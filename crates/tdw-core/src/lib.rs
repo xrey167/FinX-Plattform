@@ -49,8 +49,8 @@ impl<T> DataModel for T where
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
 pub struct OBBject<T: DataModel> {
-    pub provider: &'static str,
-    pub endpoint: &'static str,
+    pub provider: String,
+    pub endpoint: String,
     pub rows: Vec<T>,
     pub metadata: BTreeMap<String, Value>,
 }
@@ -58,8 +58,8 @@ pub struct OBBject<T: DataModel> {
 impl<T: DataModel> OBBject<T> {
     pub fn new(rows: Vec<T>, provider: &'static str, endpoint: &'static str) -> Self {
         Self {
-            provider,
-            endpoint,
+            provider: provider.to_string(),
+            endpoint: endpoint.to_string(),
             rows,
             metadata: BTreeMap::new(),
         }
@@ -79,18 +79,19 @@ pub struct Credentials {
 }
 
 #[async_trait]
-pub trait Fetcher: Send + Sync + 'static {
-    type Query: QueryParams;
-    type Data: DataModel;
-
+pub trait Fetcher<Q, D>: Send + Sync + 'static
+where
+    Q: QueryParams,
+    D: DataModel,
+{
     const PROVIDER: &'static str;
     const ENDPOINT: &'static str;
 
-    fn transform_query(params: Value) -> Result<Self::Query>;
-    async fn extract_data(&self, query: &Self::Query, creds: &Credentials) -> Result<Bytes>;
-    fn transform_data(&self, query: &Self::Query, raw: Bytes) -> Result<Vec<Self::Data>>;
+    fn transform_query(params: Value) -> Result<Q>;
+    async fn extract_data(&self, query: &Q, creds: &Credentials) -> Result<Bytes>;
+    fn transform_data(&self, query: &Q, raw: Bytes) -> Result<Vec<D>>;
 
-    async fn fetch(&self, params: Value, creds: &Credentials) -> Result<OBBject<Self::Data>> {
+    async fn fetch(&self, params: Value, creds: &Credentials) -> Result<OBBject<D>> {
         let query = Self::transform_query(params)?;
         let raw = self.extract_data(&query, creds).await?;
         let rows = self.transform_data(&query, raw)?;
@@ -101,23 +102,22 @@ pub trait Fetcher: Send + Sync + 'static {
 pub type DataStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
 
 #[async_trait]
-pub trait Streamer: Send + Sync + 'static {
-    type Query: QueryParams;
-    type Data: DataModel;
-
+pub trait Streamer<Q, D>: Send + Sync + 'static
+where
+    Q: QueryParams,
+    D: DataModel,
+{
     const PROVIDER: &'static str;
     const ENDPOINT: &'static str;
 
-    async fn subscribe(
-        &self,
-        query: Self::Query,
-        creds: &Credentials,
-    ) -> Result<DataStream<Self::Data>>;
-    async fn snapshot(&self, query: &Self::Query, creds: &Credentials) -> Result<Vec<Self::Data>>;
+    async fn subscribe(&self, query: Q, creds: &Credentials) -> Result<DataStream<D>>;
+    async fn snapshot(&self, query: &Q, creds: &Credentials) -> Result<Vec<D>>;
     async fn checkpoint(&self, _seq: u64) -> Result<()> {
         Ok(())
     }
 }
+
+pub type ProgressStream<T> = Pin<Box<dyn Stream<Item = Result<ProgressOrResult<T>>> + Send>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HealthStatus {
@@ -254,18 +254,162 @@ impl ProviderRegistry {
         Ok(())
     }
 
+    pub fn register_fetcher<F, Q, D>(&mut self) -> Result<()>
+    where
+        F: Fetcher<Q, D>,
+        Q: QueryParams,
+        D: DataModel,
+    {
+        self.register(RegistryEntry::fetcher(F::PROVIDER, F::ENDPOINT))
+    }
+
+    pub fn register_streamer<S, Q, D>(&mut self) -> Result<()>
+    where
+        S: Streamer<Q, D>,
+        Q: QueryParams,
+        D: DataModel,
+    {
+        self.register(RegistryEntry::streamer(S::PROVIDER, S::ENDPOINT))
+    }
+
+    pub fn from_inventory() -> Result<Self> {
+        let registry = Self::default();
+        #[cfg(feature = "inventory-registration")]
+        {
+            return Self::with_inventory_entries(registry);
+        }
+        #[cfg(not(feature = "inventory-registration"))]
+        {
+            Ok(registry)
+        }
+    }
+
+    #[cfg(feature = "inventory-registration")]
+    fn with_inventory_entries(mut registry: Self) -> Result<Self> {
+        for entry in inventory::iter::<RegistryEntry> {
+            registry.register(entry.clone())?;
+        }
+        Ok(registry)
+    }
+
+    pub fn resolve(
+        &self,
+        provider: &str,
+        endpoint: &str,
+        kind: ProviderKind,
+    ) -> Option<&RegistryEntry> {
+        self.entries.iter().find(|entry| {
+            entry.provider == provider && entry.endpoint == endpoint && entry.kind == kind
+        })
+    }
+
+    pub fn contains(&self, provider: &str, endpoint: &str, kind: ProviderKind) -> bool {
+        self.resolve(provider, endpoint, kind).is_some()
+    }
+
     pub fn entries(&self) -> &[RegistryEntry] {
         &self.entries
     }
 }
 
+impl RegistryEntry {
+    pub const fn fetcher(provider: &'static str, endpoint: &'static str) -> Self {
+        Self {
+            provider,
+            endpoint,
+            kind: ProviderKind::Fetcher,
+        }
+    }
+
+    pub const fn streamer(provider: &'static str, endpoint: &'static str) -> Self {
+        Self {
+            provider,
+            endpoint,
+            kind: ProviderKind::Streamer,
+        }
+    }
+}
+
+#[cfg(feature = "inventory-registration")]
+inventory::collect!(RegistryEntry);
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use serde_json::json;
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
     struct Row {
         symbol: String,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+    struct Query {
+        symbol: String,
+    }
+
+    struct MockFetcher;
+
+    #[async_trait]
+    impl Fetcher<Query, Row> for MockFetcher {
+        const PROVIDER: &'static str = "mock";
+        const ENDPOINT: &'static str = "equity_historical";
+
+        fn transform_query(params: Value) -> Result<Query> {
+            let symbol = params
+                .get("symbol")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::InvalidQuery("missing symbol".to_string()))?;
+            Ok(Query {
+                symbol: symbol.to_string(),
+            })
+        }
+
+        async fn extract_data(&self, query: &Query, _creds: &Credentials) -> Result<Bytes> {
+            Ok(Bytes::from(query.symbol.clone()))
+        }
+
+        fn transform_data(&self, _query: &Query, raw: Bytes) -> Result<Vec<Row>> {
+            let symbol = String::from_utf8(raw.to_vec())
+                .map_err(|error| Error::Provider(error.to_string()))?;
+            Ok(vec![Row { symbol }])
+        }
+    }
+
+    struct MockStreamer;
+
+    #[async_trait]
+    impl Streamer<Query, Row> for MockStreamer {
+        const PROVIDER: &'static str = "mock-ws";
+        const ENDPOINT: &'static str = "equity_ticks";
+
+        async fn subscribe(&self, _query: Query, _creds: &Credentials) -> Result<DataStream<Row>> {
+            Ok(Box::pin(EmptyStream))
+        }
+
+        async fn snapshot(&self, query: &Query, _creds: &Credentials) -> Result<Vec<Row>> {
+            Ok(vec![Row {
+                symbol: query.symbol.clone(),
+            }])
+        }
+    }
+
+    struct EmptyStream;
+
+    impl Stream for EmptyStream {
+        type Item = Result<Row>;
+
+        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Ready(None)
+        }
+    }
+
+    #[cfg(feature = "inventory-registration")]
+    inventory::submit! {
+        RegistryEntry::fetcher("inventory", "equity_historical")
     }
 
     #[test]
@@ -281,17 +425,96 @@ mod tests {
     }
 
     #[test]
+    fn envelope_round_trips_json() {
+        let object = OBBject::new(
+            vec![Row {
+                symbol: "MSFT".to_string(),
+            }],
+            "fileset",
+            "equity_historical",
+        )
+        .with_metadata("source", json!("golden"));
+
+        let json = serde_json::to_string(&object)
+            .unwrap_or_else(|error| panic!("object should serialize: {error}"));
+        let round_trip: OBBject<Row> = serde_json::from_str(&json)
+            .unwrap_or_else(|error| panic!("object should deserialize: {error}"));
+
+        assert_eq!(round_trip, object);
+    }
+
+    #[test]
     fn registry_rejects_duplicate_entries() {
         let mut registry = ProviderRegistry::default();
-        let entry = RegistryEntry {
-            provider: "fileset",
-            endpoint: "equity_historical",
-            kind: ProviderKind::Fetcher,
-        };
+        let entry = RegistryEntry::fetcher("fileset", "equity_historical");
 
         assert!(registry.register(entry.clone()).is_ok());
         let duplicate = registry.register(entry);
 
         assert!(duplicate.is_err());
+    }
+
+    #[test]
+    fn registry_registers_fetchers_and_streamers_explicitly() {
+        let mut registry = ProviderRegistry::default();
+
+        registry
+            .register_fetcher::<MockFetcher, Query, Row>()
+            .unwrap_or_else(|error| panic!("mock fetcher should register: {error}"));
+        registry
+            .register_streamer::<MockStreamer, Query, Row>()
+            .unwrap_or_else(|error| panic!("mock streamer should register: {error}"));
+
+        assert!(registry.contains("mock", "equity_historical", ProviderKind::Fetcher));
+        assert!(registry.contains("mock-ws", "equity_ticks", ProviderKind::Streamer));
+    }
+
+    #[test]
+    fn registry_allows_distinct_provider_endpoint_and_kind_combinations() {
+        let mut registry = ProviderRegistry::default();
+
+        for entry in [
+            RegistryEntry::fetcher("mock", "equity_historical"),
+            RegistryEntry::fetcher("mock", "quotes"),
+            RegistryEntry::fetcher("fileset", "equity_historical"),
+            RegistryEntry::streamer("mock", "equity_historical"),
+        ] {
+            registry
+                .register(entry)
+                .unwrap_or_else(|error| panic!("distinct entry should register: {error}"));
+        }
+
+        assert_eq!(registry.entries().len(), 4);
+        assert!(
+            registry
+                .resolve("mock", "equity_historical", ProviderKind::Fetcher)
+                .is_some()
+        );
+        assert!(
+            registry
+                .resolve("mock", "equity_historical", ProviderKind::Streamer)
+                .is_some()
+        );
+        assert!(
+            registry
+                .resolve("mock", "missing", ProviderKind::Fetcher)
+                .is_none()
+        );
+        assert!(
+            registry
+                .resolve("missing", "equity_historical", ProviderKind::Fetcher)
+                .is_none()
+        );
+        assert!(!registry.contains("mock", "missing", ProviderKind::Fetcher));
+        assert_eq!(registry.entries()[3].kind, ProviderKind::Streamer);
+    }
+
+    #[cfg(feature = "inventory-registration")]
+    #[test]
+    fn registry_loads_inventory_entries_when_feature_enabled() {
+        let registry = ProviderRegistry::from_inventory()
+            .unwrap_or_else(|error| panic!("inventory registry should load: {error}"));
+
+        assert!(registry.contains("inventory", "equity_historical", ProviderKind::Fetcher));
     }
 }

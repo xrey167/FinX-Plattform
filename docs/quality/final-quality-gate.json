@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "releaseCandidate": "v0.1",
+  "recommendation": "APPROVE",
+  "architectStatus": "CLEAR",
+  "aiSlopCleaner": {
+    "status": "passed",
+    "evidence": "docs/quality/ai-slop-cleanup-report.md"
+  },
+  "verification": {
+    "status": "passed",
+    "commands": [
+      "just verify-phase",
+      "just coverage",
+      "just windows-release",
+      "just mutation-core",
+      "local flaky-detect loop: 10 integration/e2e repetitions",
+      "cargo run -q -p xtask -- quality-gate check",
+      "git diff --check"
+    ],
+    "evidence": "docs/quality/release-readiness-summary.md"
+  },
+  "codeReview": {
+    "recommendation": "APPROVE",
+    "architectStatus": "CLEAR",
+    "evidence": "docs/quality/final-code-review.json"
+  },
+  "gates": [
+    {
+      "id": "verify-phase",
+      "status": "PASS",
+      "evidence": "just verify-phase"
+    },
+    {
+      "id": "coverage",
+      "status": "PASS",
+      "evidence": "just coverage; lcov.info line coverage 83.74% against 82% project target"
+    },
+    {
+      "id": "windows-release",
+      "status": "PASS",
+      "evidence": "just windows-release; x86_64-pc-windows-msvc release build"
+    },
+    {
+      "id": "mutation-smoke",
+      "status": "PASS",
+      "evidence": "just mutation-core; 28 tested, 19 caught, 9 unviable, 0 missed"
+    },
+    {
+      "id": "adversarial",
+      "status": "PASS",
+      "evidence": "just test-adversarial"
+    },
+    {
+      "id": "flaky-detect",
+      "status": "PASS",
+      "evidence": "local 10-iteration integration/e2e loop passed"
+    },
+    {
+      "id": "code-review",
+      "status": "PASS",
+      "evidence": "docs/quality/final-code-review.json recommendation APPROVE and architectStatus CLEAR"
+    },
+    {
+      "id": "ai-slop-cleanup",
+      "status": "PASS",
+      "evidence": "docs/quality/ai-slop-cleanup-report.md"
+    }
+  ],
+  "notes": [
+    "Nightly workflow encodes mutation, full e2e, and flaky detection.",
+    "Seven scheduled nightly CI runs are not time-observable inside a single local execution session."
+  ]
+}

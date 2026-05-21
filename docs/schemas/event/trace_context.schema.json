@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "parent_span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "trace_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "trace_id",
+    "span_id"
+  ],
+  "title": "TraceContext",
+  "type": "object"
+}

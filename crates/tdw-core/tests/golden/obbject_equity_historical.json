@@ -1,0 +1,18 @@
+{
+  "provider": "fileset",
+  "endpoint": "equity_historical",
+  "rows": [
+    {
+      "symbol": "AAPL",
+      "date": "2026-05-21",
+      "open": 100.0,
+      "high": 101.0,
+      "low": 99.0,
+      "close": 100.5,
+      "volume": 1000
+    }
+  ],
+  "metadata": {
+    "source": "golden"
+  }
+}

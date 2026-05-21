@@ -1,0 +1,94 @@
+{
+  "$defs": {
+    "ContentKind": {
+      "enum": [
+        "Document",
+        "Dataset",
+        "Prompt",
+        "Workflow",
+        "Tool"
+      ],
+      "type": "string"
+    },
+    "ContentRef": {
+      "properties": {
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ContentKind"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "uri": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "kind",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "GotchaSeverity": {
+      "enum": [
+        "Info",
+        "Warning",
+        "Blocker"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "applies_to": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "gotcha_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "remediation": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "severity": {
+      "$ref": "#/$defs/GotchaSeverity"
+    },
+    "source_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ContentRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "title": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "gotcha_id",
+    "title",
+    "severity",
+    "applies_to",
+    "remediation"
+  ],
+  "title": "Gotcha",
+  "type": "object"
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "entity": {
+      "type": "string"
+    },
+    "primary_key": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "type": "string"
+    },
+    "table": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "entity",
+    "schema",
+    "table",
+    "primary_key"
+  ],
+  "title": "StorageMapping",
+  "type": "object"
+}

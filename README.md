@@ -19,3 +19,5 @@ cargo run -p xtask -- clean-room-audit
 ```
 
 The source plans are copied into `.plans/` for traceability.
+
+Docker profile and WSL2 volume guidance lives in `docs/docker.md`.

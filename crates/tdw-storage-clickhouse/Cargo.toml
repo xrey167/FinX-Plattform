@@ -2,8 +2,17 @@
 name = "tdw-storage-clickhouse"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+
+[dev-dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

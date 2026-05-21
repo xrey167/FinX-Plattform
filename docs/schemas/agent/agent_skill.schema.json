@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "description": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "input_schema": true,
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "output_schema": true,
+    "skill_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "skill_id",
+    "name",
+    "description",
+    "input_schema",
+    "output_schema",
+    "tags"
+  ],
+  "title": "AgentSkill",
+  "type": "object"
+}

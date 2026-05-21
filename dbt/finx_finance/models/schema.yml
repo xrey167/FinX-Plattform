@@ -1,0 +1,174 @@
+version: 2
+
+models:
+  - name: bronze_ohlcv
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, venue, ts]
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: venue
+        tests: [not_null]
+      - name: ts
+        tests: [not_null]
+      - name: close
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+      - name: volume
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+  - name: silver_ohlcv_adjusted
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, venue, ts]
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: venue
+        tests: [not_null]
+      - name: ts
+        tests: [not_null]
+      - name: close
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+      - name: volume
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+  - name: gold_daily_returns
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, session_date]
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: session_date
+        tests: [not_null]
+      - name: close
+        tests: [not_null]
+  - name: gold_rolling_volatility
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, session_date]
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: session_date
+        tests: [not_null]
+      - name: rolling_volatility_21d
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+  - name: silver_balance_sheet
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: fiscal_period
+        tests: [not_null]
+      - name: metric
+        tests: [not_null]
+      - name: value
+        tests: [not_null]
+  - name: gold_financial_ratios
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, fiscal_period]
+    columns:
+      - name: symbol
+        tests: [not_null]
+      - name: fiscal_period
+        tests: [not_null]
+      - name: assets
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+      - name: liabilities
+        tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+  - name: silver_news_normalized
+    columns:
+      - name: id
+        tests: [not_null]
+      - name: published_at
+        tests: [not_null]
+      - name: sentiment_score
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: -1
+              max_value: 1
+  - name: gold_news_sentiment_panel
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [session_date, source]
+    columns:
+      - name: session_date
+        tests: [not_null]
+      - name: source
+        tests: [not_null]
+      - name: article_count
+        tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              min_value: 0
+              strictly: false
+  - name: silver_eval_runs
+    columns:
+      - name: run_id
+        tests: [not_null]
+      - name: agent_id
+        tests: [not_null]
+      - name: metric_name
+        tests: [not_null]
+  - name: gold_eval_leaderboard
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [agent_id, dataset_id, metric_name]
+    columns:
+      - name: agent_id
+        tests: [not_null]
+      - name: metric_name
+        tests: [not_null]
+      - name: best_metric_value
+        tests: [not_null]
+  - name: meta_dbt_runs
+    columns:
+      - name: dbt_invocation_id
+        tests: [not_null]
+      - name: observed_at
+        tests: [not_null]
+      - name: target_name
+        tests: [not_null]
+  - name: meta_source_freshness
+    columns:
+      - name: source_name
+        tests: [not_null]
+      - name: last_fetched_at
+        tests: [not_null]
+  - name: meta_tag_assignments
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [entity_id, tag_id, provenance]
+    columns:
+      - name: entity_id
+        tests: [not_null]
+      - name: tag_id
+        tests: [not_null]
+      - name: provenance
+        tests: [not_null]

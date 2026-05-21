@@ -2,8 +2,13 @@
 name = "tdw-storage-fs"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tdw-core = { workspace = true }
 
 [lints]
 workspace = true

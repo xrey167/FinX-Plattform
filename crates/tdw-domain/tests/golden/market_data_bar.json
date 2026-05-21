@@ -1,0 +1,12 @@
+{
+  "symbol": "AAPL",
+  "venue": "XNAS",
+  "granularity": "Day",
+  "ts": "2026-05-21T00:00:00Z",
+  "open": 100.0,
+  "high": 101.0,
+  "low": 99.0,
+  "close": 100.5,
+  "volume": 1000.0,
+  "source": "golden"
+}

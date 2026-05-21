@@ -2,11 +2,18 @@
 name = "tdw-core"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
+
+[features]
+default = []
+inventory-registration = ["dep:inventory"]
 
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
+inventory = { version = "0.3.21", optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

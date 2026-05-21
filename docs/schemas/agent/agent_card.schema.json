@@ -1,0 +1,123 @@
+{
+  "$defs": {
+    "AgentSkill": {
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input_schema": true,
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "output_schema": true,
+        "skill_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "skill_id",
+        "name",
+        "description",
+        "input_schema",
+        "output_schema",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "ContentKind": {
+      "enum": [
+        "Document",
+        "Dataset",
+        "Prompt",
+        "Workflow",
+        "Tool"
+      ],
+      "type": "string"
+    },
+    "ContentRef": {
+      "properties": {
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ContentKind"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "uri": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "kind",
+        "tags"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agent_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "content_refs": {
+      "items": {
+        "$ref": "#/$defs/ContentRef"
+      },
+      "type": "array"
+    },
+    "description": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "endpoint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "skills": {
+      "items": {
+        "$ref": "#/$defs/AgentSkill"
+      },
+      "type": "array"
+    },
+    "version": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "agent_id",
+    "name",
+    "version",
+    "description",
+    "skills",
+    "content_refs"
+  ],
+  "title": "AgentCard",
+  "type": "object"
+}

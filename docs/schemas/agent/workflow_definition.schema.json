@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "WorkflowEdge": {
+      "properties": {
+        "from": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "to": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "WorkflowNode": {
+      "properties": {
+        "node_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id",
+        "task"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/WorkflowEdge"
+      },
+      "type": "array"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/WorkflowNode"
+      },
+      "type": "array"
+    },
+    "workflow_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "workflow_id",
+    "nodes",
+    "edges"
+  ],
+  "title": "WorkflowDefinition",
+  "type": "object"
+}

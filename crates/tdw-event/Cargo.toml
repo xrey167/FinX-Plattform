@@ -2,8 +2,14 @@
 name = "tdw-event"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+validator = { workspace = true }
 
 [lints]
 workspace = true

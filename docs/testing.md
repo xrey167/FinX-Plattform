@@ -1,13 +1,27 @@
 # Testing
 
-## Local Gates
+## Phase-Exit Gates
 
 ```powershell
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo run -p xtask -- clean-room-audit
+just fmt-check
+just lint
+just test-unit
+just test-integration
+just test-property
+just test-e2e
+just test-adversarial
+just schema-sync
+just event-schema-check
+just bench
+just quality-gate-check
+just deny
+just audit
 ```
+
+`just coverage` writes `lcov.info`. `just windows-release` validates the
+MSVC release profile and is required before a release checkpoint. The generated
+quality-gate contract lives at `docs/quality/phase-exit-gates.json`; refresh it
+with `just quality-gate` after changing the gate list.
 
 ## Test Tiers
 
@@ -16,9 +30,10 @@ cargo run -p xtask -- clean-room-audit
 - Property tests belong under `tests/property/`.
 - End-to-end tests belong under `tests/e2e/` and should avoid billed APIs by default.
 - Benchmarks belong under `benches/` or `xtask`.
-- Adversarial tests belong under `tests/adversarial/` and must document their safety
-  assumptions.
+- Adversarial checks must stay in `just test-adversarial` and cover injection,
+  masking, authorization, and OIDC claim-rejection paths without billed APIs.
 
-The initial coverage floor is intentionally bootstrapped at zero until real feature
-code exists. The workflow files are already shaped so the floor can ratchet up per
-phase.
+Coverage is gated through Codecov with an 82% workspace target and 80% patch
+target. A failed phase-exit command must be recorded as blocker evidence; do not
+claim a checkpoint complete until the blocker is fixed or explicitly carried in
+the ultragoal evidence.

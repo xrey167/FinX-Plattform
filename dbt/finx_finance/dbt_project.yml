@@ -1,0 +1,23 @@
+name: finx_finance
+version: "0.1.0"
+config-version: 2
+profile: finx_finance
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+models:
+  finx_finance:
+    bronze:
+      +schema: raw
+      +tags: ["layer:bronze"]
+    silver:
+      +schema: staging
+      +tags: ["layer:silver"]
+    gold:
+      +schema: analytics
+      +tags: ["layer:gold"]
+    meta:
+      +schema: system
+      +tags: ["lineage"]

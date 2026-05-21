@@ -1,0 +1,36 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "User",
+        "Service",
+        "Worker",
+        "Agent",
+        "System"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "actor_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/ActorKind"
+    },
+    "tenant_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "actor_id",
+    "kind"
+  ],
+  "title": "Actor",
+  "type": "object"
+}

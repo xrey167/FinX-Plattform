@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "args": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "command": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "command",
+    "args"
+  ],
+  "title": "SlashCommandInvocation",
+  "type": "object"
+}

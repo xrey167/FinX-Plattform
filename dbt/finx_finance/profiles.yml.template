@@ -1,0 +1,20 @@
+finx_finance:
+  target: pg_dev
+  outputs:
+    pg_dev:
+      type: postgres
+      host: localhost
+      port: 5432
+      user: tdw
+      password: tdw
+      dbname: tdw
+      schema: raw
+      threads: 4
+    ch_dev:
+      type: clickhouse
+      host: localhost
+      port: 8123
+      user: default
+      password: ""
+      schema: raw
+      threads: 4

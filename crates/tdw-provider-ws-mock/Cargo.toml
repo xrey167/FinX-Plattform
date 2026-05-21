@@ -2,8 +2,16 @@
 name = "tdw-provider-ws-mock"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+async-trait = { workspace = true }
+futures-core = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+tdw-core = { workspace = true }
+tdw-domain = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,31 @@
+{
+  "agent_id": "market-researcher",
+  "name": "Market Researcher",
+  "version": "0.1.0",
+  "description": "Generates evidence-backed market research notes.",
+  "skills": [
+    {
+      "skill_id": "research.note",
+      "name": "Research Note",
+      "description": "Draft a research note from retrieved content.",
+      "input_schema": {
+        "type": "object",
+        "required": ["symbol"]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["note"]
+      },
+      "tags": ["research", "mcp"]
+    }
+  ],
+  "content_refs": [
+    {
+      "uri": "tdw://docs/research-template",
+      "kind": "Prompt",
+      "checksum": null,
+      "tags": ["prompt"]
+    }
+  ],
+  "endpoint": "mcp://tdw/agents/market-researcher"
+}

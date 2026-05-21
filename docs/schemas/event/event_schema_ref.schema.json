@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "event_type": {
+      "type": "string"
+    },
+    "schema_name": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event_type",
+    "schema_name",
+    "schema_version"
+  ],
+  "title": "EventSchemaRef",
+  "type": "object"
+}

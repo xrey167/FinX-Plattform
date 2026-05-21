@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "SlashArg": {
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "required"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "args": {
+      "items": {
+        "$ref": "#/$defs/SlashArg"
+      },
+      "type": "array"
+    },
+    "description": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "workflow_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "name",
+    "description",
+    "args"
+  ],
+  "title": "SlashCommand",
+  "type": "object"
+}

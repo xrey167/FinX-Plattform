@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: market_data_bar
+      - name: fundamental_metric
+      - name: news_sentiment
+      - name: eval_run

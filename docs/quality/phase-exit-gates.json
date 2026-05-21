@@ -1,0 +1,148 @@
+{
+  "gates": [
+    {
+      "artifact": "rustfmt stdout",
+      "cadence": "phase-exit",
+      "command": "just fmt-check",
+      "id": "fmt",
+      "requiredForPhaseExit": true,
+      "tier": "lint"
+    },
+    {
+      "artifact": "clippy stdout",
+      "cadence": "phase-exit",
+      "command": "just lint",
+      "id": "lint",
+      "requiredForPhaseExit": true,
+      "tier": "lint"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "phase-exit",
+      "command": "just test-unit",
+      "id": "unit",
+      "requiredForPhaseExit": true,
+      "tier": "test"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "phase-exit",
+      "command": "just test-integration",
+      "id": "integration",
+      "requiredForPhaseExit": true,
+      "tier": "test"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "phase-exit",
+      "command": "just test-property",
+      "id": "property",
+      "requiredForPhaseExit": true,
+      "tier": "test"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "phase-exit",
+      "command": "just test-e2e",
+      "id": "e2e-subset",
+      "requiredForPhaseExit": true,
+      "tier": "test"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "phase-exit",
+      "command": "just test-adversarial",
+      "id": "adversarial",
+      "requiredForPhaseExit": true,
+      "tier": "security"
+    },
+    {
+      "artifact": "lcov.info",
+      "cadence": "phase-exit",
+      "command": "just coverage",
+      "id": "coverage",
+      "requiredForPhaseExit": true,
+      "tier": "coverage"
+    },
+    {
+      "artifact": "docs/schemas/agent/*.schema.json",
+      "cadence": "phase-exit",
+      "command": "just schema-sync",
+      "id": "schema-sync",
+      "requiredForPhaseExit": true,
+      "tier": "schema"
+    },
+    {
+      "artifact": "docs/schemas/event/*.schema.json",
+      "cadence": "phase-exit",
+      "command": "just event-schema-check",
+      "id": "event-schema-check",
+      "requiredForPhaseExit": true,
+      "tier": "schema"
+    },
+    {
+      "artifact": "docs/perf-history.json",
+      "cadence": "phase-exit",
+      "command": "just bench",
+      "id": "perf",
+      "requiredForPhaseExit": true,
+      "tier": "performance"
+    },
+    {
+      "artifact": "cargo-deny stdout",
+      "cadence": "phase-exit",
+      "command": "just deny",
+      "id": "dependency-audit",
+      "requiredForPhaseExit": true,
+      "tier": "security"
+    },
+    {
+      "artifact": "xtask clean-room-audit stdout",
+      "cadence": "phase-exit",
+      "command": "just audit",
+      "id": "clean-room-audit",
+      "requiredForPhaseExit": true,
+      "tier": "governance"
+    },
+    {
+      "artifact": "MSVC release build stdout",
+      "cadence": "phase-exit",
+      "command": "just windows-release",
+      "id": "windows-release",
+      "requiredForPhaseExit": true,
+      "tier": "release"
+    },
+    {
+      "artifact": "cargo-mutants stdout",
+      "cadence": "nightly",
+      "command": "just mutation-core",
+      "id": "mutation-smoke",
+      "requiredForPhaseExit": false,
+      "tier": "mutation"
+    },
+    {
+      "artifact": "cargo test stdout",
+      "cadence": "nightly",
+      "command": "cargo test --workspace --features e2e",
+      "id": "e2e-full",
+      "requiredForPhaseExit": false,
+      "tier": "test"
+    },
+    {
+      "artifact": "nightly workflow log",
+      "cadence": "nightly",
+      "command": "nightly integration/e2e x10",
+      "id": "flaky-detect",
+      "requiredForPhaseExit": false,
+      "tier": "stability"
+    }
+  ],
+  "generatedBy": "cargo run -p xtask -- quality-gate write",
+  "policy": {
+    "checkpointRequiresCommandsAndArtifacts": true,
+    "failedGateRequiresBlockerEvidence": true,
+    "narrowBeforeBroad": true,
+    "testQuarantineAllowedAtRelease": false
+  },
+  "version": 1
+}

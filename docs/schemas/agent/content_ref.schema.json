@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "ContentKind": {
+      "enum": [
+        "Document",
+        "Dataset",
+        "Prompt",
+        "Workflow",
+        "Tool"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "checksum": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "$ref": "#/$defs/ContentKind"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "uri": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "uri",
+    "kind",
+    "tags"
+  ],
+  "title": "ContentRef",
+  "type": "object"
+}

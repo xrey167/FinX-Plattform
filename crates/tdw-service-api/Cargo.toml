@@ -2,8 +2,51 @@
 name = "tdw-service-api"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-actor = { path = "../tdw-actor" }
+tdw-agent = { path = "../tdw-agent" }
+tdw-agent-store = { path = "../tdw-agent-store" }
+tdw-auth = { path = "../tdw-auth" }
+tdw-auth-oidc = { path = "../tdw-auth-oidc" }
+tdw-bus = { path = "../tdw-bus" }
+tdw-cdc = { path = "../tdw-cdc" }
+tdw-core = { workspace = true }
+tdw-define = { path = "../tdw-define" }
+tdw-domain = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-event = { path = "../tdw-event" }
+tdw-eval-runner = { path = "../tdw-eval-runner" }
+tdw-entity-resolver = { path = "../tdw-entity-resolver" }
+tdw-feature-store = { path = "../tdw-feature-store" }
+tdw-graph = { path = "../tdw-graph" }
+tdw-hooks = { path = "../tdw-hooks" }
+tdw-kg = { path = "../tdw-kg" }
+tdw-mask = { path = "../tdw-mask" }
+tdw-outbox = { path = "../tdw-outbox" }
+tdw-pipe = { path = "../tdw-pipe" }
+tdw-provider-fileset = { path = "../tdw-provider-fileset" }
+tdw-provider-ws-mock = { path = "../tdw-provider-ws-mock" }
+tdw-provider-yahoo = { path = "../tdw-provider-yahoo" }
+tdw-replay = { path = "../tdw-replay" }
+tdw-runtime = { workspace = true }
+tdw-snapshot = { path = "../tdw-snapshot" }
+tdw-spatial = { path = "../tdw-spatial" }
+tdw-stage = { path = "../tdw-stage" }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+tdw-storage-s3 = { path = "../tdw-storage-s3" }
+tdw-table-format = { path = "../tdw-table-format" }
+tdw-tag-rules = { path = "../tdw-tag-rules" }
+tdw-tags = { path = "../tdw-tags" }
+tdw-udf = { path = "../tdw-udf" }
+tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 
 [lints]
 workspace = true

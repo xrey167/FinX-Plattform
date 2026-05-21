@@ -211,6 +211,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,6 +348,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "rustversion"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
 name = "schemars"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -460,34 +475,69 @@ dependencies = [
 [[package]]
 name = "tdw-actor"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-event",
+]
 
 [[package]]
 name = "tdw-agent"
 version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "validator",
+]
 
 [[package]]
 name = "tdw-agent-store"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-agent",
+]
 
 [[package]]
 name = "tdw-auth"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-auth-oidc"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-bus"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-event",
+]
 
 [[package]]
 name = "tdw-cdc"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-event",
+ "tdw-outbox",
+]
 
 [[package]]
 name = "tdw-cli"
 version = "0.1.0"
+dependencies = [
+ "tdw-service-api",
+]
 
 [[package]]
 name = "tdw-core"
@@ -496,6 +546,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-core",
+ "inventory",
  "schemars",
  "serde",
  "serde_json",
@@ -505,10 +556,18 @@ dependencies = [
 [[package]]
 name = "tdw-dbt-runner"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "tdw-define"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-hooks",
+]
 
 [[package]]
 name = "tdw-domain"
@@ -516,12 +575,17 @@ version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
+ "serde_json",
  "validator",
 ]
 
 [[package]]
 name = "tdw-embed"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "tdw-embed-google"
@@ -530,6 +594,9 @@ version = "0.1.0"
 [[package]]
 name = "tdw-embed-local"
 version = "0.1.0"
+dependencies = [
+ "tdw-embed",
+]
 
 [[package]]
 name = "tdw-embed-openai"
@@ -538,18 +605,37 @@ version = "0.1.0"
 [[package]]
 name = "tdw-entity-resolver"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-kg",
+]
 
 [[package]]
 name = "tdw-eval-runner"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-agent",
+ "tdw-agent-store",
+]
 
 [[package]]
 name = "tdw-event"
 version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "validator",
+]
 
 [[package]]
 name = "tdw-feature-store"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-tags",
+]
 
 [[package]]
 name = "tdw-fn-string"
@@ -558,26 +644,48 @@ version = "0.1.0"
 [[package]]
 name = "tdw-graph"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-hooks"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-event",
+ "thiserror",
+]
 
 [[package]]
 name = "tdw-kg"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-mask"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-hooks",
+]
 
 [[package]]
 name = "tdw-mcp"
 version = "0.1.0"
+dependencies = [
+ "tdw-service-api",
+]
 
 [[package]]
 name = "tdw-migration"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-ml-registry"
@@ -586,10 +694,19 @@ version = "0.1.0"
 [[package]]
 name = "tdw-outbox"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-event",
+]
 
 [[package]]
 name = "tdw-pipe"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-stage",
+]
 
 [[package]]
 name = "tdw-pipeline"
@@ -606,6 +723,15 @@ version = "0.1.0"
 [[package]]
 name = "tdw-provider-fileset"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+]
 
 [[package]]
 name = "tdw-provider-fred"
@@ -622,14 +748,37 @@ version = "0.1.0"
 [[package]]
 name = "tdw-provider-ws-mock"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-core",
+ "schemars",
+ "serde",
+ "tdw-core",
+ "tdw-domain",
+]
 
 [[package]]
 name = "tdw-provider-yahoo"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "tdw-provider-fileset",
+]
 
 [[package]]
 name = "tdw-replay"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-cdc",
+]
 
 [[package]]
 name = "tdw-rewrite"
@@ -639,44 +788,124 @@ version = "0.1.0"
 name = "tdw-runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "schemars",
+ "serde",
+ "serde_json",
  "tdw-core",
 ]
 
 [[package]]
 name = "tdw-service"
 version = "0.1.0"
+dependencies = [
+ "tdw-service-api",
+]
 
 [[package]]
 name = "tdw-service-api"
 version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde",
+ "serde_json",
+ "tdw-actor",
+ "tdw-agent",
+ "tdw-agent-store",
+ "tdw-auth",
+ "tdw-auth-oidc",
+ "tdw-bus",
+ "tdw-cdc",
+ "tdw-core",
+ "tdw-define",
+ "tdw-domain",
+ "tdw-embed",
+ "tdw-embed-local",
+ "tdw-entity-resolver",
+ "tdw-eval-runner",
+ "tdw-event",
+ "tdw-feature-store",
+ "tdw-graph",
+ "tdw-hooks",
+ "tdw-kg",
+ "tdw-mask",
+ "tdw-outbox",
+ "tdw-pipe",
+ "tdw-provider-fileset",
+ "tdw-provider-ws-mock",
+ "tdw-provider-yahoo",
+ "tdw-replay",
+ "tdw-runtime",
+ "tdw-snapshot",
+ "tdw-spatial",
+ "tdw-stage",
+ "tdw-storage-meilisearch",
+ "tdw-storage-qdrant",
+ "tdw-storage-s3",
+ "tdw-table-format",
+ "tdw-tag-rules",
+ "tdw-tags",
+ "tdw-udf",
+ "tdw-workflow-engine",
+]
 
 [[package]]
 name = "tdw-snapshot"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-spatial"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-sql-codegen"
 version = "0.1.0"
+dependencies = [
+ "tdw-domain",
+]
 
 [[package]]
 name = "tdw-stage"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-storage-clickhouse"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-fs"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-meilisearch"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-parquet"
@@ -685,30 +914,64 @@ version = "0.1.0"
 [[package]]
 name = "tdw-storage-postgres"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-qdrant"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-router"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "schemars",
+ "serde",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-storage-s3"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "tdw-core",
+]
 
 [[package]]
 name = "tdw-table-format"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "tdw-tag-rules"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-tags",
+ "thiserror",
+]
 
 [[package]]
 name = "tdw-tags"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "tdw-test-utils"
@@ -720,6 +983,10 @@ dependencies = [
 [[package]]
 name = "tdw-udf"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "tdw-udf-external"
@@ -740,10 +1007,17 @@ version = "0.1.0"
 [[package]]
 name = "tdw-worker"
 version = "0.1.0"
+dependencies = [
+ "tdw-service-api",
+]
 
 [[package]]
 name = "tdw-workflow-engine"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "tdw-agent",
+]
 
 [[package]]
 name = "thiserror"
@@ -838,6 +1112,13 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tdw-agent",
+ "tdw-event",
+ "tdw-migration",
+ "tdw-sql-codegen",
+]
 
 [[package]]
 name = "yoke"

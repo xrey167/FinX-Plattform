@@ -1,5 +1,35 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    println!("tdw-mcp bootstrap binary");
+    match tdw_service_api::mcp_progress_sample("AAPL") {
+        Ok(events) => {
+            let tools = tdw_service_api::mcp_agent_tools();
+            let event = match tdw_service_api::event_spine_sample("mcp") {
+                Ok(event) => event,
+                Err(error) => {
+                    eprintln!("tdw-mcp event error: {error}");
+                    std::process::exit(1);
+                }
+            };
+            let kg_tags = match tdw_service_api::kg_tag_sample() {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    eprintln!("tdw-mcp kg/tag error: {error}");
+                    std::process::exit(1);
+                }
+            };
+            println!(
+                "tdw-mcp progress={} agent_tools={} tag_tools={} event_spine={} kg_tags={}",
+                events.join(","),
+                tools.join(","),
+                tdw_service_api::mcp_tag_tools().join(","),
+                event,
+                kg_tags
+            );
+        }
+        Err(error) => {
+            eprintln!("tdw-mcp error: {error}");
+            std::process::exit(1);
+        }
+    }
 }

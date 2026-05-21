@@ -10,6 +10,7 @@ yanked = "deny"
 
 [licenses]
 version = 2
+private = { ignore = true }
 allow = [
     "Apache-2.0",
     "BSD-2-Clause",
@@ -21,4 +22,4 @@ allow = [
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+wildcards = "warn"

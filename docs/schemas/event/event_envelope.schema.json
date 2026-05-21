@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "Actor": {
+      "properties": {
+        "actor_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "tenant_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actor_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ActorKind": {
+      "enum": [
+        "User",
+        "Service",
+        "Worker",
+        "Agent",
+        "System"
+      ],
+      "type": "string"
+    },
+    "Origin": {
+      "properties": {
+        "entrypoint": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "entrypoint"
+      ],
+      "type": "object"
+    },
+    "TraceContext": {
+      "properties": {
+        "parent_span_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "span_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "trace_id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "trace_id",
+        "span_id"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "actor": {
+      "$ref": "#/$defs/Actor"
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "depth": {
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "event_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "event_type": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "occurred_at": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "origin": {
+      "$ref": "#/$defs/Origin"
+    },
+    "payload": true,
+    "schema_version": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "trace": {
+      "$ref": "#/$defs/TraceContext"
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "actor",
+    "origin",
+    "trace",
+    "occurred_at",
+    "payload",
+    "depth"
+  ],
+  "title": "EventEnvelope",
+  "type": "object"
+}

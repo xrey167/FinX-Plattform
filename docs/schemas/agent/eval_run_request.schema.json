@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "ContentKind": {
+      "enum": [
+        "Document",
+        "Dataset",
+        "Prompt",
+        "Workflow",
+        "Tool"
+      ],
+      "type": "string"
+    },
+    "ContentRef": {
+      "properties": {
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ContentKind"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "uri": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "kind",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "EvalCase": {
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "expected_refs": {
+          "items": {
+            "$ref": "#/$defs/ContentRef"
+          },
+          "type": "array"
+        },
+        "prompt": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "case_id",
+        "prompt",
+        "expected_refs"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agent_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/EvalCase"
+      },
+      "type": "array"
+    },
+    "dataset_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "run_id": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "agent_id",
+    "dataset_id",
+    "cases"
+  ],
+  "title": "EvalRunRequest",
+  "type": "object"
+}

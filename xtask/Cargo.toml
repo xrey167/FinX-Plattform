@@ -2,8 +2,15 @@
 name = "xtask"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+serde_json = { workspace = true }
+tdw-agent = { path = "../crates/tdw-agent" }
+tdw-event = { path = "../crates/tdw-event" }
+tdw-migration = { path = "../crates/tdw-migration" }
+tdw-sql-codegen = { path = "../crates/tdw-sql-codegen" }
 
 [lints]
 workspace = true

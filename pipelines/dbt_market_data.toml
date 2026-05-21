@@ -1,0 +1,23 @@
+[[jobs]]
+name = "dbt_bronze_market_data"
+runner = "dbt"
+args = "run --select tag:layer:bronze tag:domain:market_data"
+depends_on = []
+
+[[jobs]]
+name = "dbt_silver_market_data"
+runner = "dbt"
+args = "run --select tag:layer:silver tag:domain:market_data"
+depends_on = ["dbt_bronze_market_data"]
+
+[[jobs]]
+name = "dbt_gold_market_data"
+runner = "dbt"
+args = "run --select tag:layer:gold tag:domain:market_data"
+depends_on = ["dbt_silver_market_data"]
+
+[[jobs]]
+name = "dbt_test_market_data"
+runner = "dbt"
+args = "test --select tag:domain:market_data"
+depends_on = ["dbt_gold_market_data"]

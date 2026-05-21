@@ -5,6 +5,7 @@
 !.env.example
 /lcov.info
 /coverage/
+/mutants.out*/
 /.nextest/
 /tmp/
 *.pdb

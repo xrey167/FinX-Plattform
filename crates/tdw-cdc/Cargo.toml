@@ -2,8 +2,16 @@
 name = "tdw-cdc"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-outbox = { path = "../tdw-outbox" }
+
+[dev-dependencies]
+tdw-event = { path = "../tdw-event" }
 
 [lints]
 workspace = true

@@ -2,8 +2,15 @@
 name = "tdw-replay"
 version = "0.1.0"
 edition = "2024"
+publish = false
+license = "UNLICENSED"
 
 [dependencies]
+serde = { workspace = true }
+tdw-cdc = { path = "../tdw-cdc" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
