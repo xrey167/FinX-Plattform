@@ -1,0 +1,12 @@
+/target/
+/.worktrees/
+/.env
+/.env.*
+!.env.example
+/lcov.info
+/coverage/
+/.nextest/
+/tmp/
+*.pdb
+*.profraw
+*.profdata

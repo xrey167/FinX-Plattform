@@ -1,0 +1,9 @@
+[build]
+jobs = 8
+
+[term]
+color = "auto"
+
+[alias]
+xtask = "run -p xtask --"
+audit-clean-room = "run -p xtask -- clean-room-audit"

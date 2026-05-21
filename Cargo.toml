@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/*",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["ReyDa"]
+publish = false
+license = "UNLICENSED"
+
+[workspace.dependencies]
+async-trait = "0.1.89"
+bytes = "1.11.0"
+futures-core = "0.3.31"
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = "2.0.18"
+ulid = { version = "1.2.1", features = ["serde"] }
+uuid = { version = "1.23.1", features = ["v7", "serde"] }
+validator = { version = "0.20.0", features = ["derive"] }
+
+tdw-core = { path = "crates/tdw-core" }
+tdw-domain = { path = "crates/tdw-domain" }
+tdw-runtime = { path = "crates/tdw-runtime" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+
+[profile.release]
+lto = "fat"
+panic = "abort"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+debug = 1

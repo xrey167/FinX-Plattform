@@ -1,0 +1,25 @@
+name: Phase Task
+description: Track implementation work from the plan set
+title: "phase: "
+labels: ["phase"]
+body:
+  - type: input
+    id: plan
+    attributes:
+      label: Source plan
+      placeholder: .plans/2026-05-21-rust-trading-data-warehouse.md
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Commands or evidence required before closing.
+    validations:
+      required: true

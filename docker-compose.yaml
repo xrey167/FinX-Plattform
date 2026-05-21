@@ -1,0 +1,74 @@
+name: finx-plattform
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["minimal", "full"]
+    environment:
+      POSTGRES_USER: tdw
+      POSTGRES_PASSWORD: tdw
+      POSTGRES_DB: tdw
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tdw -d tdw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.5
+    profiles: ["minimal", "full"]
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    profiles: ["full"]
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    profiles: ["full"]
+    environment:
+      MEILI_ENV: development
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili-data:/meili_data
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["full"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports:
+      - "9001:9001"
+      - "9002:9000"
+    volumes:
+      - minio-data:/data
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["full"]
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  qdrant-data:
+  meili-data:
+  minio-data:
