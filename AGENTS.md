@@ -89,15 +89,19 @@
 
 ## Remote (GitHub)
 
-- Approved remote: `xrey167/FinX-Plattform`, visibility `private`.
-- The remote is created with `scripts/github/create-private-repo.ps1`. Changing
-  **owner**, **repository name**, or **visibility** of an existing remote
-  requires a new explicit approval — do not move the repo silently.
-- After remote exists:
-  - `origin/main` must be protected: require PR, require CI, no force-push, no
-    direct push, allow squash-and-merge only.
-  - Tags follow `vMAJOR.MINOR.PATCH` once a release process is defined; not used
-    pre-release.
+- Approved remote: `xrey167/FinX-Plattform`, visibility `public`. The repo was
+  originally drafted as private; visibility was flipped to public to unlock free
+  GitHub Actions minutes and branch-protection rulesets, both of which are
+  Pro-gated on private repos.
+- The remote is created with `scripts/github/create-private-repo.ps1` (name is
+  historical; pass `-Visibility public`). Changing **owner**, **repository
+  name**, or **visibility** of an existing remote requires a new explicit
+  approval — do not move the repo silently.
+- `origin/main` is protected by a branch ruleset: require PR, require the CI
+  status checks listed in `ci.yml`, block force-push, block deletion. Allow
+  squash-and-merge only.
+- Tags follow `vMAJOR.MINOR.PATCH` once a release process is defined; not used
+  pre-release.
 
 ## Verification Before Calling A Task Done
 
