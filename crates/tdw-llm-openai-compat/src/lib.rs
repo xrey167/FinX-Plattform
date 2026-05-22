@@ -2,7 +2,7 @@
 
 use tdw_llm::{
     ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result, Usage,
-    last_user_message,
+    last_user_message, validate_base_url, validate_model_id,
 };
 
 #[derive(Clone, Debug)]
@@ -12,11 +12,13 @@ pub struct OpenAiCompatibleModel {
 }
 
 impl OpenAiCompatibleModel {
-    pub fn new(model_id: impl Into<String>, base_url: Option<String>) -> Self {
-        Self {
-            model_id: model_id.into(),
-            base_url,
+    pub fn new(model_id: impl Into<String>, base_url: Option<String>) -> Result<Self> {
+        let model_id = model_id.into();
+        validate_model_id(&model_id)?;
+        if let Some(base_url) = base_url.as_deref() {
+            validate_base_url(base_url)?;
         }
+        Ok(Self { model_id, base_url })
     }
 
     pub fn base_url(&self) -> Option<&str> {
@@ -52,7 +54,8 @@ mod tests {
     #[test]
     fn openai_compatible_adapter_preserves_base_url() {
         let model =
-            OpenAiCompatibleModel::new("gpt-compatible", Some("http://localhost:11434".into()));
+            OpenAiCompatibleModel::new("gpt-compatible", Some("http://localhost:11434".into()))
+                .unwrap_or_else(|error| panic!("model config should be valid: {error}"));
         let response = model
             .complete(ChatRequest {
                 messages: vec![ChatMessage {
@@ -65,5 +68,9 @@ mod tests {
 
         assert_eq!(model.base_url(), Some("http://localhost:11434"));
         assert!(response.message.content.contains("draft"));
+        assert!(OpenAiCompatibleModel::new("", None).is_err());
+        assert!(
+            OpenAiCompatibleModel::new("gpt-compatible", Some("localhost:11434".into())).is_err()
+        );
     }
 }

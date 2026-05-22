@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tdw_core::{Credentials, DataStream, RegistryEntry, Result, Streamer};
+use tdw_core::{Credentials, DataStream, Error, RegistryEntry, Result, Streamer};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -35,6 +35,7 @@ impl Streamer<EquityTickQuery, MarketDataBar> for MockEquityStreamer {
         query: EquityTickQuery,
         _creds: &Credentials,
     ) -> Result<DataStream<MarketDataBar>> {
+        validate_symbol(&query.symbol)?;
         Ok(Box::pin(VecStream::new(snapshot_rows(&query.symbol))))
     }
 
@@ -43,8 +44,16 @@ impl Streamer<EquityTickQuery, MarketDataBar> for MockEquityStreamer {
         query: &EquityTickQuery,
         _creds: &Credentials,
     ) -> Result<Vec<MarketDataBar>> {
+        validate_symbol(&query.symbol)?;
         Ok(snapshot_rows(&query.symbol))
     }
+}
+
+fn validate_symbol(symbol: &str) -> Result<()> {
+    if symbol.trim().is_empty() {
+        return Err(Error::InvalidQuery("empty symbol".to_string()));
+    }
+    Ok(())
 }
 
 fn snapshot_rows(symbol: &str) -> Vec<MarketDataBar> {
@@ -117,6 +126,10 @@ mod tests {
         assert_eq!(rows[0].symbol, "AAPL");
         assert_eq!(item.symbol, "AAPL");
         assert!(poll_next_ready(stream.as_mut()).is_none());
+        let empty = EquityTickQuery {
+            symbol: String::new(),
+        };
+        assert!(block_on_ready(streamer.snapshot(&empty, &Credentials::default())).is_err());
     }
 
     struct NoopWaker;

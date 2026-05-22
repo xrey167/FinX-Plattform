@@ -1,0 +1,43 @@
+# tdw-provider-ws-mock Readiness Worksheet
+
+Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embedding, and Model Adapter Crates.
+
+## Baseline Inventory
+
+- Manifest: crates\tdw-provider-ws-mock\Cargo.toml
+- Target kinds: lib
+- Local dependencies: tdw-core, tdw-domain
+- External dependencies: async-trait ^0.1.89; futures-core ^0.3.31; schemars ^1.2.1; serde ^1.0.228 features=[derive]
+- Dev dependencies: none
+- Reverse local dependencies: tdw-service-api
+- Feature flags: none
+- Test attributes detected: 2
+- tests/ directory: no
+- README: no
+- Examples directory: no
+- Scaffold/dead-code/fallback scan signals: 6 total, 0 stub-related
+
+## Required Readiness Evidence
+
+- [ ] Manifest correctness reviewed.
+- [ ] Dependency direction reviewed.
+- [ ] Feature flags reviewed or marked not applicable.
+- [ ] Public API and error contracts reviewed.
+- [ ] Runtime behavior reviewed.
+- [ ] Tests and coverage evidence recorded.
+- [ ] Docs and examples reviewed.
+- [ ] Surface wiring reviewed where applicable.
+- [ ] Scaffold, dead-code, and fallback signals classified.
+- [ ] Security and reliability risks reviewed.
+
+## Findings
+
+- Pending tranche audit.
+
+## Verification
+
+- Pending tranche audit. Record focused crate commands and any workspace commands here.
+
+## Verdict
+
+Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.

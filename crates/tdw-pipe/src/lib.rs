@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use tdw_stage::{CopyIntoPlan, StageLocation};
+use tdw_stage::{CopyIntoPlan, Result as StageResult, StageLocation};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PipeDefinition {
@@ -12,7 +12,7 @@ pub struct PipeDefinition {
 }
 
 impl PipeDefinition {
-    pub fn copy_plan(&self, files: Vec<String>) -> CopyIntoPlan {
+    pub fn copy_plan(&self, files: Vec<String>) -> StageResult<CopyIntoPlan> {
         CopyIntoPlan::new(self.stage.clone(), self.target_table.clone(), files)
     }
 
@@ -36,8 +36,11 @@ mod tests {
             target_table: "raw.market_data_bar".to_string(),
             last_offset: 0,
         };
-        let plan = pipe.copy_plan(vec!["ohlcv.parquet".to_string()]);
+        let plan = pipe
+            .copy_plan(vec!["ohlcv.parquet".to_string()])
+            .unwrap_or_else(|error| panic!("copy plan should be valid: {error}"));
         pipe.advance(42);
+        pipe.advance(7);
 
         assert_eq!(plan.target_table, "raw.market_data_bar");
         assert_eq!(pipe.last_offset, 42);

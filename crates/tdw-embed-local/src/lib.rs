@@ -18,11 +18,14 @@ impl Default for HashEmbeddingProvider {
 }
 
 impl HashEmbeddingProvider {
-    pub fn new(model_id: impl Into<String>, dimensions: usize) -> Self {
-        Self {
+    pub fn new(model_id: impl Into<String>, dimensions: usize) -> Result<Self> {
+        if dimensions == 0 {
+            return Err(EmbeddingError::InvalidDimensions);
+        }
+        Ok(Self {
             model_id: model_id.into(),
             dimensions,
-        }
+        })
     }
 }
 
@@ -65,5 +68,6 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.vector.len(), 8);
+        assert!(HashEmbeddingProvider::new("bad", 0).is_err());
     }
 }

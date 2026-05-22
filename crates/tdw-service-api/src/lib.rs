@@ -508,7 +508,9 @@ pub fn parity_layer_sample() -> Result<Value> {
         target_table: "raw.market_data_bar".to_string(),
         last_offset: 0,
     };
-    let copy_plan = pipe.copy_plan(vec!["ohlcv.parquet".to_string()]);
+    let copy_plan = pipe
+        .copy_plan(vec!["ohlcv.parquet".to_string()])
+        .map_err(|error| Error::Storage(error.to_string()))?;
     pipe.advance(stream_offset);
     let manifest = TableManifest {
         format: TableFormat::Iceberg,
@@ -697,11 +699,13 @@ pub fn kg_tag_sample() -> Result<Value> {
 }
 
 pub fn llm_knowledge_sample() -> Result<Value> {
-    let anthropic = AnthropicMessagesModel::new("claude-fixture");
+    let anthropic = AnthropicMessagesModel::new("claude-fixture")
+        .map_err(|error| Error::Provider(error.to_string()))?;
     let openai_compat = OpenAiCompatibleModel::new(
         "openai-compatible-fixture",
         Some("http://localhost:11434".to_string()),
-    );
+    )
+    .map_err(|error| Error::Provider(error.to_string()))?;
     let response = anthropic
         .complete(ChatRequest {
             messages: vec![ChatMessage {

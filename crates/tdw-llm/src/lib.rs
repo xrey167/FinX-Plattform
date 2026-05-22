@@ -10,6 +10,14 @@ pub type Result<T> = std::result::Result<T, LlmError>;
 pub enum LlmError {
     #[error("chat request has no messages")]
     EmptyMessages,
+    #[error("chat message content is empty")]
+    EmptyMessageContent,
+    #[error("chat request max_output_tokens must be greater than zero")]
+    EmptyMaxOutputTokens,
+    #[error("model id must not be empty")]
+    EmptyModelId,
+    #[error("base url must start with http:// or https://")]
+    InvalidBaseUrl,
     #[error("unsupported provider: {0}")]
     UnsupportedProvider(String),
 }
@@ -70,6 +78,7 @@ impl ModelSelection {
 }
 
 pub fn last_user_message(request: &ChatRequest) -> Result<&str> {
+    validate_chat_request(request)?;
     request
         .messages
         .iter()
@@ -77,6 +86,37 @@ pub fn last_user_message(request: &ChatRequest) -> Result<&str> {
         .find(|message| message.role == MessageRole::User)
         .map(|message| message.content.as_str())
         .ok_or(LlmError::EmptyMessages)
+}
+
+pub fn validate_chat_request(request: &ChatRequest) -> Result<()> {
+    if request.messages.is_empty() {
+        return Err(LlmError::EmptyMessages);
+    }
+    if request.max_output_tokens == 0 {
+        return Err(LlmError::EmptyMaxOutputTokens);
+    }
+    if request
+        .messages
+        .iter()
+        .any(|message| message.content.trim().is_empty())
+    {
+        return Err(LlmError::EmptyMessageContent);
+    }
+    Ok(())
+}
+
+pub fn validate_model_id(model_id: &str) -> Result<()> {
+    if model_id.trim().is_empty() {
+        return Err(LlmError::EmptyModelId);
+    }
+    Ok(())
+}
+
+pub fn validate_base_url(base_url: &str) -> Result<()> {
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err(LlmError::InvalidBaseUrl);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -121,5 +161,16 @@ mod tests {
 
         assert_eq!(response.model_id, "echo");
         assert_eq!(response.message.content, "hello");
+        assert!(
+            model
+                .complete(ChatRequest {
+                    messages: vec![ChatMessage {
+                        role: MessageRole::User,
+                        content: "hello".to_string(),
+                    }],
+                    max_output_tokens: 0,
+                })
+                .is_err()
+        );
     }
 }

@@ -18,11 +18,17 @@ impl LocalBlobEngine {
     }
 
     fn resolve_key(&self, key: &str) -> Result<PathBuf> {
+        if key.trim().is_empty() || key.contains('\\') {
+            return Err(Error::Storage(format!("invalid blob key: {key}")));
+        }
         let path = Path::new(key);
         if path.components().any(|component| {
             matches!(
                 component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                Component::CurDir
+                    | Component::ParentDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
             )
         }) {
             return Err(Error::Storage(format!("invalid blob key: {key}")));
@@ -57,6 +63,29 @@ mod tests {
         let engine = LocalBlobEngine::new("target/blob-tests");
 
         assert!(engine.resolve_key("../escape").is_err());
+        assert!(engine.resolve_key("").is_err());
+        assert!(engine.resolve_key("./object.json").is_err());
+        assert!(engine.resolve_key("safe\\object.json").is_err());
         assert!(engine.resolve_key("safe/object.json").is_ok());
+    }
+
+    #[tokio::test]
+    async fn writes_and_reads_relative_keys() {
+        let engine = LocalBlobEngine::new("target/blob-tests");
+        engine
+            .put_object(
+                "safe/object.bin",
+                Bytes::from_static(b"payload"),
+                "application/octet-stream",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("object should write: {error}"));
+
+        let body = engine
+            .get_object("safe/object.bin")
+            .await
+            .unwrap_or_else(|error| panic!("object should read: {error}"));
+
+        assert_eq!(body, Bytes::from_static(b"payload"));
     }
 }

@@ -9,6 +9,10 @@ pub type Result<T> = std::result::Result<T, EmbeddingError>;
 pub enum EmbeddingError {
     #[error("embedding input is empty")]
     EmptyInput,
+    #[error("embedding dimensions must be greater than zero")]
+    InvalidDimensions,
+    #[error("embedding vector is empty")]
+    EmptyVector,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -20,6 +24,13 @@ pub struct Embedding {
 pub trait EmbeddingProvider: Send + Sync {
     fn model_id(&self) -> &str;
     fn embed(&self, text: &str) -> Result<Embedding>;
+}
+
+pub fn validate_embedding(embedding: &Embedding) -> Result<()> {
+    if embedding.vector.is_empty() {
+        return Err(EmbeddingError::EmptyVector);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -53,5 +64,6 @@ mod tests {
 
         assert_eq!(embedding.model_id, "constant");
         assert_eq!(embedding.vector, vec![1.0]);
+        assert!(validate_embedding(&embedding).is_ok());
     }
 }

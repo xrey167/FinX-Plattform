@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, TableManifestError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TableFormat {
@@ -22,11 +25,53 @@ pub struct TableManifest {
     pub files: Vec<TableFile>,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum TableManifestError {
+    #[error("table manifest table name must not be empty")]
+    EmptyTable,
+    #[error("table manifest version must be greater than zero")]
+    EmptyVersion,
+    #[error("table manifest must include at least one file")]
+    EmptyFiles,
+    #[error("table manifest file path must not be empty")]
+    EmptyFilePath,
+    #[error("table manifest checksum mismatch for {path}: expected {expected}, actual {actual}")]
+    ChecksumMismatch {
+        path: String,
+        expected: u64,
+        actual: u64,
+    },
+}
+
 impl TableManifest {
+    pub fn validate(&self) -> Result<()> {
+        if self.table.trim().is_empty() {
+            return Err(TableManifestError::EmptyTable);
+        }
+        if self.version == 0 {
+            return Err(TableManifestError::EmptyVersion);
+        }
+        if self.files.is_empty() {
+            return Err(TableManifestError::EmptyFiles);
+        }
+        for file in &self.files {
+            if file.path.trim().is_empty() {
+                return Err(TableManifestError::EmptyFilePath);
+            }
+            let expected = simple_checksum(&file.path);
+            if file.checksum != expected {
+                return Err(TableManifestError::ChecksumMismatch {
+                    path: file.path.clone(),
+                    expected,
+                    actual: file.checksum,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub fn verify_checksums(&self) -> bool {
-        self.files
-            .iter()
-            .all(|file| file.checksum == simple_checksum(&file.path))
+        self.validate().is_ok()
     }
 }
 
@@ -52,6 +97,30 @@ mod tests {
                 files: vec![file],
             };
             assert!(manifest.verify_checksums());
+            assert!(manifest.validate().is_ok());
         }
+    }
+
+    #[test]
+    fn rejects_invalid_manifest_shape_and_checksum_drift() {
+        let invalid = TableManifest {
+            format: TableFormat::Iceberg,
+            table: String::new(),
+            version: 0,
+            files: Vec::new(),
+        };
+        assert!(invalid.validate().is_err());
+
+        let drifted = TableManifest {
+            format: TableFormat::Delta,
+            table: "raw.market_data_bar".to_string(),
+            version: 1,
+            files: vec![TableFile {
+                path: "s3://stage/ohlcv.parquet".to_string(),
+                checksum: 1,
+            }],
+        };
+        assert!(drifted.validate().is_err());
+        assert!(!drifted.verify_checksums());
     }
 }

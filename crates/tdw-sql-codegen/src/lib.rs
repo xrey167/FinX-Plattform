@@ -33,4 +33,16 @@ mod tests {
         );
         assert!(export_domain_ddl(SqlTarget::ClickHouse).contains("MergeTree"));
     }
+
+    #[test]
+    fn ddl_export_is_target_specific_and_domain_annotated() {
+        let postgres = export_domain_ddl(SqlTarget::Postgres);
+        let clickhouse = export_domain_ddl(SqlTarget::ClickHouse);
+
+        assert!(postgres.starts_with("-- generated from "));
+        assert!(postgres.contains("create table if not exists raw.market_data_bar"));
+        assert!(!postgres.contains("MergeTree"));
+        assert!(clickhouse.contains("engine = MergeTree"));
+        assert!(clickhouse.contains("order by (symbol, ts)"));
+    }
 }

@@ -217,6 +217,22 @@ impl SqliteSessionStore {
         .await?;
         Ok(())
     }
+
+    pub async fn cost_entries(&self, session_id: &SessionId) -> Result<Vec<CostLedgerEntry>> {
+        let rows = sqlx::query(
+            r#"
+            select session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend
+            from cost_ledger
+            where session_id = ?1
+            order by id asc
+            "#,
+        )
+        .bind(session_id.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(row_to_cost_entry).collect())
+    }
 }
 
 pub const SQLITE_MIGRATION: &str = r#"
@@ -282,6 +298,18 @@ fn row_to_pending_approval(row: sqlx::sqlite::SqliteRow) -> Result<PendingApprov
     })
 }
 
+fn row_to_cost_entry(row: sqlx::sqlite::SqliteRow) -> CostLedgerEntry {
+    CostLedgerEntry {
+        session_id: row.get("session_id"),
+        operation_id: row.get("operation_id"),
+        tokens: row.get("tokens"),
+        bytes_scanned: row.get("bytes_scanned"),
+        rows_read: row.get("rows_read"),
+        rows_written: row.get("rows_written"),
+        backend: row.get("backend"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +346,19 @@ mod tests {
             .request_approval(&session_id, &permission_id, "tdw.udf.run", "tdw.udf.*")
             .await
             .unwrap_or_else(|error| panic!("approval persists: {error}"));
+        let cost = CostLedgerEntry {
+            session_id: session_id.as_str().to_string(),
+            operation_id: "op-1".to_string(),
+            tokens: 42,
+            bytes_scanned: 2048,
+            rows_read: 128,
+            rows_written: 4,
+            backend: "sqlite".to_string(),
+        };
+        store
+            .append_cost(&cost)
+            .await
+            .unwrap_or_else(|error| panic!("cost entry persists: {error}"));
 
         assert_eq!(
             store
@@ -345,6 +386,13 @@ mod tests {
                 .expect("approval exists")
                 .decision,
             Some(ApprovalDecision::AllowOnce)
+        );
+        assert_eq!(
+            store
+                .cost_entries(&session_id)
+                .await
+                .unwrap_or_else(|error| panic!("cost entries load: {error}")),
+            vec![cost]
         );
     }
 

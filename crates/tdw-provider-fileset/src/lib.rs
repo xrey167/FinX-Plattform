@@ -32,6 +32,9 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for FilesetEquityHisto
             .get("symbol")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::InvalidQuery("missing symbol".to_string()))?;
+        if symbol.trim().is_empty() {
+            return Err(Error::InvalidQuery("empty symbol".to_string()));
+        }
         Ok(EquityHistoricalQuery {
             symbol: symbol.to_ascii_uppercase(),
         })
@@ -90,5 +93,13 @@ mod tests {
 
         assert_eq!(entry.provider, "fileset");
         assert_eq!(entry.endpoint, "equity_historical");
+    }
+
+    #[test]
+    fn rejects_empty_symbol_queries() {
+        assert!(
+            FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({ "symbol": "" }))
+                .is_err()
+        );
     }
 }

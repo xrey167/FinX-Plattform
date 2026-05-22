@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::path::{Component, Path};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -30,6 +31,7 @@ impl InMemoryS3BlobEngine {
 #[async_trait]
 impl BlobEngine for InMemoryS3BlobEngine {
     async fn put_object(&self, key: &str, body: Bytes, content_type: &str) -> Result<()> {
+        validate_key(key)?;
         self.objects
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?
@@ -44,6 +46,7 @@ impl BlobEngine for InMemoryS3BlobEngine {
     }
 
     async fn get_object(&self, key: &str) -> Result<Bytes> {
+        validate_key(key)?;
         self.objects
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?
@@ -51,6 +54,30 @@ impl BlobEngine for InMemoryS3BlobEngine {
             .map(|object| object.body.clone())
             .ok_or_else(|| Error::Storage(format!("missing s3 object: {key}")))
     }
+}
+
+fn validate_key(key: &str) -> Result<()> {
+    if key.trim().is_empty() {
+        return Err(Error::Storage(
+            "s3 object key must not be empty".to_string(),
+        ));
+    }
+    if key.contains('\\') {
+        return Err(Error::Storage(format!(
+            "s3 object key must use '/' separators: {key}"
+        )));
+    }
+    for component in Path::new(key).components() {
+        match component {
+            Component::Normal(part) if !part.is_empty() => {}
+            _ => {
+                return Err(Error::Storage(format!(
+                    "s3 object key must be relative and canonical: {key}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -62,5 +89,44 @@ mod tests {
         fn assert_blob<T: BlobEngine>() {}
 
         assert_blob::<InMemoryS3BlobEngine>();
+    }
+
+    #[tokio::test]
+    async fn stores_objects_under_canonical_relative_keys() {
+        let engine = InMemoryS3BlobEngine::default();
+        engine
+            .put_object(
+                "raw/ohlcv.parquet",
+                Bytes::from_static(b"parquet"),
+                "application/vnd.apache.parquet",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("object should store: {error}"));
+
+        let body = engine
+            .get_object("raw/ohlcv.parquet")
+            .await
+            .unwrap_or_else(|error| panic!("object should read: {error}"));
+
+        assert_eq!(body, Bytes::from_static(b"parquet"));
+    }
+
+    #[tokio::test]
+    async fn rejects_absolute_parent_and_platform_keys() {
+        let engine = InMemoryS3BlobEngine::default();
+
+        for key in [
+            "",
+            "../secret.parquet",
+            "/rooted.parquet",
+            "raw\\ohlcv.parquet",
+        ] {
+            assert!(
+                engine
+                    .put_object(key, Bytes::from_static(b"bad"), "application/octet-stream")
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

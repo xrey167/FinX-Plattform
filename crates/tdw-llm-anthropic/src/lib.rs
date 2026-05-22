@@ -2,7 +2,7 @@
 
 use tdw_llm::{
     ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result, Usage,
-    last_user_message,
+    last_user_message, validate_model_id,
 };
 
 #[derive(Clone, Debug)]
@@ -11,10 +11,10 @@ pub struct AnthropicMessagesModel {
 }
 
 impl AnthropicMessagesModel {
-    pub fn new(model_id: impl Into<String>) -> Self {
-        Self {
-            model_id: model_id.into(),
-        }
+    pub fn new(model_id: impl Into<String>) -> Result<Self> {
+        let model_id = model_id.into();
+        validate_model_id(&model_id)?;
+        Ok(Self { model_id })
     }
 }
 
@@ -45,7 +45,8 @@ mod tests {
 
     #[test]
     fn anthropic_adapter_implements_language_model_contract() {
-        let model = AnthropicMessagesModel::new("claude-test");
+        let model = AnthropicMessagesModel::new("claude-test")
+            .unwrap_or_else(|error| panic!("model id should be valid: {error}"));
         let response = model
             .complete(ChatRequest {
                 messages: vec![ChatMessage {
@@ -58,5 +59,6 @@ mod tests {
 
         assert_eq!(response.model_id, "claude-test");
         assert!(response.message.content.contains("summarize AAPL"));
+        assert!(AnthropicMessagesModel::new("").is_err());
     }
 }

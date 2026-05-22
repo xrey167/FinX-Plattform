@@ -1,0 +1,43 @@
+# tdw-llm-openai-compat Readiness Worksheet
+
+Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embedding, and Model Adapter Crates.
+
+## Baseline Inventory
+
+- Manifest: crates\tdw-llm-openai-compat\Cargo.toml
+- Target kinds: lib
+- Local dependencies: tdw-llm
+- External dependencies: none
+- Dev dependencies: none
+- Reverse local dependencies: tdw-service-api
+- Feature flags: none
+- Test attributes detected: 1
+- tests/ directory: no
+- README: no
+- Examples directory: no
+- Scaffold/dead-code/fallback scan signals: 1 total, 0 stub-related
+
+## Required Readiness Evidence
+
+- [ ] Manifest correctness reviewed.
+- [ ] Dependency direction reviewed.
+- [ ] Feature flags reviewed or marked not applicable.
+- [ ] Public API and error contracts reviewed.
+- [ ] Runtime behavior reviewed.
+- [ ] Tests and coverage evidence recorded.
+- [ ] Docs and examples reviewed.
+- [ ] Surface wiring reviewed where applicable.
+- [ ] Scaffold, dead-code, and fallback signals classified.
+- [ ] Security and reliability risks reviewed.
+
+## Findings
+
+- Pending tranche audit.
+
+## Verification
+
+- Pending tranche audit. Record focused crate commands and any workspace commands here.
+
+## Verdict
+
+Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.

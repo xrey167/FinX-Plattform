@@ -2339,6 +2339,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2370,6 +2371,11 @@ dependencies = [
 [[package]]
 name = "tdw-embed-google"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tdw-embed",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-embed-local"
@@ -2381,6 +2387,11 @@ dependencies = [
 [[package]]
 name = "tdw-embed-openai"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tdw-embed",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-entity-resolver"
@@ -2514,6 +2525,7 @@ name = "tdw-migration"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2540,6 +2552,9 @@ dependencies = [
 [[package]]
 name = "tdw-pipeline"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-protocol"
@@ -2556,10 +2571,16 @@ dependencies = [
 [[package]]
 name = "tdw-provider-alpaca"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-provider-binance"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-provider-fileset"
@@ -2577,14 +2598,23 @@ dependencies = [
 [[package]]
 name = "tdw-provider-fred"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-provider-huggingface"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-provider-polygon"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-provider-ws-mock"
@@ -2764,6 +2794,7 @@ name = "tdw-stage"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2784,6 +2815,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "tdw-core",
+ "tokio",
 ]
 
 [[package]]
@@ -2791,12 +2823,18 @@ name = "tdw-storage-meilisearch"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "serde_json",
  "tdw-core",
+ "tokio",
 ]
 
 [[package]]
 name = "tdw-storage-parquet"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tdw-storage-postgres"
@@ -2814,7 +2852,9 @@ name = "tdw-storage-qdrant"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "serde_json",
  "tdw-core",
+ "tokio",
 ]
 
 [[package]]
@@ -2825,6 +2865,7 @@ dependencies = [
  "schemars",
  "serde",
  "tdw-core",
+ "tokio",
 ]
 
 [[package]]
@@ -2834,6 +2875,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "tdw-core",
+ "tokio",
 ]
 
 [[package]]
@@ -2841,6 +2883,7 @@ name = "tdw-table-format"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
