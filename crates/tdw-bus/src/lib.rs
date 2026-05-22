@@ -12,6 +12,12 @@ pub struct BusEntry {
     pub envelope: EventEnvelope<Value>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetentionWindow {
+    pub oldest_sequence: u64,
+    pub newest_sequence: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct EventBus {
     capacity: usize,
@@ -46,6 +52,18 @@ impl EventBus {
             .collect()
     }
 
+    pub fn retention_window(&self) -> Option<RetentionWindow> {
+        Some(RetentionWindow {
+            oldest_sequence: self.events.front()?.sequence,
+            newest_sequence: self.events.back()?.sequence,
+        })
+    }
+
+    pub fn has_retention_gap(&self, requested_sequence: u64) -> bool {
+        self.retention_window()
+            .is_some_and(|window| requested_sequence < window.oldest_sequence)
+    }
+
     pub fn lag_since(&self, last_seen_sequence: u64) -> u64 {
         self.next_sequence
             .saturating_sub(1)
@@ -74,5 +92,30 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].sequence, first);
         assert_eq!(bus.lag_since(first), second - first);
+    }
+
+    #[test]
+    fn reports_retention_gap_after_capacity_eviction() {
+        let mut bus = EventBus::new(2);
+        let first = bus.publish(sample_event("service"));
+        let second = bus.publish(sample_event("worker"));
+        let third = bus.publish(sample_event("mcp"));
+
+        assert_eq!(
+            bus.retention_window(),
+            Some(RetentionWindow {
+                oldest_sequence: second,
+                newest_sequence: third,
+            })
+        );
+        assert!(bus.has_retention_gap(first));
+        assert!(!bus.has_retention_gap(second));
+
+        let retained_sequences = bus
+            .read_from(first)
+            .into_iter()
+            .map(|entry| entry.sequence)
+            .collect::<Vec<_>>();
+        assert_eq!(retained_sequences, vec![second, third]);
     }
 }

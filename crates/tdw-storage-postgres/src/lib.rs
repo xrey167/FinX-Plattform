@@ -33,6 +33,7 @@ impl PostgresRecordingEngine {
 #[async_trait]
 impl RelationalEngine for PostgresRecordingEngine {
     async fn execute(&self, sql: &str, _params: Value) -> Result<u64> {
+        validate_sql(sql)?;
         self.statements
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?
@@ -41,12 +42,20 @@ impl RelationalEngine for PostgresRecordingEngine {
     }
 
     async fn fetch_json(&self, sql: &str, params: Value) -> Result<Vec<Value>> {
+        validate_sql(sql)?;
         Ok(vec![serde_json::json!({
             "engine": "postgres-recording",
             "sql": sql,
             "params": params
         })])
     }
+}
+
+fn validate_sql(sql: &str) -> Result<()> {
+    if sql.trim().is_empty() {
+        return Err(Error::Storage("postgres sql must not be empty".to_string()));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -132,6 +141,7 @@ mod tests {
             1
         );
         assert_eq!(health, HealthStatus::Healthy);
+        assert!(block_on_ready(engine.execute("", serde_json::json!({}))).is_err());
     }
 
     struct NoopWaker;

@@ -1,11 +1,38 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
+
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, PipelineValidationError>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PipelineJob {
     pub name: &'static str,
     pub runner: &'static str,
     pub args: &'static str,
     pub depends_on: &'static [&'static str],
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum PipelineValidationError {
+    #[error("pipeline must include at least one job")]
+    EmptyPipeline,
+    #[error("pipeline job name must not be empty")]
+    EmptyJobName,
+    #[error("pipeline job {name} runner must not be empty")]
+    EmptyRunner { name: &'static str },
+    #[error("pipeline job {name} args must not be empty")]
+    EmptyArgs { name: &'static str },
+    #[error("duplicate pipeline job: {name}")]
+    DuplicateJob { name: &'static str },
+    #[error("pipeline job {name} depends on itself")]
+    SelfDependency { name: &'static str },
+    #[error("pipeline job {name} has unknown dependency {dependency}")]
+    UnknownDependency {
+        name: &'static str,
+        dependency: &'static str,
+    },
 }
 
 pub fn market_data_dbt_jobs() -> Vec<PipelineJob> {
@@ -37,6 +64,44 @@ pub fn market_data_dbt_jobs() -> Vec<PipelineJob> {
     ]
 }
 
+pub fn validate_jobs(jobs: &[PipelineJob]) -> Result<()> {
+    if jobs.is_empty() {
+        return Err(PipelineValidationError::EmptyPipeline);
+    }
+
+    let mut names = BTreeSet::new();
+    for job in jobs {
+        if job.name.trim().is_empty() {
+            return Err(PipelineValidationError::EmptyJobName);
+        }
+        if job.runner.trim().is_empty() {
+            return Err(PipelineValidationError::EmptyRunner { name: job.name });
+        }
+        if job.args.trim().is_empty() {
+            return Err(PipelineValidationError::EmptyArgs { name: job.name });
+        }
+        if !names.insert(job.name) {
+            return Err(PipelineValidationError::DuplicateJob { name: job.name });
+        }
+    }
+
+    for job in jobs {
+        for dependency in job.depends_on {
+            if *dependency == job.name {
+                return Err(PipelineValidationError::SelfDependency { name: job.name });
+            }
+            if !names.contains(dependency) {
+                return Err(PipelineValidationError::UnknownDependency {
+                    name: job.name,
+                    dependency,
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn can_enqueue(job: &PipelineJob, completed_jobs: &[&str]) -> bool {
     job.depends_on
         .iter()
@@ -57,5 +122,42 @@ mod tests {
 
         assert!(!can_enqueue(silver, &[]));
         assert!(can_enqueue(silver, &["dbt_bronze_market_data"]));
+        assert!(validate_jobs(&jobs).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unknown_pipeline_dependencies() {
+        let duplicate = vec![
+            PipelineJob {
+                name: "job",
+                runner: "dbt",
+                args: "run",
+                depends_on: &[],
+            },
+            PipelineJob {
+                name: "job",
+                runner: "dbt",
+                args: "run",
+                depends_on: &[],
+            },
+        ];
+        let unknown = vec![PipelineJob {
+            name: "silver",
+            runner: "dbt",
+            args: "run",
+            depends_on: &["bronze"],
+        }];
+
+        assert!(validate_jobs(&duplicate).is_err());
+        assert!(validate_jobs(&unknown).is_err());
+        assert_eq!(
+            validate_jobs(&[PipelineJob {
+                name: "job",
+                runner: "dbt",
+                args: "",
+                depends_on: &[],
+            }]),
+            Err(PipelineValidationError::EmptyArgs { name: "job" })
+        );
     }
 }

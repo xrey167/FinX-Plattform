@@ -1,0 +1,5 @@
+TDW hook tool prompt
+
+Use the typed HookEvent, HandlerKind, PermissionRules, and DeferredApprovals
+contracts. A hook may add context or request a stop only through the serialized
+HookRuntimeOutcome. Do not infer hidden side channels from handler output.

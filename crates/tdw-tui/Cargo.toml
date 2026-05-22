@@ -1,0 +1,13 @@
+[package]
+name = "tdw-tui"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "UNLICENSED"
+
+[dependencies]
+ratatui = { workspace = true }
+tdw-protocol = { workspace = true }
+
+[lints]
+workspace = true

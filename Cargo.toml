@@ -18,16 +18,35 @@ async-trait = "0.1.89"
 bytes = "1.11.0"
 futures-core = "0.3.31"
 schemars = "1.2.1"
+ratatui = "0.30.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "sqlite", "sqlite-bundled", "macros"] }
 thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync"] }
+toml = "1.1.2"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.1", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
+tdw-config = { path = "crates/tdw-config" }
+tdw-acp = { path = "crates/tdw-acp" }
 tdw-core = { path = "crates/tdw-core" }
 tdw-domain = { path = "crates/tdw-domain" }
+tdw-exec = { path = "crates/tdw-exec" }
+tdw-knowledge = { path = "crates/tdw-knowledge" }
+tdw-llm = { path = "crates/tdw-llm" }
+tdw-llm-anthropic = { path = "crates/tdw-llm-anthropic" }
+tdw-llm-openai-compat = { path = "crates/tdw-llm-openai-compat" }
+tdw-protocol = { path = "crates/tdw-protocol" }
+tdw-rollout = { path = "crates/tdw-rollout" }
+tdw-session = { path = "crates/tdw-session" }
+tdw-sandbox = { path = "crates/tdw-sandbox" }
+tdw-tools = { path = "crates/tdw-tools" }
+tdw-tui = { path = "crates/tdw-tui" }
 tdw-runtime = { path = "crates/tdw-runtime" }
+tdw-app-client = { path = "crates/tdw-app-client" }
+tdw-app-server = { path = "crates/tdw-app-server" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

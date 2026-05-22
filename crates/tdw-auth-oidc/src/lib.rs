@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_ALLOWED_ALGORITHMS: [&str; 2] = ["RS256", "ES256"];
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JwksKey {
     pub kid: String,
@@ -17,8 +19,59 @@ pub struct JwtClaims {
     pub roles: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClaimValidationError {
+    EmptySubject,
+    IssuerMismatch,
+    AudienceMismatch,
+    EmptyKeyId,
+    UnknownKeyId,
+    UnsupportedAlgorithm,
+    InvalidRole,
+}
+
 pub fn validate_claims(claims: &JwtClaims, jwks: &[JwksKey], issuer: &str, audience: &str) -> bool {
-    claims.iss == issuer && claims.aud == audience && jwks.iter().any(|key| key.kid == claims.kid)
+    validate_claims_strict(claims, jwks, issuer, audience, &DEFAULT_ALLOWED_ALGORITHMS).is_ok()
+}
+
+pub fn validate_claims_strict(
+    claims: &JwtClaims,
+    jwks: &[JwksKey],
+    issuer: &str,
+    audience: &str,
+    allowed_algorithms: &[&str],
+) -> Result<(), ClaimValidationError> {
+    if claims.sub.trim().is_empty() {
+        return Err(ClaimValidationError::EmptySubject);
+    }
+    if claims.iss != issuer || issuer.trim().is_empty() {
+        return Err(ClaimValidationError::IssuerMismatch);
+    }
+    if claims.aud != audience || audience.trim().is_empty() {
+        return Err(ClaimValidationError::AudienceMismatch);
+    }
+    if claims.kid.trim().is_empty() {
+        return Err(ClaimValidationError::EmptyKeyId);
+    }
+    if claims.roles.iter().any(|role| !is_role_name(role)) {
+        return Err(ClaimValidationError::InvalidRole);
+    }
+
+    let Some(key) = jwks.iter().find(|key| key.kid == claims.kid) else {
+        return Err(ClaimValidationError::UnknownKeyId);
+    };
+    if !allowed_algorithms.iter().any(|alg| *alg == key.alg) {
+        return Err(ClaimValidationError::UnsupportedAlgorithm);
+    }
+
+    Ok(())
+}
+
+fn is_role_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
 #[cfg(test)]
@@ -41,5 +94,57 @@ mod tests {
 
         assert!(validate_claims(&claims, &[key], "https://issuer", "tdw"));
         assert!(!validate_claims(&claims, &[], "https://issuer", "tdw"));
+    }
+
+    #[test]
+    fn rejects_empty_subject_unknown_algorithms_and_bad_roles() {
+        let key = JwksKey {
+            kid: "k1".to_string(),
+            alg: "none".to_string(),
+        };
+        let claims = JwtClaims {
+            sub: "alice".to_string(),
+            iss: "https://issuer".to_string(),
+            aud: "tdw".to_string(),
+            kid: "k1".to_string(),
+            roles: vec!["analyst".to_string()],
+        };
+
+        assert_eq!(
+            validate_claims_strict(&claims, &[key], "https://issuer", "tdw", &["RS256"]),
+            Err(ClaimValidationError::UnsupportedAlgorithm)
+        );
+        assert_eq!(
+            validate_claims_strict(
+                &JwtClaims {
+                    sub: " ".to_string(),
+                    ..claims.clone()
+                },
+                &[JwksKey {
+                    kid: "k1".to_string(),
+                    alg: "RS256".to_string(),
+                }],
+                "https://issuer",
+                "tdw",
+                &["RS256"],
+            ),
+            Err(ClaimValidationError::EmptySubject)
+        );
+        assert_eq!(
+            validate_claims_strict(
+                &JwtClaims {
+                    roles: vec!["analyst\nadmin".to_string()],
+                    ..claims
+                },
+                &[JwksKey {
+                    kid: "k1".to_string(),
+                    alg: "RS256".to_string(),
+                }],
+                "https://issuer",
+                "tdw",
+                &["RS256"],
+            ),
+            Err(ClaimValidationError::InvalidRole)
+        );
     }
 }

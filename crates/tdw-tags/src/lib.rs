@@ -27,6 +27,12 @@ pub enum TagError {
     Cycle(String),
     #[error("unknown tag: {0}")]
     UnknownTag(String),
+    #[error("unknown parent tag: {0}")]
+    UnknownParent(String),
+    #[error("invalid tag id: {0}")]
+    InvalidTagId(String),
+    #[error("invalid tag assignment")]
+    InvalidAssignment,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -37,6 +43,16 @@ pub struct TagStore {
 
 impl TagStore {
     pub fn define(&mut self, definition: TagDefinition) -> Result<(), TagError> {
+        validate_tag_id(&definition.tag_id)?;
+        if let Some(parent) = &definition.parent {
+            validate_tag_id(parent)?;
+            if !self.definitions.contains_key(parent) {
+                return Err(TagError::UnknownParent(parent.clone()));
+            }
+        }
+        if matches!(definition.ttl_days, Some(0)) {
+            return Err(TagError::InvalidTagId(definition.tag_id));
+        }
         self.definitions
             .insert(definition.tag_id.clone(), definition.clone());
         if self.has_cycle(&definition.tag_id) {
@@ -47,6 +63,7 @@ impl TagStore {
     }
 
     pub fn assign(&mut self, assignment: TagAssignment) -> Result<(), TagError> {
+        validate_assignment(&assignment)?;
         if !self.definitions.contains_key(&assignment.tag_id) {
             return Err(TagError::UnknownTag(assignment.tag_id));
         }
@@ -58,6 +75,7 @@ impl TagStore {
         self.assignments
             .iter()
             .filter(|assignment| assignment.entity_id == entity_id)
+            .filter(|assignment| assignment.assigned_at.as_str() <= as_of)
             .filter(|assignment| {
                 assignment
                     .expires_at
@@ -94,6 +112,55 @@ impl TagStore {
         }
         false
     }
+}
+
+fn validate_tag_id(value: &str) -> Result<(), TagError> {
+    if is_tag_id(value) {
+        Ok(())
+    } else {
+        Err(TagError::InvalidTagId(value.to_string()))
+    }
+}
+
+fn validate_assignment(assignment: &TagAssignment) -> Result<(), TagError> {
+    validate_tag_id(&assignment.tag_id)?;
+    if !is_entity_id(&assignment.entity_id)
+        || !is_date(&assignment.assigned_at)
+        || assignment.provenance.trim().is_empty()
+        || assignment.provenance.chars().any(char::is_control)
+        || assignment
+            .expires_at
+            .as_deref()
+            .is_some_and(|expires| !is_date(expires) || expires <= assignment.assigned_at.as_str())
+    {
+        return Err(TagError::InvalidAssignment);
+    }
+    Ok(())
+}
+
+fn is_tag_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.contains(':')
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-')
+        })
+}
+
+fn is_entity_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
+}
+
+fn is_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .chars()
+            .enumerate()
+            .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -138,5 +205,43 @@ mod tests {
         );
         assert_eq!(store.taxonomy_stats().get("style:momentum"), Some(&1));
         assert_eq!(store.assignments()[0].provenance, "rule:price_momentum");
+    }
+
+    #[test]
+    fn rejects_invalid_taxonomy_and_assignment_inputs() {
+        let mut store = TagStore::default();
+        assert_eq!(
+            store.define(TagDefinition {
+                tag_id: "asset/equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            }),
+            Err(TagError::InvalidTagId("asset/equity".to_string()))
+        );
+        assert_eq!(
+            store.define(TagDefinition {
+                tag_id: "style:momentum".to_string(),
+                parent: Some("asset:missing".to_string()),
+                ttl_days: None,
+            }),
+            Err(TagError::UnknownParent("asset:missing".to_string()))
+        );
+        store
+            .define(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        assert_eq!(
+            store.assign(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "asset:equity".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: Some("2026-05-20".to_string()),
+                provenance: "manual".to_string(),
+            }),
+            Err(TagError::InvalidAssignment)
+        );
     }
 }

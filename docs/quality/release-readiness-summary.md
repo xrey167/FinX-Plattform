@@ -1,25 +1,31 @@
 # Release Readiness Summary
 
-Release candidate: v0.1
+Scope: G001-G008 crate-readiness hardening ultragoal for the FinX-Plattform clean-room TDW workspace.
 
 Verdict: APPROVE / CLEAR for the implemented ultragoal scope.
 
 Final evidence:
-- `just verify-phase`: PASS
-- `just coverage`: PASS, `lcov.info` line coverage 83.74%
-- `just windows-release`: PASS for `x86_64-pc-windows-msvc`
-- `just mutation-core`: PASS, 28 tested, 19 caught, 9 unviable, 0 missed
-- `just test-adversarial`: PASS
-- Local flaky-detect loop: PASS, 10 integration/e2e repetitions
+- `cargo test -p tdw-mask`: PASS
+- `cargo fmt --all -- --check`: PASS
+- `cargo check --workspace`: PASS
+- `cargo clippy --workspace --all-targets -- -D warnings`: PASS
+- `cargo test --workspace`: PASS
+- `cargo run -p xtask -- clean-room-audit`: PASS
 - `git diff --check`: PASS
 - AI slop cleanup report: PASS
 - Code review: APPROVE with architectural status CLEAR
 
-Hardening changes made during G010:
-- Added schema drift assertions in CI after agent and event schema generation.
-- Added a named adversarial gate in `Justfile`, CI, docs, and the generated quality-gate contract.
-- Fixed mutation-smoke gaps in `tdw-core` registry behavior and inventory registration coverage.
-- Updated generated-output ignore rules for cargo-mutants reports.
+Readiness coverage:
+- Every workspace crate under `crates/*` has a worksheet under `docs/quality/crate-readiness/`.
+- `xtask` has a worksheet and a final matrix verdict.
+- `docs/quality/crate-readiness/matrix.md` has no pending tranche-audit verdicts.
+- `docs/quality/crate-readiness/dependency-topology.md` records dependency and scan evidence for the changed tranche surfaces.
 
-Operational caveat:
-- The repository now encodes nightly mutation, full e2e, and flaky-detect gates. This local run also passed one 10-iteration flaky-detect loop, but seven scheduled nightly CI runs require elapsed CI time after merge.
+Hardening summary:
+- Provider, embedding, LLM, agent, auth, hooks, tools, UDF, knowledge, graph, tag, eval, client, service, ACP, runtime, TUI, and worker surfaces now have validation or checked execution paths plus readiness evidence.
+- `tdw-service-api` composes the thin CLI/MCP/service/worker surfaces instead of duplicating business logic.
+- The final cleaner pass changed `tdw-mask::apply_masks` from fail-open to fail-closed behavior for invalid mask rules.
+- Clean-room audit passed: no `finx-*` crate/dependency, copied FinX-XR code, or `tdw-provider-openbb` dependency was introduced.
+
+Residual follow-ups:
+- Production transports, durable queues, release packaging, and richer policy binding remain future integration work. They are documented as follow-ups, not blockers for this bootstrap readiness gate.

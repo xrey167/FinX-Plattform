@@ -9,7 +9,9 @@ that contract directly:
 - `tdw-bus` provides ordered in-memory publish/read/lag behavior for local
   integration tests.
 - `tdw-hooks` provides deterministic hook ordering, transaction modes,
-  enable/disable state, recursion guard, and depth guard.
+  enable/disable state, recursion guard, depth guard, lifecycle `HookEvent`
+  values, handler kinds, stop vetoes, injected context, last-match-wins
+  permission rules, deferred approval state, and sibling prompt text assets.
 - `tdw-outbox` persists pending events before dispatch.
 - `tdw-cdc` turns outbox records into ordered offsets.
 - `tdw-replay` creates dry-run replay plans from CDC records.

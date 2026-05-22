@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, DbtCommandError>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DbtRunResult {
@@ -22,17 +25,48 @@ pub struct DbtCommand {
     pub args: Vec<String>,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum DbtCommandError {
+    #[error("dbt project dir must not be empty")]
+    EmptyProjectDir,
+    #[error("dbt profiles dir must not be empty")]
+    EmptyProfilesDir,
+    #[error("dbt selector must not be empty")]
+    EmptySelector,
+    #[error("dbt selector must not contain control characters")]
+    SelectorControlCharacters,
+}
+
 impl DbtCommand {
-    pub fn build_run(project_dir: impl Into<String>, selector: impl Into<String>) -> Self {
-        Self {
-            project_dir: project_dir.into(),
-            profiles_dir: "dbt/finx_finance".to_string(),
-            args: vec!["run".to_string(), "--select".to_string(), selector.into()],
+    pub fn build_run(project_dir: impl Into<String>, selector: impl Into<String>) -> Result<Self> {
+        Self::build_run_with_profiles(project_dir, "dbt/finx_finance", selector)
+    }
+
+    pub fn build_run_with_profiles(
+        project_dir: impl Into<String>,
+        profiles_dir: impl Into<String>,
+        selector: impl Into<String>,
+    ) -> Result<Self> {
+        let project_dir = project_dir.into();
+        let profiles_dir = profiles_dir.into();
+        let selector = selector.into();
+
+        validate_component(&project_dir, DbtCommandError::EmptyProjectDir)?;
+        validate_component(&profiles_dir, DbtCommandError::EmptyProfilesDir)?;
+        validate_component(&selector, DbtCommandError::EmptySelector)?;
+        if selector.chars().any(char::is_control) {
+            return Err(DbtCommandError::SelectorControlCharacters);
         }
+
+        Ok(Self {
+            project_dir,
+            profiles_dir,
+            args: vec!["run".to_string(), "--select".to_string(), selector],
+        })
     }
 }
 
-pub fn parse_run_results(json: &str) -> Result<DbtRunResult, serde_json::Error> {
+pub fn parse_run_results(json: &str) -> std::result::Result<DbtRunResult, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -50,6 +84,13 @@ pub fn run_step_rows(result: &DbtRunResult) -> Vec<(String, String, f64)> {
         .collect()
 }
 
+fn validate_component(value: &str, error: DbtCommandError) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(error);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -64,5 +105,24 @@ mod tests {
         let rows = run_step_rows(&result);
         assert_eq!(rows[0].0, "model.finx_finance.bronze_ohlcv");
         assert_eq!(rows[0].1, "success");
+    }
+
+    #[test]
+    fn builds_validated_dbt_run_command() {
+        let command = DbtCommand::build_run("dbt/finx_finance", "tag:layer:bronze")
+            .unwrap_or_else(|error| panic!("dbt command should be valid: {error}"));
+
+        assert_eq!(command.project_dir, "dbt/finx_finance");
+        assert_eq!(command.profiles_dir, "dbt/finx_finance");
+        assert_eq!(
+            command.args,
+            vec![
+                "run".to_string(),
+                "--select".to_string(),
+                "tag:layer:bronze".to_string(),
+            ]
+        );
+        assert!(DbtCommand::build_run("", "tag:layer:bronze").is_err());
+        assert!(DbtCommand::build_run("dbt/finx_finance", "\n").is_err());
     }
 }

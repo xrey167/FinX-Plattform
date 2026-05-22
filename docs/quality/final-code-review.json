@@ -1,8 +1,44 @@
 {
   "version": 1,
-  "scope": "G001-G010 ultragoal implementation diff",
-  "filesReviewed": "workspace diff, CI workflows, Justfile, xtask, quality docs, core registry hardening, provider/storage coverage tests",
-  "totalIssues": 0,
+  "scope": "G001-G008 crate-readiness ultragoal final diff",
+  "filesReviewed": [
+    "Cargo.lock",
+    "crates/tdw-acp",
+    "crates/tdw-agent",
+    "crates/tdw-agent-store",
+    "crates/tdw-app-client",
+    "crates/tdw-app-server",
+    "crates/tdw-auth",
+    "crates/tdw-auth-oidc",
+    "crates/tdw-define",
+    "crates/tdw-embed*",
+    "crates/tdw-entity-resolver",
+    "crates/tdw-eval-runner",
+    "crates/tdw-exec",
+    "crates/tdw-feature-store",
+    "crates/tdw-fn-string",
+    "crates/tdw-graph",
+    "crates/tdw-hooks",
+    "crates/tdw-kg",
+    "crates/tdw-knowledge",
+    "crates/tdw-llm*",
+    "crates/tdw-mask",
+    "crates/tdw-ml-registry",
+    "crates/tdw-provider-*",
+    "crates/tdw-rewrite",
+    "crates/tdw-sandbox",
+    "crates/tdw-service-api",
+    "crates/tdw-spatial",
+    "crates/tdw-tag-rules",
+    "crates/tdw-tags",
+    "crates/tdw-tools",
+    "crates/tdw-tui",
+    "crates/tdw-udf*",
+    "crates/tdw-workflow-engine",
+    "xtask",
+    "docs/quality"
+  ],
+  "totalUnresolvedIssues": 0,
   "architecturalStatus": "CLEAR",
   "codeReviewerRecommendation": "APPROVE",
   "finalRecommendation": "APPROVE",
@@ -12,25 +48,42 @@
     "medium": [],
     "low": []
   },
+  "resolvedDuringReview": [
+    {
+      "severity": "medium",
+      "files": [
+        "crates/tdw-mask/src/lib.rs"
+      ],
+      "issue": "Compatibility masking wrapper returned the original unmasked row when invalid mask rules were supplied.",
+      "resolution": "Changed the wrapper to fail closed by redacting all values, kept the checked error path, and added a regression test."
+    },
+    {
+      "severity": "low",
+      "files": [
+        "docs/quality/crate-readiness/xtask.md",
+        "docs/quality/crate-readiness/matrix.md"
+      ],
+      "issue": "The final aggregate matrix still marked xtask pending.",
+      "resolution": "Completed the xtask worksheet and changed the matrix verdict to Ready with follow-ups."
+    }
+  ],
   "checksReviewed": [
-    "just verify-phase",
-    "just coverage",
-    "just windows-release",
-    "just mutation-core",
-    "local flaky-detect x10 integration/e2e loop",
-    "ai-slop cleanup scan",
+    "cargo test -p tdw-mask",
+    "cargo fmt --all -- --check",
+    "cargo check --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "cargo run -p xtask -- clean-room-audit",
     "git diff --check"
   ],
   "securityReview": {
-    "hardcodedSecrets": "none found; credential hits are runtime option fields only",
-    "injectionAndBypassCoverage": "just test-adversarial covers SQL guard, masking, authorization, and OIDC claim validation",
-    "dependencyAudit": "cargo deny exits successfully; private workspace path wildcard diagnostics are accepted by ADR-0009"
+    "hardcodedSecrets": "none found in changed files",
+    "unsafeCode": "crate-level forbid(unsafe_code) remains in the touched crates; verification passed",
+    "cleanRoom": "clean-room audit passed and the changed dependency set contains no finx-* crates, copied FinX-XR code, or tdw-provider-openbb dependency"
   },
   "architectureReview": {
     "status": "CLEAR",
-    "rationale": "Core runtime, storage, event, parity, KG, agent, and verification layers are wired through shared contracts and CI/quality gates rather than parallel bypass paths.",
-    "watchItems": [
-      "Scheduled seven-night CI history is future evidence after merge; local x10 flaky-detect passed in this session."
-    ]
+    "rationale": "The implementation keeps the clean-room TDW boundary, routes client/MCP/service/worker entrypoints through service-api and protocol crates, keeps provider/model/auth/tool/UDF behavior in bounded crates, and records crate readiness with no pending matrix verdicts.",
+    "watchItems": []
   }
 }

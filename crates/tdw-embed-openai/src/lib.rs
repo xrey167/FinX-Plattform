@@ -1,15 +1,101 @@
 #![forbid(unsafe_code)]
 
-//! Bootstrap stub for the `tdw-embed-openai` crate.
+use serde_json::{Value, json};
+use tdw_embed::Embedding;
+use thiserror::Error;
 
-pub const CRATE_NAME: &str = "tdw-embed-openai";
+pub const PROVIDER_ID: &str = "openai";
+pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const EMBEDDINGS_PATH: &str = "/embeddings";
+
+pub type Result<T> = std::result::Result<T, OpenAiEmbeddingAdapterError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddingHttpRequest {
+    pub provider: &'static str,
+    pub base_url: String,
+    pub path: &'static str,
+    pub bearer_token_required: bool,
+    pub body: Value,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum OpenAiEmbeddingAdapterError {
+    #[error("openai embedding model id must not be empty")]
+    EmptyModel,
+    #[error("openai embedding input must not be empty")]
+    EmptyInput,
+    #[error("openai api key must be supplied by the caller")]
+    MissingApiKey,
+    #[error("openai embedding vector must not be empty")]
+    EmptyVector,
+    #[error("openai embedding vector contains a non-finite value")]
+    NonFiniteVector,
+}
+
+pub fn build_embedding_request(
+    model: &str,
+    input: &str,
+    api_key_present: bool,
+) -> Result<EmbeddingHttpRequest> {
+    if !api_key_present {
+        return Err(OpenAiEmbeddingAdapterError::MissingApiKey);
+    }
+    let model = normalize_component(model, OpenAiEmbeddingAdapterError::EmptyModel)?;
+    let input = normalize_component(input, OpenAiEmbeddingAdapterError::EmptyInput)?;
+    Ok(EmbeddingHttpRequest {
+        provider: PROVIDER_ID,
+        base_url: DEFAULT_BASE_URL.to_string(),
+        path: EMBEDDINGS_PATH,
+        bearer_token_required: true,
+        body: json!({
+            "model": model,
+            "input": input
+        }),
+    })
+}
+
+pub fn decode_embedding(model: &str, vector: Vec<f32>) -> Result<Embedding> {
+    let model = normalize_component(model, OpenAiEmbeddingAdapterError::EmptyModel)?;
+    if vector.is_empty() {
+        return Err(OpenAiEmbeddingAdapterError::EmptyVector);
+    }
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err(OpenAiEmbeddingAdapterError::NonFiniteVector);
+    }
+    Ok(Embedding {
+        model_id: model,
+        vector,
+    })
+}
+
+fn normalize_component(value: &str, error: OpenAiEmbeddingAdapterError) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(error);
+    }
+    Ok(value.to_string())
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn exposes_crate_name() {
-        assert_eq!(CRATE_NAME, "tdw-embed-openai");
+    fn builds_request_and_decodes_vector_without_network_call() {
+        let request = build_embedding_request("text-embedding-3-small", "macro note", true)
+            .unwrap_or_else(|error| panic!("request should build: {error}"));
+        let embedding = decode_embedding("text-embedding-3-small", vec![0.1, 0.2])
+            .unwrap_or_else(|error| panic!("embedding should decode: {error}"));
+
+        assert_eq!(request.provider, "openai");
+        assert_eq!(request.path, EMBEDDINGS_PATH);
+        assert_eq!(request.body["model"], "text-embedding-3-small");
+        assert_eq!(embedding.vector.len(), 2);
+        assert!(build_embedding_request("model", "input", false).is_err());
+        assert!(build_embedding_request("", "input", true).is_err());
+        assert!(build_embedding_request("model", "", true).is_err());
+        assert!(decode_embedding("model", Vec::new()).is_err());
+        assert!(decode_embedding("model", vec![f32::NAN]).is_err());
     }
 }

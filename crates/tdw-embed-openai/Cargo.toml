@@ -6,6 +6,9 @@ publish = false
 license = "UNLICENSED"
 
 [dependencies]
+serde_json = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

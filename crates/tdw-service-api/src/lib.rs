@@ -8,16 +8,20 @@ use std::task::{Context, Poll, Wake, Waker};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tdw_acp::{AcpRequest, AcpServerInfo, validate_request};
 use tdw_actor::{ActorContext, OmcSpawn};
 use tdw_agent::{
     EvalCase, EvalRunRequest, WorkflowDefinition, WorkflowEdge, WorkflowNode, gotcha_seed,
     parse_slash_command_invocation, sample_agent_card, schema_bundle,
 };
 use tdw_agent_store::AgentStore;
+use tdw_app_client::{AppClient, ClientInfo};
+use tdw_app_server::{DaemonEndpoint, DaemonTransport, channel, validate_endpoint};
 use tdw_auth::{AuthPolicy, Principal, authorize};
 use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims};
 use tdw_bus::EventBus;
 use tdw_cdc::CdcStream;
+use tdw_config::{ConfigLayer, ConfigLayerKind, default_layer_order, merge_layers};
 use tdw_core::{
     BlobEngine, Error, LexicalDoc, LexicalEngine, OBBject, ProgressOrResult, ProgressStream,
     ProviderKind, ProviderRegistry, Result, ScoredDoc, ScoredPoint, TextQuery, VectorEngine,
@@ -30,18 +34,31 @@ use tdw_embed_local::HashEmbeddingProvider;
 use tdw_entity_resolver::{manual_merge_decision, resolve_symbol};
 use tdw_eval_runner::EvalRunner;
 use tdw_event::{EventEnvelope, event_schema_bundle};
+use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
 use tdw_graph::DirectedGraph;
-use tdw_hooks::{HookRegistry, TransactionMode, event_hook};
+use tdw_hooks::{
+    AdditionalContext, HandlerKind, HookEvent, HookRegistry, HookSpec, TransactionMode, event_hook,
+};
 use tdw_kg::{Entity, EntityKind, KnowledgeGraph, Relationship};
+use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex, summarize_syntax};
+use tdw_llm::{ChatMessage, ChatRequest, LanguageModel, MessageRole};
+use tdw_llm_anthropic::AnthropicMessagesModel;
+use tdw_llm_openai_compat::OpenAiCompatibleModel;
 use tdw_mask::{MaskMode, MaskRule, apply_masks, masking_hook};
 use tdw_outbox::InMemoryOutbox;
 use tdw_pipe::PipeDefinition;
+use tdw_protocol::{
+    ActorKind, ActorRef, EventMsg, Op, OpEnvelope, PermissionId, ReplayFrame, SessionId,
+    schema_bundle as protocol_schema_bundle,
+};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
+use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
+use tdw_sandbox::{LocalUdfSandbox, SandboxRuntime, UdfRequest};
 use tdw_snapshot::SnapshotStore;
 use tdw_spatial::{BoundingBox, Point};
 use tdw_stage::StageLocation;
@@ -51,6 +68,8 @@ use tdw_storage_s3::InMemoryS3BlobEngine;
 use tdw_table_format::{TableFile, TableFormat, TableManifest, simple_checksum};
 use tdw_tag_rules::{RuleEngine, RulePredicate, TagRule};
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
+use tdw_tools::{ToolOrchestrator, ToolRegistry, echo_tool};
+use tdw_tui::event_lines;
 use tdw_udf::{UdfDefinition, UdfRuntime, evaluate};
 use tdw_workflow_engine::WorkflowEngine;
 
@@ -125,6 +144,60 @@ pub fn mcp_progress_sample(symbol: &str) -> Result<Vec<String>> {
     }
 
     Ok(events)
+}
+
+pub fn protocol_config_sample() -> Result<Value> {
+    let config = merge_layers(&[
+        ConfigLayer::from_toml(
+            ConfigLayerKind::ProjectConfig,
+            "project",
+            r#"
+profile = "service"
+
+[model]
+provider = "openai-compatible"
+model = "unset"
+"#,
+        )
+        .map_err(|error| Error::Provider(error.to_string()))?,
+        ConfigLayer::new(
+            ConfigLayerKind::CliFlags,
+            "cli",
+            json!({
+                "protocol": { "max_event_bytes": 4096 },
+                "permissions": { "last_match_wins": true }
+            }),
+        ),
+    ])
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let session_id = SessionId::new("session-service-sample")
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let actor = ActorRef {
+        actor_id: "system:tdw-service-api".to_string(),
+        kind: ActorKind::Service,
+        tenant_id: Some("default".to_string()),
+    };
+    let op = OpEnvelope::new(
+        session_id,
+        1,
+        actor,
+        Op::ApprovalResponse {
+            permission_id: PermissionId::new("approval-service-sample")
+                .map_err(|error| Error::Provider(error.to_string()))?,
+            decision: tdw_protocol::ApprovalDecision::AllowOnce,
+            reason: Some("sample".to_string()),
+        },
+    );
+    let event = EventMsg::Started { op_id: op.op_id };
+
+    Ok(json!({
+        "profile": config.profile,
+        "layer_order": default_layer_order().iter().map(|layer| layer.source).collect::<Vec<_>>(),
+        "max_event_bytes": config.protocol.max_event_bytes,
+        "protocol_schemas": protocol_schema_bundle().keys().copied().collect::<Vec<_>>(),
+        "op_sequence": op.sequence,
+        "event": event,
+    }))
 }
 
 pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> {
@@ -214,6 +287,64 @@ pub fn mcp_agent_tools() -> Vec<String> {
     ]
 }
 
+pub fn mcp_extensibility_tools() -> Vec<String> {
+    vec![
+        "tdw.query.plan".to_string(),
+        "tdw.query.run".to_string(),
+        "tdw.ingest.run".to_string(),
+        "tdw.agent.run".to_string(),
+        "tdw.kg.search".to_string(),
+        "tdw.udf.run".to_string(),
+    ]
+}
+
+pub fn extensibility_sample() -> Result<Value> {
+    let mut registry = ToolRegistry::default();
+    registry
+        .register(echo_tool())
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let mut permissions = tdw_hooks::PermissionRules::default();
+    permissions.push(tdw_hooks::PermissionRule::new(
+        tdw_hooks::PermissionEffect::Allow,
+        "tdw.echo",
+        "tdw.echo",
+    ));
+    let orchestrator = ToolOrchestrator::new(registry, permissions);
+    let tool = orchestrator
+        .run(
+            tdw_protocol::ToolCallId::new("tool-call-1")
+                .map_err(|error| Error::Provider(error.to_string()))?,
+            "tdw.echo",
+            json!({"symbol": "AAPL"}),
+        )
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let sandbox = LocalUdfSandbox;
+    let udf = sandbox
+        .run(UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            input: "aapl".to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        })
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let acp = AcpServerInfo::default();
+    validate_request(&AcpRequest::Initialize {
+        client_name: "tdw-mcp".to_string(),
+    })
+    .map_err(|error| Error::Provider(error.to_string()))?;
+
+    Ok(json!({
+        "tool": tool,
+        "sandbox_runtime": sandbox.runtime_name(),
+        "udf_output": udf.output,
+        "mcp_tools": mcp_extensibility_tools(),
+        "acp": acp,
+        "acp_validated": true,
+    }))
+}
+
 pub fn agent_tool_sample() -> Result<Value> {
     let mut store = AgentStore::new();
     let card = sample_agent_card();
@@ -295,9 +426,21 @@ pub fn event_spine_sample(entrypoint: &str) -> Result<Value> {
     let sequence = bus.publish(envelope.clone());
     let mut hooks = HookRegistry::default();
     hooks.register(event_hook!("audit", 10, TransactionMode::PostCommit));
+    hooks.register(
+        HookSpec::new("policy_context", 15, TransactionMode::InTransaction)
+            .for_event(HookEvent::PreToolCall)
+            .with_handler(HandlerKind::Prompt {
+                prompt_path: "crates/tdw-hooks/src/tool_prompt.txt".to_string(),
+            })
+            .with_context(AdditionalContext {
+                uri: "tdw://context/hook-policy".to_string(),
+                body: "policy context".to_string(),
+                priority: 10,
+            }),
+    );
     hooks.register(event_hook!("cdc", 20, TransactionMode::InTransaction));
     let hook_outcomes = hooks
-        .execute(&envelope)
+        .execute_runtime(&envelope)
         .map_err(|error| Error::Provider(error.to_string()))?;
 
     let mut outbox = InMemoryOutbox::default();
@@ -313,6 +456,8 @@ pub fn event_spine_sample(entrypoint: &str) -> Result<Value> {
         "bus_sequence": sequence,
         "bus_lag": bus.lag_since(0),
         "hook_order": hook_outcomes.iter().map(|hook| hook.name.clone()).collect::<Vec<_>>(),
+        "hook_contexts": hook_outcomes.iter().flat_map(|hook| hook.additional_contexts.iter().map(|context| context.uri.clone())).collect::<Vec<_>>(),
+        "hook_can_stop": hook_outcomes.iter().any(|hook| hook.should_stop),
         "outbox_pending": pending.len(),
         "cdc_offsets": cdc.records.iter().map(|record| record.offset).collect::<Vec<_>>(),
         "replay_dry_run": replay.dry_run,
@@ -335,7 +480,7 @@ pub fn parity_layer_sample() -> Result<Value> {
     let time_travel_rows = snapshots
         .as_of_version("raw.market_data_bar", 1)
         .map(|snapshot| snapshot.row_ids.len())
-        .unwrap_or_default();
+        .ok_or_else(|| Error::Provider("missing time-travel snapshot version 1".to_string()))?;
 
     let mut event_bus = EventBus::new(8);
     let stream_offset = event_bus.publish(EventEnvelope::new(
@@ -370,7 +515,9 @@ pub fn parity_layer_sample() -> Result<Value> {
         target_table: "raw.market_data_bar".to_string(),
         last_offset: 0,
     };
-    let copy_plan = pipe.copy_plan(vec!["ohlcv.parquet".to_string()]);
+    let copy_plan = pipe
+        .copy_plan(vec!["ohlcv.parquet".to_string()])
+        .map_err(|error| Error::Storage(error.to_string()))?;
     pipe.advance(stream_offset);
     let manifest = TableManifest {
         format: TableFormat::Iceberg,
@@ -419,6 +566,10 @@ pub fn parity_layer_sample() -> Result<Value> {
             mode: MaskMode::Last4,
         }],
     );
+    let masked_account = masked
+        .get("account_id")
+        .cloned()
+        .ok_or_else(|| Error::Provider("masked account_id missing".to_string()))?;
 
     Ok(json!({
         "snapshot_version": snapshot.version,
@@ -444,7 +595,7 @@ pub fn parity_layer_sample() -> Result<Value> {
         "define_hook": define.compile_hook().name,
         "define_key": define.idempotency_key(),
         "mask_hook": masking_hook().name,
-        "masked_account": masked.get("account_id").cloned().unwrap_or_default(),
+        "masked_account": masked_account,
     }))
 }
 
@@ -554,6 +705,134 @@ pub fn kg_tag_sample() -> Result<Value> {
     }))
 }
 
+pub fn llm_knowledge_sample() -> Result<Value> {
+    let anthropic = AnthropicMessagesModel::new("claude-fixture")
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let openai_compat = OpenAiCompatibleModel::new(
+        "openai-compatible-fixture",
+        Some("http://localhost:11434".to_string()),
+    )
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let response = anthropic
+        .complete(ChatRequest {
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: "Summarize AAPL momentum".to_string(),
+            }],
+            max_output_tokens: 128,
+        })
+        .map_err(|error| Error::Provider(error.to_string()))?;
+
+    let mut index = KnowledgeIndex::default();
+    block_on(index.index_document(KnowledgeDocument {
+        id: "doc-1".to_string(),
+        body: "AAPL equity momentum research".to_string(),
+        entity: Entity {
+            entity_id: "instrument:AAPL".to_string(),
+            kind: EntityKind::Instrument,
+            label: "Apple".to_string(),
+            aliases: vec!["AAPL".to_string()],
+        },
+        tags: vec!["asset:equity".to_string()],
+    }))
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let hits = block_on(index.search("AAPL momentum", 1))
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let syntax = summarize_syntax("create table raw.market_data_bar (symbol text);");
+
+    Ok(json!({
+        "anthropic_model": response.model_id,
+        "anthropic_message": response.message.content,
+        "openai_base_url": openai_compat.base_url(),
+        "knowledge_hits": hits,
+        "active_tags": index.active_tags("instrument:AAPL", "2026-05-22"),
+        "syntax_symbols": syntax.symbols,
+    }))
+}
+
+pub fn client_event_sample() -> Result<Value> {
+    let session_id = SessionId::new("session-client-sample")
+        .map_err(|error| Error::Provider(error.to_string()))?;
+    let op = Op::RunQuery {
+        sql: "select 1".to_string(),
+        plan_id: None,
+        cost_hint: None,
+    };
+    validate_request(&AcpRequest::SubmitOp {
+        session_id: session_id.clone(),
+        op: op.clone(),
+    })
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let envelope = OpEnvelope::new(
+        session_id.clone(),
+        1,
+        ActorRef {
+            actor_id: "user:cli".to_string(),
+            kind: ActorKind::User,
+            tenant_id: Some("default".to_string()),
+        },
+        op,
+    );
+    let endpoint = DaemonEndpoint {
+        transport: DaemonTransport::Uds,
+        address: "~/.tdw/daemon.sock".to_string(),
+    };
+    validate_endpoint(&endpoint).map_err(|error| Error::Provider(error.to_string()))?;
+    let (handle, mut daemon_events, mut daemon_loop) = channel();
+    let client = AppClient::try_new(
+        ClientInfo {
+            name: "tdw-cli".to_string(),
+            endpoint,
+        },
+        handle,
+    )
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let daemon_envelope = OpEnvelope::new(
+        session_id.clone(),
+        2,
+        ActorRef {
+            actor_id: "user:cli".to_string(),
+            kind: ActorKind::User,
+            tenant_id: Some("default".to_string()),
+        },
+        Op::Shutdown,
+    );
+    client
+        .submit(daemon_envelope)
+        .map_err(|_| Error::Provider("daemon submission failed".to_string()))?;
+    let daemon_event = block_on(daemon_loop.run_once())
+        .ok_or_else(|| Error::Provider("daemon did not emit an event".to_string()))?;
+    let daemon_observed_event = block_on(daemon_events.recv())
+        .ok_or_else(|| Error::Provider("daemon event channel was empty".to_string()))?;
+
+    let run = try_run_headless(envelope).map_err(|error| Error::Provider(error.to_string()))?;
+    let lines = event_lines(&run.events);
+    let rollout_records = run
+        .events
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, event)| RolloutRecord {
+            recorded_at: "2026-05-22T00:00:00Z".to_string(),
+            frame: ReplayFrame {
+                session_id: session_id.clone(),
+                sequence: (index + 1) as u64,
+                event,
+            },
+        })
+        .collect::<Vec<_>>();
+    let replay = ReplayEngine::from_rollout(&rollout_records);
+
+    Ok(json!({
+        "events": run.events,
+        "tui_lines": lines.iter().map(|line| line.spans[0].content.to_string()).collect::<Vec<_>>(),
+        "client_name": client.info().name.clone(),
+        "daemon_event": daemon_event,
+        "daemon_observed_event": daemon_observed_event,
+        "replay": replay,
+    }))
+}
+
 struct NoopWake;
 
 impl Wake for NoopWake {
@@ -638,6 +917,22 @@ mod tests {
     }
 
     #[test]
+    fn protocol_config_sample_wires_service_contracts() {
+        let evidence = protocol_config_sample()
+            .unwrap_or_else(|error| panic!("protocol/config sample should succeed: {error}"));
+
+        assert_eq!(evidence["profile"], "service");
+        assert_eq!(evidence["max_event_bytes"], 4096);
+        assert_eq!(evidence["op_sequence"], 1);
+        assert_eq!(evidence["event"]["type"], "started");
+        assert!(
+            evidence["protocol_schemas"]
+                .as_array()
+                .is_some_and(|schemas| schemas.len() >= 4)
+        );
+    }
+
+    #[test]
     fn agent_tool_sample_wires_schema_store_eval_and_workflow() {
         let evidence = agent_tool_sample()
             .unwrap_or_else(|error| panic!("agent tool sample should succeed: {error}"));
@@ -653,12 +948,27 @@ mod tests {
     }
 
     #[test]
+    fn extensibility_sample_wires_tools_sandbox_mcp_and_acp() {
+        let evidence = extensibility_sample()
+            .unwrap_or_else(|error| panic!("extensibility sample should succeed: {error}"));
+
+        assert_eq!(evidence["tool"]["permission"], "Allow");
+        assert_eq!(evidence["tool"]["output"]["symbol"], "AAPL");
+        assert_eq!(evidence["sandbox_runtime"], "local-tdw-udf");
+        assert_eq!(evidence["udf_output"], "AAPL");
+        assert_eq!(evidence["mcp_tools"][5], "tdw.udf.run");
+        assert_eq!(evidence["acp"]["supports_streaming"], true);
+    }
+
+    #[test]
     fn event_spine_sample_wires_actor_bus_hooks_outbox_cdc_and_replay() {
         let evidence = event_spine_sample("mcp")
             .unwrap_or_else(|error| panic!("event sample should succeed: {error}"));
 
         assert_eq!(evidence["entrypoint"], "mcp");
         assert_eq!(evidence["hook_order"][0], "audit");
+        assert_eq!(evidence["hook_contexts"][0], "tdw://context/hook-policy");
+        assert_eq!(evidence["hook_can_stop"], false);
         assert_eq!(evidence["outbox_pending"], 1);
         assert_eq!(evidence["replay_dry_run"], true);
     }
@@ -689,5 +999,27 @@ mod tests {
         assert_eq!(evidence["hybrid_search_filter"], "tag:asset:equity");
         assert_eq!(evidence["dbt_model"], "meta_tag_assignments");
         assert_eq!(evidence["feature_count"], 1);
+    }
+
+    #[test]
+    fn llm_knowledge_sample_wires_model_and_retrieval_contracts() {
+        let evidence = llm_knowledge_sample()
+            .unwrap_or_else(|error| panic!("llm knowledge sample should succeed: {error}"));
+
+        assert_eq!(evidence["anthropic_model"], "claude-fixture");
+        assert_eq!(evidence["openai_base_url"], "http://localhost:11434");
+        assert_eq!(evidence["knowledge_hits"][0]["id"], "doc-1");
+        assert_eq!(evidence["active_tags"][0], "asset:equity");
+        assert_eq!(evidence["syntax_symbols"][0]["kind"], "table");
+    }
+
+    #[test]
+    fn client_event_sample_wires_exec_tui_and_replay() {
+        let evidence = client_event_sample()
+            .unwrap_or_else(|error| panic!("client event sample should succeed: {error}"));
+
+        assert_eq!(evidence["events"][0]["type"], "started");
+        assert_eq!(evidence["tui_lines"][0], "started");
+        assert_eq!(evidence["replay"]["event_types"][1], "completed");
     }
 }

@@ -11,6 +11,12 @@ pub struct EvalRunOutcome {
     pub metrics: Vec<EvalMetric>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvalRunError {
+    InvalidRequest,
+    StoreRejected,
+}
+
 pub struct EvalRunner;
 
 impl EvalRunner {
@@ -45,6 +51,33 @@ impl EvalRunner {
         });
         outcome
     }
+
+    pub fn try_run(
+        request: EvalRunRequest,
+        store: &mut AgentStore,
+    ) -> Result<EvalRunOutcome, EvalRunError> {
+        validate_request(&request)?;
+        let outcome = Self::run(request, store);
+        if store.eval_run(&outcome.run_id).is_none() {
+            return Err(EvalRunError::StoreRejected);
+        }
+        Ok(outcome)
+    }
+}
+
+pub fn validate_request(request: &EvalRunRequest) -> Result<(), EvalRunError> {
+    if request.run_id.trim().is_empty()
+        || request.agent_id.trim().is_empty()
+        || request.dataset_id.trim().is_empty()
+        || request.cases.is_empty()
+        || request
+            .cases
+            .iter()
+            .any(|case| case.case_id.trim().is_empty() || case.prompt.trim().is_empty())
+    {
+        return Err(EvalRunError::InvalidRequest);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -75,6 +108,25 @@ mod tests {
         assert_eq!(
             store.eval_run("eval-1").map(|run| run.metrics.len()),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn checked_run_rejects_empty_eval_cases() {
+        let mut store = AgentStore::new();
+        store.upsert_agent(sample_agent_card());
+
+        assert_eq!(
+            EvalRunner::try_run(
+                EvalRunRequest {
+                    run_id: "eval-1".to_string(),
+                    agent_id: "market-researcher".to_string(),
+                    dataset_id: "golden-market-notes".to_string(),
+                    cases: Vec::new(),
+                },
+                &mut store,
+            ),
+            Err(EvalRunError::InvalidRequest)
         );
     }
 }

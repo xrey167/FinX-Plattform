@@ -1,0 +1,23 @@
+[package]
+name = "tdw-knowledge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "UNLICENSED"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-kg = { path = "../tdw-kg" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+tdw-tags = { path = "../tdw-tags" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

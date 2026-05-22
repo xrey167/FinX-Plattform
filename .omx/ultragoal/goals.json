@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "createdAt": "2026-05-22T02:12:27.180Z",
+  "updatedAt": "2026-05-22T06:20:08.413Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-crate-readiness-rubric-inventory-and-matrix",
+      "title": "Crate Readiness Rubric, Inventory, and Matrix",
+      "objective": "Create the crate-by-crate production-readiness audit framework before editing crates. Enumerate every workspace crate from cargo metadata and crates/*, define the readiness rubric, define required per-crate artifacts under docs/quality/crate-readiness/<crate>.md, create an aggregate matrix artifact, map each crate to exactly one tranche goal, and record baseline dependency and feature-flag topology. Rubric must cover manifest correctness, dependency direction, feature flags, public API, error handling, runtime behavior, test coverage, docs/examples, wiring through service-api/cli/mcp/xtask where applicable, scaffold/dead-code/fallback scans, security/reliability risks, and a production-readiness verdict.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T04:43:43.644Z",
+      "startedAt": "2026-05-22T02:14:45.502Z",
+      "completedAt": "2026-05-22T04:43:43.644Z",
+      "evidence": "Created docs/quality/crate-readiness README, matrix, dependency-topology, and 83 per-package worksheets from cargo metadata; coverage check packages=83 matrix_rows=83 docs=86; rg trailing whitespace found no matches; cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, and git diff --check passed with CARGO_INCREMENTAL=0 RUSTFLAGS=-C debuginfo=0."
+    },
+    {
+      "id": "G002-core-contracts-event-session-and-replay-crates",
+      "title": "Core Contracts, Event, Session, and Replay Crates",
+      "objective": "Audit and harden these crates one by one: tdw-core, tdw-domain, tdw-protocol, tdw-config, tdw-event, tdw-actor, tdw-bus, tdw-cdc, tdw-outbox, tdw-snapshot, tdw-replay, tdw-rollout, and tdw-session. For each crate, produce its readiness artifact, verify manifest/dependencies/features, ensure API and error contracts are production-shaped, add or improve tests and docs where evidence is weak, remove scaffold-only or masking fallback behavior, and confirm downstream wiring into dependent crates.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T04:51:05.879Z",
+      "startedAt": "2026-05-22T04:44:01.753Z",
+      "completedAt": "2026-05-22T04:51:05.879Z",
+      "evidence": "Audited and hardened G002 crates tdw-core, tdw-domain, tdw-protocol, tdw-config, tdw-event, tdw-actor, tdw-bus, tdw-cdc, tdw-outbox, tdw-snapshot, tdw-replay, tdw-rollout, and tdw-session. Added ActorContext::new with identity-plane test, EventBus retention_window/has_retention_gap with eviction test, InMemoryOutbox mark_dispatched bool with missing-sequence test, and SqliteSessionStore cost_entries with cost-ledger read test. Updated 13 readiness worksheets and matrix verdicts to Ready with follow-ups. Verification passed: cargo test for all G002 crates; cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check; crate-readiness trailing whitespace check."
+    },
+    {
+      "id": "G003-data-storage-pipeline-and-sql-crates",
+      "title": "Data, Storage, Pipeline, and SQL Crates",
+      "objective": "Audit and harden these crates one by one: tdw-dbt-runner, tdw-migration, tdw-pipe, tdw-pipeline, tdw-sql-codegen, tdw-stage, tdw-table-format, tdw-storage-clickhouse, tdw-storage-fs, tdw-storage-meilisearch, tdw-storage-parquet, tdw-storage-postgres, tdw-storage-qdrant, tdw-storage-router, and tdw-storage-s3. For each crate, prove production readiness around data contracts, storage boundaries, SQL/export correctness, checksums/idempotency, error handling, test coverage, docs, dependency/feature configuration, and clean-room constraints.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T05:21:46.529Z",
+      "startedAt": "2026-05-22T04:51:19.146Z",
+      "completedAt": "2026-05-22T05:21:46.529Z",
+      "evidence": "G003-data-storage-pipeline-and-sql-crates complete; .omx/ultragoal/goals.json and ledger.jsonl report G003 complete; verification passed: cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check."
+    },
+    {
+      "id": "G004-provider-embedding-and-model-adapter-crates",
+      "title": "Provider, Embedding, and Model Adapter Crates",
+      "objective": "Audit and harden these crates one by one: tdw-provider-alpaca, tdw-provider-binance, tdw-provider-fileset, tdw-provider-fred, tdw-provider-huggingface, tdw-provider-polygon, tdw-provider-ws-mock, tdw-provider-yahoo, tdw-embed, tdw-embed-local, tdw-embed-openai, tdw-embed-google, tdw-llm, tdw-llm-anthropic, and tdw-llm-openai-compat. For each crate, verify provider/model contracts, deterministic tests or mocked boundaries, credentials/config behavior, feature/dependency shape, documentation, error handling, and absence of untested live-network assumptions.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T05:32:32.218Z",
+      "startedAt": "2026-05-22T05:06:06.329Z",
+      "completedAt": "2026-05-22T05:32:32.218Z",
+      "evidence": "G004-provider-embedding-and-model-adapter-crates complete; provider/model adapter crates audited and hardened; focused G004 tests, fmt/check/clippy/workspace tests, clean-room audit, readiness worksheets/matrix, and git diff check passed."
+    },
+    {
+      "id": "G005-agent-auth-hooks-tools-and-udf-crates",
+      "title": "Agent, Auth, Hooks, Tools, and UDF Crates",
+      "objective": "Audit and harden these crates one by one: tdw-agent, tdw-agent-store, tdw-auth, tdw-auth-oidc, tdw-define, tdw-hooks, tdw-mask, tdw-tools, tdw-sandbox, tdw-udf, tdw-udf-external, tdw-udf-js, tdw-udf-python, and tdw-udf-wasm. For each crate, assess production-grade auth/tool/hook/UDF behavior, permission boundaries, schema/golden tests, adversarial/security tests where relevant, feature flags, docs, wiring into runtime/service surfaces, and fallback/dead-code risk.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T05:49:06.240Z",
+      "startedAt": "2026-05-22T05:32:41.825Z",
+      "completedAt": "2026-05-22T05:49:06.240Z",
+      "evidence": "G005-agent-auth-hooks-tools-and-udf-crates complete; agent/auth/hooks/tools/UDF crates audited and hardened; former UDF adapter stubs replaced with validation contracts; focused G005 tests and full gates passed: cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check."
+    },
+    {
+      "id": "G006-knowledge-graph-tags-ml-eval-and-utility-crates",
+      "title": "Knowledge, Graph, Tags, ML, Eval, and Utility Crates",
+      "objective": "Audit and harden these crates one by one: tdw-entity-resolver, tdw-eval-runner, tdw-feature-store, tdw-fn-string, tdw-graph, tdw-kg, tdw-knowledge, tdw-ml-registry, tdw-rewrite, tdw-spatial, tdw-tag-rules, tdw-tags, tdw-test-utils, and tdw-workflow-engine. For each crate, verify correctness contracts, graph/tag/model/eval behavior, malformed-input handling, tests and docs, dependency and feature shape, and complete wiring into higher-level services where intended.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T06:02:08.598Z",
+      "startedAt": "2026-05-22T05:49:20.764Z",
+      "completedAt": "2026-05-22T06:02:08.598Z",
+      "evidence": "G006-knowledge-graph-tags-ml-eval-and-utility-crates complete; knowledge/graph/tags/eval/utility crates audited and hardened; fn-string/ml-registry/rewrite placeholders replaced with validation contracts; focused G006 tests and full gates passed: cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check."
+    },
+    {
+      "id": "G007-client-service-mcp-acp-runtime-and-worker-crates",
+      "title": "Client, Service, MCP, ACP, Runtime, and Worker Crates",
+      "objective": "Audit and harden these crates one by one: tdw-acp, tdw-app-client, tdw-app-server, tdw-cli, tdw-exec, tdw-mcp, tdw-runtime, tdw-service, tdw-service-api, tdw-tui, and tdw-worker. For each crate, prove thin-client/service wiring, protocol event consumption, daemon/queue/runtime behavior, CLI/MCP/TUI output behavior, docs, tests, dependencies/features, and functional integration without duplicate business logic or scaffold-only paths.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T06:13:03.003Z",
+      "startedAt": "2026-05-22T06:02:19.544Z",
+      "completedAt": "2026-05-22T06:13:03.003Z",
+      "evidence": "G007 complete: hardened tdw-acp request validation, tdw-app-client/server endpoint and submission checks, tdw-exec checked headless queries, tdw-tui terminal-safe event text, and tdw-service-api client/server/ACP/exec/TUI/replay integration; updated G007 readiness worksheets, matrix, and topology; verification passed: cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check."
+    },
+    {
+      "id": "G008-aggregate-production-readiness-gate",
+      "title": "Aggregate Production Readiness Gate",
+      "objective": "Verify the full crate-by-crate audit and hardening run. Confirm every workspace crate has a readiness artifact and a verdict in the aggregate matrix, confirm every blocker has either been fixed or recorded as a durable follow-up, update docs/quality/release-readiness-summary.md or an equivalent crate-readiness summary, run targeted verification plus cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo check --workspace, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check, run ai-slop-cleaner on changed files, rerun verification, and complete code-review only when recommendation is APPROVE and architectStatus is CLEAR.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T02:14:40.000Z",
+      "updatedAt": "2026-05-22T06:20:08.413Z",
+      "startedAt": "2026-05-22T06:13:17.270Z",
+      "evidence": "G008 complete: all crate readiness worksheets exist, matrix has no pending tranche-audit verdicts, xtask completed, release-readiness summary and final quality-gate/code-review/cleanup reports updated; ai-slop-cleaner repaired tdw-mask fail-open compatibility behavior; code review recommendation APPROVE and architectStatus CLEAR; post-cleaner verification passed: cargo test -p tdw-mask -p xtask, cargo fmt --all -- --check, cargo check --workspace, cargo clippy --workspace --all-targets -- -D warnings, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check.",
+      "completedAt": "2026-05-22T06:20:08.413Z"
+    }
+  ],
+  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate"
+}

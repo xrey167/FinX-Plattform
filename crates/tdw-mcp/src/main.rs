@@ -18,11 +18,20 @@ fn main() {
                     std::process::exit(1);
                 }
             };
+            let client_events = match tdw_service_api::client_event_sample() {
+                Ok(evidence) => evidence,
+                Err(error) => {
+                    eprintln!("tdw-mcp client event error: {error}");
+                    std::process::exit(1);
+                }
+            };
             println!(
-                "tdw-mcp progress={} agent_tools={} tag_tools={} event_spine={} kg_tags={}",
+                "tdw-mcp progress={} agent_tools={} tag_tools={} extensibility_tools={} client_events={} event_spine={} kg_tags={}",
                 events.join(","),
                 tools.join(","),
                 tdw_service_api::mcp_tag_tools().join(","),
+                tdw_service_api::mcp_extensibility_tools().join(","),
+                client_events,
                 event,
                 kg_tags
             );

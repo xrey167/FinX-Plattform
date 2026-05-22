@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use tdw_agent::{WorkflowDefinition, WorkflowValidationError};
+use tdw_agent::{AgentContractError, WorkflowDefinition, validate_workflow_contract};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionPlan {
@@ -13,12 +13,10 @@ pub struct ExecutionPlan {
 pub struct WorkflowEngine;
 
 impl WorkflowEngine {
-    pub fn compile(
-        workflow: &WorkflowDefinition,
-    ) -> Result<ExecutionPlan, WorkflowValidationError> {
+    pub fn compile(workflow: &WorkflowDefinition) -> Result<ExecutionPlan, AgentContractError> {
         Ok(ExecutionPlan {
             workflow_id: workflow.workflow_id.clone(),
-            ordered_node_ids: workflow.validate_dag()?,
+            ordered_node_ids: validate_workflow_contract(workflow)?,
         })
     }
 }
@@ -53,5 +51,19 @@ mod tests {
         let plan = WorkflowEngine::compile(&workflow)
             .unwrap_or_else(|error| panic!("workflow should compile: {error}"));
         assert_eq!(plan.ordered_node_ids, vec!["retrieve", "draft"]);
+    }
+
+    #[test]
+    fn compile_rejects_invalid_workflow_identifiers() {
+        let workflow = WorkflowDefinition {
+            workflow_id: "../research".to_string(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+
+        assert!(matches!(
+            WorkflowEngine::compile(&workflow),
+            Err(AgentContractError::InvalidIdentifier("workflow_id", _))
+        ));
     }
 }

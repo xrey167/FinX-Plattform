@@ -1,0 +1,13 @@
+{
+  "goal": {
+    "threadId": "019e4d29-408e-70b3-910e-77fa9ed117c4",
+    "objective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-inventory-decisions-and-clean-room-boundaries Inventory, Decisions, and Clean-Room Boundaries; G002-protocol-config-and-core-boundary Protocol, Config, and Core Boundary; G003-hook-event-spine-permissions-and-prompts Hook Event Spine, Permissions, and Prompts; G004-tools-udf-sandbox-mcp-and-acp Tools, UDF Sandbox, MCP, and ACP; G005-session-rollout-daemon-and-queue-loop Session, Rollout, Daemon, and Queue Loop; G006-llm-retrieval-and-knowledge-intelligence LLM, Retrieval, and Knowledge Intelligence; G007-thin-clients-cli-tui-service-and-replay Thin Clients, CLI, TUI, Service, and Replay; G008-integration-verification-and-final-quality-gate Integration, Verification, and Final Quality Gate",
+    "status": "complete",
+    "tokensUsed": 859270,
+    "timeUsedSeconds": 2426,
+    "createdAt": 1779413167,
+    "updatedAt": 1779415594
+  },
+  "remainingTokens": null,
+  "completionBudgetReport": null
+}
