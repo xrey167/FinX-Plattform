@@ -1,0 +1,3 @@
+# Default owner for everything. Auto-requests a review from the user
+# on every PR once the remote exists. Refine per-path as the team grows.
+*       @xrey167

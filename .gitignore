@@ -1,5 +1,6 @@
 /target/
 /.worktrees/
+/.claude/worktrees/
 /.env
 /.env.*
 !.env.example
@@ -8,6 +9,8 @@
 /mutants.out*/
 /.nextest/
 /tmp/
+/.omc/
+/.remember/
 *.pdb
 *.profraw
 *.profdata
