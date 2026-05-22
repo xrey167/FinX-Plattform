@@ -32,11 +32,8 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for FilesetEquityHisto
             .get("symbol")
             .and_then(Value::as_str)
             .ok_or_else(|| Error::InvalidQuery("missing symbol".to_string()))?;
-        if symbol.trim().is_empty() {
-            return Err(Error::InvalidQuery("empty symbol".to_string()));
-        }
         Ok(EquityHistoricalQuery {
-            symbol: symbol.to_ascii_uppercase(),
+            symbol: normalize_symbol(symbol)?,
         })
     }
 
@@ -83,6 +80,22 @@ pub fn fixture_rows(symbol: &str) -> Vec<EquityHistoricalData> {
     ]
 }
 
+fn normalize_symbol(symbol: &str) -> Result<String> {
+    let symbol = symbol.trim();
+    if symbol.is_empty() {
+        return Err(Error::InvalidQuery("empty symbol".to_string()));
+    }
+    if !symbol
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err(Error::InvalidQuery(
+            "symbol contains unsupported characters".to_string(),
+        ));
+    }
+    Ok(symbol.to_ascii_uppercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +114,16 @@ mod tests {
             FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({ "symbol": "" }))
                 .is_err()
         );
+        assert!(
+            FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({
+                "symbol": "AAPL/../../secret"
+            }))
+            .is_err()
+        );
+        let query = FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({
+            "symbol": " aapl "
+        }))
+        .unwrap_or_else(|error| panic!("query should normalize: {error}"));
+        assert_eq!(query.symbol, "AAPL");
     }
 }

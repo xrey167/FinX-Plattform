@@ -11,7 +11,7 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 - Dev dependencies: none
 - Reverse local dependencies: tdw-service-api
 - Feature flags: none
-- Test attributes detected: 1
+- Test attributes detected: 2
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -19,25 +19,28 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 
 ## Required Readiness Evidence
 
-- [ ] Manifest correctness reviewed.
-- [ ] Dependency direction reviewed.
-- [ ] Feature flags reviewed or marked not applicable.
-- [ ] Public API and error contracts reviewed.
-- [ ] Runtime behavior reviewed.
-- [ ] Tests and coverage evidence recorded.
-- [ ] Docs and examples reviewed.
-- [ ] Surface wiring reviewed where applicable.
-- [ ] Scaffold, dead-code, and fallback signals classified.
-- [ ] Security and reliability risks reviewed.
+- [x] Manifest correctness reviewed.
+- [x] Dependency direction reviewed.
+- [x] Feature flags reviewed: none.
+- [x] Public API and error contracts reviewed: compatibility resolve/merge APIs remain and checked try_* APIs expose invalid symbol/merge endpoint errors.
+- [x] Runtime behavior reviewed: symbol resolution rejects path/query-like symbols before matching aliases.
+- [x] Tests and coverage evidence recorded: tests cover exact matching and unsafe symbol/self-merge rejection.
+- [x] Docs and examples reviewed: worksheet records resolver behavior; no README/examples required.
+- [x] Surface wiring reviewed: service API uses resolver with valid symbols.
+- [x] Scaffold, dead-code, and fallback signals classified: none.
+- [x] Security and reliability risks reviewed: untrusted symbols cannot traverse into graph IDs or merge endpoints unchecked.
 
 ## Findings
 
-- Pending tranche audit.
+- Resolver remains deterministic and in-memory over provided KG entities.
+- Checked APIs now make malformed resolution and merge requests auditable.
+- Follow-up boundary: fuzzy scoring and conflict review queues belong in later resolver runtime work.
 
 ## Verification
 
-- Pending tranche audit. Record focused crate commands and any workspace commands here.
+- Focused G006 crate check passed: cargo test -p tdw-entity-resolver -p tdw-eval-runner -p tdw-feature-store -p tdw-fn-string -p tdw-graph -p tdw-kg -p tdw-knowledge -p tdw-ml-registry -p tdw-rewrite -p tdw-spatial -p tdw-tag-rules -p tdw-tags -p tdw-test-utils -p tdw-workflow-engine -p tdw-service-api.
+- Final workspace gate for G006 passed: cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check.
 
 ## Verdict
 
-Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.
+Ready with follow-ups. No G006 blocker remains inside tdw-entity-resolver.

@@ -11,7 +11,7 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - Dev dependencies: none
 - Reverse local dependencies: tdw-app-client
 - Feature flags: none
-- Test attributes detected: 1
+- Test attributes detected: 2
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -19,25 +19,27 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Required Readiness Evidence
 
-- [ ] Manifest correctness reviewed.
-- [ ] Dependency direction reviewed.
-- [ ] Feature flags reviewed or marked not applicable.
-- [ ] Public API and error contracts reviewed.
-- [ ] Runtime behavior reviewed.
-- [ ] Tests and coverage evidence recorded.
-- [ ] Docs and examples reviewed.
-- [ ] Surface wiring reviewed where applicable.
-- [ ] Scaffold, dead-code, and fallback signals classified.
-- [ ] Security and reliability risks reviewed.
+- [x] Manifest correctness reviewed.
+- [x] Dependency direction reviewed.
+- [x] Feature flags reviewed or marked not applicable.
+- [x] Public API and error contracts reviewed.
+- [x] Runtime behavior reviewed.
+- [x] Tests and coverage evidence recorded.
+- [x] Docs and examples reviewed.
+- [x] Surface wiring reviewed where applicable.
+- [x] Scaffold, dead-code, and fallback signals classified.
+- [x] Security and reliability risks reviewed.
 
 ## Findings
 
-- Pending tranche audit.
+- Added daemon endpoint validation for UDS and HTTP/SSE transports, rejecting empty, traversal, control-character, shell-control, and wrong-scheme addresses.
+- Existing queue behavior is covered by `AgentLoop::run_once`, which consumes submitted protocol envelopes and emits `EventMsg::Started`.
+- Scan signals are test `expect` calls; no stub, copied FinX-XR, OpenBB, or duplicate service implementation was found.
 
 ## Verification
 
-- Pending tranche audit. Record focused crate commands and any workspace commands here.
+- Focused G007 command passed: `cargo test -p tdw-acp -p tdw-app-client -p tdw-app-server -p tdw-exec -p tdw-runtime -p tdw-service-api -p tdw-tui -p tdw-cli -p tdw-mcp -p tdw-service -p tdw-worker`.
 
 ## Verdict
 
-Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.
+Ready with follow-ups. The daemon sample has typed endpoint contracts and queue-event tests; durable production queueing remains a future service concern.

@@ -19,25 +19,28 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 
 ## Required Readiness Evidence
 
-- [ ] Manifest correctness reviewed.
-- [ ] Dependency direction reviewed.
-- [ ] Feature flags reviewed or marked not applicable.
-- [ ] Public API and error contracts reviewed.
-- [ ] Runtime behavior reviewed.
-- [ ] Tests and coverage evidence recorded.
-- [ ] Docs and examples reviewed.
-- [ ] Surface wiring reviewed where applicable.
-- [ ] Scaffold, dead-code, and fallback signals classified.
-- [ ] Security and reliability risks reviewed.
+- [x] Manifest correctness reviewed: workspace lints, edition 2024, publish=false, and dependency shape match the local embedding adapter role.
+- [x] Dependency direction reviewed: depends only on tdw-embed; knowledge and service-api consume it.
+- [x] Feature flags reviewed: none.
+- [x] Public API and error contracts reviewed: constructor rejects empty model IDs and zero dimensions.
+- [x] Runtime behavior reviewed: hash embedding is deterministic, local-only, and does not require credentials or network.
+- [x] Tests and coverage evidence recorded: deterministic embedding test covers repeatability, vector length, validation, and bad constructor inputs.
+- [x] Docs and examples reviewed: no separate README/examples required for this small local adapter.
+- [x] Surface wiring reviewed: tdw-knowledge/service-api use the local adapter as the offline embedding path.
+- [x] Scaffold, dead-code, and fallback signals classified: remaining matches are test-only panic helpers.
+- [x] Security and reliability risks reviewed: invalid model/dimension configuration fails before embeddings are generated.
 
 ## Findings
 
-- Pending tranche audit.
+- Local hash embeddings are deterministic and validate through the shared embedding contract.
+- Constructor now rejects empty model IDs instead of silently creating an unnamed provider.
+- Follow-up boundary: production-grade local model inference can replace the hash adapter behind the same trait.
 
 ## Verification
 
-- Pending tranche audit. Record focused crate commands and any workspace commands here.
+- Focused G004 crate check passed: cargo test -p tdw-provider-alpaca -p tdw-provider-binance -p tdw-provider-fileset -p tdw-provider-fred -p tdw-provider-huggingface -p tdw-provider-polygon -p tdw-provider-ws-mock -p tdw-provider-yahoo -p tdw-embed -p tdw-embed-local -p tdw-embed-openai -p tdw-embed-google -p tdw-llm -p tdw-llm-anthropic -p tdw-llm-openai-compat.
+- Final workspace gate for G004: cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check.
 
 ## Verdict
 
-Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.
+Ready with follow-ups. No G004 blocker remains; follow-ups are production embedding runtime depth.

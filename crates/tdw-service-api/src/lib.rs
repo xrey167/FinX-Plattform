@@ -8,13 +8,15 @@ use std::task::{Context, Poll, Wake, Waker};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tdw_acp::AcpServerInfo;
+use tdw_acp::{AcpRequest, AcpServerInfo, validate_request};
 use tdw_actor::{ActorContext, OmcSpawn};
 use tdw_agent::{
     EvalCase, EvalRunRequest, WorkflowDefinition, WorkflowEdge, WorkflowNode, gotcha_seed,
     parse_slash_command_invocation, sample_agent_card, schema_bundle,
 };
 use tdw_agent_store::AgentStore;
+use tdw_app_client::{AppClient, ClientInfo};
+use tdw_app_server::{DaemonEndpoint, DaemonTransport, channel, validate_endpoint};
 use tdw_auth::{AuthPolicy, Principal, authorize};
 use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims};
 use tdw_bus::EventBus;
@@ -32,7 +34,7 @@ use tdw_embed_local::HashEmbeddingProvider;
 use tdw_entity_resolver::{manual_merge_decision, resolve_symbol};
 use tdw_eval_runner::EvalRunner;
 use tdw_event::{EventEnvelope, event_schema_bundle};
-use tdw_exec::run_headless;
+use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
 use tdw_graph::DirectedGraph;
 use tdw_hooks::{
@@ -328,6 +330,10 @@ pub fn extensibility_sample() -> Result<Value> {
         })
         .map_err(|error| Error::Provider(error.to_string()))?;
     let acp = AcpServerInfo::default();
+    validate_request(&AcpRequest::Initialize {
+        client_name: "tdw-mcp".to_string(),
+    })
+    .map_err(|error| Error::Provider(error.to_string()))?;
 
     Ok(json!({
         "tool": tool,
@@ -335,6 +341,7 @@ pub fn extensibility_sample() -> Result<Value> {
         "udf_output": udf.output,
         "mcp_tools": mcp_extensibility_tools(),
         "acp": acp,
+        "acp_validated": true,
     }))
 }
 
@@ -746,6 +753,16 @@ pub fn llm_knowledge_sample() -> Result<Value> {
 pub fn client_event_sample() -> Result<Value> {
     let session_id = SessionId::new("session-client-sample")
         .map_err(|error| Error::Provider(error.to_string()))?;
+    let op = Op::RunQuery {
+        sql: "select 1".to_string(),
+        plan_id: None,
+        cost_hint: None,
+    };
+    validate_request(&AcpRequest::SubmitOp {
+        session_id: session_id.clone(),
+        op: op.clone(),
+    })
+    .map_err(|error| Error::Provider(error.to_string()))?;
     let envelope = OpEnvelope::new(
         session_id.clone(),
         1,
@@ -754,13 +771,41 @@ pub fn client_event_sample() -> Result<Value> {
             kind: ActorKind::User,
             tenant_id: Some("default".to_string()),
         },
-        Op::RunQuery {
-            sql: "select 1".to_string(),
-            plan_id: None,
-            cost_hint: None,
-        },
+        op,
     );
-    let run = run_headless(envelope);
+    let endpoint = DaemonEndpoint {
+        transport: DaemonTransport::Uds,
+        address: "~/.tdw/daemon.sock".to_string(),
+    };
+    validate_endpoint(&endpoint).map_err(|error| Error::Provider(error.to_string()))?;
+    let (handle, mut daemon_events, mut daemon_loop) = channel();
+    let client = AppClient::try_new(
+        ClientInfo {
+            name: "tdw-cli".to_string(),
+            endpoint,
+        },
+        handle,
+    )
+    .map_err(|error| Error::Provider(error.to_string()))?;
+    let daemon_envelope = OpEnvelope::new(
+        session_id.clone(),
+        2,
+        ActorRef {
+            actor_id: "user:cli".to_string(),
+            kind: ActorKind::User,
+            tenant_id: Some("default".to_string()),
+        },
+        Op::Shutdown,
+    );
+    client
+        .submit(daemon_envelope)
+        .map_err(|_| Error::Provider("daemon submission failed".to_string()))?;
+    let daemon_event = block_on(daemon_loop.run_once())
+        .ok_or_else(|| Error::Provider("daemon did not emit an event".to_string()))?;
+    let daemon_observed_event = block_on(daemon_events.recv())
+        .ok_or_else(|| Error::Provider("daemon event channel was empty".to_string()))?;
+
+    let run = try_run_headless(envelope).map_err(|error| Error::Provider(error.to_string()))?;
     let lines = event_lines(&run.events);
     let rollout_records = run
         .events
@@ -781,6 +826,9 @@ pub fn client_event_sample() -> Result<Value> {
     Ok(json!({
         "events": run.events,
         "tui_lines": lines.iter().map(|line| line.spans[0].content.to_string()).collect::<Vec<_>>(),
+        "client_name": client.info().name.clone(),
+        "daemon_event": daemon_event,
+        "daemon_observed_event": daemon_observed_event,
         "replay": replay,
     }))
 }

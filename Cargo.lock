@@ -2707,6 +2707,8 @@ dependencies = [
  "tdw-actor",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-app-client",
+ "tdw-app-server",
  "tdw-auth",
  "tdw-auth-oidc",
  "tdw-bus",

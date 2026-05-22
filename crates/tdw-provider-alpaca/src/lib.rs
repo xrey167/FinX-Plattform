@@ -28,6 +28,8 @@ pub struct ProviderRequest {
 pub enum AlpacaProviderError {
     #[error("alpaca symbol must not be empty")]
     EmptySymbol,
+    #[error("alpaca symbol contains unsupported characters")]
+    InvalidSymbol,
     #[error("alpaca api key must be supplied by the caller")]
     MissingApiKey,
 }
@@ -60,6 +62,12 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
     if symbol.is_empty() {
         return Err(AlpacaProviderError::EmptySymbol);
     }
+    if !symbol
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err(AlpacaProviderError::InvalidSymbol);
+    }
     Ok(symbol.to_ascii_uppercase())
 }
 
@@ -77,5 +85,6 @@ mod tests {
         assert_eq!(request.credential_header, API_KEY_HEADER);
         assert!(stock_bars_request("AAPL", false).is_err());
         assert!(stock_bars_request("", true).is_err());
+        assert!(stock_bars_request("AAPL/../../secret", true).is_err());
     }
 }

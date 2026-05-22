@@ -35,8 +35,8 @@ impl Streamer<EquityTickQuery, MarketDataBar> for MockEquityStreamer {
         query: EquityTickQuery,
         _creds: &Credentials,
     ) -> Result<DataStream<MarketDataBar>> {
-        validate_symbol(&query.symbol)?;
-        Ok(Box::pin(VecStream::new(snapshot_rows(&query.symbol))))
+        let symbol = normalize_symbol(&query.symbol)?;
+        Ok(Box::pin(VecStream::new(snapshot_rows(&symbol))))
     }
 
     async fn snapshot(
@@ -44,21 +44,30 @@ impl Streamer<EquityTickQuery, MarketDataBar> for MockEquityStreamer {
         query: &EquityTickQuery,
         _creds: &Credentials,
     ) -> Result<Vec<MarketDataBar>> {
-        validate_symbol(&query.symbol)?;
-        Ok(snapshot_rows(&query.symbol))
+        let symbol = normalize_symbol(&query.symbol)?;
+        Ok(snapshot_rows(&symbol))
     }
 }
 
-fn validate_symbol(symbol: &str) -> Result<()> {
+fn normalize_symbol(symbol: &str) -> Result<String> {
+    let symbol = symbol.trim();
     if symbol.trim().is_empty() {
         return Err(Error::InvalidQuery("empty symbol".to_string()));
     }
-    Ok(())
+    if !symbol
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err(Error::InvalidQuery(
+            "symbol contains unsupported characters".to_string(),
+        ));
+    }
+    Ok(symbol.to_ascii_uppercase())
 }
 
 fn snapshot_rows(symbol: &str) -> Vec<MarketDataBar> {
     vec![MarketDataBar {
-        symbol: symbol.to_ascii_uppercase(),
+        symbol: symbol.to_string(),
         venue: "SIM".to_string(),
         granularity: TimeGranularity::Tick,
         ts: "2026-05-21T20:00:00Z".to_string(),
@@ -113,7 +122,7 @@ mod tests {
     fn snapshot_and_stream_uppercase_symbol_rows() {
         let streamer = MockEquityStreamer;
         let query = EquityTickQuery {
-            symbol: "aapl".to_string(),
+            symbol: " aapl ".to_string(),
         };
         let rows = block_on_ready(streamer.snapshot(&query, &Credentials::default()))
             .unwrap_or_else(|error| panic!("snapshot should succeed: {error}"));
@@ -130,6 +139,10 @@ mod tests {
             symbol: String::new(),
         };
         assert!(block_on_ready(streamer.snapshot(&empty, &Credentials::default())).is_err());
+        let invalid = EquityTickQuery {
+            symbol: "AAPL/../../secret".to_string(),
+        };
+        assert!(block_on_ready(streamer.snapshot(&invalid, &Credentials::default())).is_err());
     }
 
     struct NoopWaker;

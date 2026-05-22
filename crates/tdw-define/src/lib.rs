@@ -3,6 +3,13 @@
 use serde::{Deserialize, Serialize};
 use tdw_hooks::{HookSpec, TransactionMode};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DefineError {
+    InvalidEventName,
+    InvalidTableName,
+    InvalidHookName,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DefineEvent {
     pub event_name: String,
@@ -16,9 +23,52 @@ impl DefineEvent {
         HookSpec::new(self.hook_name.clone(), 100, self.transaction_mode)
     }
 
+    pub fn try_compile_hook(&self) -> Result<HookSpec, DefineError> {
+        self.validate()?;
+        Ok(self.compile_hook())
+    }
+
     pub fn idempotency_key(&self) -> String {
         format!("{}:{}:{}", self.on_table, self.event_name, self.hook_name)
     }
+
+    pub fn validate(&self) -> Result<(), DefineError> {
+        if !is_action_name(&self.event_name) {
+            return Err(DefineError::InvalidEventName);
+        }
+        if !is_table_name(&self.on_table) {
+            return Err(DefineError::InvalidTableName);
+        }
+        if !is_action_name(&self.hook_name) {
+            return Err(DefineError::InvalidHookName);
+        }
+        Ok(())
+    }
+}
+
+fn is_action_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+}
+
+fn is_table_name(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let Some(schema) = parts.next() else {
+        return false;
+    };
+    let Some(table) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none() && is_table_part(schema) && is_table_part(table)
+}
+
+fn is_table_part(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 #[cfg(test)]
@@ -39,6 +89,21 @@ mod tests {
         assert_eq!(
             define.idempotency_key(),
             "raw.market_data_bar:market_data_changed:emit.market_data_changed"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_define_event_parts() {
+        let define = DefineEvent {
+            event_name: "market_data_changed".to_string(),
+            on_table: "raw.market_data_bar;drop".to_string(),
+            hook_name: "emit.market_data_changed".to_string(),
+            transaction_mode: TransactionMode::PostCommit,
+        };
+
+        assert_eq!(
+            define.try_compile_hook(),
+            Err(DefineError::InvalidTableName)
         );
     }
 }

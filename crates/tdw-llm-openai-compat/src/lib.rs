@@ -72,5 +72,23 @@ mod tests {
         assert!(
             OpenAiCompatibleModel::new("gpt-compatible", Some("localhost:11434".into())).is_err()
         );
+        assert!(
+            OpenAiCompatibleModel::new(
+                "gpt-compatible",
+                Some("https://api.example.com/v1 token".into())
+            )
+            .is_err()
+        );
+        assert!(
+            model
+                .complete(ChatRequest {
+                    messages: vec![ChatMessage {
+                        role: MessageRole::User,
+                        content: String::new(),
+                    }],
+                    max_output_tokens: 64,
+                })
+                .is_err()
+        );
     }
 }

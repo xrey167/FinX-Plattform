@@ -19,11 +19,15 @@ impl Default for HashEmbeddingProvider {
 
 impl HashEmbeddingProvider {
     pub fn new(model_id: impl Into<String>, dimensions: usize) -> Result<Self> {
+        let model_id = model_id.into();
+        if model_id.trim().is_empty() {
+            return Err(EmbeddingError::EmptyModelId);
+        }
         if dimensions == 0 {
             return Err(EmbeddingError::InvalidDimensions);
         }
         Ok(Self {
-            model_id: model_id.into(),
+            model_id,
             dimensions,
         })
     }
@@ -68,6 +72,8 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.vector.len(), 8);
+        assert!(tdw_embed::validate_embedding(&first).is_ok());
+        assert!(HashEmbeddingProvider::new("", 8).is_err());
         assert!(HashEmbeddingProvider::new("bad", 0).is_err());
     }
 }

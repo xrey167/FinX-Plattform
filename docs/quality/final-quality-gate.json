@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "ultragoal": "G001-G008 agentic CLI runtime boundary",
+  "ultragoal": "G001-G008 crate-readiness hardening",
   "recommendation": "APPROVE",
   "architectStatus": "CLEAR",
   "aiSlopCleaner": {
@@ -9,19 +9,16 @@
   },
   "verification": {
     "status": "passed",
-    "environment": {
-      "CARGO_INCREMENTAL": "0",
-      "RUSTFLAGS": "-C debuginfo=0"
-    },
     "commands": [
+      "cargo test -p tdw-mask",
       "cargo fmt --all -- --check",
-      "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo check --workspace",
+      "cargo clippy --workspace --all-targets -- -D warnings",
       "cargo test --workspace",
       "cargo run -p xtask -- clean-room-audit",
       "git diff --check"
     ],
-    "evidence": "All commands passed after the ai-slop-cleaner pass. An earlier pre-clean run exhausted C: disk/PDB space; repo-local target cleanup freed space and final verification was rerun with reduced debug output settings."
+    "evidence": "All commands passed after the ai-slop-cleaner pass."
   },
   "codeReview": {
     "recommendation": "APPROVE",
@@ -30,9 +27,14 @@
   },
   "gates": [
     {
+      "id": "crate-readiness-artifacts",
+      "status": "PASS",
+      "evidence": "Every crates/* package plus xtask has docs/quality/crate-readiness/<crate>.md and a matrix verdict."
+    },
+    {
       "id": "ai-slop-cleanup",
       "status": "PASS",
-      "evidence": "Fallback-like defaults repaired in session, knowledge, and service sample paths; report recorded."
+      "evidence": "tdw-mask fail-open compatibility wrapper repaired; no remaining masking fallback blocker found in changed files."
     },
     {
       "id": "fmt",
@@ -40,14 +42,14 @@
       "evidence": "cargo fmt --all -- --check"
     },
     {
-      "id": "clippy",
-      "status": "PASS",
-      "evidence": "cargo clippy --workspace --all-targets -- -D warnings"
-    },
-    {
       "id": "typecheck",
       "status": "PASS",
       "evidence": "cargo check --workspace"
+    },
+    {
+      "id": "clippy",
+      "status": "PASS",
+      "evidence": "cargo clippy --workspace --all-targets -- -D warnings"
     },
     {
       "id": "workspace-tests",
@@ -67,11 +69,11 @@
     {
       "id": "code-review",
       "status": "PASS",
-      "evidence": "docs/quality/final-code-review.json recommendation APPROVE and architectStatus CLEAR"
+      "evidence": "final-code-review.json recommendation APPROVE and architectural status CLEAR"
     }
   ],
   "notes": [
-    "Final quality gate is scoped to the G001-G008 ultragoal generated from .brainstorm/2026-05-22-agentic-cli-patterns-for-finx.md.",
-    "The attempted omx team launch was blocked by the native outside-tmux hook, so the final gate was completed by the active leader agent."
+    "Final quality gate is scoped to the .omx/ultragoal G001-G008 aggregate objective.",
+    "The .claude/ directory is pre-existing/untracked and is not part of this gate evidence."
   ]
 }

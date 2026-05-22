@@ -28,6 +28,8 @@ pub struct ProviderRequest {
 pub enum FredProviderError {
     #[error("fred series id must not be empty")]
     EmptySeriesId,
+    #[error("fred series id contains unsupported characters")]
+    InvalidSeriesId,
     #[error("fred api key must be supplied by the caller")]
     MissingApiKey,
 }
@@ -63,6 +65,12 @@ fn normalize_series_id(series_id: &str) -> Result<String> {
     if series_id.is_empty() {
         return Err(FredProviderError::EmptySeriesId);
     }
+    if !series_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+    {
+        return Err(FredProviderError::InvalidSeriesId);
+    }
     Ok(series_id.to_ascii_uppercase())
 }
 
@@ -80,5 +88,6 @@ mod tests {
         assert_eq!(request.credential_param, API_KEY_PARAM);
         assert!(series_observations_request("GDP", false).is_err());
         assert!(series_observations_request("", true).is_err());
+        assert!(series_observations_request("GDP&file_type=xml", true).is_err());
     }
 }

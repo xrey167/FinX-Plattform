@@ -129,6 +129,8 @@ pub enum HookError {
     RecursionGuard(String),
     #[error("hook depth exceeded at {0}")]
     DepthExceeded(String),
+    #[error("invalid hook spec {0}: {1}")]
+    InvalidSpec(String, &'static str),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -176,6 +178,7 @@ impl HookRegistry {
     ) -> Result<Vec<HookRuntimeOutcome>, HookError> {
         let mut outcomes = Vec::new();
         for hook in self.hooks.clone().into_iter().filter(|hook| hook.enabled) {
+            validate_hook_spec(&hook)?;
             if envelope.depth >= hook.max_depth {
                 return Err(HookError::DepthExceeded(hook.name));
             }
@@ -251,6 +254,9 @@ impl PermissionRules {
     }
 
     pub fn evaluate(&self, action: &str) -> PermissionEffect {
+        if !is_action_name(action) {
+            return PermissionEffect::Deny;
+        }
         self.rules
             .iter()
             .filter(|rule| pattern_matches(&rule.pattern, action))
@@ -315,12 +321,88 @@ pub fn tool_prompt_text() -> &'static str {
     TOOL_PROMPT_TEXT
 }
 
+pub fn validate_hook_spec(hook: &HookSpec) -> Result<(), HookError> {
+    if !is_action_name(&hook.name) {
+        return Err(HookError::InvalidSpec(hook.name.clone(), "name"));
+    }
+    if hook.max_depth == 0 {
+        return Err(HookError::InvalidSpec(hook.name.clone(), "max_depth"));
+    }
+    validate_handler(hook)?;
+    for context in &hook.additional_contexts {
+        if !is_context_uri(&context.uri) {
+            return Err(HookError::InvalidSpec(hook.name.clone(), "context_uri"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_handler(hook: &HookSpec) -> Result<(), HookError> {
+    match &hook.handler {
+        HandlerKind::Command { command, args } => {
+            if command.is_empty()
+                || command
+                    .chars()
+                    .any(|character| matches!(character, '/' | '\\'))
+                || command.chars().any(|character| {
+                    character.is_control() || matches!(character, ';' | '&' | '|' | '`')
+                })
+            {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "command"));
+            }
+            if args.iter().any(|arg| {
+                arg.chars()
+                    .any(|character| character.is_control() || matches!(character, ';' | '|' | '`'))
+            }) {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "command_args"));
+            }
+        }
+        HandlerKind::Http { url } => {
+            if !url.starts_with("https://") {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "url"));
+            }
+        }
+        HandlerKind::Mcp { server, tool } => {
+            if !is_action_name(server) || !is_action_name(tool) {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "mcp"));
+            }
+        }
+        HandlerKind::Prompt { prompt_path } => {
+            if prompt_path.is_empty()
+                || prompt_path.contains("..")
+                || prompt_path
+                    .chars()
+                    .any(|character| character.is_control() || character == '\0')
+            {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "prompt_path"));
+            }
+        }
+        HandlerKind::Agent { agent_id, skill_id } => {
+            if !is_action_name(agent_id) || !is_action_name(skill_id) {
+                return Err(HookError::InvalidSpec(hook.name.clone(), "agent"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn pattern_matches(pattern: &str, action: &str) -> bool {
     pattern == "*"
         || pattern == action
         || pattern
             .strip_suffix('*')
             .is_some_and(|prefix| action.starts_with(prefix))
+}
+
+fn is_action_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+}
+
+fn is_context_uri(value: &str) -> bool {
+    value.starts_with("tdw://") || value.starts_with("mcp://") || value.starts_with("https://")
 }
 
 #[macro_export]
@@ -427,6 +509,27 @@ mod tests {
         assert_eq!(resolved.permission_id, permission_id);
         assert_eq!(resolved.decision, Some(ApprovalDecision::AllowOnce));
         assert_eq!(approvals.pending_count(), 0);
+    }
+
+    #[test]
+    fn runtime_rejects_unsafe_hook_specs_and_permission_actions() {
+        let mut registry = HookRegistry::default();
+        registry.register(
+            HookSpec::new("bad", 1, TransactionMode::InTransaction).with_handler(
+                HandlerKind::Command {
+                    command: "../runner".to_string(),
+                    args: Vec::new(),
+                },
+            ),
+        );
+
+        assert_eq!(
+            registry.execute_runtime(&sample_event("service")),
+            Err(HookError::InvalidSpec("bad".to_string(), "command"))
+        );
+
+        let rules = PermissionRules::default();
+        assert_eq!(rules.evaluate("tdw.query.run\nall"), PermissionEffect::Deny);
     }
 
     #[test]

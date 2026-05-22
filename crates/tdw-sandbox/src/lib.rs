@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use tdw_udf::{UdfDefinition, UdfError, UdfRuntime, evaluate};
+use tdw_udf::{MAX_UDF_INPUT_BYTES, UdfDefinition, UdfError, UdfRuntime, evaluate};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, SandboxError>;
@@ -10,6 +10,8 @@ pub type Result<T> = std::result::Result<T, SandboxError>;
 pub enum SandboxError {
     #[error("sandbox denied capability: {0}")]
     CapabilityDenied(&'static str),
+    #[error("invalid sandbox request: {0}")]
+    InvalidRequest(&'static str),
     #[error("udf failed: {0}")]
     Udf(String),
 }
@@ -53,6 +55,7 @@ impl SandboxRuntime for LocalUdfSandbox {
     }
 
     fn run(&self, request: UdfRequest) -> Result<UdfResponse> {
+        validate_request(&request)?;
         let definition = UdfDefinition {
             name: request.name,
             runtime: request.runtime,
@@ -66,6 +69,19 @@ impl SandboxRuntime for LocalUdfSandbox {
             output,
         })
     }
+}
+
+pub fn validate_request(request: &UdfRequest) -> Result<()> {
+    if request.name.trim().is_empty() {
+        return Err(SandboxError::InvalidRequest("name"));
+    }
+    if request.source.trim().is_empty() {
+        return Err(SandboxError::InvalidRequest("source"));
+    }
+    if request.input.len() > MAX_UDF_INPUT_BYTES {
+        return Err(SandboxError::InvalidRequest("input"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -103,5 +119,20 @@ mod tests {
         });
 
         assert_eq!(denied, Err(SandboxError::CapabilityDenied("network")));
+    }
+
+    #[test]
+    fn local_sandbox_rejects_empty_source_before_dispatch() {
+        let sandbox = LocalUdfSandbox;
+        let rejected = sandbox.run(UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: " ".to_string(),
+            input: "aapl".to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        });
+
+        assert_eq!(rejected, Err(SandboxError::InvalidRequest("source")));
     }
 }

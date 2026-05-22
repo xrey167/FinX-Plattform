@@ -17,6 +17,8 @@ pub enum ToolError {
     DuplicateTool(String),
     #[error("unknown tool: {0}")]
     UnknownTool(String),
+    #[error("invalid tool definition: {0}")]
+    InvalidDefinition(&'static str),
     #[error("tool permission denied: {0}")]
     PermissionDenied(String),
 }
@@ -56,6 +58,7 @@ pub struct ToolRegistry {
 
 impl ToolRegistry {
     pub fn register(&mut self, tool: RegisteredTool) -> Result<()> {
+        validate_tool_definition(&tool.definition)?;
         if self.tools.contains_key(&tool.definition.name) {
             return Err(ToolError::DuplicateTool(tool.definition.name));
         }
@@ -73,6 +76,19 @@ impl ToolRegistry {
             .map(|tool| tool.definition.clone())
             .collect()
     }
+}
+
+pub fn validate_tool_definition(definition: &ToolDefinition) -> Result<()> {
+    if !is_tool_name(&definition.name) {
+        return Err(ToolError::InvalidDefinition("name"));
+    }
+    if definition.description.trim().is_empty() {
+        return Err(ToolError::InvalidDefinition("description"));
+    }
+    if !is_permission_pattern(&definition.permission_pattern) {
+        return Err(ToolError::InvalidDefinition("permission_pattern"));
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -168,6 +184,25 @@ pub fn echo_tool() -> RegisteredTool {
     )
 }
 
+fn is_tool_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(is_name_character))
+}
+
+fn is_permission_pattern(value: &str) -> bool {
+    value == "*"
+        || value
+            .strip_suffix('*')
+            .map(|prefix| prefix.ends_with('.') && is_tool_name(prefix.trim_end_matches('.')))
+            .unwrap_or_else(|| is_tool_name(value))
+}
+
+fn is_name_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +267,25 @@ mod tests {
         assert_eq!(result.permission, PermissionEffect::Ask);
         assert!(result.output.is_none());
         assert!(result.deferred_permission.is_some());
+    }
+
+    #[test]
+    fn registry_rejects_unsafe_tool_definition() {
+        let mut registry = ToolRegistry::default();
+        let unsafe_tool = RegisteredTool::new(
+            ToolDefinition {
+                name: "../tdw.echo".to_string(),
+                description: "unsafe".to_string(),
+                input_schema: json!({"type": "object"}),
+                output_schema: json!({"type": "object"}),
+                permission_pattern: "tdw.echo".to_string(),
+            },
+            Ok,
+        );
+
+        assert_eq!(
+            registry.register(unsafe_tool),
+            Err(ToolError::InvalidDefinition("name"))
+        );
     }
 }

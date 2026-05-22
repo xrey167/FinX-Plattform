@@ -20,6 +20,8 @@ pub struct ProviderRequest {
 pub enum PolygonProviderError {
     #[error("polygon ticker must not be empty")]
     EmptyTicker,
+    #[error("polygon ticker contains unsupported characters")]
+    InvalidTicker,
     #[error("polygon api key must be supplied by the caller")]
     MissingApiKey,
 }
@@ -42,6 +44,12 @@ fn normalize_ticker(ticker: &str) -> Result<String> {
     if ticker.is_empty() {
         return Err(PolygonProviderError::EmptyTicker);
     }
+    if !ticker
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err(PolygonProviderError::InvalidTicker);
+    }
     Ok(ticker.to_ascii_uppercase())
 }
 
@@ -59,5 +67,6 @@ mod tests {
         assert_eq!(request.credential_param, API_KEY_PARAM);
         assert!(aggregates_request("MSFT", false).is_err());
         assert!(aggregates_request("", true).is_err());
+        assert!(aggregates_request("MSFT?adjusted=false", true).is_err());
     }
 }

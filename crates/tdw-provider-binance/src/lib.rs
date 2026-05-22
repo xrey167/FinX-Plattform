@@ -27,6 +27,8 @@ pub struct ProviderRequest {
 pub enum BinanceProviderError {
     #[error("binance symbol must not be empty")]
     EmptySymbol,
+    #[error("binance symbol contains unsupported characters")]
+    InvalidSymbol,
 }
 
 pub fn endpoints() -> &'static [ProviderEndpoint] {
@@ -54,6 +56,12 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
     if symbol.is_empty() {
         return Err(BinanceProviderError::EmptySymbol);
     }
+    if !symbol
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric())
+    {
+        return Err(BinanceProviderError::InvalidSymbol);
+    }
     Ok(symbol.to_ascii_uppercase())
 }
 
@@ -70,5 +78,6 @@ mod tests {
         assert_eq!(request.path, "/api/v3/ticker/price?symbol=BTCUSDT");
         assert!(!request.requires_credential);
         assert!(ticker_price_request("").is_err());
+        assert!(ticker_price_request("BTCUSDT&recvWindow=1").is_err());
     }
 }

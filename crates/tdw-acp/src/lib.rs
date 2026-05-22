@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tdw_protocol::{EventMsg, Op, SessionId};
+use std::error::Error;
+use std::fmt;
+use tdw_protocol::{ApprovalDecision, EventMsg, Op, PermissionId, SessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcpServerInfo {
@@ -55,6 +57,157 @@ pub enum AcpResponse {
     },
 }
 
+pub type Result<T> = std::result::Result<T, AcpValidationError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AcpValidationError {
+    EmptyField { field: &'static str },
+    UnsafeField { field: &'static str },
+    InvalidApprovalDecision { decision: String },
+    InvalidQuery { reason: &'static str },
+}
+
+impl fmt::Display for AcpValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyField { field } => write!(formatter, "{field} must not be empty"),
+            Self::UnsafeField { field } => write!(formatter, "{field} contains unsafe characters"),
+            Self::InvalidApprovalDecision { decision } => {
+                write!(formatter, "unsupported approval decision: {decision}")
+            }
+            Self::InvalidQuery { reason } => write!(formatter, "invalid query: {reason}"),
+        }
+    }
+}
+
+impl Error for AcpValidationError {}
+
+pub fn validate_request(request: &AcpRequest) -> Result<()> {
+    match request {
+        AcpRequest::Initialize { client_name } => validate_token("client_name", client_name),
+        AcpRequest::SubmitOp { op, .. } => validate_op(op),
+        AcpRequest::ResolveApproval {
+            permission_id,
+            decision,
+        } => {
+            validate_token("permission_id", permission_id)?;
+            PermissionId::new(permission_id.clone()).map_err(|_| {
+                AcpValidationError::EmptyField {
+                    field: "permission_id",
+                }
+            })?;
+            parse_approval_decision(decision).map(|_| ())
+        }
+    }
+}
+
+pub fn parse_approval_decision(value: &str) -> Result<ApprovalDecision> {
+    let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
+    match normalized.as_str() {
+        "allow_once" => Ok(ApprovalDecision::AllowOnce),
+        "always_allow" | "allow_always" => Ok(ApprovalDecision::AlwaysAllow),
+        "deny" => Ok(ApprovalDecision::Deny),
+        _ => Err(AcpValidationError::InvalidApprovalDecision {
+            decision: value.to_string(),
+        }),
+    }
+}
+
+fn validate_op(op: &Op) -> Result<()> {
+    match op {
+        Op::AppendUserMessage { message } => validate_display_text("message", message),
+        Op::RunQuery { sql, .. } => validate_read_only_sql(sql),
+        Op::IngestBatch {
+            provider,
+            endpoint,
+            range,
+        } => {
+            validate_token("provider", provider)?;
+            validate_token("endpoint", endpoint)?;
+            if let Some(range) = range {
+                validate_display_text("range.start", &range.start)?;
+                validate_display_text("range.end", &range.end)?;
+            }
+            Ok(())
+        }
+        Op::ToolCall { tool_name, .. } => validate_token("tool_name", tool_name),
+        Op::ApprovalResponse { reason, .. } => {
+            if let Some(reason) = reason {
+                validate_display_text("reason", reason)?;
+            }
+            Ok(())
+        }
+        Op::CompactContext { target_tokens } => {
+            if *target_tokens == 0 {
+                Err(AcpValidationError::InvalidQuery {
+                    reason: "target token budget must be positive",
+                })
+            } else {
+                Ok(())
+            }
+        }
+        Op::Cancel { .. } | Op::Shutdown => Ok(()),
+    }
+}
+
+fn validate_token(field: &'static str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(AcpValidationError::EmptyField { field });
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | ';' | '|' | '&'))
+        || value.contains("..")
+    {
+        return Err(AcpValidationError::UnsafeField { field });
+    }
+    Ok(())
+}
+
+fn validate_display_text(field: &'static str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(AcpValidationError::EmptyField { field });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(AcpValidationError::UnsafeField { field });
+    }
+    Ok(())
+}
+
+fn validate_read_only_sql(sql: &str) -> Result<()> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err(AcpValidationError::EmptyField { field: "sql" });
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(AcpValidationError::UnsafeField { field: "sql" });
+    }
+    let semicolon_count = trimmed.matches(';').count();
+    if semicolon_count > 1 || (semicolon_count == 1 && !trimmed.ends_with(';')) {
+        return Err(AcpValidationError::InvalidQuery {
+            reason: "multiple statements are not allowed",
+        });
+    }
+    let without_trailing_semicolon = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
+    let lower = without_trailing_semicolon.to_ascii_lowercase();
+    if !lower.starts_with("select ") && lower != "select" {
+        return Err(AcpValidationError::InvalidQuery {
+            reason: "only read-only select statements are supported",
+        });
+    }
+    if [
+        "--", "/*", "*/", " drop ", " delete ", " insert ", " update ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err(AcpValidationError::InvalidQuery {
+            reason: "unsafe SQL tokens are not allowed",
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +250,43 @@ mod tests {
         let encoded = serde_json::to_value(&response).expect("response serializes");
         assert_eq!(encoded["type"], "event");
         assert_eq!(encoded["event"]["type"], "started");
+    }
+
+    #[test]
+    fn validates_client_boundary_requests() {
+        let request = AcpRequest::Initialize {
+            client_name: "tdw-cli".to_string(),
+        };
+        assert!(validate_request(&request).is_ok());
+
+        let rejected = AcpRequest::ResolveApproval {
+            permission_id: "../approval".to_string(),
+            decision: "allow_once".to_string(),
+        };
+        assert_eq!(
+            validate_request(&rejected),
+            Err(AcpValidationError::UnsafeField {
+                field: "permission_id"
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_submit_op_queries() {
+        let request = AcpRequest::SubmitOp {
+            session_id: SessionId::new("session-1").expect("session id"),
+            op: Op::RunQuery {
+                sql: "select 1; drop table raw.orders".to_string(),
+                plan_id: None,
+                cost_hint: None,
+            },
+        };
+
+        assert_eq!(
+            validate_request(&request),
+            Err(AcpValidationError::InvalidQuery {
+                reason: "multiple statements are not allowed"
+            })
+        );
     }
 }

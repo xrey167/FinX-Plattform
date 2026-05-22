@@ -1,15 +1,123 @@
 #![forbid(unsafe_code)]
 
-//! Bootstrap stub for the `tdw-fn-string` crate.
-
 pub const CRATE_NAME: &str = "tdw-fn-string";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringFn {
+    Trim,
+    Uppercase,
+    Lowercase,
+    Replace { from: String, to: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StringPipeline {
+    pub name: String,
+    pub steps: Vec<StringFn>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StringFnError {
+    InvalidPipelineName,
+    EmptyPipeline,
+    EmptyPattern,
+    UnsafePattern,
+}
+
+pub fn apply_pipeline(input: &str, pipeline: &StringPipeline) -> Result<String, StringFnError> {
+    validate_pipeline(pipeline)?;
+    let mut value = input.to_string();
+    for step in &pipeline.steps {
+        match step {
+            StringFn::Trim => value = value.trim().to_string(),
+            StringFn::Uppercase => value = value.to_ascii_uppercase(),
+            StringFn::Lowercase => value = value.to_ascii_lowercase(),
+            StringFn::Replace { from, to } => value = value.replace(from, to),
+        }
+    }
+    Ok(value)
+}
+
+pub fn validate_pipeline(pipeline: &StringPipeline) -> Result<(), StringFnError> {
+    if !is_identifier(&pipeline.name) {
+        return Err(StringFnError::InvalidPipelineName);
+    }
+    if pipeline.steps.is_empty() {
+        return Err(StringFnError::EmptyPipeline);
+    }
+    for step in &pipeline.steps {
+        if let StringFn::Replace { from, to } = step {
+            if from.is_empty() {
+                return Err(StringFnError::EmptyPattern);
+            }
+            if contains_control_or_shell(from) || contains_control_or_shell(to) {
+                return Err(StringFnError::UnsafePattern);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+fn contains_control_or_shell(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() || matches!(character, ';' | '|' | '`'))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn exposes_crate_name() {
-        assert_eq!(CRATE_NAME, "tdw-fn-string");
+    fn applies_deterministic_string_pipeline() {
+        let pipeline = StringPipeline {
+            name: CRATE_NAME.to_string(),
+            steps: vec![
+                StringFn::Trim,
+                StringFn::Replace {
+                    from: " ".to_string(),
+                    to: "_".to_string(),
+                },
+                StringFn::Uppercase,
+            ],
+        };
+
+        assert_eq!(
+            apply_pipeline(" aapl equity ", &pipeline),
+            Ok("AAPL_EQUITY".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_and_unsafe_replace_patterns() {
+        let pipeline = StringPipeline {
+            name: "normalize".to_string(),
+            steps: vec![StringFn::Replace {
+                from: String::new(),
+                to: "safe".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            validate_pipeline(&pipeline),
+            Err(StringFnError::EmptyPattern)
+        );
+        assert_eq!(
+            validate_pipeline(&StringPipeline {
+                steps: vec![StringFn::Replace {
+                    from: "AAPL".to_string(),
+                    to: "AAPL;DROP".to_string(),
+                }],
+                ..pipeline
+            }),
+            Err(StringFnError::UnsafePattern)
+        );
     }
 }

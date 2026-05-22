@@ -20,6 +20,8 @@ pub struct InferenceRequest {
 pub enum HuggingFaceProviderError {
     #[error("huggingface model id must not be empty")]
     EmptyModelId,
+    #[error("huggingface model id contains unsupported path characters")]
+    InvalidModelId,
     #[error("huggingface token must be supplied by the caller")]
     MissingToken,
 }
@@ -42,6 +44,18 @@ fn normalize_model_id(model_id: &str) -> Result<String> {
     if model_id.is_empty() {
         return Err(HuggingFaceProviderError::EmptyModelId);
     }
+    if model_id.starts_with('/')
+        || model_id.ends_with('/')
+        || model_id.contains("//")
+        || model_id
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        || !model_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '/' | '-' | '_' | '.')
+        })
+    {
+        return Err(HuggingFaceProviderError::InvalidModelId);
+    }
     Ok(model_id.to_string())
 }
 
@@ -59,5 +73,6 @@ mod tests {
         assert_eq!(request.auth_header, AUTH_HEADER);
         assert!(text_generation_request("model", false).is_err());
         assert!(text_generation_request("", true).is_err());
+        assert!(text_generation_request("../secret", true).is_err());
     }
 }

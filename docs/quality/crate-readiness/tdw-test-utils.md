@@ -19,25 +19,27 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 
 ## Required Readiness Evidence
 
-- [ ] Manifest correctness reviewed.
-- [ ] Dependency direction reviewed.
-- [ ] Feature flags reviewed or marked not applicable.
-- [ ] Public API and error contracts reviewed.
-- [ ] Runtime behavior reviewed.
-- [ ] Tests and coverage evidence recorded.
-- [ ] Docs and examples reviewed.
-- [ ] Surface wiring reviewed where applicable.
-- [ ] Scaffold, dead-code, and fallback signals classified.
-- [ ] Security and reliability risks reviewed.
+- [x] Manifest correctness reviewed.
+- [x] Dependency direction reviewed: test utility crate depends only on tdw-domain.
+- [x] Feature flags reviewed: default/e2e/integration/property are declared as empty coordination flags.
+- [x] Public API and error contracts reviewed: fixtures and container specs are deterministic bootstrap helpers.
+- [x] Runtime behavior reviewed: fixture data is stable and container specs cover the minimal profile.
+- [x] Tests and coverage evidence recorded: tests cover deterministic OHLCV fixtures and core container specs.
+- [x] Docs and examples reviewed: worksheet records test utility behavior.
+- [x] Surface wiring reviewed: no runtime consumer.
+- [x] Scaffold, dead-code, and fallback signals classified: none.
+- [x] Security and reliability risks reviewed: no network or container launch happens in this crate.
 
 ## Findings
 
-- Pending tranche audit.
+- This crate remains fixture-only and does not start infrastructure.
+- Feature flags are coordination markers for future test layers.
 
 ## Verification
 
-- Pending tranche audit. Record focused crate commands and any workspace commands here.
+- Focused G006 crate check passed: cargo test -p tdw-entity-resolver -p tdw-eval-runner -p tdw-feature-store -p tdw-fn-string -p tdw-graph -p tdw-kg -p tdw-knowledge -p tdw-ml-registry -p tdw-rewrite -p tdw-spatial -p tdw-tag-rules -p tdw-tags -p tdw-test-utils -p tdw-workflow-engine -p tdw-service-api.
+- Final workspace gate for G006 passed: cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check.
 
 ## Verdict
 
-Pending tranche audit. This baseline worksheet is not a production-readiness attestation yet.
+Ready with follow-ups. No G006 blocker remains inside tdw-test-utils.

@@ -13,6 +13,8 @@ tdw-acp = { workspace = true }
 tdw-actor = { path = "../tdw-actor" }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
+tdw-app-client = { workspace = true }
+tdw-app-server = { workspace = true }
 tdw-auth = { path = "../tdw-auth" }
 tdw-auth-oidc = { path = "../tdw-auth-oidc" }
 tdw-bus = { path = "../tdw-bus" }

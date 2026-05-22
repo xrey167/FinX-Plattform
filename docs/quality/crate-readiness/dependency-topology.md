@@ -22,8 +22,8 @@ Baseline generated during G001 and refreshed during tranche audits. Treat this a
 | [tdw-actor](tdw-actor.md) | tdw-event | tdw-service-api |
 | [tdw-agent](tdw-agent.md) | none | tdw-agent-store, tdw-eval-runner, tdw-service-api, tdw-workflow-engine, xtask |
 | [tdw-agent-store](tdw-agent-store.md) | tdw-agent | tdw-eval-runner, tdw-service-api |
-| [tdw-app-client](tdw-app-client.md) | tdw-app-server, tdw-protocol | none |
-| [tdw-app-server](tdw-app-server.md) | tdw-protocol | tdw-app-client |
+| [tdw-app-client](tdw-app-client.md) | tdw-app-server, tdw-protocol | tdw-service-api |
+| [tdw-app-server](tdw-app-server.md) | tdw-protocol | tdw-app-client, tdw-service-api |
 | [tdw-auth](tdw-auth.md) | none | tdw-service-api |
 | [tdw-auth-oidc](tdw-auth-oidc.md) | none | tdw-service-api |
 | [tdw-bus](tdw-bus.md) | tdw-event | tdw-service-api |
@@ -35,9 +35,9 @@ Baseline generated during G001 and refreshed during tranche audits. Treat this a
 | [tdw-define](tdw-define.md) | tdw-hooks | tdw-service-api |
 | [tdw-domain](tdw-domain.md) | none | tdw-provider-fileset, tdw-provider-ws-mock, tdw-provider-yahoo, tdw-service-api, tdw-sql-codegen, tdw-test-utils |
 | [tdw-embed](tdw-embed.md) | none | tdw-embed-local, tdw-knowledge, tdw-service-api |
-| [tdw-embed-google](tdw-embed-google.md) | none | none |
+| [tdw-embed-google](tdw-embed-google.md) | tdw-embed | none |
 | [tdw-embed-local](tdw-embed-local.md) | tdw-embed | tdw-knowledge, tdw-service-api |
-| [tdw-embed-openai](tdw-embed-openai.md) | none | none |
+| [tdw-embed-openai](tdw-embed-openai.md) | tdw-embed | none |
 | [tdw-entity-resolver](tdw-entity-resolver.md) | tdw-kg | tdw-service-api |
 | [tdw-eval-runner](tdw-eval-runner.md) | tdw-agent, tdw-agent-store | tdw-service-api |
 | [tdw-event](tdw-event.md) | none | tdw-actor, tdw-bus, tdw-cdc, tdw-hooks, tdw-outbox, tdw-service-api, xtask |
@@ -73,7 +73,7 @@ Baseline generated during G001 and refreshed during tranche audits. Treat this a
 | [tdw-runtime](tdw-runtime.md) | tdw-core | tdw-service-api |
 | [tdw-sandbox](tdw-sandbox.md) | tdw-udf | tdw-service-api |
 | [tdw-service](tdw-service.md) | tdw-service-api | none |
-| [tdw-service-api](tdw-service-api.md) | tdw-acp, tdw-actor, tdw-agent, tdw-agent-store, tdw-auth, tdw-auth-oidc, tdw-bus, tdw-cdc, tdw-config, tdw-core, tdw-define, tdw-domain, tdw-embed, tdw-embed-local, tdw-entity-resolver, tdw-eval-runner, tdw-event, tdw-exec, tdw-feature-store, tdw-graph, tdw-hooks, tdw-kg, tdw-knowledge, tdw-llm, tdw-llm-anthropic, tdw-llm-openai-compat, tdw-mask, tdw-outbox, tdw-pipe, tdw-protocol, tdw-provider-fileset, tdw-provider-ws-mock, tdw-provider-yahoo, tdw-replay, tdw-rollout, tdw-runtime, tdw-sandbox, tdw-snapshot, tdw-spatial, tdw-stage, tdw-storage-meilisearch, tdw-storage-qdrant, tdw-storage-s3, tdw-table-format, tdw-tag-rules, tdw-tags, tdw-tools, tdw-tui, tdw-udf, tdw-workflow-engine | tdw-cli, tdw-mcp, tdw-service, tdw-worker |
+| [tdw-service-api](tdw-service-api.md) | tdw-acp, tdw-actor, tdw-agent, tdw-agent-store, tdw-app-client, tdw-app-server, tdw-auth, tdw-auth-oidc, tdw-bus, tdw-cdc, tdw-config, tdw-core, tdw-define, tdw-domain, tdw-embed, tdw-embed-local, tdw-entity-resolver, tdw-eval-runner, tdw-event, tdw-exec, tdw-feature-store, tdw-graph, tdw-hooks, tdw-kg, tdw-knowledge, tdw-llm, tdw-llm-anthropic, tdw-llm-openai-compat, tdw-mask, tdw-outbox, tdw-pipe, tdw-protocol, tdw-provider-fileset, tdw-provider-ws-mock, tdw-provider-yahoo, tdw-replay, tdw-rollout, tdw-runtime, tdw-sandbox, tdw-snapshot, tdw-spatial, tdw-stage, tdw-storage-meilisearch, tdw-storage-qdrant, tdw-storage-s3, tdw-table-format, tdw-tag-rules, tdw-tags, tdw-tools, tdw-tui, tdw-udf, tdw-workflow-engine | tdw-cli, tdw-mcp, tdw-service, tdw-worker |
 | [tdw-session](tdw-session.md) | tdw-hooks, tdw-protocol | none |
 | [tdw-snapshot](tdw-snapshot.md) | none | tdw-service-api |
 | [tdw-spatial](tdw-spatial.md) | none | tdw-service-api |
@@ -115,44 +115,52 @@ Baseline scan signals count conservative matches for TODO/todo!/unimplemented!/p
 
 | Crate | Baseline scan signals | Stub signals |
 | --- | ---: | ---: |
-| [tdw-acp](tdw-acp.md) | 4 | 0 |
+| [tdw-acp](tdw-acp.md) | 6 | 0 |
 | [tdw-agent](tdw-agent.md) | 7 | 0 |
-| [tdw-app-client](tdw-app-client.md) | 1 | 0 |
+| [tdw-app-client](tdw-app-client.md) | 2 | 0 |
 | [tdw-app-server](tdw-app-server.md) | 3 | 0 |
 | [tdw-config](tdw-config.md) | 4 | 0 |
 | [tdw-core](tdw-core.md) | 9 | 0 |
 | [tdw-dbt-runner](tdw-dbt-runner.md) | 2 | 0 |
 | [tdw-domain](tdw-domain.md) | 2 | 0 |
 | [tdw-embed](tdw-embed.md) | 1 | 0 |
-| [tdw-embed-google](tdw-embed-google.md) | 1 | 1 |
+| [tdw-embed-google](tdw-embed-google.md) | 2 | 0 |
 | [tdw-embed-local](tdw-embed-local.md) | 2 | 0 |
-| [tdw-embed-openai](tdw-embed-openai.md) | 1 | 1 |
+| [tdw-embed-openai](tdw-embed-openai.md) | 2 | 0 |
 | [tdw-event](tdw-event.md) | 1 | 0 |
-| [tdw-exec](tdw-exec.md) | 1 | 0 |
+| [tdw-cli](tdw-cli.md) | 2 | 0 |
+| [tdw-exec](tdw-exec.md) | 3 | 0 |
 | [tdw-feature-store](tdw-feature-store.md) | 2 | 0 |
-| [tdw-fn-string](tdw-fn-string.md) | 1 | 1 |
+| [tdw-fn-string](tdw-fn-string.md) | 0 | 0 |
 | [tdw-hooks](tdw-hooks.md) | 4 | 0 |
 | [tdw-knowledge](tdw-knowledge.md) | 4 | 0 |
+| [tdw-kg](tdw-kg.md) | 1 | 0 |
 | [tdw-llm](tdw-llm.md) | 1 | 0 |
-| [tdw-llm-anthropic](tdw-llm-anthropic.md) | 1 | 0 |
-| [tdw-llm-openai-compat](tdw-llm-openai-compat.md) | 1 | 0 |
-| [tdw-ml-registry](tdw-ml-registry.md) | 1 | 1 |
+| [tdw-llm-anthropic](tdw-llm-anthropic.md) | 2 | 0 |
+| [tdw-llm-openai-compat](tdw-llm-openai-compat.md) | 2 | 0 |
+| [tdw-mask](tdw-mask.md) | 1 | 0 |
+| [tdw-ml-registry](tdw-ml-registry.md) | 0 | 0 |
 | [tdw-pipe](tdw-pipe.md) | 1 | 0 |
 | [tdw-pipeline](tdw-pipeline.md) | 1 | 0 |
 | [tdw-protocol](tdw-protocol.md) | 7 | 0 |
-| [tdw-provider-alpaca](tdw-provider-alpaca.md) | 1 | 1 |
-| [tdw-provider-binance](tdw-provider-binance.md) | 1 | 1 |
-| [tdw-provider-fred](tdw-provider-fred.md) | 1 | 1 |
-| [tdw-provider-huggingface](tdw-provider-huggingface.md) | 1 | 1 |
-| [tdw-provider-polygon](tdw-provider-polygon.md) | 1 | 1 |
+| [tdw-provider-alpaca](tdw-provider-alpaca.md) | 1 | 0 |
+| [tdw-provider-binance](tdw-provider-binance.md) | 1 | 0 |
+| [tdw-provider-fileset](tdw-provider-fileset.md) | 1 | 0 |
+| [tdw-provider-fred](tdw-provider-fred.md) | 1 | 0 |
+| [tdw-provider-huggingface](tdw-provider-huggingface.md) | 1 | 0 |
+| [tdw-provider-polygon](tdw-provider-polygon.md) | 1 | 0 |
 | [tdw-provider-ws-mock](tdw-provider-ws-mock.md) | 6 | 0 |
 | [tdw-provider-yahoo](tdw-provider-yahoo.md) | 4 | 0 |
 | [tdw-replay](tdw-replay.md) | 1 | 0 |
-| [tdw-rewrite](tdw-rewrite.md) | 1 | 1 |
+| [tdw-rewrite](tdw-rewrite.md) | 0 | 0 |
 | [tdw-rollout](tdw-rollout.md) | 5 | 0 |
-| [tdw-runtime](tdw-runtime.md) | 2 | 0 |
+| [tdw-mcp](tdw-mcp.md) | 4 | 0 |
+| [tdw-runtime](tdw-runtime.md) | 4 | 0 |
+| [tdw-service](tdw-service.md) | 2 | 0 |
 | [tdw-sandbox](tdw-sandbox.md) | 1 | 0 |
-| [tdw-service-api](tdw-service-api.md) | 12 | 0 |
+| [tdw-service-api](tdw-service-api.md) | 51 | 0 |
+| [tdw-tui](tdw-tui.md) | 2 | 0 |
+| [tdw-worker](tdw-worker.md) | 1 | 0 |
 | [tdw-session](tdw-session.md) | 19 | 0 |
 | [tdw-stage](tdw-stage.md) | 2 | 0 |
 | [tdw-storage-clickhouse](tdw-storage-clickhouse.md) | 7 | 0 |
@@ -163,13 +171,13 @@ Baseline scan signals count conservative matches for TODO/todo!/unimplemented!/p
 | [tdw-storage-qdrant](tdw-storage-qdrant.md) | 2 | 0 |
 | [tdw-storage-router](tdw-storage-router.md) | 4 | 0 |
 | [tdw-storage-s3](tdw-storage-s3.md) | 2 | 0 |
-| [tdw-tag-rules](tdw-tag-rules.md) | 3 | 0 |
-| [tdw-tags](tdw-tags.md) | 3 | 0 |
+| [tdw-tag-rules](tdw-tag-rules.md) | 4 | 0 |
+| [tdw-tags](tdw-tags.md) | 4 | 0 |
 | [tdw-tools](tdw-tools.md) | 8 | 0 |
 | [tdw-udf](tdw-udf.md) | 1 | 0 |
-| [tdw-udf-external](tdw-udf-external.md) | 1 | 1 |
-| [tdw-udf-js](tdw-udf-js.md) | 1 | 1 |
-| [tdw-udf-python](tdw-udf-python.md) | 1 | 1 |
-| [tdw-udf-wasm](tdw-udf-wasm.md) | 1 | 1 |
+| [tdw-udf-external](tdw-udf-external.md) | 0 | 0 |
+| [tdw-udf-js](tdw-udf-js.md) | 0 | 0 |
+| [tdw-udf-python](tdw-udf-python.md) | 0 | 0 |
+| [tdw-udf-wasm](tdw-udf-wasm.md) | 0 | 0 |
 | [tdw-workflow-engine](tdw-workflow-engine.md) | 1 | 0 |
-| [xtask](xtask.md) | 3 | 0 |
+| [xtask](xtask.md) | 8 | 0 |

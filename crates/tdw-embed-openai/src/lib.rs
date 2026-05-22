@@ -29,6 +29,8 @@ pub enum OpenAiEmbeddingAdapterError {
     MissingApiKey,
     #[error("openai embedding vector must not be empty")]
     EmptyVector,
+    #[error("openai embedding vector contains a non-finite value")]
+    NonFiniteVector,
 }
 
 pub fn build_embedding_request(
@@ -57,6 +59,9 @@ pub fn decode_embedding(model: &str, vector: Vec<f32>) -> Result<Embedding> {
     let model = normalize_component(model, OpenAiEmbeddingAdapterError::EmptyModel)?;
     if vector.is_empty() {
         return Err(OpenAiEmbeddingAdapterError::EmptyVector);
+    }
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err(OpenAiEmbeddingAdapterError::NonFiniteVector);
     }
     Ok(Embedding {
         model_id: model,
@@ -88,6 +93,9 @@ mod tests {
         assert_eq!(request.body["model"], "text-embedding-3-small");
         assert_eq!(embedding.vector.len(), 2);
         assert!(build_embedding_request("model", "input", false).is_err());
+        assert!(build_embedding_request("", "input", true).is_err());
+        assert!(build_embedding_request("model", "", true).is_err());
         assert!(decode_embedding("model", Vec::new()).is_err());
+        assert!(decode_embedding("model", vec![f32::NAN]).is_err());
     }
 }

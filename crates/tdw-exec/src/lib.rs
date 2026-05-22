@@ -2,11 +2,43 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::error::Error;
+use std::fmt;
 use tdw_protocol::{EventMsg, Op, OpEnvelope};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExecRun {
     pub events: Vec<EventMsg>,
+}
+
+pub type Result<T> = std::result::Result<T, ExecError>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecError {
+    EmptySql,
+    MultipleStatements,
+    UnsafeSqlToken,
+    NonReadOnlySql,
+}
+
+impl fmt::Display for ExecError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptySql => write!(formatter, "SQL must not be empty"),
+            Self::MultipleStatements => {
+                write!(formatter, "multiple SQL statements are not allowed")
+            }
+            Self::UnsafeSqlToken => write!(formatter, "unsafe SQL token is not allowed"),
+            Self::NonReadOnlySql => write!(formatter, "only read-only SELECT SQL is supported"),
+        }
+    }
+}
+
+impl Error for ExecError {}
+
+pub fn try_run_headless(envelope: OpEnvelope) -> Result<ExecRun> {
+    validate_op(&envelope.op)?;
+    Ok(run_headless(envelope))
 }
 
 pub fn run_headless(envelope: OpEnvelope) -> ExecRun {
@@ -26,6 +58,44 @@ pub fn run_headless(envelope: OpEnvelope) -> ExecRun {
         },
     });
     ExecRun { events }
+}
+
+pub fn validate_op(op: &Op) -> Result<()> {
+    match op {
+        Op::RunQuery { sql, .. } => validate_read_only_sql(sql),
+        _ => Ok(()),
+    }
+}
+
+fn validate_read_only_sql(sql: &str) -> Result<()> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err(ExecError::EmptySql);
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(ExecError::UnsafeSqlToken);
+    }
+
+    let semicolon_count = trimmed.matches(';').count();
+    if semicolon_count > 1 || (semicolon_count == 1 && !trimmed.ends_with(';')) {
+        return Err(ExecError::MultipleStatements);
+    }
+
+    let without_trailing_semicolon = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
+    let lower = without_trailing_semicolon.to_ascii_lowercase();
+    if !lower.starts_with("select ") && lower != "select" {
+        return Err(ExecError::NonReadOnlySql);
+    }
+    if [
+        "--", "/*", "*/", " drop ", " delete ", " insert ", " update ",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err(ExecError::UnsafeSqlToken);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -53,5 +123,25 @@ mod tests {
 
         assert!(matches!(run.events[0], EventMsg::Started { .. }));
         assert!(matches!(run.events[1], EventMsg::Completed { .. }));
+    }
+
+    #[test]
+    fn checked_headless_exec_rejects_mutating_queries() {
+        let envelope = OpEnvelope::new(
+            SessionId::new("session-1").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "user".to_string(),
+                kind: ActorKind::User,
+                tenant_id: None,
+            },
+            Op::RunQuery {
+                sql: "delete from raw.orders".to_string(),
+                plan_id: None,
+                cost_hint: None,
+            },
+        );
+
+        assert_eq!(try_run_headless(envelope), Err(ExecError::NonReadOnlySql));
     }
 }

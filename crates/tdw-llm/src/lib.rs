@@ -16,8 +16,12 @@ pub enum LlmError {
     EmptyMaxOutputTokens,
     #[error("model id must not be empty")]
     EmptyModelId,
+    #[error("model id contains unsupported control characters")]
+    InvalidModelId,
     #[error("base url must start with http:// or https://")]
     InvalidBaseUrl,
+    #[error("base url contains whitespace or control characters")]
+    UnsafeBaseUrl,
     #[error("unsupported provider: {0}")]
     UnsupportedProvider(String),
 }
@@ -106,13 +110,23 @@ pub fn validate_chat_request(request: &ChatRequest) -> Result<()> {
 }
 
 pub fn validate_model_id(model_id: &str) -> Result<()> {
-    if model_id.trim().is_empty() {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
         return Err(LlmError::EmptyModelId);
+    }
+    if model_id.chars().any(char::is_control) {
+        return Err(LlmError::InvalidModelId);
     }
     Ok(())
 }
 
 pub fn validate_base_url(base_url: &str) -> Result<()> {
+    if base_url
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return Err(LlmError::UnsafeBaseUrl);
+    }
     if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
         return Err(LlmError::InvalidBaseUrl);
     }
@@ -161,6 +175,22 @@ mod tests {
 
         assert_eq!(response.model_id, "echo");
         assert_eq!(response.message.content, "hello");
+        assert_eq!(
+            last_user_message(&ChatRequest {
+                messages: vec![
+                    ChatMessage {
+                        role: MessageRole::System,
+                        content: "policy".to_string(),
+                    },
+                    ChatMessage {
+                        role: MessageRole::User,
+                        content: "latest".to_string(),
+                    },
+                ],
+                max_output_tokens: 8,
+            }),
+            Ok("latest")
+        );
         assert!(
             model
                 .complete(ChatRequest {
@@ -172,5 +202,8 @@ mod tests {
                 })
                 .is_err()
         );
+        assert!(validate_model_id("bad\nmodel").is_err());
+        assert!(validate_base_url("https://api.example.com/v1").is_ok());
+        assert!(validate_base_url("https://api.example.com/v1 token").is_err());
     }
 }

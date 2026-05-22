@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tdw_core::{VectorEngine, VectorPoint, VectorQuery};
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
-use tdw_kg::{Entity, KnowledgeGraph, Relationship};
+use tdw_kg::{Entity, KnowledgeGraph, Relationship, validate_entity};
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use thiserror::Error;
@@ -22,6 +22,10 @@ pub enum KnowledgeError {
     Tag(String),
     #[error("invalid vector payload field: {0}")]
     InvalidPayloadField(&'static str),
+    #[error("invalid knowledge document field: {0}")]
+    InvalidDocumentField(&'static str),
+    #[error("invalid knowledge query: {0}")]
+    InvalidQuery(&'static str),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +65,7 @@ pub struct KnowledgeIndex {
 
 impl KnowledgeIndex {
     pub async fn index_document(&mut self, document: KnowledgeDocument) -> Result<()> {
+        validate_document(&document)?;
         let embedding = self
             .embedder
             .embed(&document.body)
@@ -107,6 +112,7 @@ impl KnowledgeIndex {
     }
 
     pub async fn search(&self, query: &str, top_k: usize) -> Result<Vec<KnowledgeHit>> {
+        validate_query(query, top_k)?;
         let embedding = self
             .embedder
             .embed(query)
@@ -147,6 +153,31 @@ impl KnowledgeIndex {
     }
 }
 
+pub fn validate_document(document: &KnowledgeDocument) -> Result<()> {
+    if !is_identifier(&document.id) {
+        return Err(KnowledgeError::InvalidDocumentField("id"));
+    }
+    if document.body.trim().is_empty() {
+        return Err(KnowledgeError::InvalidDocumentField("body"));
+    }
+    validate_entity(&document.entity)
+        .map_err(|_| KnowledgeError::InvalidDocumentField("entity"))?;
+    if document.tags.iter().any(|tag| !is_tag_id(tag)) {
+        return Err(KnowledgeError::InvalidDocumentField("tags"));
+    }
+    Ok(())
+}
+
+pub fn validate_query(query: &str, top_k: usize) -> Result<()> {
+    if query.trim().is_empty() {
+        return Err(KnowledgeError::InvalidQuery("query"));
+    }
+    if top_k == 0 {
+        return Err(KnowledgeError::InvalidQuery("top_k"));
+    }
+    Ok(())
+}
+
 fn payload_str<'a>(payload: &'a Value, field: &'static str) -> Result<&'a str> {
     payload
         .get(field)
@@ -167,6 +198,21 @@ fn payload_string_array(payload: &Value, field: &'static str) -> Result<Vec<Stri
                 .ok_or(KnowledgeError::InvalidPayloadField(field))
         })
         .collect()
+}
+
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+fn is_tag_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.contains(':')
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-')
+        })
 }
 
 pub fn summarize_syntax(input: &str) -> SyntaxSummary {
@@ -260,6 +306,36 @@ mod tests {
         assert!(matches!(
             error,
             KnowledgeError::InvalidPayloadField("entity_id")
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_documents_and_queries() {
+        let mut index = KnowledgeIndex::default();
+        let document = KnowledgeDocument {
+            id: "../doc".to_string(),
+            body: "AAPL".to_string(),
+            entity: Entity {
+                entity_id: "instrument:AAPL".to_string(),
+                kind: EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: vec!["AAPL".to_string()],
+            },
+            tags: vec!["asset:equity".to_string()],
+        };
+
+        let error = index
+            .index_document(document)
+            .await
+            .expect_err("invalid document id should fail");
+        assert!(matches!(error, KnowledgeError::InvalidDocumentField("id")));
+        assert!(matches!(
+            index.search(" ", 1).await,
+            Err(KnowledgeError::InvalidQuery("query"))
+        ));
+        assert!(matches!(
+            index.search("AAPL", 0).await,
+            Err(KnowledgeError::InvalidQuery("top_k"))
         ));
     }
 

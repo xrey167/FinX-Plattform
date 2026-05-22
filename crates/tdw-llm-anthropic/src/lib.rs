@@ -60,5 +60,17 @@ mod tests {
         assert_eq!(response.model_id, "claude-test");
         assert!(response.message.content.contains("summarize AAPL"));
         assert!(AnthropicMessagesModel::new("").is_err());
+        assert!(AnthropicMessagesModel::new("claude\nbad").is_err());
+        assert!(
+            model
+                .complete(ChatRequest {
+                    messages: vec![ChatMessage {
+                        role: MessageRole::User,
+                        content: "   ".to_string(),
+                    }],
+                    max_output_tokens: 128,
+                })
+                .is_err()
+        );
     }
 }

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use tdw_agent::{
     AgentCard, EvalMetric, EvalRunRequest, Gotcha, StorageMapping, WorkflowDefinition,
-    agent_storage_mappings,
+    agent_storage_mappings, validate_agent_card_contract, validate_workflow_contract,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -13,6 +13,13 @@ pub struct StoredEvalRun {
     pub request: EvalRunRequest,
     pub metrics: Vec<EvalMetric>,
     pub status: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreError {
+    InvalidAgent,
+    InvalidWorkflow,
+    InvalidEvalRun,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -32,6 +39,12 @@ impl AgentStore {
         self.agents.insert(card.agent_id.clone(), card);
     }
 
+    pub fn try_upsert_agent(&mut self, card: AgentCard) -> Result<(), StoreError> {
+        validate_agent_card_contract(&card).map_err(|_| StoreError::InvalidAgent)?;
+        self.upsert_agent(card);
+        Ok(())
+    }
+
     pub fn upsert_gotcha(&mut self, gotcha: Gotcha) {
         self.gotchas.insert(gotcha.gotcha_id.clone(), gotcha);
     }
@@ -41,8 +54,29 @@ impl AgentStore {
             .insert(workflow.workflow_id.clone(), workflow);
     }
 
+    pub fn try_upsert_workflow(&mut self, workflow: WorkflowDefinition) -> Result<(), StoreError> {
+        validate_workflow_contract(&workflow).map_err(|_| StoreError::InvalidWorkflow)?;
+        self.upsert_workflow(workflow);
+        Ok(())
+    }
+
     pub fn record_eval_run(&mut self, run: StoredEvalRun) {
         self.eval_runs.insert(run.request.run_id.clone(), run);
+    }
+
+    pub fn try_record_eval_run(&mut self, run: StoredEvalRun) -> Result<(), StoreError> {
+        if run.request.run_id.trim().is_empty()
+            || run.request.agent_id.trim().is_empty()
+            || run.request.dataset_id.trim().is_empty()
+            || run.metrics.iter().any(|metric| {
+                metric.metric_name.trim().is_empty() || !metric.metric_value.is_finite()
+            })
+            || run.status.trim().is_empty()
+        {
+            return Err(StoreError::InvalidEvalRun);
+        }
+        self.record_eval_run(run);
+        Ok(())
     }
 
     pub fn agent(&self, agent_id: &str) -> Option<&AgentCard> {
@@ -135,5 +169,42 @@ mod tests {
         let mappings = store.storage_mappings();
         assert!(mappings.iter().any(|mapping| mapping.schema == "agents"));
         assert!(mappings.iter().any(|mapping| mapping.schema == "evals"));
+    }
+
+    #[test]
+    fn checked_store_paths_reject_invalid_agent_workflow_and_eval_run() {
+        let mut store = AgentStore::new();
+        let mut card = sample_agent_card();
+        card.agent_id = "../agent".to_string();
+        assert_eq!(store.try_upsert_agent(card), Err(StoreError::InvalidAgent));
+
+        assert_eq!(
+            store.try_upsert_workflow(WorkflowDefinition {
+                workflow_id: "research-flow".to_string(),
+                nodes: Vec::new(),
+                edges: vec![WorkflowEdge {
+                    from: "missing".to_string(),
+                    to: "also-missing".to_string(),
+                }],
+            }),
+            Err(StoreError::InvalidWorkflow)
+        );
+
+        assert_eq!(
+            store.try_record_eval_run(StoredEvalRun {
+                request: EvalRunRequest {
+                    run_id: "eval-1".to_string(),
+                    agent_id: "market-researcher".to_string(),
+                    dataset_id: "golden-market-notes".to_string(),
+                    cases: Vec::new(),
+                },
+                metrics: vec![EvalMetric {
+                    metric_name: "score".to_string(),
+                    metric_value: f64::NAN,
+                }],
+                status: "success".to_string(),
+            }),
+            Err(StoreError::InvalidEvalRun)
+        );
     }
 }

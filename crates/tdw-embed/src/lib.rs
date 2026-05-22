@@ -7,12 +7,16 @@ pub type Result<T> = std::result::Result<T, EmbeddingError>;
 
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
+    #[error("embedding model id is empty")]
+    EmptyModelId,
     #[error("embedding input is empty")]
     EmptyInput,
     #[error("embedding dimensions must be greater than zero")]
     InvalidDimensions,
     #[error("embedding vector is empty")]
     EmptyVector,
+    #[error("embedding vector contains a non-finite value")]
+    NonFiniteVector,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -27,8 +31,14 @@ pub trait EmbeddingProvider: Send + Sync {
 }
 
 pub fn validate_embedding(embedding: &Embedding) -> Result<()> {
+    if embedding.model_id.trim().is_empty() {
+        return Err(EmbeddingError::EmptyModelId);
+    }
     if embedding.vector.is_empty() {
         return Err(EmbeddingError::EmptyVector);
+    }
+    if embedding.vector.iter().any(|value| !value.is_finite()) {
+        return Err(EmbeddingError::NonFiniteVector);
     }
     Ok(())
 }
@@ -65,5 +75,19 @@ mod tests {
         assert_eq!(embedding.model_id, "constant");
         assert_eq!(embedding.vector, vec![1.0]);
         assert!(validate_embedding(&embedding).is_ok());
+        assert!(
+            validate_embedding(&Embedding {
+                model_id: String::new(),
+                vector: vec![1.0],
+            })
+            .is_err()
+        );
+        assert!(
+            validate_embedding(&Embedding {
+                model_id: "bad".to_string(),
+                vector: vec![f32::NAN],
+            })
+            .is_err()
+        );
     }
 }

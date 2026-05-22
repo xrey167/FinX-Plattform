@@ -1,31 +1,42 @@
 {
   "version": 1,
-  "scope": "G001-G008 agentic CLI runtime boundary implementation",
+  "scope": "G001-G008 crate-readiness ultragoal final diff",
   "filesReviewed": [
-    "Cargo.toml",
     "Cargo.lock",
-    "crates/tdw-protocol",
-    "crates/tdw-config",
-    "crates/tdw-hooks",
-    "crates/tdw-tools",
-    "crates/tdw-sandbox",
     "crates/tdw-acp",
-    "crates/tdw-session",
-    "crates/tdw-rollout",
-    "crates/tdw-app-server",
+    "crates/tdw-agent",
+    "crates/tdw-agent-store",
     "crates/tdw-app-client",
-    "crates/tdw-llm",
-    "crates/tdw-llm-anthropic",
-    "crates/tdw-llm-openai-compat",
-    "crates/tdw-knowledge",
+    "crates/tdw-app-server",
+    "crates/tdw-auth",
+    "crates/tdw-auth-oidc",
+    "crates/tdw-define",
+    "crates/tdw-embed*",
+    "crates/tdw-entity-resolver",
+    "crates/tdw-eval-runner",
     "crates/tdw-exec",
-    "crates/tdw-tui",
-    "crates/tdw-replay",
+    "crates/tdw-feature-store",
+    "crates/tdw-fn-string",
+    "crates/tdw-graph",
+    "crates/tdw-hooks",
+    "crates/tdw-kg",
+    "crates/tdw-knowledge",
+    "crates/tdw-llm*",
+    "crates/tdw-mask",
+    "crates/tdw-ml-registry",
+    "crates/tdw-provider-*",
+    "crates/tdw-rewrite",
+    "crates/tdw-sandbox",
     "crates/tdw-service-api",
-    "crates/tdw-cli",
-    "crates/tdw-mcp",
+    "crates/tdw-spatial",
+    "crates/tdw-tag-rules",
+    "crates/tdw-tags",
+    "crates/tdw-tools",
+    "crates/tdw-tui",
+    "crates/tdw-udf*",
+    "crates/tdw-workflow-engine",
     "xtask",
-    "docs"
+    "docs/quality"
   ],
   "totalUnresolvedIssues": 0,
   "architecturalStatus": "CLEAR",
@@ -41,58 +52,38 @@
     {
       "severity": "medium",
       "files": [
-        "crates/tdw-session/src/lib.rs",
-        "crates/tdw-knowledge/src/lib.rs",
-        "crates/tdw-service-api/src/lib.rs"
+        "crates/tdw-mask/src/lib.rs"
       ],
-      "issue": "Fallback-like defaults hid corrupt persisted enums, malformed vector payloads, or missing sample evidence.",
-      "resolution": "Replaced silent defaults with explicit errors and regression coverage where applicable."
+      "issue": "Compatibility masking wrapper returned the original unmasked row when invalid mask rules were supplied.",
+      "resolution": "Changed the wrapper to fail closed by redacting all values, kept the checked error path, and added a regression test."
     },
     {
       "severity": "low",
       "files": [
-        "crates/tdw-cli/Cargo.toml"
+        "docs/quality/crate-readiness/xtask.md",
+        "docs/quality/crate-readiness/matrix.md"
       ],
-      "issue": "tdw-cli had an unused direct tdw-protocol dependency.",
-      "resolution": "Removed the dependency; CLI continues to consume events through tdw-service-api."
-    },
-    {
-      "severity": "low",
-      "files": [
-        "crates/tdw-app-server/src/lib.rs",
-        "crates/tdw-app-client/src/lib.rs",
-        "crates/tdw-hooks/src/lib.rs",
-        "crates/tdw-knowledge/src/lib.rs"
-      ],
-      "issue": "Clippy reported derivable/default, manual-map, large-result-error, and inefficient last-match iterator shapes.",
-      "resolution": "Applied the mechanical fixes while preserving behavior."
-    },
-    {
-      "severity": "low",
-      "files": [
-        "xtask/src/main.rs"
-      ],
-      "issue": "Clean-room audit did not explicitly check the forbidden tdw-provider-openbb sentinel.",
-      "resolution": "Added a generated sentinel string to the audit without self-triggering the source scan."
+      "issue": "The final aggregate matrix still marked xtask pending.",
+      "resolution": "Completed the xtask worksheet and changed the matrix verdict to Ready with follow-ups."
     }
   ],
   "checksReviewed": [
+    "cargo test -p tdw-mask",
     "cargo fmt --all -- --check",
-    "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo check --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo test --workspace",
     "cargo run -p xtask -- clean-room-audit",
-    "git diff --check",
-    "cargo test -p tdw-session -p tdw-knowledge"
+    "git diff --check"
   ],
   "securityReview": {
     "hardcodedSecrets": "none found in changed files",
-    "unsafeCode": "workspace lint and crate-level forbids remain in place; verification passed",
-    "cleanRoom": "clean-room audit passed and now checks finx-, tesser-, and tdw-provider-openbb source sentinels"
+    "unsafeCode": "crate-level forbid(unsafe_code) remains in the touched crates; verification passed",
+    "cleanRoom": "clean-room audit passed and the changed dependency set contains no finx-* crates, copied FinX-XR code, or tdw-provider-openbb dependency"
   },
   "architectureReview": {
     "status": "CLEAR",
-    "rationale": "The implementation keeps protocol/config contracts I/O-free, places hook/tool/sandbox/session/rollout/client behavior in bounded crates, routes thin clients through service/event contracts, and preserves the clean-room TDW boundary without finx-* crates or copied FinX-XR/OpenBB bridge code.",
+    "rationale": "The implementation keeps the clean-room TDW boundary, routes client/MCP/service/worker entrypoints through service-api and protocol crates, keeps provider/model/auth/tool/UDF behavior in bounded crates, and records crate readiness with no pending matrix verdicts.",
     "watchItems": []
   }
 }
