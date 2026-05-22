@@ -8,3 +8,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # dtolnay/rust-toolchain tags semver-looking refs (1.85.0, 1.99.0, …) as
+      # Rust toolchain pinning aliases, not as action releases. Dependabot
+      # mis-parses these as new action versions and opens PRs that fail at
+      # job-start because the referenced action ref does not exist. Pin the
+      # action to a major-version float (or @stable) in workflows and ignore
+      # all Dependabot bumps for it. See PRs #4 and #7 for the failure pattern.
+      - dependency-name: "dtolnay/rust-toolchain"
