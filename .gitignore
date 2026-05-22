@@ -1,6 +1,6 @@
 /target/
 /.worktrees/
-/.claude/worktrees/
+/.claude/
 /.env
 /.env.*
 !.env.example
