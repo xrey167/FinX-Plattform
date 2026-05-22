@@ -1,0 +1,62 @@
+#![forbid(unsafe_code)]
+
+use tdw_llm::{
+    ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result, Usage,
+    last_user_message,
+};
+
+#[derive(Clone, Debug)]
+pub struct AnthropicMessagesModel {
+    model_id: String,
+}
+
+impl AnthropicMessagesModel {
+    pub fn new(model_id: impl Into<String>) -> Self {
+        Self {
+            model_id: model_id.into(),
+        }
+    }
+}
+
+impl LanguageModel for AnthropicMessagesModel {
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let prompt = last_user_message(&request)?;
+        Ok(ChatResponse {
+            model_id: self.model_id.clone(),
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content: format!("anthropic:{}:{prompt}", self.model_id),
+            },
+            usage: Usage {
+                input_tokens: request.messages.len() as u32,
+                output_tokens: prompt.split_whitespace().count() as u32,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anthropic_adapter_implements_language_model_contract() {
+        let model = AnthropicMessagesModel::new("claude-test");
+        let response = model
+            .complete(ChatRequest {
+                messages: vec![ChatMessage {
+                    role: MessageRole::User,
+                    content: "summarize AAPL".to_string(),
+                }],
+                max_output_tokens: 128,
+            })
+            .unwrap_or_else(|error| panic!("model completes: {error}"));
+
+        assert_eq!(response.model_id, "claude-test");
+        assert!(response.message.content.contains("summarize AAPL"));
+    }
+}

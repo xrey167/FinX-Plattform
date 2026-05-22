@@ -1,39 +1,47 @@
 # AI Slop Cleanup Report
 
-Scope: G001-G010 changed artifacts in `FinX-Plattform`, excluding generated build output and this report.
+Scope: G001-G008 changed artifacts for the agentic CLI runtime boundary in `FinX-Plattform`, including new TDW protocol/config/hooks/tools/session/rollout/daemon/LLM/knowledge/client crates, changed workspace manifests, xtask schema/audit commands, and related docs. Generated build output is excluded.
 
-Behavior lock:
-- `just verify-phase` passed after the adversarial gate was added.
-- `just coverage` passed and wrote `lcov.info` with 83.74% line coverage.
-- `just windows-release` passed for `x86_64-pc-windows-msvc`.
-- `just mutation-core` passed with 28 mutants tested, 19 caught, 9 unviable, and 0 missed.
-- Local flaky-detect loop passed 10 integration/e2e repetitions.
+Behavior Lock: `cargo test -p tdw-session -p tdw-knowledge` passed after fallback cleanup. Earlier story checkpoints also passed focused crate tests, `cargo fmt --all -- --check`, `cargo check --workspace`, `cargo test --workspace`, and `cargo run -p xtask -- clean-room-audit`.
 
-Cleanup plan:
-- Search changed code and docs for quick hacks, temporary workarounds, bypasses, swallowed errors, silent defaults, TODO markers, debug leftovers, and unchecked unwrap patterns.
-- Classify credential-looking hits separately from hardcoded secrets.
-- Fix any release-gate placeholders that were only encoded but not runnable.
-- Rerun the final gates after cleanup.
+Cleanup Plan: Bound the pass to changed files; search for fallback-like terms, placeholders, bypasses, swallowed errors, silent defaults, TODO/debug leftovers, and unused dependencies; repair masking fallbacks before broader cleanup; then rerun the required G008 verification.
 
-Findings:
-- No fallback-like masking code, TODO markers, debug macros, or unchecked `unwrap(` patterns were found in scoped source paths.
-- Credential scan found only runtime option fields and credential setter plumbing in `tdw-core` and `tdw-runtime`; no committed secret values were found.
-- CI schema generation needed drift assertions; fixed with `git diff --exit-code` checks for agent and event schemas.
-- Adversarial testing was implicit in crate tests but lacked a named gate; fixed with `just test-adversarial`, CI wiring, docs, and quality-gate JSON.
-- Mutation smoke initially missed registry matching behavior in `tdw-core`; fixed with provider/endpoint/kind distinction tests and inventory-registration coverage.
+Fallback Findings:
+- `crates/tdw-session/src/lib.rs`: persisted session status and approval decision decoding silently collapsed unknown values to `Failed` or `None`. Classification: masking fallback slop. Resolution: explicit `InvalidSessionStatus` and `InvalidApprovalDecision` errors plus regression coverage.
+- `crates/tdw-knowledge/src/lib.rs`: vector payload decoding silently defaulted missing `entity_id`/`tags`. Classification: masking fallback slop. Resolution: explicit `InvalidPayloadField` errors plus malformed-payload regression coverage.
+- `crates/tdw-service-api/src/lib.rs`: sample wiring defaulted missing snapshot and masked account evidence to empty values. Classification: masking fallback slop. Resolution: explicit provider errors if required evidence is missing.
+- `crates/tdw-tui/src/lib.rs` and `crates/tdw-knowledge/src/lib.rs` retain optional-display/best-effort parser defaults for absent summaries, cancellation reasons, and partial syntax tokens. Classification: grounded UI/parser behavior, not masking runtime evidence.
 
-Passes completed:
-- Fallback-like code resolution gate: no masking fallback findings.
-- Dead code/debug cleanup: no debug/TODO leftovers found in scoped paths.
-- Duplicate/boundary cleanup: schema drift and adversarial gates are explicit repo-level boundaries.
-- Test reinforcement: added registry mutation-killing tests and the adversarial gate.
+UI/Design Findings: N/A; no frontend visual files were changed.
 
-Quality gates:
-- Regression tests: PASS
-- Lint/typecheck: PASS via `just verify-phase`
-- Tests: PASS via `just verify-phase`
-- Static/security scan: PASS via `just deny` and `just test-adversarial`
-- Mutation smoke: PASS via `just mutation-core`
+Passes Completed:
+- Fallback-like code resolution gate: repaired masking fallback slop in session persistence, knowledge payload decoding, and service sample evidence checks.
+1. Pass 1: Dead code deletion: removed an unused direct `tdw-protocol` dependency from `tdw-cli`.
+2. Pass 2: Duplicate removal: no duplicate implementation paths found in the scoped new crates.
+3. Pass 3: Naming/error handling cleanup: added explicit error variants for persisted enum, vector payload, and sample evidence corruption; extended clean-room audit with the `tdw-provider-openbb` sentinel; fixed clippy-reported API and iterator shape issues.
+4. Pass 4: Test reinforcement: added focused regression tests for invalid persisted enums and malformed vector payloads.
 
-Remaining risks:
-- Seven scheduled nightly CI runs cannot be time-observed inside one local Codex session; the nightly workflow is encoded and the local flaky-detect loop passed once.
+Quality Gates:
+- Regression tests: PASS via `cargo test -p tdw-session -p tdw-knowledge`
+- Lint: PASS via `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`
+- Typecheck: PASS via `cargo check --workspace`
+- Tests: PASS via `cargo test --workspace`
+- Static/security scan: PASS via `cargo run -p xtask -- clean-room-audit`
+- Diff hygiene: PASS via `git diff --check`
+
+Changed Files:
+- `crates/tdw-cli/Cargo.toml` - removed unused direct protocol dependency.
+- `crates/tdw-session/src/lib.rs` - replaced silent enum fallback decoding with explicit errors and tests.
+- `crates/tdw-knowledge/src/lib.rs` - replaced silent vector payload defaults with explicit errors and tests.
+- `crates/tdw-service-api/src/lib.rs` - replaced missing sample evidence defaults with explicit errors.
+- `crates/tdw-app-server/src/lib.rs` and `crates/tdw-app-client/src/lib.rs` - boxed submission errors to satisfy clippy without losing envelope recovery.
+- `crates/tdw-hooks/src/lib.rs` - retained last-match-wins behavior with a reverse iterator shape accepted by clippy.
+- `xtask/src/main.rs` - added explicit clean-room audit coverage for forbidden `tdw-provider-openbb`.
+
+Fallback Review:
+- Findings: three masking fallback findings detected and repaired; optional-display/best-effort parser defaults preserved as grounded behavior.
+- Classification: masking fallback slop repaired; grounded parser/UI defaults retained.
+- Escalation Status: none needed; findings were local and covered by tests.
+
+Remaining Risks:
+- None for the scoped cleanup pass.

@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "createdAt": "2026-05-22T01:14:28.242Z",
+  "updatedAt": "2026-05-22T02:07:00.884Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-inventory-decisions-and-clean-room-boundaries",
+      "title": "Inventory, Decisions, and Clean-Room Boundaries",
+      "objective": "Reconcile the brainstorm against the real FinX-Plattform workspace before implementation. Inventory existing TDW crates, decide which new crates are truly needed, resolve the week-1 open questions for query planning, cost accounting, MCP identity, and hook authentication, and record the clean-room implementation contract without introducing finx-* dependencies, copied FinX-XR code, or tdw-provider-openbb.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:29:02.709Z",
+      "startedAt": "2026-05-22T01:26:00.916Z",
+      "completedAt": "2026-05-22T01:29:02.709Z",
+      "evidence": "docs/adr/0012-agentic-cli-runtime-boundary.md records workspace inventory, new crate decisions, four resolved open questions, and clean-room boundaries; docs/architecture.md links the ADR; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; rg ADR-0012/tdw-protocol/Resolved Open Questions verified artifact coverage"
+    },
+    {
+      "id": "G002-protocol-config-and-core-boundary",
+      "title": "Protocol, Config, and Core Boundary",
+      "objective": "Land the I/O-free protocol and configuration foundation: add or adapt tdw-protocol for serializable Op and EventMsg types, IDs, errors, and replay-friendly contracts; implement explicit config layering with schema output; and wire workspace dependencies so clients and services depend on protocol/config contracts rather than agent internals.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:35:43.855Z",
+      "startedAt": "2026-05-22T01:29:21.174Z",
+      "completedAt": "2026-05-22T01:35:43.855Z",
+      "evidence": "Added tdw-protocol with serializable Op/EventMsg/OpEnvelope/ReplayFrame IDs/errors/schema_bundle; added tdw-config with explicit six-layer precedence, TOML merge, config schema_bundle; generated docs/schemas/protocol and docs/schemas/config via xtask; wired tdw-service-api::protocol_config_sample plus docs/protocol-config-boundary.md and docs/architecture.md. Verification: cargo test -p tdw-protocol -p tdw-config -p tdw-service-api -p xtask passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G003-hook-event-spine-permissions-and-prompts",
+      "title": "Hook Event Spine, Permissions, and Prompts",
+      "objective": "Implement the typed hook-event spine over the existing event/bus/runtime crates: lifecycle HookEvent values, Command/Http/Mcp/Prompt/Agent handlers, should_stop vetoes, additional_context injection, last-match-wins permission rules, deferred approval state, and sibling prompt-text files for model-facing tool prose.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:38:32.307Z",
+      "startedAt": "2026-05-22T01:35:57.070Z",
+      "completedAt": "2026-05-22T01:38:32.307Z",
+      "evidence": "Extended tdw-hooks with HookEvent lifecycle values, HandlerKind Command/Http/Mcp/Prompt/Agent, HookRuntimeOutcome should_stop and additional_contexts, PermissionRules last-match-wins, DeferredApprovals using protocol PermissionId, and sibling tool_prompt.txt; wired tdw-service-api event_spine_sample to execute_runtime and hook context evidence; docs/event-spine.md updated. Verification: cargo test -p tdw-hooks -p tdw-service-api passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G004-tools-udf-sandbox-mcp-and-acp",
+      "title": "Tools, UDF Sandbox, MCP, and ACP",
+      "objective": "Build the extensibility backbone without a bespoke plugin runtime: define the Tool, ToolRegistry, ToolRouter, and ToolOrchestrator layers; integrate existing tdw-udf-* crates through a sandbox adapter; expose inward extension surfaces through MCP stdio/server contracts; and define the outward ACP boundary for future IDE/TUI clients.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:41:20.380Z",
+      "startedAt": "2026-05-22T01:38:44.559Z",
+      "completedAt": "2026-05-22T01:41:20.380Z",
+      "evidence": "Added tdw-tools with ToolDefinition/ToolRegistry/ToolRouter/ToolOrchestrator permission envelope; added tdw-sandbox with SandboxRuntime/UdfRequest over existing tdw-udf; added tdw-acp request/response boundary over tdw-protocol; wired tdw-service-api::extensibility_sample and tdw-mcp extensibility tool catalog; docs/extensibility-backbone.md and docs/architecture.md updated. Verification: cargo test -p tdw-tools -p tdw-sandbox -p tdw-acp -p tdw-service-api passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G005-session-rollout-daemon-and-queue-loop",
+      "title": "Session, Rollout, Daemon, and Queue Loop",
+      "objective": "Create the durable agent runtime loop: SQLx/SQLite-backed hot session and permission state, append-only JSONL rollout archives, serializable submission/event queues, a hand-rolled tokio::select! agent loop, and daemon/client transport over UDS or HTTP+SSE that can serve CLI, TUI, MCP, and future web frontends.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:45:19.815Z",
+      "startedAt": "2026-05-22T01:41:31.955Z",
+      "completedAt": "2026-05-22T01:45:19.815Z",
+      "evidence": "Added tdw-session with SQLx/SQLite sessions, permission_state, pending_approvals, cost_ledger and async tests; added tdw-rollout JSONL archive over ReplayFrame; added tdw-app-server with DaemonEndpoint, submission queue, event channel, tokio::select! run_once; added tdw-app-client thin client; docs/session-rollout-daemon.md and docs/architecture.md updated. Verification: cargo test -p tdw-session -p tdw-rollout -p tdw-app-server -p tdw-app-client passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G006-llm-retrieval-and-knowledge-intelligence",
+      "title": "LLM, Retrieval, and Knowledge Intelligence",
+      "objective": "Implement the model and retrieval layer conservatively: a small in-house LanguageModel trait with Anthropic Messages and OpenAI-compatible adapters, model/config selection through existing configuration, embedding-backed warehouse/code intelligence using existing storage choices such as Qdrant, and tree-sitter or equivalent syntactic structure for schema/repo-map context without adopting a large agent framework wholesale.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:48:02.778Z",
+      "startedAt": "2026-05-22T01:45:33.592Z",
+      "completedAt": "2026-05-22T01:48:02.778Z",
+      "evidence": "Added tdw-llm LanguageModel trait, chat types, usage, config-derived ModelSelection; added tdw-llm-anthropic and tdw-llm-openai-compat deterministic adapters; added tdw-knowledge facade over local embeddings, InMemoryVectorEngine/Qdrant contract, KG, tags, and syntax summaries; wired tdw-service-api::llm_knowledge_sample; docs/llm-knowledge.md and docs/architecture.md updated. Verification: cargo test -p tdw-llm -p tdw-llm-anthropic -p tdw-llm-openai-compat -p tdw-knowledge -p tdw-service-api passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G007-thin-clients-cli-tui-service-and-replay",
+      "title": "Thin Clients, CLI, TUI, Service, and Replay",
+      "objective": "Make user-facing shells consume protocol events instead of embedding core logic: adapt tdw-cli/headless exec flows, tdw-service or app-server endpoints, MCP/service entrypoints, replay tooling, and a final ratatui TUI path around EventMsg streams with stable fixtures and no client-to-core dependency inversion.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T01:52:20.199Z",
+      "startedAt": "2026-05-22T01:48:23.391Z",
+      "completedAt": "2026-05-22T01:52:20.199Z",
+      "evidence": "Added tdw-exec headless EventMsg execution path; added tdw-tui ratatui Line renderer over EventMsg; extended tdw-replay with protocol rollout replay summaries; wired tdw-service-api::client_event_sample; updated tdw-cli and tdw-mcp to print shared protocol-event evidence; docs/thin-clients-replay.md and docs/architecture.md updated. Verification: cargo test -p tdw-exec -p tdw-tui -p tdw-replay -p tdw-service-api passed; cargo fmt --all -- --check passed; cargo check --workspace passed; cargo run -q -p xtask -- clean-room-audit => clean-room audit passed; git diff --check passed"
+    },
+    {
+      "id": "G008-integration-verification-and-final-quality-gate",
+      "title": "Integration, Verification, and Final Quality Gate",
+      "objective": "Run the integrated verification and cleanup path for the agentic CLI architecture: update docs and ADRs, run cargo fmt --all -- --check, cargo check --workspace, cargo test --workspace, cargo run -p xtask -- clean-room-audit, run ai-slop-cleaner on changed files, rerun verification, and complete the final code-review gate only when recommendation is APPROVE and architectStatus is CLEAR.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-05-22T01:14:28.242Z",
+      "updatedAt": "2026-05-22T02:07:00.884Z",
+      "startedAt": "2026-05-22T01:52:40.860Z",
+      "evidence": "Final G008 gate passed: ai-slop-cleaner report at docs/quality/ai-slop-cleanup-report.md; cargo fmt/check/test, clippy, clean-room audit, and git diff --check passed; final code review APPROVE and architectStatus CLEAR in docs/quality/final-code-review.json; final quality gate in docs/quality/final-quality-gate.json.",
+      "completedAt": "2026-05-22T02:07:00.884Z"
+    }
+  ]
+}

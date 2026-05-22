@@ -8,6 +8,8 @@ license = "UNLICENSED"
 [dependencies]
 serde = { workspace = true }
 tdw-cdc = { path = "../tdw-cdc" }
+tdw-protocol = { workspace = true }
+tdw-rollout = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

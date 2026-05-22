@@ -1,8 +1,33 @@
 {
   "version": 1,
-  "scope": "G001-G010 ultragoal implementation diff",
-  "filesReviewed": "workspace diff, CI workflows, Justfile, xtask, quality docs, core registry hardening, provider/storage coverage tests",
-  "totalIssues": 0,
+  "scope": "G001-G008 agentic CLI runtime boundary implementation",
+  "filesReviewed": [
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/tdw-protocol",
+    "crates/tdw-config",
+    "crates/tdw-hooks",
+    "crates/tdw-tools",
+    "crates/tdw-sandbox",
+    "crates/tdw-acp",
+    "crates/tdw-session",
+    "crates/tdw-rollout",
+    "crates/tdw-app-server",
+    "crates/tdw-app-client",
+    "crates/tdw-llm",
+    "crates/tdw-llm-anthropic",
+    "crates/tdw-llm-openai-compat",
+    "crates/tdw-knowledge",
+    "crates/tdw-exec",
+    "crates/tdw-tui",
+    "crates/tdw-replay",
+    "crates/tdw-service-api",
+    "crates/tdw-cli",
+    "crates/tdw-mcp",
+    "xtask",
+    "docs"
+  ],
+  "totalUnresolvedIssues": 0,
   "architecturalStatus": "CLEAR",
   "codeReviewerRecommendation": "APPROVE",
   "finalRecommendation": "APPROVE",
@@ -12,25 +37,62 @@
     "medium": [],
     "low": []
   },
+  "resolvedDuringReview": [
+    {
+      "severity": "medium",
+      "files": [
+        "crates/tdw-session/src/lib.rs",
+        "crates/tdw-knowledge/src/lib.rs",
+        "crates/tdw-service-api/src/lib.rs"
+      ],
+      "issue": "Fallback-like defaults hid corrupt persisted enums, malformed vector payloads, or missing sample evidence.",
+      "resolution": "Replaced silent defaults with explicit errors and regression coverage where applicable."
+    },
+    {
+      "severity": "low",
+      "files": [
+        "crates/tdw-cli/Cargo.toml"
+      ],
+      "issue": "tdw-cli had an unused direct tdw-protocol dependency.",
+      "resolution": "Removed the dependency; CLI continues to consume events through tdw-service-api."
+    },
+    {
+      "severity": "low",
+      "files": [
+        "crates/tdw-app-server/src/lib.rs",
+        "crates/tdw-app-client/src/lib.rs",
+        "crates/tdw-hooks/src/lib.rs",
+        "crates/tdw-knowledge/src/lib.rs"
+      ],
+      "issue": "Clippy reported derivable/default, manual-map, large-result-error, and inefficient last-match iterator shapes.",
+      "resolution": "Applied the mechanical fixes while preserving behavior."
+    },
+    {
+      "severity": "low",
+      "files": [
+        "xtask/src/main.rs"
+      ],
+      "issue": "Clean-room audit did not explicitly check the forbidden tdw-provider-openbb sentinel.",
+      "resolution": "Added a generated sentinel string to the audit without self-triggering the source scan."
+    }
+  ],
   "checksReviewed": [
-    "just verify-phase",
-    "just coverage",
-    "just windows-release",
-    "just mutation-core",
-    "local flaky-detect x10 integration/e2e loop",
-    "ai-slop cleanup scan",
-    "git diff --check"
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo check --workspace",
+    "cargo test --workspace",
+    "cargo run -p xtask -- clean-room-audit",
+    "git diff --check",
+    "cargo test -p tdw-session -p tdw-knowledge"
   ],
   "securityReview": {
-    "hardcodedSecrets": "none found; credential hits are runtime option fields only",
-    "injectionAndBypassCoverage": "just test-adversarial covers SQL guard, masking, authorization, and OIDC claim validation",
-    "dependencyAudit": "cargo deny exits successfully; private workspace path wildcard diagnostics are accepted by ADR-0009"
+    "hardcodedSecrets": "none found in changed files",
+    "unsafeCode": "workspace lint and crate-level forbids remain in place; verification passed",
+    "cleanRoom": "clean-room audit passed and now checks finx-, tesser-, and tdw-provider-openbb source sentinels"
   },
   "architectureReview": {
     "status": "CLEAR",
-    "rationale": "Core runtime, storage, event, parity, KG, agent, and verification layers are wired through shared contracts and CI/quality gates rather than parallel bypass paths.",
-    "watchItems": [
-      "Scheduled seven-night CI history is future evidence after merge; local x10 flaky-detect passed in this session."
-    ]
+    "rationale": "The implementation keeps protocol/config contracts I/O-free, places hook/tool/sandbox/session/rollout/client behavior in bounded crates, routes thin clients through service/event contracts, and preserves the clean-room TDW boundary without finx-* crates or copied FinX-XR/OpenBB bridge code.",
+    "watchItems": []
   }
 }

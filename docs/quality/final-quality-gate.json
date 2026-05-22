@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "releaseCandidate": "v0.1",
+  "ultragoal": "G001-G008 agentic CLI runtime boundary",
   "recommendation": "APPROVE",
   "architectStatus": "CLEAR",
   "aiSlopCleaner": {
@@ -9,16 +9,19 @@
   },
   "verification": {
     "status": "passed",
+    "environment": {
+      "CARGO_INCREMENTAL": "0",
+      "RUSTFLAGS": "-C debuginfo=0"
+    },
     "commands": [
-      "just verify-phase",
-      "just coverage",
-      "just windows-release",
-      "just mutation-core",
-      "local flaky-detect loop: 10 integration/e2e repetitions",
-      "cargo run -q -p xtask -- quality-gate check",
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "cargo check --workspace",
+      "cargo test --workspace",
+      "cargo run -p xtask -- clean-room-audit",
       "git diff --check"
     ],
-    "evidence": "docs/quality/release-readiness-summary.md"
+    "evidence": "All commands passed after the ai-slop-cleaner pass. An earlier pre-clean run exhausted C: disk/PDB space; repo-local target cleanup freed space and final verification was rerun with reduced debug output settings."
   },
   "codeReview": {
     "recommendation": "APPROVE",
@@ -27,48 +30,48 @@
   },
   "gates": [
     {
-      "id": "verify-phase",
+      "id": "ai-slop-cleanup",
       "status": "PASS",
-      "evidence": "just verify-phase"
+      "evidence": "Fallback-like defaults repaired in session, knowledge, and service sample paths; report recorded."
     },
     {
-      "id": "coverage",
+      "id": "fmt",
       "status": "PASS",
-      "evidence": "just coverage; lcov.info line coverage 83.74% against 82% project target"
+      "evidence": "cargo fmt --all -- --check"
     },
     {
-      "id": "windows-release",
+      "id": "clippy",
       "status": "PASS",
-      "evidence": "just windows-release; x86_64-pc-windows-msvc release build"
+      "evidence": "cargo clippy --workspace --all-targets -- -D warnings"
     },
     {
-      "id": "mutation-smoke",
+      "id": "typecheck",
       "status": "PASS",
-      "evidence": "just mutation-core; 28 tested, 19 caught, 9 unviable, 0 missed"
+      "evidence": "cargo check --workspace"
     },
     {
-      "id": "adversarial",
+      "id": "workspace-tests",
       "status": "PASS",
-      "evidence": "just test-adversarial"
+      "evidence": "cargo test --workspace"
     },
     {
-      "id": "flaky-detect",
+      "id": "clean-room-audit",
       "status": "PASS",
-      "evidence": "local 10-iteration integration/e2e loop passed"
+      "evidence": "cargo run -p xtask -- clean-room-audit"
+    },
+    {
+      "id": "diff-check",
+      "status": "PASS",
+      "evidence": "git diff --check"
     },
     {
       "id": "code-review",
       "status": "PASS",
       "evidence": "docs/quality/final-code-review.json recommendation APPROVE and architectStatus CLEAR"
-    },
-    {
-      "id": "ai-slop-cleanup",
-      "status": "PASS",
-      "evidence": "docs/quality/ai-slop-cleanup-report.md"
     }
   ],
   "notes": [
-    "Nightly workflow encodes mutation, full e2e, and flaky detection.",
-    "Seven scheduled nightly CI runs are not time-observable inside a single local execution session."
+    "Final quality gate is scoped to the G001-G008 ultragoal generated from .brainstorm/2026-05-22-agentic-cli-patterns-for-finx.md.",
+    "The attempted omx team launch was blocked by the native outside-tmux hook, so the final gate was completed by the active leader agent."
   ]
 }

@@ -1,0 +1,296 @@
+{
+  "$defs": {
+    "ActorKind": {
+      "enum": [
+        "User",
+        "Service",
+        "Worker",
+        "Agent",
+        "System"
+      ],
+      "type": "string"
+    },
+    "ActorRef": {
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ActorKind"
+        },
+        "tenant_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actor_id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ApprovalDecision": {
+      "enum": [
+        "AllowOnce",
+        "AlwaysAllow",
+        "Deny"
+      ],
+      "type": "string"
+    },
+    "CostHint": {
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "estimated_bytes_scanned": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "estimated_rows_read": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "backend"
+      ],
+      "type": "object"
+    },
+    "Op": {
+      "oneOf": [
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "append_user_message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cost_hint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CostHint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "plan_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sql": {
+              "type": "string"
+            },
+            "type": {
+              "const": "run_query",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sql"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "endpoint": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "range": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimeRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "ingest_batch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "provider",
+            "endpoint"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": "string"
+            },
+            "permission_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_call",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "tool_name",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/ApprovalDecision"
+            },
+            "permission_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "approval_response",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "permission_id",
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "target_tokens": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "compact_context",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "target_tokens"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cancel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "shutdown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeRange": {
+      "properties": {
+        "end": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "op": {
+      "$ref": "#/$defs/Op"
+    },
+    "op_id": {
+      "type": "string"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "submitted_by": {
+      "$ref": "#/$defs/ActorRef"
+    }
+  },
+  "required": [
+    "op_id",
+    "session_id",
+    "sequence",
+    "submitted_by",
+    "op"
+  ],
+  "title": "OpEnvelope",
+  "type": "object"
+}

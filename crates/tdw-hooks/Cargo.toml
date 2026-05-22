@@ -9,6 +9,7 @@ license = "UNLICENSED"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-event = { path = "../tdw-event" }
+tdw-protocol = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]
