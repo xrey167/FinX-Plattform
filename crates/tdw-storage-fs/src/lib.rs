@@ -71,7 +71,9 @@ mod tests {
 
     #[tokio::test]
     async fn writes_and_reads_relative_keys() {
-        let engine = LocalBlobEngine::new("target/blob-tests");
+        let root = std::env::temp_dir().join(format!("tdw-storage-fs-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let engine = LocalBlobEngine::new(&root);
         engine
             .put_object(
                 "safe/object.bin",
@@ -87,5 +89,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("object should read: {error}"));
 
         assert_eq!(body, Bytes::from_static(b"payload"));
+        let _ = fs::remove_dir_all(root);
     }
 }
