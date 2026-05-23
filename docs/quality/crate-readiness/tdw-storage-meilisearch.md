@@ -44,3 +44,36 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Production Backend Evidence (G010)
+
+`MeilisearchHttpEngine` (gated by `--features meilisearch`) lives in
+`crates/tdw-storage-meilisearch/src/http_engine.rs` and implements
+`tdw_core::LexicalEngine` directly against Meilisearch's REST API
+(port 7700 by default). No SDK crate is required — just `reqwest`.
+
+The existing `InMemoryLexicalEngine` remains the offline test
+stand-in; `MeilisearchHttpEngine` is opt-in.
+
+Public surface:
+- `MeilisearchHttpEngine::new(endpoint, api_key)` — optional bearer
+  token via `Authorization: Bearer ...` header for managed
+  deployments or self-hosted instances configured with a master key.
+- `LexicalEngine::index` POSTs documents with `primaryKey=id`, then
+  blocks on `/tasks/{uid}` until the task reaches `succeeded`
+  (Meilisearch indexing is async; without the wait, callers would
+  hit empty search results on the next call). Polling: up to ~12s
+  total (60 attempts × 200ms).
+- `LexicalEngine::search_text` POSTs `/indexes/{name}/search` with
+  `showRankingScore: true`; per-hit `_rankingScore` becomes the
+  returned `ScoredDoc.score` and is stripped from the doc fields
+  before being returned to the caller.
+
+Integration test at
+`crates/tdw-storage-meilisearch/tests/http_engine.rs` is double-gated:
+compiles only with `--features meilisearch`; runs only when
+`TDW_MEILISEARCH_TEST_URL` is set. Exercises a 3-doc index + text
+search asserting that "rocket" surfaces both rocket-related docs.
+
+See `docs/quality/production-storage-transports.md` for the full
+G010 status table.
