@@ -2305,7 +2305,10 @@ dependencies = [
 name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tdw-service-api",
+ "tdw-test-utils",
+ "tokio",
 ]
 
 [[package]]
@@ -2693,7 +2696,10 @@ dependencies = [
 name = "tdw-service"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tdw-service-api",
+ "tdw-test-utils",
+ "tokio",
 ]
 
 [[package]]
@@ -2909,7 +2915,14 @@ dependencies = [
 name = "tdw-test-utils"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "serde",
+ "serde_json",
+ "tdw-core",
  "tdw-domain",
+ "tdw-service-api",
+ "tdw-storage-fs",
+ "tokio",
 ]
 
 [[package]]

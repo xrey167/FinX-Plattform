@@ -1,20 +1,29 @@
 #![forbid(unsafe_code)]
 
-fn main() {
-    match tdw_service_api::endpoint_response("fileset", "AAPL") {
-        Ok(response) => match (
-            tdw_service_api::event_spine_sample("service"),
-            tdw_service_api::parity_layer_sample(),
-        ) {
-            (Ok(event), Ok(parity)) => println!("{response} event_spine={event} parity={parity}"),
-            (Err(error), _) | (_, Err(error)) => {
-                eprintln!("tdw-service runtime error: {error}");
-                std::process::exit(1);
-            }
-        },
+use tdw_test_utils::smoke::{SmokeReport, allocate_storage_root, run_end_to_end_smoke};
+
+#[tokio::main]
+async fn main() {
+    let symbol = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "AAPL".to_string());
+    let root = allocate_storage_root("tdw-service");
+
+    let report: SmokeReport = match run_end_to_end_smoke(&symbol, root.clone()).await {
+        Ok(report) => report,
         Err(error) => {
-            eprintln!("tdw-service error: {error}");
+            eprintln!("tdw-service smoke error: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => println!("{json}"),
+        Err(error) => {
+            eprintln!("tdw-service serialize error: {error}");
             std::process::exit(1);
         }
     }
+
+    let _ = std::fs::remove_dir_all(&root);
 }

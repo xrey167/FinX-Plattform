@@ -12,7 +12,14 @@ property = []
 e2e = []
 
 [dependencies]
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
+tdw-service-api = { workspace = true }
+tdw-storage-fs = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

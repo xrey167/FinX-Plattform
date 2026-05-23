@@ -47,6 +47,10 @@ tdw-tui = { path = "crates/tdw-tui" }
 tdw-runtime = { path = "crates/tdw-runtime" }
 tdw-app-client = { path = "crates/tdw-app-client" }
 tdw-app-server = { path = "crates/tdw-app-server" }
+tdw-provider-fileset = { path = "crates/tdw-provider-fileset" }
+tdw-storage-fs = { path = "crates/tdw-storage-fs" }
+tdw-test-utils = { path = "crates/tdw-test-utils" }
+tdw-service-api = { path = "crates/tdw-service-api" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

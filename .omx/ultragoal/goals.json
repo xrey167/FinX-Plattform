@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-23T10:31:23.217Z",
+  "updatedAt": "2026-05-23T13:29:10.000Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -107,10 +107,10 @@
       "id": "G009-end-to-end-functional-smoke",
       "title": "End-to-End Functional Smoke",
       "objective": "Prove the bootstrap composition actually functions as a working system end-to-end. Wire tdw-service binary to accept a request through tdw-cli (or a programmatic harness), route it through tdw-app-server, tdw-app-client, tdw-runtime, and tdw-service-api, fetch from at least one provider (tdw-provider-fileset or tdw-provider-ws-mock is acceptable), persist to at least one storage backend (tdw-storage-fs is acceptable for this smoke), and return a structured response observable from the CLI. Capture an end-to-end transcript and add an integration test under tdw-test-utils or a dedicated smoke crate that drives the same flow deterministically. Document the smoke recipe at docs/quality/end-to-end-smoke.md so subsequent production tranches can run it as the baseline 'still works' check. Per-crate readiness worksheets receive a Smoke Evidence note for every crate participating in the path. Verification: focused cargo test for the participating crates plus the workspace gate set (fmt/check/clippy/test/clean-room-audit/git diff --check).",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-23T13:29:10.000Z"
     },
     {
       "id": "G010-production-storage-transports",
@@ -177,5 +177,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G009-end-to-end-functional-smoke"
+  "activeGoalId": "G010-production-storage-transports"
 }
