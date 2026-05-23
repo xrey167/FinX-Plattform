@@ -3858,6 +3858,8 @@ name = "tdw-storage-meilisearch"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "reqwest",
+ "serde",
  "serde_json",
  "tdw-core",
  "tokio",
