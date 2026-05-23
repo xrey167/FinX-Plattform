@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod pg_outbox;
+
+#[cfg(feature = "postgres")]
+pub use pg_outbox::PgOutboxStore;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tdw_event::EventEnvelope;

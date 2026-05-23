@@ -46,3 +46,46 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 
 Ready with follow-ups. No G002 blocker remains; listed follow-ups are assigned to later tranche responsibilities or future production runtime/storage implementations.
 
+
+## Production Backend Evidence (G013)
+
+`PgOutboxStore` (gated by `--features postgres`) lives in
+`crates/tdw-outbox/src/pg_outbox.rs`. Wraps
+`tdw_storage_postgres::PgEngine` (G010) — no direct sqlx use in
+this crate.
+
+Schema:
+
+```sql
+CREATE TABLE tdw_outbox (
+    sequence       BIGSERIAL PRIMARY KEY,
+    envelope_json  JSONB NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'Pending',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Public surface:
+- `PgOutboxStore::new(engine)` — wraps a `PgEngine` instance.
+- `with_table(name)` — override default `tdw_outbox` table.
+- `ensure_schema()` — idempotent `CREATE TABLE IF NOT EXISTS`.
+- `append(envelope)` — uses CTE `WITH inserted AS (INSERT ...
+  RETURNING sequence) SELECT sequence FROM inserted` so
+  `PgEngine::fetch_json`'s row_to_json projection can see the
+  RETURNING rows. Returns the auto-assigned sequence (BIGSERIAL).
+- `mark_dispatched(sequence)` — `UPDATE ... WHERE sequence = $1 AND
+  status = 'Pending'`; returns `true` only when a row transitioned.
+- `pending_after(sequence)` — `SELECT ... WHERE sequence > $1 AND
+  status = 'Pending' ORDER BY sequence ASC`, decodes
+  `envelope_json::text` back into `EventEnvelope<Value>`.
+
+The semantics match `InMemoryOutbox` exactly so callers can swap
+backends.
+
+Integration test at `crates/tdw-outbox/tests/pg_outbox.rs` is
+double-gated by `--features postgres` + `TDW_POSTGRES_TEST_URL`.
+Hermetic table per test process (`tdw_outbox_test_<pid>`) — drops
+table before and after the run.
+
+See `docs/quality/production-transport-status.md` for the broader
+G013 punch list.
