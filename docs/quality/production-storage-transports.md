@@ -11,10 +11,12 @@ flag.
 | `tdw-storage-fs` | `BlobEngine` | (n/a — disk-backed by default) | `LocalBlobEngine` | — | — |
 | `tdw-storage-postgres` | `RelationalEngine` | `PostgresRecordingEngine` | `PgEngine` (sqlx 0.9 `PgPool`) | `postgres` | `TDW_POSTGRES_TEST_URL` |
 | `tdw-storage-s3` | `BlobEngine` | `InMemoryS3BlobEngine` | `S3Engine` (aws-sdk-s3) | `s3` | `TDW_S3_TEST_BUCKET` + `TDW_S3_TEST_ENDPOINT` |
-| `tdw-storage-clickhouse` | `RelationalEngine` | (in-memory) | (pending) | — | — |
-| `tdw-storage-qdrant` | `VectorEngine` | `InMemoryVectorEngine` | (pending) | — | — |
-| `tdw-storage-meilisearch` | `LexicalEngine` | `InMemoryLexicalEngine` | (pending) | — | — |
+| `tdw-storage-clickhouse` | `OlapEngine` | `ClickHouseRecordingEngine` | `ClickHouseHttpEngine` (reqwest HTTP) | `clickhouse` | `TDW_CLICKHOUSE_TEST_URL` |
+| `tdw-storage-qdrant` | `VectorEngine` | `InMemoryVectorEngine` | `QdrantHttpEngine` (reqwest HTTP) | `qdrant` | `TDW_QDRANT_TEST_URL` |
+| `tdw-storage-meilisearch` | `LexicalEngine` | `InMemoryLexicalEngine` | `MeilisearchHttpEngine` (reqwest HTTP) | `meilisearch` | `TDW_MEILISEARCH_TEST_URL` |
 | `tdw-storage-parquet` | — | (utility, not an engine) | — | — | — |
+
+**G010 storage backends: 5 of 5 real.**
 
 ## Common pattern
 
@@ -121,28 +123,127 @@ cargo test -p tdw-storage-s3 --features s3 --test aws_engine
 docker stop tdw-minio-smoke
 ```
 
+## ClickHouse (`tdw-storage-clickhouse`)
+
+Lives at `crates/tdw-storage-clickhouse/src/http_engine.rs`. Direct
+reqwest HTTP against ClickHouse's native HTTP interface (port 8123).
+No SDK; `POST /?query=...` for execute, append `FORMAT JSON` for
+parseable SELECT responses. Auth optional (HTTP basic).
+
+```rust
+use tdw_core::OlapEngine;
+use tdw_storage_clickhouse::ClickHouseHttpEngine;
+
+let engine = ClickHouseHttpEngine::new("http://127.0.0.1:8123", None, None)?;
+engine.execute("CREATE TABLE x (...) ENGINE = Memory").await?;
+let payload = engine.query_json("SELECT * FROM x FORMAT JSON", Value::Null).await?;
+```
+
+Param binding deferred (ClickHouse uses `param_<name>` query keys, a
+different shape from sqlx-style positional binding).
+
+### Docker run recipe (ClickHouse)
+
+```powershell
+docker compose --profile minimal up -d clickhouse
+$env:TDW_CLICKHOUSE_TEST_URL = "http://127.0.0.1:8123"
+cargo test -p tdw-storage-clickhouse --features clickhouse --test http_engine
+docker compose --profile minimal down -v
+```
+
+## Qdrant (`tdw-storage-qdrant`)
+
+Lives at `crates/tdw-storage-qdrant/src/http_engine.rs`. Direct
+reqwest HTTP against Qdrant's REST API (port 6333). Lazy collection
+auto-create on first upsert using the first point's vector dimension.
+
+```rust
+use tdw_core::{VectorEngine, VectorPoint, VectorQuery};
+use tdw_storage_qdrant::QdrantHttpEngine;
+
+let engine = QdrantHttpEngine::new("http://127.0.0.1:6333", None)?;
+engine.upsert("my-collection", vec![VectorPoint { id: "1".into(), vector: vec![0.1,0.2,0.3,0.4], payload: json!({}) }]).await?;
+let hits = engine.search_knn("my-collection", VectorQuery { vector: vec![0.1,0.2,0.3,0.4], top_k: 5 }).await?;
+```
+
+Point IDs in this slice must be unsigned integers or UUIDs (Qdrant
+constraint); arbitrary string ID normalization via UUID v5 is a
+follow-up.
+
+### Docker run recipe (Qdrant)
+
+```powershell
+docker compose --profile full up -d qdrant
+$env:TDW_QDRANT_TEST_URL = "http://127.0.0.1:6333"
+cargo test -p tdw-storage-qdrant --features qdrant --test http_engine
+docker compose --profile full down -v
+```
+
+## Meilisearch (`tdw-storage-meilisearch`)
+
+Lives at `crates/tdw-storage-meilisearch/src/http_engine.rs`. Direct
+reqwest HTTP against Meilisearch's REST API (port 7700). `index`
+polls `/tasks/{uid}` until succeeded so callers can immediately
+follow with `search_text` without flakiness.
+
+```rust
+use tdw_core::{LexicalEngine, LexicalDoc, TextQuery};
+use tdw_storage_meilisearch::MeilisearchHttpEngine;
+
+let engine = MeilisearchHttpEngine::new("http://127.0.0.1:7700", None)?;
+engine.index("my-index", vec![LexicalDoc { id: "1".into(), body: "alpha beta".into(), fields: json!({}) }]).await?;
+let hits = engine.search_text("my-index", TextQuery { text: "alpha".into(), top_k: 5 }).await?;
+```
+
+`showRankingScore: true` populates `ScoredDoc.score`; the
+`_rankingScore` field is stripped from returned doc fields.
+
+### Docker run recipe (Meilisearch)
+
+```powershell
+docker compose --profile full up -d meilisearch
+$env:TDW_MEILISEARCH_TEST_URL = "http://127.0.0.1:7700"
+cargo test -p tdw-storage-meilisearch --features meilisearch --test http_engine
+docker compose --profile full down -v
+```
+
 ## Why each feature is opt-in
 
 The real driver crates pull non-trivial transitive dep sets:
 
 - `sqlx postgres` → stringprep, hkdf, hmac, etc.
 - `aws-sdk-s3` → `aws-config`, `aws-smithy-*`, `hyper-rustls`, `rustls`, etc. (~70 crates)
+- `reqwest` → `hyper`, `hyper-rustls`, `rustls`, `tower-http`, `url`, etc. (~50 crates)
 
 Gating each behind a feature flag keeps the default workspace build
 lean and lets consuming crates pick whether they pay for the real
 driver.
 
-## Follow-ups in this goal
+## CI integration
 
-1. **ClickHouse** (`clickhouse-rs` or HTTP via reqwest) behind
-   `clickhouse` feature; testcontainer for
-   `clickhouse/clickhouse-server`.
-2. **Qdrant** (`qdrant-client`) behind `qdrant` feature; `qdrant/qdrant`
-   testcontainer.
-3. **Meilisearch** (`meilisearch-sdk`) behind `meilisearch` feature;
-   `getmeili/meilisearch` testcontainer.
-4. **CI wiring** — extend `.github/workflows/ci.yml` `Integration,
-   Property, and E2E Subset` job to start each container (postgres +
-   minio + clickhouse + qdrant + meilisearch) and set the respective
-   `TDW_*_TEST_URL` / `TDW_*_TEST_BUCKET` env vars so the gated tests
-   actually run in CI.
+The `Integration, Property, and E2E Subset` job in
+`.github/workflows/ci.yml` brings up the storage containers from
+`docker-compose.yaml`, waits for health, and runs the feature-gated
+integration tests with the appropriate `TDW_*_TEST_*` env vars set.
+Containers covered:
+
+- postgres (`TDW_POSTGRES_TEST_URL`)
+- minio (`TDW_S3_TEST_BUCKET` + `TDW_S3_TEST_ENDPOINT` + creds)
+- clickhouse (`TDW_CLICKHOUSE_TEST_URL`)
+- qdrant (`TDW_QDRANT_TEST_URL`)
+- meilisearch (`TDW_MEILISEARCH_TEST_URL`)
+
+Default `cargo test --workspace` remains offline because the integration
+tests early-return when their env vars are unset; only the CI
+integration job pays the container startup cost.
+
+## G010 status: complete
+
+All five storage backend slices have shipped and CI validates them on
+every PR. Next goals build on this foundation:
+
+- **G011** — Production provider transports (Yahoo / FRED / Alpaca /
+  Binance / Polygon / HuggingFace). Pattern in
+  `docs/quality/production-transport-status.md`.
+- **G013** — Durable persistence backends (outbox / session / bus /
+  snapshot / rollout) built on top of `PgEngine` + `S3Engine`.

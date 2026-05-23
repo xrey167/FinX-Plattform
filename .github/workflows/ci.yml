@@ -88,8 +88,8 @@ jobs:
       # early-returns when its TDW_*_TEST_* env var is unset, so without
       # these steps the tests are no-ops; with these steps they actually
       # validate the production transport.
-      - name: Start G010 storage containers (postgres + minio)
-        run: docker compose --profile full up -d postgres minio
+      - name: Start G010 storage containers (postgres + minio + clickhouse + qdrant + meilisearch)
+        run: docker compose --profile full up -d postgres minio clickhouse qdrant meilisearch
 
       - name: Wait for postgres
         run: |
@@ -128,6 +128,51 @@ jobs:
           TDW_S3_TEST_SECRET_KEY: minio123
           TDW_S3_TEST_REGION: us-east-1
         run: cargo test -p tdw-storage-s3 --features s3 --test aws_engine -- --nocapture
+
+      - name: Wait for ClickHouse
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8123/ping; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "clickhouse failed to become ready"; exit 1
+
+      - name: Run G010 clickhouse integration test
+        env:
+          TDW_CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+        run: cargo test -p tdw-storage-clickhouse --features clickhouse --test http_engine -- --nocapture
+
+      - name: Wait for Qdrant
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:6333/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "qdrant failed to become ready"; exit 1
+
+      - name: Run G010 qdrant integration test
+        env:
+          TDW_QDRANT_TEST_URL: http://127.0.0.1:6333
+        run: cargo test -p tdw-storage-qdrant --features qdrant --test http_engine -- --nocapture
+
+      - name: Wait for Meilisearch
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:7700/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "meilisearch failed to become ready"; exit 1
+
+      - name: Run G010 meilisearch integration test
+        env:
+          TDW_MEILISEARCH_TEST_URL: http://127.0.0.1:7700
+        run: cargo test -p tdw-storage-meilisearch --features meilisearch --test http_engine -- --nocapture
 
       - name: Tear down G010 storage containers
         if: always()
