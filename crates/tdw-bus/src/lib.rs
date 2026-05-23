@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod pg_bus;
+
+#[cfg(feature = "postgres")]
+pub use pg_bus::PgEventBus;
+
 use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
