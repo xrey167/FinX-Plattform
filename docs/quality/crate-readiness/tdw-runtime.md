@@ -43,3 +43,13 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 ## Verdict
 
 Ready with follow-ups. Runtime orchestration is delegated to provider traits and streaming wrappers; production scheduling belongs above this crate.
+
+## Smoke Evidence (G009)
+
+Participates in the [end-to-end functional smoke](../end-to-end-smoke.md). The smoke composition is exercised by:
+
+- `tdw-test-utils::smoke::run_end_to_end_smoke` (library entry)
+- `crates/tdw-test-utils/tests/end_to_end_smoke.rs` (integration tests)
+- `tdw-service` and `tdw-cli` binaries (programmatic harness output)
+
+Verified with `cargo test -p tdw-test-utils --test end_to_end_smoke` — green.

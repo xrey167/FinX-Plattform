@@ -45,3 +45,13 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Smoke Evidence (G009)
+
+Participates in the [end-to-end functional smoke](../end-to-end-smoke.md). The smoke composition is exercised by:
+
+- `tdw-test-utils::smoke::run_end_to_end_smoke` (library entry)
+- `crates/tdw-test-utils/tests/end_to_end_smoke.rs` (integration tests)
+- `tdw-service` and `tdw-cli` binaries (programmatic harness output)
+
+Verified with `cargo test -p tdw-test-utils --test end_to_end_smoke` — green.

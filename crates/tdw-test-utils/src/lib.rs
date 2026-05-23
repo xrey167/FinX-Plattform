@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod smoke;
+
 use tdw_domain::{EquityHistoricalData, Instrument, ResearchNote};
 
 pub mod fixtures {
