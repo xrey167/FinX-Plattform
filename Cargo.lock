@@ -3544,9 +3544,13 @@ version = "0.1.0"
 name = "tdw-outbox"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
+ "tdw-core",
  "tdw-event",
+ "tdw-storage-postgres",
+ "tokio",
 ]
 
 [[package]]
@@ -3869,6 +3873,8 @@ name = "tdw-storage-qdrant"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "reqwest",
+ "serde",
  "serde_json",
  "tdw-core",
  "tokio",
