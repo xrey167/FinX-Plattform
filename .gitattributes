@@ -5,3 +5,8 @@
 *.toml text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+
+# Append-only JSONL state files: take the union of both sides on merge
+# so parallel-session PRs that all append distinct lines do not
+# spuriously conflict at EOF.
+.omx/ultragoal/ledger.jsonl merge=union
