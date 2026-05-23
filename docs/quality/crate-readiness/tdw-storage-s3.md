@@ -44,3 +44,27 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Production Backend Evidence (G010)
+
+`S3Engine` (gated by `--features s3`) lands in
+`crates/tdw-storage-s3/src/aws_engine.rs` and implements
+`tdw_core::BlobEngine` directly against `aws_sdk_s3::Client`. The default
+`InMemoryS3BlobEngine` remains the offline test stand-in; `S3Engine` is
+opt-in so the default workspace test set stays deterministic and
+offline.
+
+Two constructors are exposed:
+- `S3Engine::from_env(bucket)` — for AWS production, resolves
+  credentials and region from the standard chain (env vars, shared
+  config files, instance profile).
+- `S3Engine::from_endpoint(endpoint, region, access_key, secret_key, bucket)`
+  — for MinIO and any S3-compatible service; uses path-style addressing.
+
+Integration test at `crates/tdw-storage-s3/tests/aws_engine.rs` is
+double-gated: compiles only with `--features s3` and runs only when
+`TDW_S3_TEST_BUCKET` + `TDW_S3_TEST_ENDPOINT` are both set. CI workflows
+that bring up a MinIO container should set these.
+
+See `docs/quality/production-storage-transports.md` for the full G010
+status table and remaining backends.
