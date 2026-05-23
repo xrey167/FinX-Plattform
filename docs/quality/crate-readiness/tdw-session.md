@@ -46,3 +46,65 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 
 Ready with follow-ups. No G002 blocker remains; listed follow-ups are assigned to later tranche responsibilities or future production runtime/storage implementations.
 
+
+## Production Backend Evidence (G013)
+
+`PgSessionStore` (gated by `--features postgres`) at
+`crates/tdw-session/src/pg_session.rs`. Wraps
+`tdw_storage_postgres::PgEngine` (G010) and coexists with the
+existing `SqliteSessionStore`.
+
+This slice covers **core session CRUD only** (upsert + get).
+Permission rules, approvals, and cost-ledger persistence remain
+sqlite-only; the follow-up PRs add Postgres mirrors behind the
+same feature flag.
+
+Schema:
+
+```sql
+CREATE TABLE tdw_sessions (
+    session_id  TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+```
+
+Public surface: `new(engine)`, `with_table(name)`,
+`ensure_schema()`, `upsert_session(record)`, `get_session(id)`.
+
+Upsert uses `ON CONFLICT (session_id) DO UPDATE SET status,
+updated_at` — created_at is preserved across re-upserts to match
+the SqliteSessionStore contract.
+
+Integration test at `crates/tdw-session/tests/pg_session.rs`
+double-gated by `--features postgres` + `TDW_POSTGRES_TEST_URL`.
+Asserts upsert + get roundtrip, conflict-update preserves
+created_at, and `get_session` returns `None` for unknown ids.
+
+## Production Backend Evidence (G013, full surface)
+
+`PgSessionStore` (gated by `--features postgres`) at
+`crates/tdw-session/src/pg_session.rs` is now a **full mirror of
+`SqliteSessionStore`**: sessions + permission rules + approvals +
+cost ledger.
+
+Public surface (all on `PgSessionStore`):
+- `new(engine)` / `with_table(base)` / `ensure_schema()`
+- `upsert_session(record)` / `get_session(id)`
+- `save_permission_rules(id, rules)` / `load_permission_rules(id)`
+- `request_approval(id, perm_id, action, pattern)` /
+  `resolve_approval(perm_id, decision)` / `pending_approval(perm_id)`
+- `append_cost(entry)` / `cost_entries(id)`
+
+Schema (four tables, prefixed by the `with_table` base, default
+`tdw_sessions`):
+- `<base>` — sessions
+- `<base>_permission_state` — rules JSON keyed by session
+- `<base>_pending_approvals` — pending + resolved approvals
+- `<base>_cost_ledger` — append-only cost entries with BIGSERIAL id
+
+Integration test at `crates/tdw-session/tests/pg_session.rs`
+double-gated by `--features postgres` + `TDW_POSTGRES_TEST_URL`.
+Hermetic per-process base table; exercises every method in the
+full surface as one roundtrip.

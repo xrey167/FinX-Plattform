@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod pg_session;
+
+#[cfg(feature = "postgres")]
+pub use pg_session::PgSessionStore;
+
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{Row, SqlitePool};
