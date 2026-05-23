@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "s3")]
+pub mod aws_engine;
+
+#[cfg(feature = "s3")]
+pub use aws_engine::S3Engine;
+
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
 use std::sync::Mutex;
@@ -56,7 +62,7 @@ impl BlobEngine for InMemoryS3BlobEngine {
     }
 }
 
-fn validate_key(key: &str) -> Result<()> {
+pub(crate) fn validate_key(key: &str) -> Result<()> {
     if key.trim().is_empty() {
         return Err(Error::Storage(
             "s3 object key must not be empty".to_string(),

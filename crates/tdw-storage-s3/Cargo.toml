@@ -5,10 +5,20 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+# Enables the real S3 backend (aws-sdk-s3). Off by default so the
+# workspace test set stays offline; the integration test is additionally
+# gated by env vars TDW_S3_TEST_BUCKET and TDW_S3_TEST_ENDPOINT.
+s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:tokio"]
+
 [dependencies]
 async-trait = { workspace = true }
+aws-config = { version = "1.5", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"], optional = true }
+aws-sdk-s3 = { version = "1.65", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"], optional = true }
 bytes = { workspace = true }
 tdw-core = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
