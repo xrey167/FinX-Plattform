@@ -44,3 +44,39 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Production Backend Evidence (G010)
+
+`QdrantHttpEngine` (gated by `--features qdrant`) lives in
+`crates/tdw-storage-qdrant/src/http_engine.rs` and implements
+`tdw_core::VectorEngine` directly against Qdrant's REST API (port 6333
+by default). No SDK crate is required — just `reqwest`.
+
+Existing `InMemoryVectorEngine` remains the offline test stand-in;
+`QdrantHttpEngine` is opt-in.
+
+Public surface:
+- `QdrantHttpEngine::new(endpoint, api_key)` — optional `api-key`
+  header for managed deployments.
+- `with_distance(distance)` — override the vector distance metric for
+  auto-created collections (defaults to `Cosine`; valid values
+  `Cosine`/`Dot`/`Euclid`).
+- `VectorEngine::upsert` — lazily creates the collection on first call
+  using the first point's vector dimension; subsequent upserts to the
+  same collection skip the existence check via a per-instance cache.
+- `VectorEngine::search_knn` — POST `/collections/{name}/points/search`
+  with `with_payload: true`; parses `result` array into `ScoredPoint`.
+
+Integration test at `crates/tdw-storage-qdrant/tests/http_engine.rs`
+is double-gated: compiles only with `--features qdrant`; runs only
+when `TDW_QDRANT_TEST_URL` is set. Exercises a 3-point upsert + kNN
+search asserting the closest point is the query itself.
+
+Point ID handling in this slice: Qdrant accepts unsigned-integer or
+UUID strings; the engine forwards the caller's `id` verbatim. Mapping
+arbitrary string IDs through deterministic UUIDs (e.g. UUID v5) is
+a follow-up tracked in
+`docs/quality/production-storage-transports.md`.
+
+See `docs/quality/production-storage-transports.md` for the full G010
+status table and remaining backends.

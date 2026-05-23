@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "qdrant")]
+pub mod http_engine;
+
+#[cfg(feature = "qdrant")]
+pub use http_engine::QdrantHttpEngine;
+
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
