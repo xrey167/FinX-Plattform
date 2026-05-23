@@ -46,3 +46,33 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 
 Ready with follow-ups. No G002 blocker remains; listed follow-ups are assigned to later tranche responsibilities or future production runtime/storage implementations.
 
+
+## Production Backend Evidence (G013)
+
+`PgEventBus` (gated by `--features postgres`) at
+`crates/tdw-bus/src/pg_bus.rs`. Wraps
+`tdw_storage_postgres::PgEngine` (G010).
+
+Schema:
+
+```sql
+CREATE TABLE tdw_bus (
+    sequence       BIGSERIAL PRIMARY KEY,
+    envelope_json  JSONB NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Public surface: `new(engine)`, `with_table(name)`,
+`ensure_schema()`, `publish(envelope) -> Result<u64>`,
+`read_from(sequence) -> Result<Vec<BusEntry>>`,
+`retention_window() -> Result<Option<RetentionWindow>>`.
+
+Capacity-based eviction is **not** implemented; callers wanting
+bounded retention should run a periodic
+`DELETE FROM tdw_bus WHERE sequence < threshold` out-of-band.
+
+Integration test at `crates/tdw-bus/tests/pg_bus.rs` double-gated
+by `--features postgres` + `TDW_POSTGRES_TEST_URL`. Hermetic
+per-process table; exercises monotonic publish + read_from cursor
++ retention_window.

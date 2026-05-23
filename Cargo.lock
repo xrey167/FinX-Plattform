@@ -3291,9 +3291,13 @@ dependencies = [
 name = "tdw-bus"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
+ "tdw-core",
  "tdw-event",
+ "tdw-storage-postgres",
+ "tokio",
 ]
 
 [[package]]

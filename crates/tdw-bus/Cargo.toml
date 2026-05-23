@@ -5,10 +5,21 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+# Enables the real Postgres-backed event bus built on top of
+# tdw-storage-postgres::PgEngine. Off by default so the workspace
+# test set stays offline.
+postgres = ["dep:async-trait", "dep:tdw-core", "dep:tdw-storage-postgres", "dep:tokio", "tdw-storage-postgres/postgres"]
+
 [dependencies]
+async-trait = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-core = { workspace = true, optional = true }
 tdw-event = { path = "../tdw-event" }
+tdw-storage-postgres = { path = "../tdw-storage-postgres", optional = true }
+tokio = { workspace = true, optional = true }
 
 [lints]
 workspace = true
