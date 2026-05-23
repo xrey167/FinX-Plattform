@@ -44,3 +44,33 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Production Backend Evidence (G010)
+
+`ClickHouseHttpEngine` (gated by `--features clickhouse`) lives in
+`crates/tdw-storage-clickhouse/src/http_engine.rs` and implements
+`tdw_core::OlapEngine` directly against ClickHouse's native HTTP
+interface (port 8123 by default). No SDK crate is required — just
+`reqwest` via the newly-added workspace dep.
+
+The existing `ClickHouseRecordingEngine` remains the offline test
+stand-in; `ClickHouseHttpEngine` is opt-in so the default workspace
+test set stays deterministic and offline.
+
+Authentication uses HTTP basic auth via the constructor: pass
+`Some(user)` / `Some(password)` if the ClickHouse instance is
+configured for auth, or `None`/`None` for the default `default` user
+with no password (the standard local-development setup).
+
+Integration test at `crates/tdw-storage-clickhouse/tests/http_engine.rs`
+is double-gated: compiles only with `--features clickhouse` and runs
+only when `TDW_CLICKHOUSE_TEST_URL` is set.
+
+Param binding is not yet supported on the HTTP interface (ClickHouse
+exposes server-side params via `param_<name>` query string keys,
+which is a different binding shape than sqlx-style positional `$N`).
+The engine rejects non-null params with a clear error so production
+callers extend the binding surface deliberately.
+
+See `docs/quality/production-storage-transports.md` for the full G010
+status table and remaining backends.

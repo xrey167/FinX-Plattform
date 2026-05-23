@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "clickhouse")]
+pub mod http_engine;
+
+#[cfg(feature = "clickhouse")]
+pub use http_engine::ClickHouseHttpEngine;
+
 use std::sync::Mutex;
 
 use async_trait::async_trait;
