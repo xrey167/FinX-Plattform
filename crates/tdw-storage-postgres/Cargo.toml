@@ -5,10 +5,19 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+# Enables the real Postgres backend (sqlx::PgPool). Off by default so the
+# workspace test set stays offline; the integration test is additionally
+# gated by the env var TDW_POSTGRES_TEST_URL.
+postgres = ["dep:sqlx", "dep:tokio"]
+
 [dependencies]
 async-trait = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true, features = ["postgres"], optional = true }
 tdw-core = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 schemars = { workspace = true }

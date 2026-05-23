@@ -44,3 +44,29 @@ Owner tranche: G003-data-storage-pipeline-and-sql-crates - Data, Storage, Pipeli
 ## Verdict
 
 Ready with follow-ups. No G003 blocker remains; remaining follow-ups are production adapter depth, orchestration, or durability work layered behind the validated contracts.
+
+## Production Backend Evidence (G010)
+
+`PgEngine` (gated by `--features postgres`) lands in
+`crates/tdw-storage-postgres/src/sqlx_engine.rs` and implements
+`tdw_core::RelationalEngine` directly against `sqlx::PgPool` (sqlx 0.9
+with the `postgres` driver feature). The default `PostgresRecordingEngine`
+remains the offline test stand-in; `PgEngine` is opt-in so the default
+workspace test set stays deterministic and offline.
+
+Integration test at `crates/tdw-storage-postgres/tests/sqlx_engine.rs`
+is double-gated:
+- compiles only with `--features postgres` (no sqlx-driver dep otherwise);
+- runs only when the env var `TDW_POSTGRES_TEST_URL` is set (the test
+  early-returns with a stderr notice otherwise, so the workspace test
+  set stays green without docker).
+
+Local verification (workstation 1.95.0 toolchain wedged; ran under
+`RUSTUP_TOOLCHAIN=stable` — CI runs clean 1.95.0):
+- `cargo build -p tdw-storage-postgres` (default) — exit 0
+- `cargo build -p tdw-storage-postgres --features postgres --all-targets` — exit 0
+- `cargo clippy -p tdw-storage-postgres --features postgres --all-targets -- -D warnings` — clean
+- `cargo test -p tdw-storage-postgres --features postgres --all-targets` — 6 tests pass (4 in-memory + 2 integration that early-return without the env var)
+
+See `docs/quality/production-storage-transports.md` for the full G010
+status table and remaining backends.
