@@ -39,12 +39,14 @@ impl InMemoryOutbox {
         sequence
     }
 
-    pub fn mark_dispatched(&mut self, sequence: u64) {
+    pub fn mark_dispatched(&mut self, sequence: u64) -> bool {
         for record in &mut self.records {
             if record.sequence == sequence {
                 record.status = OutboxStatus::Dispatched;
+                return true;
             }
         }
+        false
     }
 
     pub fn pending_after(&self, sequence: u64) -> Vec<OutboxRecord> {
@@ -66,7 +68,8 @@ mod tests {
         let mut outbox = InMemoryOutbox::default();
         let first = outbox.append(sample_event("service"));
         let second = outbox.append(sample_event("worker"));
-        outbox.mark_dispatched(first);
+        assert!(outbox.mark_dispatched(first));
+        assert!(!outbox.mark_dispatched(999));
 
         let pending = outbox.pending_after(0);
         assert_eq!(pending.len(), 1);

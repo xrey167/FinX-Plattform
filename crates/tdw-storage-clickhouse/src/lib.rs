@@ -33,6 +33,7 @@ impl ClickHouseRecordingEngine {
 #[async_trait]
 impl OlapEngine for ClickHouseRecordingEngine {
     async fn execute(&self, ddl: &str) -> Result<()> {
+        validate_sql(ddl)?;
         self.statements
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?
@@ -41,12 +42,22 @@ impl OlapEngine for ClickHouseRecordingEngine {
     }
 
     async fn query_json(&self, sql: &str, params: Value) -> Result<Value> {
+        validate_sql(sql)?;
         Ok(serde_json::json!({
             "engine": "clickhouse-recording",
             "sql": sql,
             "params": params
         }))
     }
+}
+
+fn validate_sql(sql: &str) -> Result<()> {
+    if sql.trim().is_empty() {
+        return Err(Error::Storage(
+            "clickhouse sql must not be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -131,6 +142,7 @@ mod tests {
             1
         );
         assert_eq!(health, HealthStatus::Healthy);
+        assert!(block_on_ready(engine.execute("")).is_err());
     }
 
     struct NoopWaker;

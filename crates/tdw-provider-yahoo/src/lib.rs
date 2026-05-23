@@ -84,6 +84,12 @@ mod tests {
         assert_eq!(query.symbol, "AAPL");
         assert_eq!(rows[0].symbol, "AAPL");
         assert_eq!(rows[0].close, 202.0);
+        assert!(
+            YahooEquityHistoricalFetcher::transform_query(serde_json::json!({
+                "symbol": "AAPL?range=1y"
+            }))
+            .is_err()
+        );
     }
 
     struct NoopWaker;

@@ -9,9 +9,26 @@ pub struct DirectedGraph {
     edges: BTreeMap<String, BTreeSet<String>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphError {
+    InvalidNodeId,
+    SelfLoop,
+}
+
 impl DirectedGraph {
     pub fn add_edge(&mut self, from: impl Into<String>, to: impl Into<String>) {
         self.edges.entry(from.into()).or_default().insert(to.into());
+    }
+
+    pub fn try_add_edge(&mut self, from: &str, to: &str) -> Result<(), GraphError> {
+        if !is_node_id(from) || !is_node_id(to) {
+            return Err(GraphError::InvalidNodeId);
+        }
+        if from == to {
+            return Err(GraphError::SelfLoop);
+        }
+        self.add_edge(from, to);
+        Ok(())
     }
 
     pub fn traverse(&self, start: &str) -> Vec<String> {
@@ -41,6 +58,13 @@ impl DirectedGraph {
     }
 }
 
+fn is_node_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +85,19 @@ mod tests {
         assert!(!graph.has_cycle());
         graph.add_edge("instrument", "account");
         assert!(graph.has_cycle());
+    }
+
+    #[test]
+    fn checked_edges_reject_invalid_nodes_and_self_loops() {
+        let mut graph = DirectedGraph::default();
+        assert_eq!(graph.try_add_edge("account", "position"), Ok(()));
+        assert_eq!(
+            graph.try_add_edge("account", "account"),
+            Err(GraphError::SelfLoop)
+        );
+        assert_eq!(
+            graph.try_add_edge("../account", "position"),
+            Err(GraphError::InvalidNodeId)
+        );
     }
 }

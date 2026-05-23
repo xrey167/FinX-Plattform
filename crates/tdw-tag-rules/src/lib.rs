@@ -22,6 +22,10 @@ pub struct TagRule {
 pub enum RuleError {
     #[error("rejected unsafe SQL predicate")]
     UnsafeSql,
+    #[error("invalid rule: {0}")]
+    InvalidRule(&'static str),
+    #[error("tag assignment failed: {0}")]
+    Tag(String),
     #[error("rule recursion exceeded")]
     Recursion,
 }
@@ -35,11 +39,7 @@ pub struct RuleEngine {
 impl RuleEngine {
     pub fn hot_reload(&mut self, rules: Vec<TagRule>) -> Result<(), RuleError> {
         for rule in &rules {
-            if let RulePredicate::SqlContains { sql, .. } = &rule.predicate
-                && (sql.contains(';') || sql.contains("--"))
-            {
-                return Err(RuleError::UnsafeSql);
-            }
+            validate_rule(rule)?;
         }
         self.rules = rules;
         self.version += 1;
@@ -67,7 +67,9 @@ impl RuleEngine {
                     expires_at: None,
                     provenance: format!("rule:{}", rule.rule_id),
                 };
-                let _ = store.assign(assignment.clone());
+                store
+                    .assign(assignment.clone())
+                    .map_err(|error| RuleError::Tag(error.to_string()))?;
                 assignments.push(assignment);
             }
         }
@@ -77,6 +79,58 @@ impl RuleEngine {
     pub fn version(&self) -> u64 {
         self.version
     }
+}
+
+fn validate_rule(rule: &TagRule) -> Result<(), RuleError> {
+    if !is_identifier(&rule.rule_id) {
+        return Err(RuleError::InvalidRule("rule_id"));
+    }
+    if !is_tag_id(&rule.tag_id) {
+        return Err(RuleError::InvalidRule("tag_id"));
+    }
+    match &rule.predicate {
+        RulePredicate::SqlContains { sql, needle } => {
+            if sql.contains(';')
+                || sql.contains("--")
+                || sql.to_ascii_lowercase().contains(" drop ")
+            {
+                return Err(RuleError::UnsafeSql);
+            }
+            if needle.trim().is_empty() {
+                return Err(RuleError::InvalidRule("needle"));
+            }
+        }
+        RulePredicate::JsonPathEquals { path, value } => {
+            if !path.starts_with("$.") || path.contains("..") || path.chars().any(char::is_control)
+            {
+                return Err(RuleError::InvalidRule("json_path"));
+            }
+            if value.trim().is_empty() {
+                return Err(RuleError::InvalidRule("value"));
+            }
+        }
+        RulePredicate::LabelContains { label } => {
+            if label.trim().is_empty() || label.chars().any(char::is_control) {
+                return Err(RuleError::InvalidRule("label"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+fn is_tag_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.contains(':')
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-')
+        })
 }
 
 #[cfg(test)]
@@ -121,5 +175,35 @@ mod tests {
             }]),
             Err(RuleError::UnsafeSql)
         );
+    }
+
+    #[test]
+    fn rejects_invalid_rules_and_unknown_tag_assignments() {
+        let mut engine = RuleEngine::default();
+        assert_eq!(
+            engine.hot_reload(vec![TagRule {
+                rule_id: "../bad".to_string(),
+                tag_id: "asset:equity".to_string(),
+                predicate: RulePredicate::LabelContains {
+                    label: "AAPL".to_string(),
+                },
+            }]),
+            Err(RuleError::InvalidRule("rule_id"))
+        );
+        engine
+            .hot_reload(vec![TagRule {
+                rule_id: "missing-tag".to_string(),
+                tag_id: "asset:missing".to_string(),
+                predicate: RulePredicate::LabelContains {
+                    label: "AAPL".to_string(),
+                },
+            }])
+            .unwrap_or_else(|error| panic!("rule should reload: {error}"));
+
+        let mut tags = TagStore::default();
+        assert!(matches!(
+            engine.apply("instrument:AAPL", "AAPL", &mut tags),
+            Err(RuleError::Tag(_))
+        ));
     }
 }

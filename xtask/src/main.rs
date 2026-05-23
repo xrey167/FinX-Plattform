@@ -21,6 +21,14 @@ fn main() {
             Some("schema-check") => events_schema_check(),
             _ => help(),
         },
+        "protocol" => match args.next().as_deref() {
+            Some("schema-check") => protocol_schema_check(),
+            _ => help(),
+        },
+        "config" => match args.next().as_deref() {
+            Some("schema-check") => config_schema_check(),
+            _ => help(),
+        },
         "clean-room-audit" => clean_room_audit(),
         _ => help(),
     };
@@ -33,7 +41,7 @@ fn main() {
 
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | clean-room-audit"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | clean-room-audit"
     );
     Ok(())
 }
@@ -333,21 +341,44 @@ fn schema_sync() -> Result<(), String> {
 }
 
 fn events_schema_check() -> Result<(), String> {
-    let schema_dir = Path::new("docs/schemas/event");
+    let count = write_schema_bundle(
+        Path::new("docs/schemas/event"),
+        tdw_event::event_schema_bundle(),
+    )?;
+    println!("events schema-check wrote {count} event schemas to docs/schemas/event");
+    Ok(())
+}
+
+fn protocol_schema_check() -> Result<(), String> {
+    let count = write_schema_bundle(
+        Path::new("docs/schemas/protocol"),
+        tdw_protocol::schema_bundle(),
+    )?;
+    println!("protocol schema-check wrote {count} protocol schemas to docs/schemas/protocol");
+    Ok(())
+}
+
+fn config_schema_check() -> Result<(), String> {
+    let count = write_schema_bundle(
+        Path::new("docs/schemas/config"),
+        tdw_config::schema_bundle(),
+    )?;
+    println!("config schema-check wrote {count} config schemas to docs/schemas/config");
+    Ok(())
+}
+
+fn write_schema_bundle(
+    schema_dir: &Path,
+    bundle: std::collections::BTreeMap<&'static str, serde_json::Value>,
+) -> Result<usize, String> {
     fs::create_dir_all(schema_dir).map_err(|error| error.to_string())?;
-    let bundle = tdw_event::event_schema_bundle();
     for (name, schema) in &bundle {
         let content =
             serde_json::to_string_pretty(schema).map_err(|error| error.to_string())? + "\n";
         fs::write(schema_dir.join(format!("{name}.schema.json")), content)
             .map_err(|error| error.to_string())?;
     }
-    println!(
-        "events schema-check wrote {} event schemas to {}",
-        bundle.len(),
-        schema_dir.display()
-    );
-    Ok(())
+    Ok(bundle.len())
 }
 
 fn clean_room_audit() -> Result<(), String> {
@@ -356,7 +387,11 @@ fn clean_room_audit() -> Result<(), String> {
         let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
         for (index, line) in content.lines().enumerate() {
             let lower = line.to_ascii_lowercase();
-            let forbidden = [format!("{}{}", "finx", "-"), format!("{}{}", "tesser", "-")];
+            let forbidden = [
+                format!("{}{}", "finx", "-"),
+                format!("{}{}", "tesser", "-"),
+                format!("{}{}{}", "tdw-provider", "-", "openbb"),
+            ];
             if forbidden.iter().any(|needle| lower.contains(needle)) {
                 offenders.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
             }

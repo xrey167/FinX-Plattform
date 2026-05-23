@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "DaemonConfig": {
+      "properties": {
+        "http_bind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transport": {
+          "$ref": "#/$defs/DaemonTransport"
+        },
+        "uds_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport",
+        "uds_path"
+      ],
+      "type": "object"
+    },
+    "DaemonTransport": {
+      "enum": [
+        "Uds",
+        "HttpSse"
+      ],
+      "type": "string"
+    },
+    "ModelConfig": {
+      "properties": {
+        "base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "type": "object"
+    },
+    "PathsConfig": {
+      "properties": {
+        "data_dir": {
+          "type": "string"
+        },
+        "rollout_dir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data_dir",
+        "rollout_dir"
+      ],
+      "type": "object"
+    },
+    "PermissionAction": {
+      "enum": [
+        "Allow",
+        "Ask",
+        "Deny"
+      ],
+      "type": "string"
+    },
+    "PermissionConfig": {
+      "properties": {
+        "default_action": {
+          "$ref": "#/$defs/PermissionAction"
+        },
+        "last_match_wins": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "default_action",
+        "last_match_wins"
+      ],
+      "type": "object"
+    },
+    "ProtocolConfig": {
+      "properties": {
+        "max_event_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "replay_enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "max_event_bytes",
+        "replay_enabled"
+      ],
+      "type": "object"
+    },
+    "SessionConfig": {
+      "properties": {
+        "jsonl_archive": {
+          "type": "boolean"
+        },
+        "sqlite_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sqlite_path",
+        "jsonl_archive"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "daemon": {
+      "$ref": "#/$defs/DaemonConfig"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelConfig"
+    },
+    "paths": {
+      "$ref": "#/$defs/PathsConfig"
+    },
+    "permissions": {
+      "$ref": "#/$defs/PermissionConfig"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "protocol": {
+      "$ref": "#/$defs/ProtocolConfig"
+    },
+    "session": {
+      "$ref": "#/$defs/SessionConfig"
+    }
+  },
+  "required": [
+    "profile",
+    "paths",
+    "daemon",
+    "session",
+    "permissions",
+    "model",
+    "protocol"
+  ],
+  "title": "TdwConfig",
+  "type": "object"
+}

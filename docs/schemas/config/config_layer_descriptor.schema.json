@@ -1,0 +1,37 @@
+{
+  "$defs": {
+    "ConfigLayerKind": {
+      "enum": [
+        "UserDefaults",
+        "EnvFile",
+        "ProjectConfig",
+        "SplitFile",
+        "InlineEnv",
+        "CliFlags"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "kind": {
+      "$ref": "#/$defs/ConfigLayerKind"
+    },
+    "precedence": {
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "source": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "source",
+    "precedence"
+  ],
+  "title": "ConfigLayerDescriptor",
+  "type": "object"
+}

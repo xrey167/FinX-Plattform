@@ -176,6 +176,8 @@ pub enum AgentParseError {
     EmptyManifest,
     #[error("missing field: {0}")]
     MissingField(&'static str),
+    #[error("invalid identifier for {0}: {1}")]
+    InvalidIdentifier(&'static str, String),
     #[error("invalid line: {0}")]
     InvalidLine(String),
     #[error("slash command must start with /")]
@@ -190,6 +192,20 @@ pub enum WorkflowValidationError {
     MissingNode(String),
     #[error("workflow contains a cycle")]
     Cycle,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum AgentContractError {
+    #[error("invalid identifier for {0}: {1}")]
+    InvalidIdentifier(&'static str, String),
+    #[error("missing field: {0}")]
+    MissingField(&'static str),
+    #[error("invalid uri: {0}")]
+    InvalidUri(String),
+    #[error("invalid endpoint: {0}")]
+    InvalidEndpoint(String),
+    #[error("workflow validation failed: {0}")]
+    Workflow(#[from] WorkflowValidationError),
 }
 
 impl WorkflowDefinition {
@@ -275,8 +291,13 @@ pub fn parse_skill_manifest(input: &str) -> Result<AgentSkill, AgentParseError> 
         })
         .unwrap_or_default();
 
+    let skill_id = take_required(&fields, "id")?;
+    if !is_agent_identifier(&skill_id) {
+        return Err(AgentParseError::InvalidIdentifier("id", skill_id));
+    }
+
     Ok(AgentSkill {
-        skill_id: take_required(&fields, "id")?,
+        skill_id,
         name: take_required(&fields, "name")?,
         description: take_required(&fields, "description")?,
         input_schema: json!({"type": "object"}),
@@ -298,10 +319,16 @@ pub fn parse_slash_command_invocation(
         .next()
         .ok_or(AgentParseError::MissingField("command"))?
         .to_string();
+    if !is_agent_identifier(&command) {
+        return Err(AgentParseError::InvalidIdentifier("command", command));
+    }
     let mut args = BTreeMap::new();
 
     for (index, part) in parts.enumerate() {
         if let Some((key, value)) = part.split_once('=') {
+            if !is_agent_identifier(key) {
+                return Err(AgentParseError::InvalidIdentifier("arg", key.to_string()));
+            }
             args.insert(key.to_string(), value.to_string());
         } else {
             args.insert(format!("arg{}", index + 1), part.to_string());
@@ -309,6 +336,39 @@ pub fn parse_slash_command_invocation(
     }
 
     Ok(SlashCommandInvocation { command, args })
+}
+
+pub fn validate_agent_card_contract(card: &AgentCard) -> Result<(), AgentContractError> {
+    validate_identifier_field("agent_id", &card.agent_id)?;
+    require_non_empty("name", &card.name)?;
+    require_non_empty("version", &card.version)?;
+    require_non_empty("description", &card.description)?;
+    for skill in &card.skills {
+        validate_identifier_field("skill_id", &skill.skill_id)?;
+        require_non_empty("skill_name", &skill.name)?;
+        require_non_empty("skill_description", &skill.description)?;
+    }
+    for content_ref in &card.content_refs {
+        validate_uri(&content_ref.uri)?;
+    }
+    if let Some(endpoint) = &card.endpoint {
+        validate_endpoint(endpoint)?;
+    }
+    Ok(())
+}
+
+pub fn validate_workflow_contract(
+    workflow: &WorkflowDefinition,
+) -> Result<Vec<String>, AgentContractError> {
+    validate_identifier_field("workflow_id", &workflow.workflow_id)?;
+    for node in &workflow.nodes {
+        validate_identifier_field("node_id", &node.node_id)?;
+        require_non_empty("task", &node.task)?;
+        if let Some(skill_id) = &node.skill_id {
+            validate_identifier_field("skill_id", skill_id)?;
+        }
+    }
+    workflow.validate_dag().map_err(AgentContractError::from)
 }
 
 pub fn agent_storage_mappings() -> Vec<StorageMapping> {
@@ -418,6 +478,57 @@ pub fn schema_name_set() -> BTreeSet<&'static str> {
     AGENT_SCHEMA_NAMES.into_iter().collect()
 }
 
+fn validate_identifier_field(field: &'static str, value: &str) -> Result<(), AgentContractError> {
+    if is_agent_identifier(value) {
+        Ok(())
+    } else {
+        Err(AgentContractError::InvalidIdentifier(
+            field,
+            value.to_string(),
+        ))
+    }
+}
+
+fn require_non_empty(field: &'static str, value: &str) -> Result<(), AgentContractError> {
+    if value.trim().is_empty() {
+        Err(AgentContractError::MissingField(field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_uri(value: &str) -> Result<(), AgentContractError> {
+    if is_safe_uri(value) {
+        Ok(())
+    } else {
+        Err(AgentContractError::InvalidUri(value.to_string()))
+    }
+}
+
+fn validate_endpoint(value: &str) -> Result<(), AgentContractError> {
+    if (value.starts_with("mcp://") || value.starts_with("https://")) && is_safe_uri(value) {
+        Ok(())
+    } else {
+        Err(AgentContractError::InvalidEndpoint(value.to_string()))
+    }
+}
+
+fn is_safe_uri(value: &str) -> bool {
+    !value.trim().is_empty()
+        && !value.contains("..")
+        && !value.chars().any(char::is_control)
+        && (value.starts_with("tdw://")
+            || value.starts_with("mcp://")
+            || value.starts_with("https://"))
+}
+
+fn is_agent_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +555,7 @@ mod tests {
         let decoded = serde_json::from_str::<AgentCard>(&encoded)
             .unwrap_or_else(|error| panic!("agent card should deserialize: {error}"));
         assert_eq!(decoded, card);
+        assert_eq!(validate_agent_card_contract(&card), Ok(()));
     }
 
     #[test]
@@ -464,6 +576,26 @@ mod tests {
 
         assert_eq!(invocation.command, "research");
         assert_eq!(invocation.args.get("symbol"), Some(&"AAPL".to_string()));
+    }
+
+    #[test]
+    fn rejects_unsafe_agent_contract_inputs() {
+        assert_eq!(
+            parse_slash_command_invocation("/../research symbol=AAPL"),
+            Err(AgentParseError::InvalidIdentifier(
+                "command",
+                "../research".to_string()
+            ))
+        );
+
+        let mut card = sample_agent_card();
+        card.endpoint = Some("file:///etc/passwd".to_string());
+        assert_eq!(
+            validate_agent_card_contract(&card),
+            Err(AgentContractError::InvalidEndpoint(
+                "file:///etc/passwd".to_string()
+            ))
+        );
     }
 
     #[test]
@@ -488,8 +620,7 @@ mod tests {
             }],
         };
         assert_eq!(
-            workflow
-                .validate_dag()
+            validate_workflow_contract(&workflow)
                 .unwrap_or_else(|error| panic!("workflow should validate: {error}")),
             vec!["retrieve".to_string(), "draft".to_string()]
         );

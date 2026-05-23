@@ -18,9 +18,25 @@ pub struct MergeDecision {
     pub audited: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResolveError {
+    InvalidSymbol,
+    InvalidMergeEndpoint,
+}
+
 pub fn resolve_symbol(symbol: &str, entities: &[Entity]) -> Vec<ResolveCandidate> {
+    try_resolve_symbol(symbol, entities).unwrap_or_default()
+}
+
+pub fn try_resolve_symbol(
+    symbol: &str,
+    entities: &[Entity],
+) -> Result<Vec<ResolveCandidate>, ResolveError> {
+    if !is_symbol(symbol) {
+        return Err(ResolveError::InvalidSymbol);
+    }
     let normalized = symbol.to_ascii_uppercase();
-    entities
+    Ok(entities
         .iter()
         .filter(|entity| {
             entity.kind == EntityKind::Instrument
@@ -35,7 +51,7 @@ pub fn resolve_symbol(symbol: &str, entities: &[Entity]) -> Vec<ResolveCandidate
             score: 100,
             reason: "exact symbol or alias match".to_string(),
         })
-        .collect()
+        .collect())
 }
 
 pub fn manual_merge_decision(source: &str, target: &str, approved: bool) -> MergeDecision {
@@ -45,6 +61,33 @@ pub fn manual_merge_decision(source: &str, target: &str, approved: bool) -> Merg
         approved,
         audited: true,
     }
+}
+
+pub fn try_manual_merge_decision(
+    source: &str,
+    target: &str,
+    approved: bool,
+) -> Result<MergeDecision, ResolveError> {
+    if !is_entity_id(source) || !is_entity_id(target) || source == target {
+        return Err(ResolveError::InvalidMergeEndpoint);
+    }
+    Ok(manual_merge_decision(source, target, approved))
+}
+
+fn is_symbol(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed == value
+        && trimmed.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+}
+
+fn is_entity_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
 }
 
 #[cfg(test)]
@@ -68,6 +111,18 @@ mod tests {
                 approved: true,
                 audited: true,
             }
+        );
+    }
+
+    #[test]
+    fn checked_resolution_rejects_unsafe_symbols_and_self_merges() {
+        assert_eq!(
+            try_resolve_symbol("AAPL/../../secret", &[]),
+            Err(ResolveError::InvalidSymbol)
+        );
+        assert_eq!(
+            try_manual_merge_decision("instrument:AAPL", "instrument:AAPL", true),
+            Err(ResolveError::InvalidMergeEndpoint)
         );
     }
 }

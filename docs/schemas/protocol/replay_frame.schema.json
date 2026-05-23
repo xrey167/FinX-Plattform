@@ -1,0 +1,268 @@
+{
+  "$defs": {
+    "EventMsg": {
+      "oneOf": [
+        {
+          "properties": {
+            "op_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "started",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "fraction": {
+              "format": "float",
+              "type": "number"
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "stage": {
+              "type": "string"
+            },
+            "type": {
+              "const": "progress",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "stage",
+            "fraction"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "permission_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "approval_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "permission_id",
+            "action",
+            "pattern"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "arguments": true,
+            "call_id": {
+              "type": "string"
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "tool_call_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "call_id",
+            "tool_name",
+            "arguments"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "call_id": {
+              "type": "string"
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "result": true,
+            "type": {
+              "const": "tool_call_completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "call_id",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bytes": {
+              "type": "string"
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "stream": {
+              "$ref": "#/$defs/OutputStream"
+            },
+            "type": {
+              "const": "output_chunk",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "stream",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "event_type": {
+              "type": "string"
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "payload": true,
+            "type": {
+              "const": "domain_event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "event_type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op_id": {
+              "type": "string"
+            },
+            "result": true,
+            "summary": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "completed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "error": {
+              "type": "string"
+            },
+            "op_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id",
+            "error"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "op_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "op_id"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OutputStream": {
+      "enum": [
+        "Stdout",
+        "Stderr",
+        "Model",
+        "System"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "event": {
+      "$ref": "#/$defs/EventMsg"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "session_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "sequence",
+    "event"
+  ],
+  "title": "ReplayFrame",
+  "type": "object"
+}
