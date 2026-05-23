@@ -1,22 +1,32 @@
 #![forbid(unsafe_code)]
 
-fn main() {
-    match tdw_service_api::fetch_equity_historical("fileset", "AAPL") {
-        Ok(object) => {
-            println!(
-                "tdw-cli provider={} endpoint={} rows={}",
-                object.provider,
-                object.endpoint,
-                object.rows.len()
-            );
-            match tdw_service_api::client_event_sample() {
-                Ok(events) => println!("tdw-cli events={}", events["tui_lines"]),
-                Err(error) => eprintln!("tdw-cli event sample error: {error}"),
-            }
-        }
+use tdw_test_utils::smoke::{SmokeReport, allocate_storage_root, run_end_to_end_smoke};
+
+#[tokio::main]
+async fn main() {
+    let symbol = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "AAPL".to_string());
+    let root = allocate_storage_root("tdw-cli");
+
+    let report: SmokeReport = match run_end_to_end_smoke(&symbol, root.clone()).await {
+        Ok(report) => report,
         Err(error) => {
-            eprintln!("tdw-cli error: {error}");
+            eprintln!("tdw-cli smoke error: {error}");
             std::process::exit(1);
         }
-    }
+    };
+
+    println!(
+        "tdw-cli provider={} endpoint={} symbol={} rows={} blob={} bytes={} roundtrip={}",
+        report.provider,
+        report.endpoint,
+        report.query_symbol,
+        report.rows_fetched,
+        report.blob_key,
+        report.blob_bytes_written,
+        report.roundtrip_ok,
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }

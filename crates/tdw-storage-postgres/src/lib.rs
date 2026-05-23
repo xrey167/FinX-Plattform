@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod sqlx_engine;
+
+#[cfg(feature = "postgres")]
+pub use sqlx_engine::PgEngine;
+
 use std::sync::Mutex;
 
 use async_trait::async_trait;
