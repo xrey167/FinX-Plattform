@@ -3783,8 +3783,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tdw-core",
  "tdw-hooks",
  "tdw-protocol",
+ "tdw-storage-postgres",
  "thiserror 2.0.18",
  "tokio",
 ]
