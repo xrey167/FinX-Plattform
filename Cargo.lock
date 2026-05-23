@@ -3789,7 +3789,12 @@ dependencies = [
 name = "tdw-snapshot"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-storage-postgres",
+ "tokio",
 ]
 
 [[package]]
