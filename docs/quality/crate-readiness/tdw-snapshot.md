@@ -46,3 +46,45 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 
 Ready with follow-ups. No G002 blocker remains; listed follow-ups are assigned to later tranche responsibilities or future production runtime/storage implementations.
 
+
+## Production Backend Evidence (G013)
+
+`PgSnapshotStore` (gated by `--features postgres`) lives in
+`crates/tdw-snapshot/src/pg_snapshot.rs`. Wraps
+`tdw_storage_postgres::PgEngine` (G010).
+
+Schema:
+
+```sql
+CREATE TABLE tdw_snapshot (
+    id          BIGSERIAL PRIMARY KEY,
+    table_name  TEXT NOT NULL,
+    version     BIGINT NOT NULL,
+    created_at  TEXT NOT NULL,
+    row_ids     JSONB NOT NULL,
+    UNIQUE (table_name, version)
+);
+```
+
+Public surface:
+- `PgSnapshotStore::new(engine)` / `with_table(name)`.
+- `ensure_schema()` — idempotent CREATE TABLE.
+- `commit(table, created_at, row_ids)` — computes the next version
+  server-side as `COALESCE(MAX(version), 0) + 1` for the table via
+  CTE-wrapped INSERT ... SELECT ... RETURNING. The `(table_name,
+  version)` UNIQUE constraint serialises concurrent writers; under
+  contention the loser of a race surfaces as `Error::Storage` and
+  callers may retry.
+- `as_of_version(table, version)` / `latest(table)` — both return
+  `Option<Snapshot>`.
+
+Per-table version numbering matches the in-memory `SnapshotStore`
+(starts at 1, monotonic).
+
+Integration test at `crates/tdw-snapshot/tests/pg_snapshot.rs` is
+double-gated by `--features postgres` + `TDW_POSTGRES_TEST_URL`.
+Hermetic per-process table; exercises commit/latest/as_of_version
+across two tables to verify per-table versioning.
+
+See `docs/quality/production-transport-status.md` for the broader
+G013 punch list.

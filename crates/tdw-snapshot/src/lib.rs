@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod pg_snapshot;
+
+#[cfg(feature = "postgres")]
+pub use pg_snapshot::PgSnapshotStore;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
