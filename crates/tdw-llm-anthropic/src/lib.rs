@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "http")]
+pub mod http_client;
+
+#[cfg(feature = "http")]
+pub use http_client::{AnthropicHttpClient, AnthropicHttpError};
+
 use tdw_llm::{
     ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result, Usage,
     last_user_message, validate_model_id,

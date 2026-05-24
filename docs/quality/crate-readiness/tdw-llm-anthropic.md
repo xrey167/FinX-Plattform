@@ -44,3 +44,63 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production Anthropic transport/runtime integration.
+
+## Production Backend Evidence (G012)
+
+`AnthropicHttpClient` (gated by `--features http`) at
+`crates/tdw-llm-anthropic/src/http_client.rs` is the first real LLM
+HTTP transport in the workspace. Posts to
+`POST {base_url}/v1/messages` with the standard Anthropic Messages
+API headers (`x-api-key`, `anthropic-version: 2023-06-01`).
+Existing sync stub `AnthropicMessagesModel` preserved as offline
+default.
+
+Public surface:
+- `AnthropicHttpClient::new(api_key, model_id)` — validates the
+  model id via `tdw_llm::validate_model_id`.
+- `with_base_url(url)` — override default
+  `https://api.anthropic.com` for tests / self-hosted gateways.
+- `model_id()` accessor.
+- `async fn complete(request: ChatRequest) -> Result<ChatResponse, AnthropicHttpError>`
+  — the primary surface. Async-native because `tdw_llm::LanguageModel`
+  is a synchronous trait; bridging sync/async is a follow-up
+  concern.
+
+Role translation:
+- `MessageRole::System` messages collapse into Anthropic's
+  top-level `system` field (joined with `\n` if multiple).
+- `MessageRole::User` / `Assistant` go into the `messages` array
+  with the matching role string.
+- `MessageRole::Tool` is folded into a `user` message with a
+  `[tool] ` prefix for this slice; full tool-use envelope support
+  is a follow-up.
+
+Response shape:
+- All `content[]` blocks with `"type": "text"` are concatenated
+  into `ChatResponse.message.content`. Empty text content yields
+  `AnthropicHttpError::InvalidResponse`.
+- `usage.input_tokens` / `usage.output_tokens` flow through to
+  `ChatResponse.usage`.
+
+Streaming (`stream: true` SSE) is deferred to a follow-up slice;
+this PR ships the batch endpoint only.
+
+Tests:
+- Unit tests inside `http_client.rs` (need `pub(crate)` access to
+  `build_request_body` + `parse_response` + the envelope types):
+  - `system_message_becomes_top_level_system_field_and_user_goes_in_messages`
+  - `multiple_system_messages_join_with_newline`
+  - `tool_role_is_folded_into_user_message_with_marker`
+  - `cassette_replay_decodes_messages_response`
+  - `cassette_replay_joins_multiple_text_blocks`
+  - `cassette_replay_errors_when_no_text_content`
+- Integration test at `tests/http_client.rs`, double-gated by
+  `--features http` + env vars `TDW_ANTHROPIC_LIVE=1` and
+  `ANTHROPIC_API_KEY`. Calls the cheapest model
+  (`claude-haiku-4-5-20251001`) with a one-message prompt; asserts
+  non-empty content + non-zero `output_tokens`. Costs ~$0.001 per
+  run.
+
+`tdw_core::Credentials` gained an `anthropic_api_key: Option<String>`
+field as part of this slice so deployments can supply the key
+through the standard credentials surface.
