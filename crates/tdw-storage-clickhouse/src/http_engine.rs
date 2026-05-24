@@ -52,10 +52,14 @@ impl ClickHouseHttpEngine {
     }
 
     fn request(&self, query: &str) -> reqwest::RequestBuilder {
+        // Explicit empty body so reqwest sets `Content-Length: 0`. ClickHouse's
+        // HTTP interface rejects POSTs that have neither `Content-Length` nor
+        // `Transfer-Encoding: chunked` with `411 Length Required` (Code 381).
         let mut builder = self
             .client
             .post(self.base_url.clone())
-            .query(&[("query", query)]);
+            .query(&[("query", query)])
+            .body("");
         if let Some(user) = self.user.as_deref() {
             builder = builder.basic_auth(user, self.password.as_deref());
         }
