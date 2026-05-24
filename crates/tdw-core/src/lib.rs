@@ -76,6 +76,7 @@ pub struct Credentials {
     pub polygon_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub google_api_key: Option<String>,
+    pub anthropic_api_key: Option<String>,
 }
 
 #[async_trait]
