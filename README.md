@@ -1,26 +1,116 @@
 # FinX-Plattform
 
-Rust workspace for the FinX-Finance trading data warehouse plan set. Hosted at
-[github.com/xrey167/FinX-Plattform](https://github.com/xrey167/FinX-Plattform)
-(public — visibility chosen so GitHub Actions and branch protection are usable
-on the Free tier; the workspace was originally drafted as a private project).
+A Rust workspace for a trading data warehouse — event-sourced, provider-agnostic, designed to make market data, agent workflows, and storage layers composable without locking into any one vendor.
 
-This repo is intentionally clean-room relative to FinX-XR:
+**Status:** pre-1.0, actively built. APIs change between tranches. No release tags yet.
 
-- crate names use the `tdw-*` prefix;
-- no `finx-*` dependencies are allowed;
+---
+
+## What this is
+
+FinX-Plattform (`tdw-*`) is a clean-room Rust workspace that splits a trading data warehouse into ~80 small crates organized around a shared event spine. Each crate has a single responsibility and is independently testable; nothing depends on a specific database, LLM vendor, or market data provider at the contract layer.
+
+Concretely the workspace contains:
+
+- **Core contracts** — `tdw-event`, `tdw-session`, `tdw-rollout`, `tdw-snapshot`, `tdw-bus`, `tdw-outbox`, `tdw-cdc`, `tdw-domain`, `tdw-protocol`.
+- **Storage backends** — Postgres, ClickHouse, S3/MinIO, Qdrant, Meilisearch, Parquet, plain filesystem, plus a router that fans queries across them.
+- **Market data providers** — Yahoo Finance, FRED, Polygon, Alpaca, Binance, HuggingFace, fileset, and a WebSocket mock for tests.
+- **LLM + embeddings** — Anthropic and OpenAI-compatible adapters, local / OpenAI / Google embedding backends, behind a single `tdw-llm` interface.
+- **Agents + tooling** — agent registry, hooks, sandboxed UDFs (JS / Python / WASM / external), MCP and ACP servers, a TUI, a CLI.
+- **Pipelines + SQL** — staging, dbt runner, migrations, SQL codegen, table-format adapters.
+
+The full crate roster and per-crate audit state lives in [`docs/quality/crate-readiness/matrix.md`](docs/quality/crate-readiness/matrix.md).
+
+## Why "clean-room"
+
+This repo is intentionally isolated from an earlier project called FinX-XR:
+
+- crate names use the `tdw-*` prefix; no `finx-*` dependencies exist or are permitted;
 - no `tdw-provider-openbb` crate exists;
-- the remote owner/name/visibility is explicit and tracked in `AGENTS.md`.
+- no trait signatures, tests, or code are copied from FinX-XR.
 
-## Bootstrap Commands
+The boundary is enforced by `cargo run -p xtask -- clean-room-audit`, which runs in CI on every PR.
+
+## Architecture
+
+Work is organized into tranches (`G0NN-<topic>`) that map to active worktrees on `work/<topic>` branches. A given tranche typically lands a coherent slice of functionality — e.g., G010 brings up storage adapters, G011 brings up market data providers, G013 wires the event spine end-to-end.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  clients         tdw-cli   tdw-tui   tdw-app-client   tdw-mcp   │
+├─────────────────────────────────────────────────────────────────┤
+│  service         tdw-service   tdw-service-api   tdw-app-server │
+├─────────────────────────────────────────────────────────────────┤
+│  agents/tools    tdw-agent  tdw-hooks  tdw-tools  tdw-sandbox   │
+│                  tdw-udf-{js,python,wasm,external}              │
+├─────────────────────────────────────────────────────────────────┤
+│  knowledge/llm   tdw-knowledge  tdw-kg  tdw-tags  tdw-llm-*     │
+│                  tdw-embed-{local,openai,google}                │
+├─────────────────────────────────────────────────────────────────┤
+│  pipelines       tdw-pipe  tdw-stage  tdw-dbt-runner            │
+├─────────────────────────────────────────────────────────────────┤
+│  event spine     tdw-event  tdw-bus  tdw-outbox  tdw-cdc        │
+│                  tdw-session  tdw-snapshot  tdw-rollout         │
+├─────────────────────────────────────────────────────────────────┤
+│  storage         tdw-storage-{postgres,clickhouse,s3,qdrant,    │
+│                  meilisearch,parquet,fs,router}                 │
+├─────────────────────────────────────────────────────────────────┤
+│  providers       tdw-provider-{yahoo,fred,polygon,alpaca,       │
+│                  binance,huggingface,fileset,ws-mock}           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Quickstart
+
+Prerequisites: Rust toolchain pinned by [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.95.0). Docker Desktop is only needed for live container smoke tests; the offline gates run without it.
 
 ```powershell
+git clone https://github.com/xrey167/FinX-Plattform.git
+cd FinX-Plattform
+
 cargo fmt --all -- --check
 cargo check --workspace
 cargo test --workspace
 cargo run -p xtask -- clean-room-audit
 ```
 
-The source plans are copied into `.plans/` for traceability.
+Local infra (Postgres, ClickHouse, optionally Qdrant / Meilisearch / MinIO / Redis) comes up via Docker Compose profiles — see [`docs/docker.md`](docs/docker.md).
 
-Docker profile and WSL2 volume guidance lives in `docs/docker.md`.
+## Repository layout
+
+```
+FinX-Plattform/
+├── crates/                  # ~80 tdw-* crates (one responsibility each)
+├── xtask/                   # workspace automation (audits, codegen, lint)
+├── docs/
+│   ├── docker.md            # local compose + WSL2 guidance
+│   └── quality/             # readiness matrix + per-crate audit notes
+├── scripts/
+│   ├── git/new-worktree.ps1 # create sibling worktree on work/<topic>
+│   └── github/              # remote setup helpers
+├── .github/workflows/       # ci.yml + codeql.yml
+├── AGENTS.md                # operational rules (branches, PRs, verification)
+└── CONTRIBUTING.md          # contributor onramp
+```
+
+The workspace folder (`FinX-Finance/`) one level up holds parallel-phase worktrees as siblings; see its `AGENTS.md` for the multi-worktree layout.
+
+## Contributing
+
+External contributions are welcome — bug reports, fixes, providers, storage adapters. The basics:
+
+1. Read [`AGENTS.md`](AGENTS.md) for branch / commit / PR conventions and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the local checks.
+2. Open an issue before non-trivial work so we can agree on scope.
+3. Branch off `main` as `work/<topic>` (or `fix/<topic>`, `docs/<topic>`, `chore/<topic>`).
+4. Run the four verification commands before opening a PR. Squash-and-merge only.
+5. Keep the clean-room boundary intact: no `finx-*` imports, nothing copied from FinX-XR, no `tdw-provider-openbb`.
+
+By submitting a contribution you agree it may be incorporated under the project's license terms below.
+
+## License
+
+**Source-available, all rights reserved.**
+
+The repository is public so the design, code, and history can be read, studied, and discussed. No license to use, copy, modify, or redistribute the code is granted. If you want to use any part of this codebase outside of reading it, contact the author.
+
+This is reflected in `Cargo.toml` (`license = "UNLICENSED"`, `publish = false`) — none of these crates are or will be published to crates.io under this license.
