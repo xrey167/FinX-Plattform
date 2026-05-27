@@ -150,10 +150,13 @@
       "id": "G013-durable-persistence",
       "title": "Durable Persistence Backends",
       "objective": "Replace in-memory and SQLite-only persistence with durable production backends behind feature flags so the in-memory paths remain the bootstrap/test default. tdw-outbox gains a Postgres-backed implementation; tdw-cdc and tdw-replay consume offsets from the real outbox. tdw-session SqliteSessionStore is supplemented by a Postgres-backed SessionStore for multi-tenant deployments. tdw-bus retention enforcement gains a persistent backend option (Postgres or Redis). tdw-snapshot and tdw-rollout add real durable storage paths (filesystem with locking, or object-store backed). Each new backend has integration tests against a real database (gated by feature flag). Update worksheets and matrix.md to record durable-backend evidence. Verification: focused cargo test plus the workspace gate set.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T20:17:57.555Z",
+      "startedAt": "2026-05-23T18:43:41.746Z",
+      "completedAt": "2026-05-27T20:17:57.555Z",
+      "evidence": "G013 complete: tdw-outbox, tdw-bus, tdw-session, and tdw-snapshot have feature-gated Postgres backends on PgEngine. tdw-rollout now uses locked, synced JSONL filesystem persistence. crates/tdw-session/tests/g013_durable_cross_store.rs verifies the durable set together, double-gated by --features g013-cross-store and TDW_POSTGRES_TEST_URL. Offline defaults remain intact."
     },
     {
       "id": "G014-release-packaging",
@@ -184,5 +187,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G013-durable-persistence"
+  "activeGoalId": "G014-release-packaging"
 }

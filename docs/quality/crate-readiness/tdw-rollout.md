@@ -11,7 +11,7 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 - Dev dependencies: none
 - Reverse local dependencies: tdw-replay, tdw-service-api
 - Feature flags: none
-- Test attributes detected: 1
+- Test attributes detected: 2
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -24,7 +24,7 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 - [x] Feature flags reviewed: none.
 - [x] Public API and error contracts reviewed for the crate role.
 - [x] Runtime behavior reviewed for in-memory, JSONL, SQLite, protocol, or schema responsibilities as applicable.
-- [x] Tests and coverage evidence recorded: 1 test attributes detected plus focused and workspace verification commands.
+- [x] Tests and coverage evidence recorded: 2 test attributes detected plus focused and workspace verification commands.
 - [x] Docs and examples reviewed: no per-crate README/examples required for this foundational crate when higher-level docs and schema artifacts cover the contract.
 - [x] Surface wiring reviewed: service-api and xtask usage were checked where applicable via rg evidence.
 - [x] Scaffold, dead-code, and fallback signals classified: remaining matches are test assertions, sample helpers, defaults with explicit policy, or tracked follow-ups; no bootstrap stubs found in this tranche.
@@ -33,16 +33,23 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 ## Findings
 
 - JSONL rollout archive appends typed replay frames and reads non-empty records with IO/JSON errors preserved.
-- No code change required in G002; current test covers append/read roundtrip.
-- Follow-up boundary: File locking and rotation can be added when concurrent runtime writers require it.
+- G013 hardening serializes appenders with an exclusive file lock, uses a shared
+  lock for reads, and calls `sync_all` after every append.
+- Concurrent append coverage verifies that multi-writer rollout records remain
+  complete and parseable.
+- Follow-up boundary: rotation can be added when long-running archives require
+  bounded file size.
 
 ## Verification
 
 - Focused patched-crate check passed: cargo test -p tdw-bus -p tdw-outbox -p tdw-session -p tdw-actor.
+- G013 focused rollout check passed: cargo test -p tdw-rollout --all-targets -- --nocapture.
+- G013 cross-store smoke passed without live Postgres configured: cargo test -p tdw-session --features g013-cross-store --test g013_durable_cross_store -- --nocapture.
 - G002 focused tranche check: cargo test -p tdw-core -p tdw-domain -p tdw-protocol -p tdw-config -p tdw-event -p tdw-actor -p tdw-bus -p tdw-cdc -p tdw-outbox -p tdw-snapshot -p tdw-replay -p tdw-rollout -p tdw-session.
 - Workspace gate passed: cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check.
 
 ## Verdict
 
-Ready with follow-ups. No G002 blocker remains; listed follow-ups are assigned to later tranche responsibilities or future production runtime/storage implementations.
-
+Ready with follow-ups. G013 durable filesystem persistence is in place for the
+rollout archive; remaining follow-up is archive rotation, not correctness of
+append/read durability.

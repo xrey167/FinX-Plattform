@@ -6,13 +6,13 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 
 - Manifest: crates\tdw-session\Cargo.toml
 - Target kinds: lib
-- Local dependencies: tdw-hooks, tdw-protocol
-- External dependencies: serde ^1.0.228 features=[derive]; serde_json ^1.0.145; sqlx ^0.9.0 features=[runtime-tokio,tls-rustls,sqlite,sqlite-bundled,macros]; thiserror ^2.0.18; tokio ^1.52.3 kind=dev features=[macros,rt-multi-thread,sync]
-- Dev dependencies: tokio
+- Local dependencies: tdw-core (optional), tdw-hooks, tdw-protocol, tdw-storage-postgres (optional)
+- External dependencies: serde ^1.0.228 features=[derive]; serde_json ^1.0.145; sqlx ^0.9.0 features=[runtime-tokio,tls-rustls,sqlite,sqlite-bundled,macros]; thiserror ^2.0.18; tokio ^1.52.3 optional/dev features=[macros,rt-multi-thread,sync]
+- Dev dependencies: tdw-bus, tdw-event, tdw-outbox, tdw-rollout, tdw-snapshot, tokio
 - Reverse local dependencies: none
-- Feature flags: none
-- Test attributes detected: 2
-- tests/ directory: no
+- Feature flags: postgres, g013-cross-store
+- Test attributes detected: 4
+- tests/ directory: yes
 - README: no
 - Examples directory: no
 - Scaffold/dead-code/fallback scan signals: 19 total, 0 stub-related
@@ -20,11 +20,11 @@ Owner tranche: G002-core-contracts-event-session-and-replay-crates - Core Contra
 ## Required Readiness Evidence
 
 - [x] Manifest correctness reviewed: package uses workspace lints, publish=false, edition 2024, and expected workspace dependencies.
-- [x] Dependency direction reviewed: local dependencies are tdw-hooks, tdw-protocol; reverse dependencies are none.
-- [x] Feature flags reviewed: none.
+- [x] Dependency direction reviewed: local dependencies are tdw-core (optional), tdw-hooks, tdw-protocol, tdw-storage-postgres (optional); reverse dependencies are none.
+- [x] Feature flags reviewed: postgres and g013-cross-store keep production and cross-store verification paths opt-in.
 - [x] Public API and error contracts reviewed for the crate role.
 - [x] Runtime behavior reviewed for in-memory, JSONL, SQLite, protocol, or schema responsibilities as applicable.
-- [x] Tests and coverage evidence recorded: 2 test attributes detected plus focused and workspace verification commands.
+- [x] Tests and coverage evidence recorded: 4 test attributes detected plus focused and workspace verification commands.
 - [x] Docs and examples reviewed: no per-crate README/examples required for this foundational crate when higher-level docs and schema artifacts cover the contract.
 - [x] Surface wiring reviewed: service-api and xtask usage were checked where applicable via rg evidence.
 - [x] Scaffold, dead-code, and fallback signals classified: remaining matches are test assertions, sample helpers, defaults with explicit policy, or tracked follow-ups; no bootstrap stubs found in this tranche.
@@ -108,3 +108,13 @@ Integration test at `crates/tdw-session/tests/pg_session.rs`
 double-gated by `--features postgres` + `TDW_POSTGRES_TEST_URL`.
 Hermetic per-process base table; exercises every method in the
 full surface as one roundtrip.
+
+## Cross-Store Evidence (G013)
+
+`crates/tdw-session/tests/g013_durable_cross_store.rs` verifies the
+G013 durable persistence set together. It uses one `PgEngine` for
+`PgOutboxStore`, `PgEventBus`, `PgSessionStore`, and `PgSnapshotStore`,
+then writes a locked/synced `JsonlRollout` archive on the filesystem.
+The test is double-gated by `--features g013-cross-store` +
+`TDW_POSTGRES_TEST_URL`; without the env var it compiles and reports a
+skip, preserving offline workspace defaults.

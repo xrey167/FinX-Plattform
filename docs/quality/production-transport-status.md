@@ -90,24 +90,29 @@ backends. Built on top of G010 transports.
 
 | Crate | Trait | Current backend | Production backend | Status |
 |---|---|---|---|---|
-| `tdw-outbox` | `OutboxStore` | `InMemoryOutbox` | Postgres-backed (depends on G010 postgres) | ⏳ pending |
-| `tdw-session` | `SessionStore` | `SqliteSessionStore` (real disk) | Postgres-backed alternative | ⏳ pending (sqlite already real; Postgres is enhancement) |
-| `tdw-bus` | `EventBus` | in-memory | Postgres LISTEN/NOTIFY or Kafka | ⏳ pending |
-| `tdw-snapshot` | `SnapshotStore` | in-memory | Postgres + S3 (depends on G010) | ⏳ pending |
-| `tdw-rollout` | `RolloutStore` | in-memory | Postgres-backed | ⏳ pending |
+| `tdw-outbox` | `OutboxStore` | `InMemoryOutbox` | Postgres-backed (`PgOutboxStore`) | ✅ complete |
+| `tdw-session` | `SessionStore` | `SqliteSessionStore` (real disk) | Postgres-backed alternative (`PgSessionStore`) | ✅ complete |
+| `tdw-bus` | `EventBus` | in-memory | Postgres-backed (`PgEventBus`) | ✅ complete |
+| `tdw-snapshot` | `SnapshotStore` | in-memory | Postgres-backed (`PgSnapshotStore`) | ✅ complete |
+| `tdw-rollout` | `JsonlRollout` | filesystem JSONL | locked + synced filesystem JSONL | ✅ complete |
 
-These all chain on top of G010's `PgEngine` and `S3Engine`. Per-store
-PRs become possible once #13 + #14 are merged.
+The Postgres-backed stores chain on top of G010's `PgEngine`. `JsonlRollout`
+remains filesystem-backed, but G013 now serializes writers with file locking
+and calls `sync_all` after each append. The cross-store smoke at
+`crates/tdw-session/tests/g013_durable_cross_store.rs` verifies that outbox,
+bus, session, snapshot, and rollout persistence can be exercised together.
+
+**G013 is complete.** Remaining production work moves to packaging,
+policy-enforcement binding, and the aggregate production-functional gate.
 
 ## Suggested next-session order
 
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
-2. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
-3. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
-4. **G016 aggregate gate**: final verification across G009–G015.
+1. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
+2. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
+3. **G016 aggregate gate**: final verification across G009–G015.
 
 Realistic total: **8–12 focused sessions** to land G009–G016 end to end.
 
