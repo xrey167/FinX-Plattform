@@ -6,6 +6,7 @@ publish = false
 license = "UNLICENSED"
 
 [dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-event = { path = "../tdw-event" }

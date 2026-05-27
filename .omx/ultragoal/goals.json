@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T21:17:38.815Z",
+  "updatedAt": "2026-05-27T21:47:27.700Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -177,9 +177,9 @@
       "status": "in_progress",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-27T21:17:38.815Z",
+      "updatedAt": "2026-05-27T21:47:27.700Z",
       "startedAt": "2026-05-27T21:17:38.815Z",
-      "evidence": "First G015 slice in progress: tdw-service-api gained secure request-path wrappers that validate OIDC JWT claims at ingress, map endpoint policies to tdw-auth role checks with deny-by-default endpoint selection, execute configured tdw-hooks before request dispatch, enforce tdw-sandbox UDF capabilities through LocalUdfSandbox, and apply tdw-mask rules to outgoing JSON responses. Focused tests cover allowed and denied service endpoint access, bad ingress claims, hook veto, and denied UDF filesystem capability. Remaining G015 work: real hook handler execution for command/HTTP/MCP and broader transport-boundary wiring."
+      "evidence": "G015 in progress. First slice: tdw-service-api gained secure request-path wrappers that validate OIDC JWT claims at ingress, map endpoint policies to tdw-auth role checks with deny-by-default endpoint selection, execute configured tdw-hooks before request dispatch, enforce tdw-sandbox UDF capabilities through LocalUdfSandbox, and apply tdw-mask rules to outgoing JSON responses. Second slice: tdw-hooks gained HookRegistry::execute_handlers with HookExecutionPolicy/HookExecutionOutcome plus SystemHookHandlerBackend for no-shell command execution, bounded authenticated HTTPS POST hooks, and registered MCP client handlers. Focused tests cover allowed and denied service endpoint access, bad ingress claims, hook veto, denied UDF filesystem capability, allowed command execution, registered MCP execution, denial before backend execution, and HTTP veto denial. Remaining G015 work: bind hook handler execution into service transport entrypoints and complete broader transport-boundary wiring."
     },
     {
       "id": "G016-aggregate-production-functional-gate",

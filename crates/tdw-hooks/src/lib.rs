@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Read,
+    process::Command,
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tdw_event::EventEnvelope;
 use tdw_protocol::{ApprovalDecision, PermissionId};
 use thiserror::Error;
@@ -123,6 +128,195 @@ pub struct HookRuntimeOutcome {
     pub additional_contexts: Vec<AdditionalContext>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HookExecutionOutcome {
+    pub runtime: HookRuntimeOutcome,
+    pub action: String,
+    pub permission: PermissionEffect,
+    pub output: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookExecutionPolicy {
+    pub permissions: PermissionRules,
+    pub allow_handler_vetoes: bool,
+}
+
+impl Default for HookExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            permissions: PermissionRules {
+                default_permission: PermissionEffect::Deny,
+                rules: Vec::new(),
+            },
+            allow_handler_vetoes: false,
+        }
+    }
+}
+
+pub trait HookHandlerBackend {
+    fn run_command(
+        &mut self,
+        command: &str,
+        args: &[String],
+        payload: Value,
+    ) -> Result<Value, HookError>;
+
+    fn call_http(&mut self, url: &str, payload: Value) -> Result<Value, HookError>;
+
+    fn call_mcp(&mut self, server: &str, tool: &str, payload: Value) -> Result<Value, HookError>;
+
+    fn load_prompt(&mut self, prompt_path: &str, payload: Value) -> Result<Value, HookError>;
+
+    fn run_agent(
+        &mut self,
+        agent_id: &str,
+        skill_id: &str,
+        payload: Value,
+    ) -> Result<Value, HookError>;
+}
+
+pub type McpHookHandler = fn(Value) -> std::result::Result<Value, String>;
+
+pub struct SystemHookHandlerBackend {
+    mcp_handlers: BTreeMap<(String, String), McpHookHandler>,
+    http_bearer_token: Option<String>,
+    http_timeout: Duration,
+    max_response_bytes: usize,
+}
+
+impl SystemHookHandlerBackend {
+    pub fn new() -> Self {
+        Self {
+            mcp_handlers: BTreeMap::new(),
+            http_bearer_token: None,
+            http_timeout: Duration::from_secs(5),
+            max_response_bytes: 64 * 1024,
+        }
+    }
+
+    pub fn register_mcp_tool(
+        &mut self,
+        server: impl Into<String>,
+        tool: impl Into<String>,
+        handler: McpHookHandler,
+    ) {
+        self.mcp_handlers
+            .insert((server.into(), tool.into()), handler);
+    }
+
+    pub fn with_http_timeout(mut self, timeout: Duration) -> Self {
+        self.http_timeout = timeout;
+        self
+    }
+
+    pub fn with_http_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.http_bearer_token = Some(token.into());
+        self
+    }
+
+    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
+        self
+    }
+}
+
+impl Default for SystemHookHandlerBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HookHandlerBackend for SystemHookHandlerBackend {
+    fn run_command(
+        &mut self,
+        command: &str,
+        args: &[String],
+        payload: Value,
+    ) -> Result<Value, HookError> {
+        let output = Command::new(command)
+            .args(args)
+            .output()
+            .map_err(|error| HookError::HandlerFailed(command.to_string(), error.to_string()))?;
+        Ok(json!({
+            "command": command,
+            "args": args,
+            "success": output.status.success(),
+            "status": output.status.code(),
+            "stdout": capped_utf8(&output.stdout, self.max_response_bytes),
+            "stderr": capped_utf8(&output.stderr, self.max_response_bytes),
+            "payload": payload,
+        }))
+    }
+
+    fn call_http(&mut self, url: &str, payload: Value) -> Result<Value, HookError> {
+        let Some(token) = self.http_bearer_token.as_ref() else {
+            return Err(HookError::HandlerFailed(
+                url.to_string(),
+                "http bearer token is not configured".to_string(),
+            ));
+        };
+        let client = reqwest::blocking::Client::builder()
+            .timeout(self.http_timeout)
+            .build()
+            .map_err(|error| HookError::HandlerFailed(url.to_string(), error.to_string()))?;
+        let response = client
+            .post(url)
+            .bearer_auth(token)
+            .json(&payload)
+            .send()
+            .map_err(|error| HookError::HandlerFailed(url.to_string(), error.to_string()))?;
+        let status = response.status().as_u16();
+        let mut reader = response.take((self.max_response_bytes + 1) as u64);
+        let mut body = Vec::new();
+        reader
+            .read_to_end(&mut body)
+            .map_err(|error| HookError::HandlerFailed(url.to_string(), error.to_string()))?;
+        if body.len() > self.max_response_bytes {
+            return Err(HookError::HandlerFailed(
+                url.to_string(),
+                "response too large".to_string(),
+            ));
+        }
+        let text = String::from_utf8_lossy(&body).to_string();
+        let body = serde_json::from_str(&text).unwrap_or(Value::String(text));
+        Ok(json!({ "status": status, "body": body }))
+    }
+
+    fn call_mcp(&mut self, server: &str, tool: &str, payload: Value) -> Result<Value, HookError> {
+        let Some(handler) = self
+            .mcp_handlers
+            .get(&(server.to_string(), tool.to_string()))
+        else {
+            return Err(HookError::HandlerFailed(
+                format!("{server}.{tool}"),
+                "mcp tool is not registered".to_string(),
+            ));
+        };
+        handler(payload)
+            .map_err(|error| HookError::HandlerFailed(format!("{server}.{tool}"), error))
+    }
+
+    fn load_prompt(&mut self, prompt_path: &str, payload: Value) -> Result<Value, HookError> {
+        let body = std::fs::read_to_string(prompt_path).map_err(|error| {
+            HookError::HandlerFailed(prompt_path.to_string(), error.to_string())
+        })?;
+        Ok(json!({ "prompt_path": prompt_path, "body": body, "payload": payload }))
+    }
+
+    fn run_agent(
+        &mut self,
+        agent_id: &str,
+        skill_id: &str,
+        _payload: Value,
+    ) -> Result<Value, HookError> {
+        Err(HookError::HandlerFailed(
+            format!("{agent_id}.{skill_id}"),
+            "agent handler backend is not configured".to_string(),
+        ))
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum HookError {
     #[error("hook recursion guard blocked {0}")]
@@ -131,6 +325,14 @@ pub enum HookError {
     DepthExceeded(String),
     #[error("invalid hook spec {0}: {1}")]
     InvalidSpec(String, &'static str),
+    #[error("hook permission denied for {0}")]
+    PermissionDenied(String),
+    #[error("hook permission requires approval for {0}")]
+    PermissionRequiresApproval(String),
+    #[error("hook veto denied for {0}")]
+    VetoDenied(String),
+    #[error("hook handler failed {0}: {1}")]
+    HandlerFailed(String, String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -196,6 +398,51 @@ impl HookRegistry {
                 additional_contexts: hook.additional_contexts.clone(),
             });
             self.active.remove(&hook.name);
+        }
+        Ok(outcomes)
+    }
+
+    pub fn execute_handlers(
+        &mut self,
+        envelope: &EventEnvelope<Value>,
+        policy: &HookExecutionPolicy,
+        backend: &mut impl HookHandlerBackend,
+    ) -> Result<Vec<HookExecutionOutcome>, HookError> {
+        let mut outcomes = Vec::new();
+        for runtime in self.execute_runtime(envelope)? {
+            let action = hook_action(&runtime)?;
+            let permission = policy.permissions.evaluate(&action);
+            match permission {
+                PermissionEffect::Allow => {}
+                PermissionEffect::Ask => {
+                    return Err(HookError::PermissionRequiresApproval(action));
+                }
+                PermissionEffect::Deny => {
+                    return Err(HookError::PermissionDenied(action));
+                }
+            }
+            if runtime.should_stop && !policy.allow_handler_vetoes {
+                return Err(HookError::VetoDenied(runtime.name));
+            }
+
+            let payload = hook_handler_payload(&runtime, envelope);
+            let output = match &runtime.handler {
+                HandlerKind::Command { command, args } => {
+                    backend.run_command(command, args, payload)?
+                }
+                HandlerKind::Http { url } => backend.call_http(url, payload)?,
+                HandlerKind::Mcp { server, tool } => backend.call_mcp(server, tool, payload)?,
+                HandlerKind::Prompt { prompt_path } => backend.load_prompt(prompt_path, payload)?,
+                HandlerKind::Agent { agent_id, skill_id } => {
+                    backend.run_agent(agent_id, skill_id, payload)?
+                }
+            };
+            outcomes.push(HookExecutionOutcome {
+                runtime,
+                action,
+                permission,
+                output,
+            });
         }
         Ok(outcomes)
     }
@@ -405,6 +652,55 @@ fn is_context_uri(value: &str) -> bool {
     value.starts_with("tdw://") || value.starts_with("mcp://") || value.starts_with("https://")
 }
 
+fn hook_action(outcome: &HookRuntimeOutcome) -> Result<String, HookError> {
+    let action = match &outcome.handler {
+        HandlerKind::Command { command, .. } => format!("hook.command.{command}"),
+        HandlerKind::Http { url } => {
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|_| HookError::InvalidSpec(outcome.name.clone(), "url"))?;
+            let host = parsed
+                .host_str()
+                .ok_or_else(|| HookError::InvalidSpec(outcome.name.clone(), "url"))?;
+            format!("hook.http.{host}")
+        }
+        HandlerKind::Mcp { server, tool } => format!("hook.mcp.{server}.{tool}"),
+        HandlerKind::Prompt { .. } => format!("hook.prompt.{}", outcome.name),
+        HandlerKind::Agent { agent_id, skill_id } => {
+            format!("hook.agent.{agent_id}.{skill_id}")
+        }
+    };
+    if is_action_name(&action) {
+        Ok(action)
+    } else {
+        Err(HookError::InvalidSpec(
+            outcome.name.clone(),
+            "handler_action",
+        ))
+    }
+}
+
+fn hook_handler_payload(outcome: &HookRuntimeOutcome, envelope: &EventEnvelope<Value>) -> Value {
+    json!({
+        "hook": {
+            "name": outcome.name,
+            "event": outcome.event,
+            "transaction_mode": outcome.transaction_mode,
+            "emitted_event_type": outcome.emitted_event_type,
+            "should_stop": outcome.should_stop,
+        },
+        "envelope": envelope,
+    })
+}
+
+fn capped_utf8(bytes: &[u8], max_bytes: usize) -> String {
+    let keep = bytes.len().min(max_bytes);
+    let mut text = String::from_utf8_lossy(&bytes[..keep]).to_string();
+    if bytes.len() > max_bytes {
+        text.push_str("...");
+    }
+    text
+}
+
 #[macro_export]
 macro_rules! event_hook {
     ($name:expr, $order:expr, $mode:expr) => {
@@ -416,6 +712,20 @@ macro_rules! event_hook {
 mod tests {
     use super::*;
     use tdw_event::sample_event;
+
+    fn policy_allow(pattern: &str) -> HookExecutionPolicy {
+        let mut policy = HookExecutionPolicy::default();
+        policy.permissions.push(PermissionRule::new(
+            PermissionEffect::Allow,
+            pattern,
+            pattern,
+        ));
+        policy
+    }
+
+    fn mcp_echo(payload: Value) -> std::result::Result<Value, String> {
+        Ok(json!({ "hook": payload["hook"]["name"].clone() }))
+    }
 
     #[test]
     fn hooks_execute_in_deterministic_order_and_skip_disabled() {
@@ -475,6 +785,110 @@ mod tests {
         assert_eq!(
             outcomes[0].additional_contexts[0].uri,
             "tdw://context/policy"
+        );
+    }
+
+    #[test]
+    fn handler_execution_runs_allowed_command_without_shell() {
+        let mut registry = HookRegistry::default();
+        registry.register(
+            HookSpec::new("rustc_version", 1, TransactionMode::InTransaction).with_handler(
+                HandlerKind::Command {
+                    command: "rustc".to_string(),
+                    args: vec!["--version".to_string()],
+                },
+            ),
+        );
+        let mut backend = SystemHookHandlerBackend::new();
+
+        let outcomes = registry
+            .execute_handlers(
+                &sample_event("service"),
+                &policy_allow("hook.command.rustc"),
+                &mut backend,
+            )
+            .unwrap_or_else(|error| panic!("allowed command hook should execute: {error}"));
+
+        assert_eq!(outcomes[0].action, "hook.command.rustc");
+        assert_eq!(outcomes[0].permission, PermissionEffect::Allow);
+        assert!(outcomes[0].output["success"].as_bool().unwrap_or(false));
+        assert!(
+            outcomes[0].output["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rustc")
+        );
+    }
+
+    #[test]
+    fn handler_execution_calls_registered_mcp_client() {
+        let mut registry = HookRegistry::default();
+        registry.register(
+            HookSpec::new("mcp_echo", 1, TransactionMode::InTransaction).with_handler(
+                HandlerKind::Mcp {
+                    server: "local".to_string(),
+                    tool: "echo".to_string(),
+                },
+            ),
+        );
+        let mut backend = SystemHookHandlerBackend::new();
+        backend.register_mcp_tool("local", "echo", mcp_echo);
+
+        let outcomes = registry
+            .execute_handlers(
+                &sample_event("service"),
+                &policy_allow("hook.mcp.local.echo"),
+                &mut backend,
+            )
+            .unwrap_or_else(|error| panic!("registered mcp hook should execute: {error}"));
+
+        assert_eq!(outcomes[0].output["hook"], "mcp_echo");
+    }
+
+    #[test]
+    fn handler_execution_denies_before_backend_call() {
+        let mut registry = HookRegistry::default();
+        registry.register(
+            HookSpec::new("denied", 1, TransactionMode::InTransaction).with_handler(
+                HandlerKind::Command {
+                    command: "rustc".to_string(),
+                    args: vec!["--version".to_string()],
+                },
+            ),
+        );
+        let mut backend = SystemHookHandlerBackend::new();
+
+        assert_eq!(
+            registry.execute_handlers(
+                &sample_event("service"),
+                &HookExecutionPolicy::default(),
+                &mut backend,
+            ),
+            Err(HookError::PermissionDenied(
+                "hook.command.rustc".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn http_veto_requires_explicit_policy() {
+        let mut registry = HookRegistry::default();
+        registry.register(
+            HookSpec::new("remote_guard", 1, TransactionMode::InTransaction)
+                .with_handler(HandlerKind::Http {
+                    url: "https://example.com/tdw-hook".to_string(),
+                })
+                .should_stop(),
+        );
+        let mut backend = SystemHookHandlerBackend::new();
+
+        assert_eq!(
+            registry.execute_handlers(
+                &sample_event("service"),
+                &policy_allow("hook.http.example.com"),
+                &mut backend,
+            ),
+            Err(HookError::VetoDenied("remote_guard".to_string()))
         );
     }
 
