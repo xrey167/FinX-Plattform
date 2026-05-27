@@ -44,3 +44,9 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 ## Verdict
 
 Ready with follow-ups. No G005 blocker remains inside tdw-auth; follow-ups are service-layer row and tenant policy enforcement.
+
+## Policy Binding Evidence (G015)
+
+`tdw-service-api` now uses `authorize_with_decision` in its secure request-path
+wrapper. Missing roles deny before endpoint execution, and deny reasons are
+included in the service error path for auditability.

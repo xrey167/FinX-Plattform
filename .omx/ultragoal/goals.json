@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T20:39:56.397Z",
+  "updatedAt": "2026-05-27T21:17:38.815Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -174,10 +174,12 @@
       "id": "G015-policy-enforcement-binding",
       "title": "Policy Enforcement Binding",
       "objective": "Wire the hook, auth, sandbox, and mask validation contracts into actual request-path enforcement. tdw-hooks runtime gains real handler execution (command runner with capability boundaries, HTTP caller, MCP client) instead of declarative-only. tdw-auth role checks gate every tdw-service-api endpoint with deny-by-default. tdw-auth-oidc JWT validation runs on incoming requests at the transport boundary. tdw-sandbox capabilities are enforced when tdw-udf executes user code (deny network/filesystem unless explicitly granted). tdw-mask masking rules apply to outgoing responses end-to-end. tdw-define declarative events are reachable from real end-to-end flows. Add request-path integration tests proving denied actions actually fail (and accepted actions actually succeed). Worksheets updated to record real enforcement evidence. Verification: focused cargo test plus the workspace gate set, with a dedicated permission-deny integration suite.",
-      "status": "pending",
+      "status": "in_progress",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T21:17:38.815Z",
+      "startedAt": "2026-05-27T21:17:38.815Z",
+      "evidence": "First G015 slice in progress: tdw-service-api gained secure request-path wrappers that validate OIDC JWT claims at ingress, map endpoint policies to tdw-auth role checks with deny-by-default endpoint selection, execute configured tdw-hooks before request dispatch, enforce tdw-sandbox UDF capabilities through LocalUdfSandbox, and apply tdw-mask rules to outgoing JSON responses. Focused tests cover allowed and denied service endpoint access, bad ingress claims, hook veto, and denied UDF filesystem capability. Remaining G015 work: real hook handler execution for command/HTTP/MCP and broader transport-boundary wiring."
     },
     {
       "id": "G016-aggregate-production-functional-gate",

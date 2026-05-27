@@ -46,3 +46,9 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 ## Verdict
 
 Ready with follow-ups. No G005 blocker remains inside tdw-mask; follow-ups are service-level policy binding.
+
+## Policy Binding Evidence (G015)
+
+`tdw-service-api` now applies configured `MaskRule` values to outgoing secure
+endpoint and secure UDF JSON responses. Focused tests prove the provider field
+is redacted on an otherwise successful response.

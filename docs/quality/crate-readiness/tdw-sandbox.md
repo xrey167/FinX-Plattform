@@ -44,3 +44,10 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 ## Verdict
 
 Ready with follow-ups. No G005 blocker remains inside tdw-sandbox; follow-ups are hardened runtime isolation.
+
+## Policy Binding Evidence (G015)
+
+`tdw-service-api::secure_udf_run` now dispatches UDF work through
+`SandboxRuntime` only after ingress JWT validation and role authorization.
+Focused tests prove a network-capability UDF request is denied through the
+secure service path.
