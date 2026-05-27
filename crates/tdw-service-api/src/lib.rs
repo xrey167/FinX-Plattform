@@ -17,8 +17,8 @@ use tdw_agent::{
 use tdw_agent_store::AgentStore;
 use tdw_app_client::{AppClient, ClientInfo};
 use tdw_app_server::{DaemonEndpoint, DaemonTransport, channel, validate_endpoint};
-use tdw_auth::{AuthPolicy, Principal, authorize};
-use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims};
+use tdw_auth::{AuthPolicy, AuthorizationDecision, Principal, authorize, authorize_with_decision};
+use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims, validate_claims_strict};
 use tdw_bus::EventBus;
 use tdw_cdc::CdcStream;
 use tdw_config::{ConfigLayer, ConfigLayerKind, default_layer_order, merge_layers};
@@ -87,6 +87,69 @@ pub struct ResearchIndexEvidence {
     pub vector_hits: Vec<ScoredPoint>,
     pub lexical_hits: Vec<ScoredDoc>,
     pub blob_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ServiceEndpoint {
+    EquityHistorical,
+    UdfRun,
+}
+
+impl ServiceEndpoint {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EquityHistorical => "equity_historical",
+            Self::UdfRun => "udf.run",
+        }
+    }
+
+    fn auth_policy(self) -> AuthPolicy {
+        match self {
+            Self::EquityHistorical => AuthPolicy {
+                table: "service.equity_historical".to_string(),
+                required_role: "analyst".to_string(),
+                row_filter: None,
+            },
+            Self::UdfRun => AuthPolicy {
+                table: "service.udf_run".to_string(),
+                required_role: "udf_runner".to_string(),
+                row_filter: None,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct IngressAuthContext {
+    pub claims: JwtClaims,
+    pub jwks: Vec<JwksKey>,
+    pub issuer: String,
+    pub audience: String,
+}
+
+impl IngressAuthContext {
+    fn principal(&self) -> Principal {
+        Principal {
+            subject: self.claims.sub.clone(),
+            roles: self.claims.roles.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PolicyEnforcementConfig {
+    pub auth: IngressAuthContext,
+    pub hooks: Vec<HookSpec>,
+    pub mask_rules: Vec<MaskRule>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PolicyEnforcementEvidence {
+    pub endpoint: String,
+    pub principal: String,
+    pub roles: Vec<String>,
+    pub hooks: Vec<String>,
+    pub masked_fields: Vec<String>,
 }
 
 pub fn default_registry() -> Result<ProviderRegistry> {
@@ -267,6 +330,142 @@ pub fn endpoint_response(provider: &str, symbol: &str) -> Result<Value> {
         "endpoint": object.endpoint,
         "rows": object.rows,
     }))
+}
+
+pub fn secure_endpoint_response(
+    config: &PolicyEnforcementConfig,
+    provider: &str,
+    symbol: &str,
+) -> Result<Value> {
+    let evidence = enforce_request_path(config, ServiceEndpoint::EquityHistorical)?;
+    let response = endpoint_response(provider, symbol)?;
+    Ok(json!({
+        "policy": evidence,
+        "response": mask_json_response(response, &config.mask_rules),
+    }))
+}
+
+pub fn secure_endpoint_by_name(
+    config: &PolicyEnforcementConfig,
+    endpoint: &str,
+    provider: &str,
+    symbol: &str,
+) -> Result<Value> {
+    match endpoint {
+        "equity_historical" => secure_endpoint_response(config, provider, symbol),
+        other => Err(Error::Provider(format!(
+            "endpoint denied by default: {other}"
+        ))),
+    }
+}
+
+pub fn secure_udf_run(config: &PolicyEnforcementConfig, request: UdfRequest) -> Result<Value> {
+    let evidence = enforce_request_path(config, ServiceEndpoint::UdfRun)?;
+    let sandbox = LocalUdfSandbox;
+    let response = sandbox
+        .run(request)
+        .map_err(|error| Error::Provider(format!("sandbox denied request: {error}")))?;
+    Ok(json!({
+        "policy": evidence,
+        "response": mask_json_response(json!({
+            "runtime": response.runtime,
+            "output": response.output,
+        }), &config.mask_rules),
+    }))
+}
+
+fn enforce_request_path(
+    config: &PolicyEnforcementConfig,
+    endpoint: ServiceEndpoint,
+) -> Result<PolicyEnforcementEvidence> {
+    validate_claims_strict(
+        &config.auth.claims,
+        &config.auth.jwks,
+        &config.auth.issuer,
+        &config.auth.audience,
+        &tdw_auth_oidc::DEFAULT_ALLOWED_ALGORITHMS,
+    )
+    .map_err(|error| Error::Provider(format!("ingress jwt rejected: {error:?}")))?;
+
+    let principal = config.auth.principal();
+    let policy = endpoint.auth_policy();
+    match authorize_with_decision(&principal, &policy) {
+        AuthorizationDecision::Allow => {}
+        AuthorizationDecision::Deny(reason) => {
+            return Err(Error::Provider(format!(
+                "authorization denied for {}: {reason:?}",
+                endpoint.as_str()
+            )));
+        }
+    }
+
+    let context = ActorContext::service("tdw-service-api");
+    let task = OmcSpawn::capture(&context, endpoint.as_str());
+    let envelope = EventEnvelope::new(
+        "policy.pre_request",
+        task.actor,
+        task.origin,
+        task.trace,
+        "2026-05-27T00:00:00Z",
+        json!({ "endpoint": endpoint.as_str(), "principal": principal.subject }),
+    );
+    let mut registry = HookRegistry::default();
+    for hook in &config.hooks {
+        registry.register(hook.clone());
+    }
+    let hooks = registry
+        .execute_runtime(&envelope)
+        .map_err(|error| Error::Provider(format!("hook enforcement failed: {error}")))?;
+    if let Some(hook) = hooks.iter().find(|hook| hook.should_stop) {
+        return Err(Error::Provider(format!(
+            "hook vetoed request: {}",
+            hook.name
+        )));
+    }
+
+    Ok(PolicyEnforcementEvidence {
+        endpoint: endpoint.as_str().to_string(),
+        principal: principal.subject,
+        roles: principal.roles,
+        hooks: hooks.into_iter().map(|hook| hook.name).collect(),
+        masked_fields: config
+            .mask_rules
+            .iter()
+            .map(|rule| rule.field.clone())
+            .collect(),
+    })
+}
+
+fn mask_json_response(value: Value, rules: &[MaskRule]) -> Value {
+    match value {
+        Value::Object(mut object) => {
+            let string_fields = object
+                .iter()
+                .filter_map(|(field, value)| {
+                    value
+                        .as_str()
+                        .map(|string| (field.clone(), string.to_string()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let masked = apply_masks(&string_fields, rules);
+            for (field, masked_value) in masked {
+                if object.contains_key(&field) {
+                    object.insert(field, Value::String(masked_value));
+                }
+            }
+            for value in object.values_mut() {
+                *value = mask_json_response(value.take(), rules);
+            }
+            Value::Object(object)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| mask_json_response(value, rules))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 pub fn agent_schema_names() -> Vec<String> {
@@ -866,6 +1065,43 @@ fn poll_stream_next<T: tdw_core::DataModel>(
 mod tests {
     use super::*;
 
+    fn policy_config(
+        roles: Vec<&str>,
+        hooks: Vec<HookSpec>,
+        mask_rules: Vec<MaskRule>,
+    ) -> PolicyEnforcementConfig {
+        PolicyEnforcementConfig {
+            auth: IngressAuthContext {
+                claims: JwtClaims {
+                    sub: "alice".to_string(),
+                    iss: "https://issuer".to_string(),
+                    aud: "tdw".to_string(),
+                    kid: "k1".to_string(),
+                    roles: roles.into_iter().map(str::to_string).collect(),
+                },
+                jwks: vec![JwksKey {
+                    kid: "k1".to_string(),
+                    alg: "RS256".to_string(),
+                }],
+                issuer: "https://issuer".to_string(),
+                audience: "tdw".to_string(),
+            },
+            hooks,
+            mask_rules,
+        }
+    }
+
+    fn uppercase_udf_request(allow_network: bool) -> UdfRequest {
+        UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            input: "aapl".to_string(),
+            allow_network,
+            allow_filesystem: false,
+        }
+    }
+
     #[test]
     fn lists_fetchers_and_streamer() {
         let providers =
@@ -889,6 +1125,87 @@ mod tests {
 
         assert_eq!(object.provider, "fileset");
         assert_eq!(object.rows[0].symbol, "AAPL");
+    }
+
+    #[test]
+    fn secure_endpoint_validates_auth_hooks_and_masks_response() {
+        let config = policy_config(
+            vec!["analyst"],
+            vec![HookSpec::new(
+                "audit_request",
+                1,
+                TransactionMode::InTransaction,
+            )],
+            vec![MaskRule {
+                field: "provider".to_string(),
+                mode: MaskMode::Redact,
+            }],
+        );
+
+        let response = secure_endpoint_response(&config, "fileset", "aapl")
+            .unwrap_or_else(|error| panic!("secure endpoint should succeed: {error}"));
+
+        assert_eq!(response["policy"]["endpoint"], "equity_historical");
+        assert_eq!(response["policy"]["principal"], "alice");
+        assert_eq!(response["policy"]["hooks"][0], "audit_request");
+        assert_eq!(response["response"]["provider"], "***");
+        assert_eq!(response["response"]["rows"][0]["symbol"], "AAPL");
+    }
+
+    #[test]
+    fn secure_endpoint_is_deny_by_default_and_role_gated() {
+        let guest = policy_config(Vec::new(), Vec::new(), Vec::new());
+
+        let denied = secure_endpoint_response(&guest, "fileset", "aapl")
+            .expect_err("missing analyst role must deny");
+        assert!(denied.to_string().contains("authorization denied"));
+
+        let unknown = secure_endpoint_by_name(
+            &policy_config(vec!["analyst"], Vec::new(), Vec::new()),
+            "unregistered",
+            "fileset",
+            "aapl",
+        )
+        .expect_err("unknown endpoint must deny");
+        assert!(unknown.to_string().contains("denied by default"));
+    }
+
+    #[test]
+    fn secure_endpoint_rejects_bad_ingress_claims_and_hook_veto() {
+        let mut bad_claims = policy_config(vec!["analyst"], Vec::new(), Vec::new());
+        bad_claims.auth.claims.aud = "other".to_string();
+        let rejected = secure_endpoint_response(&bad_claims, "fileset", "aapl")
+            .expect_err("bad audience must deny");
+        assert!(rejected.to_string().contains("ingress jwt rejected"));
+
+        let veto = policy_config(
+            vec!["analyst"],
+            vec![HookSpec::new("deny_request", 1, TransactionMode::InTransaction).should_stop()],
+            Vec::new(),
+        );
+        let stopped = secure_endpoint_response(&veto, "fileset", "aapl")
+            .expect_err("stopping hook must veto");
+        assert!(stopped.to_string().contains("hook vetoed request"));
+    }
+
+    #[test]
+    fn secure_udf_path_enforces_role_and_sandbox_capabilities() {
+        let allowed = policy_config(vec!["udf_runner"], Vec::new(), Vec::new());
+        let response = secure_udf_run(&allowed, uppercase_udf_request(false))
+            .unwrap_or_else(|error| panic!("allowed udf should run: {error}"));
+        assert_eq!(response["policy"]["endpoint"], "udf.run");
+        assert_eq!(response["response"]["output"], "AAPL");
+
+        let unauthorized = secure_udf_run(
+            &policy_config(vec!["analyst"], Vec::new(), Vec::new()),
+            uppercase_udf_request(false),
+        )
+        .expect_err("missing udf_runner role must deny");
+        assert!(unauthorized.to_string().contains("authorization denied"));
+
+        let denied = secure_udf_run(&allowed, uppercase_udf_request(true))
+            .expect_err("network capability must deny");
+        assert!(denied.to_string().contains("sandbox denied capability"));
     }
 
     #[test]

@@ -53,3 +53,23 @@ Participates in the [end-to-end functional smoke](../end-to-end-smoke.md). The s
 - `tdw-service` and `tdw-cli` binaries (programmatic harness output)
 
 Verified with `cargo test -p tdw-test-utils --test end_to_end_smoke` — green.
+
+## Policy Binding Evidence (G015)
+
+First G015 request-path binding landed in `tdw-service-api`:
+
+- `secure_endpoint_response` validates incoming OIDC claims with
+  `tdw-auth-oidc`, authorizes the endpoint with `tdw-auth`, executes registered
+  hook outcomes and honors hook vetoes, then applies `tdw-mask` rules to the
+  outgoing JSON response.
+- `secure_endpoint_by_name` is deny-by-default for unknown service endpoint
+  names.
+- `secure_udf_run` validates the same ingress/auth boundary before dispatching
+  through `tdw-sandbox::LocalUdfSandbox`, preserving network/filesystem
+  capability denial from `tdw-udf`.
+- Focused tests cover accepted and denied endpoint calls, invalid ingress
+  claims, hook veto, unknown endpoint denial, response masking, accepted UDF
+  execution, and denied network-capability UDF execution.
+
+Verification: `cargo +stable test -p tdw-service-api -- --nocapture` passed
+16/16 tests.

@@ -44,3 +44,10 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 ## Verdict
 
 Ready with follow-ups. No G005 blocker remains inside tdw-hooks; follow-ups are executor integration and approval persistence.
+
+## Policy Binding Evidence (G015)
+
+`tdw-service-api` now executes registered hook outcomes on the secure request
+path and treats `should_stop` as a hard request veto. The hook crate remains
+responsible for validated hook metadata; real command/HTTP/MCP handler
+execution remains the next G015 slice.

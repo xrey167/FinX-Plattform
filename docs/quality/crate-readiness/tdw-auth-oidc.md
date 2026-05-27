@@ -44,3 +44,9 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 ## Verdict
 
 Ready with follow-ups. No G005 blocker remains inside tdw-auth-oidc; follow-ups are full JWT cryptographic verification and JWKS transport.
+
+## Policy Binding Evidence (G015)
+
+`tdw-service-api` now calls `validate_claims_strict` at the secure ingress
+boundary before authorizing or executing an endpoint. The focused G015 tests
+prove an audience mismatch fails before provider or UDF work is dispatched.
