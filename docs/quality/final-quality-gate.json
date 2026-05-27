@@ -1,24 +1,62 @@
 {
-  "version": 1,
-  "ultragoal": "G001-G008 crate-readiness hardening",
+  "version": 2,
+  "ultragoal": "G009-G016 production-functional gate",
   "recommendation": "APPROVE",
   "architectStatus": "CLEAR",
+  "target": {
+    "mainCommit": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
+    "releaseTag": "v0.1.1",
+    "releaseUrl": "https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.1",
+    "releaseWorkflowRun": 26543606204,
+    "releaseAssets": 24
+  },
+  "bootstrapBaseline": {
+    "scope": "G001-G008 crate-readiness hardening",
+    "recommendation": "APPROVE",
+    "architectStatus": "CLEAR",
+    "evidence": "docs/quality/release-readiness-summary.md"
+  },
   "aiSlopCleaner": {
     "status": "passed",
-    "evidence": "docs/quality/ai-slop-cleanup-report.md"
+    "evidence": "docs/quality/ai-slop-cleanup-report.md",
+    "scope": "G016 final evidence files and release workflow fix"
   },
   "verification": {
     "status": "passed",
-    "commands": [
-      "cargo test -p tdw-mask",
-      "cargo fmt --all -- --check",
-      "cargo check --workspace",
-      "cargo clippy --workspace --all-targets -- -D warnings",
-      "cargo test --workspace",
-      "cargo run -p xtask -- clean-room-audit",
-      "git diff --check"
+    "localCommands": [
+      "cargo +stable fmt --all -- --check",
+      "cargo +stable check --workspace",
+      "cargo +stable clippy --workspace --all-targets -- -D warnings",
+      "cargo +stable test --workspace",
+      "cargo +stable run -p xtask -- clean-room-audit",
+      "git diff --check",
+      ".omx JSON and JSONL parse"
     ],
-    "evidence": "All commands passed after the ai-slop-cleaner pass."
+    "github": [
+      {
+        "workflow": "CI",
+        "run": 26543584954,
+        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
+        "status": "PASS"
+      },
+      {
+        "workflow": "CodeQL",
+        "run": 26543584951,
+        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
+        "status": "PASS"
+      },
+      {
+        "workflow": "Release",
+        "run": 26543606204,
+        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
+        "tag": "v0.1.1",
+        "status": "PASS"
+      }
+    ],
+    "notes": [
+      "Local Docker is unavailable on this workstation, so compose/service-worker smoke evidence is taken from GitHub CI.",
+      "The v0.1.0 release workflow failure was resolved by PR #45 and superseded by the successful v0.1.1 release."
+    ]
   },
   "codeReview": {
     "recommendation": "APPROVE",
@@ -27,53 +65,63 @@
   },
   "gates": [
     {
-      "id": "crate-readiness-artifacts",
+      "id": "g009-end-to-end-smoke",
       "status": "PASS",
-      "evidence": "Every crates/* package plus xtask has docs/quality/crate-readiness/<crate>.md and a matrix verdict."
+      "evidence": "docs/quality/end-to-end-smoke.md and docs/quality/end-to-end-smoke-transcript.md"
     },
     {
-      "id": "ai-slop-cleanup",
+      "id": "g010-production-storage-transports",
       "status": "PASS",
-      "evidence": "tdw-mask fail-open compatibility wrapper repaired; no remaining masking fallback blocker found in changed files."
+      "evidence": "Real Postgres, S3, ClickHouse, Qdrant, and Meilisearch adapters are feature/env gated and covered by CI-backed integration jobs."
     },
     {
-      "id": "fmt",
+      "id": "g011-production-provider-transports",
       "status": "PASS",
-      "evidence": "cargo fmt --all -- --check"
+      "evidence": "Provider HTTP transports use cassette tests plus opt-in live tests and passed CI before merge."
     },
     {
-      "id": "typecheck",
+      "id": "g012-production-llm-and-embedding-transports",
       "status": "PASS",
-      "evidence": "cargo check --workspace"
+      "evidence": "LLM batch/streaming and embedding HTTP transports are feature/env gated and covered by focused tests."
     },
     {
-      "id": "clippy",
+      "id": "g013-durable-persistence",
       "status": "PASS",
-      "evidence": "cargo clippy --workspace --all-targets -- -D warnings"
+      "evidence": "Durable Postgres and locked filesystem persistence paths landed with gated cross-store coverage."
     },
     {
-      "id": "workspace-tests",
+      "id": "g014-release-packaging",
       "status": "PASS",
-      "evidence": "cargo test --workspace"
+      "evidence": "Dockerfiles, compose profiles, GHCR image build/scan/push, release workflow, ADR, and release policy landed."
     },
     {
-      "id": "clean-room-audit",
+      "id": "g015-policy-enforcement-binding",
       "status": "PASS",
-      "evidence": "cargo run -p xtask -- clean-room-audit"
+      "evidence": "Secure request paths enforce OIDC, roles, hooks, sandbox capabilities, and masks; focused and workspace tests passed."
     },
     {
-      "id": "diff-check",
+      "id": "release-artifacts",
       "status": "PASS",
-      "evidence": "git diff --check"
+      "evidence": "GitHub release v0.1.1 published 24 assets from release workflow run 26543606204."
+    },
+    {
+      "id": "main-ci-codeql",
+      "status": "PASS",
+      "evidence": "Main CI run 26543584954 and CodeQL run 26543584951 passed for af6f5e4."
+    },
+    {
+      "id": "final-local-gates",
+      "status": "PASS",
+      "evidence": "fmt, check, clippy, workspace tests, clean-room audit, diff check, and .omx parse passed in the G016 final evidence branch."
     },
     {
       "id": "code-review",
       "status": "PASS",
-      "evidence": "final-code-review.json recommendation APPROVE and architectural status CLEAR"
+      "evidence": "final-code-review.json recommendation APPROVE and architectural status CLEAR."
     }
   ],
-  "notes": [
-    "Final quality gate is scoped to the .omx/ultragoal G001-G008 aggregate objective.",
-    "The .claude/ directory is pre-existing/untracked and is not part of this gate evidence."
+  "annotations": [
+    "GitHub Actions reports Node.js 20 deprecation annotations for artifact actions; no gate failure.",
+    "GitHub Actions reports windows-latest redirection notices; no gate failure."
   ]
 }

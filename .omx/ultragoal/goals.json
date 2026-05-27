@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T22:18:47.114Z",
+  "updatedAt": "2026-05-27T23:03:02.501Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -186,14 +186,15 @@
       "id": "G016-aggregate-production-functional-gate",
       "title": "Aggregate Production-Functional Gate",
       "objective": "Final verification gate for the production functionality push. Confirm every G009-G015 story has its evidence captured; every readiness worksheet for affected crates reflects 'production' rather than 'bootstrap contract'; docker-compose end-to-end run completes cleanly using the G014 stack; CI builds and pushes images on main; release artifacts exist for at least one vN.M.P tag; the policy-enforcement integration tests from G015 are part of the workspace test suite. Update docs/quality/release-readiness-summary.md to mark the production-functional push as APPROVE/CLEAR (the existing G008 summary becomes the bootstrap baseline section). Run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo check --workspace, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check, ai-slop-cleaner on changed files, and a final code-review with recommendation APPROVE and architectStatus CLEAR before completing the Codex goal.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-27T22:18:47.114Z",
+      "updatedAt": "2026-05-27T23:03:02.501Z",
       "startedAt": "2026-05-27T22:18:47.114Z",
-      "evidence": "G016 opened after G015 completion. Next work is the aggregate production-functional gate across G009-G015 evidence, final release-readiness summary, and final verification/code-review pass."
+      "completedAt": "2026-05-27T23:03:02.501Z",
+      "evidence": "G016 complete: aggregate production-functional evidence for G009-G015 is captured in docs/quality/release-readiness-summary.md, final-quality-gate.json, final-code-review.json, and ai-slop-cleanup-report.md. Main CI run 26543584954 and CodeQL run 26543584951 passed on af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe. Release workflow run 26543606204 passed for v0.1.1 and published 24 release assets at https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.1. The earlier v0.1.0 publish failure was resolved by PR #45 without rewriting the failed tag. Local verification passed: cargo +stable fmt --all -- --check, cargo +stable check --workspace, cargo +stable clippy --workspace --all-targets -- -D warnings, cargo +stable test --workspace, cargo +stable run -p xtask -- clean-room-audit, git diff --check, and .omx JSON/JSONL parse. Local Docker is unavailable, so dockerized compose evidence is from GitHub CI."
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G016-aggregate-production-functional-gate"
+  "activeGoalId": null
 }

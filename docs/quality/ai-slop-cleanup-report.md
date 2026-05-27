@@ -1,42 +1,46 @@
 # AI Slop Cleanup Report
 
-Scope: Changed files in the G001-G008 crate-readiness ultragoal, including crate hardening edits, workspace manifests, `.omx/ultragoal` ledger artifacts, and readiness documentation. Generated build output is excluded.
+Scope: G016 final evidence files and the release workflow publish fix: `.github/workflows/release.yml`, `docs/quality/release-readiness-summary.md`, `docs/quality/final-quality-gate.json`, `docs/quality/final-code-review.json`, `docs/quality/ai-slop-cleanup-report.md`, `.omx/ultragoal/goals.json`, and `.omx/ultragoal/ledger.jsonl`.
 
-Behavior Lock: Before cleanup, the G007 focused command passed and the full workspace gates passed: `cargo fmt --all -- --check`, `cargo check --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo run -p xtask -- clean-room-audit`, and `git diff --check`.
+Behavior Lock: PR #45 checks passed before merge, main CI and CodeQL passed on `af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe`, and release workflow run `26543606204` published `v0.1.1` successfully with 24 assets. The final branch verification set is recorded in `docs/quality/final-quality-gate.json`.
 
-Cleanup Plan: Bound the pass to changed files; search for fallback-like terms, placeholders, bypasses, swallowed errors, silent defaults, TODO/debug leftovers, and unused dependency drift; repair masking fallbacks before broader cleanup; rerun focused and full verification.
+Cleanup Plan: Keep the pass bounded to changed evidence/workflow files; classify fallback-like or workaround language; preserve release-failure evidence instead of hiding it; avoid refactoring runtime code during the final evidence gate; rerun JSON, diff, and workspace gates.
 
 Fallback Findings:
-- `crates/tdw-mask/src/lib.rs`: `apply_masks` silently returned the original unmasked row when invalid mask rules were provided. Classification: masking fallback slop. Resolution: compatibility wrapper now fails closed by redacting all values, while `try_apply_masks` still returns `MaskError::InvalidFieldName`; regression test added.
-- `crates/tdw-entity-resolver/src/lib.rs`, `crates/tdw-spatial/src/lib.rs`, `crates/tdw-tui/src/lib.rs`, and `crates/tdw-knowledge/src/lib.rs`: optional/default wrappers or parser display defaults remain next to checked APIs or optional UI fields. Classification: grounded compatibility/UI/parser behavior, not masking runtime evidence.
-- Remaining `expect`, `unwrap_or_else`, and `panic!` scan hits are test assertions, schema serialization assertions, or deterministic sample evidence already classified in the crate worksheets.
+- `.github/workflows/release.yml`: the failed publish path was not a fallback, but it relied on implicit repository inference from a Git checkout that did not exist in the publish job. Classification: boundary assumption, not masking fallback slop. Resolution: set `GH_REPO` explicitly from `github.repository`.
+- `docs/quality/*` and `.omx/ultragoal/*`: references to the failed `v0.1.0` tag are historical evidence, not a fallback path. Classification: grounded release evidence. Resolution: record the failure and the superseding `v0.1.1` pass.
 
 UI/Design Findings: N/A; no frontend visual files were changed.
 
 Passes Completed:
-- Fallback-like code resolution gate: repaired the `tdw-mask` fail-open compatibility wrapper.
-1. Pass 1: Dead code deletion: no dead code found in the scoped changed files.
-2. Pass 2: Duplicate removal: no duplicate implementation path found that should be collapsed in the final gate.
-3. Pass 3: Naming/error handling cleanup: preserved checked error APIs and documented the compatibility behavior.
-4. Pass 4: Test reinforcement: added `tdw-mask` regression coverage for fail-closed behavior.
+- Fallback-like code resolution gate: no masking fallback slop found in the scoped changed files.
+1. Pass 1: Dead code deletion: no dead code in scoped docs/workflow evidence.
+2. Pass 2: Duplicate removal: no duplicate runtime path introduced; release evidence intentionally repeats tag/run IDs across summary and machine-readable gate files.
+3. Pass 3: Naming/error handling cleanup: release workflow now uses explicit `GH_REPO` instead of relying on implicit CLI repository discovery.
+4. Pass 4: Test reinforcement: no runtime tests were needed for docs-only final evidence; release behavior is locked by the successful `v0.1.1` workflow run.
 
 Quality Gates:
-- Regression tests: PASS via `cargo test -p tdw-mask`
-- Lint: PASS via `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`
-- Typecheck: PASS via `cargo check --workspace`
-- Tests: PASS via `cargo test --workspace`
-- Static/security scan: PASS via `cargo run -p xtask -- clean-room-audit`
+- Regression tests: PASS via `cargo +stable test --workspace`
+- Lint: PASS via `cargo +stable fmt --all -- --check` and `cargo +stable clippy --workspace --all-targets -- -D warnings`
+- Typecheck: PASS via `cargo +stable check --workspace`
+- Tests: PASS via `cargo +stable test --workspace`
+- Static/security scan: PASS via `cargo +stable run -p xtask -- clean-room-audit`
 - Diff hygiene: PASS via `git diff --check`
+- Evidence parse: PASS via `.omx` JSON and JSONL parse
 
 Changed Files:
-- `crates/tdw-mask/src/lib.rs` - fail-closed compatibility wrapper plus regression test.
-- `docs/quality/crate-readiness/tdw-mask.md`, `docs/quality/crate-readiness/xtask.md`, `docs/quality/crate-readiness/matrix.md`, and `docs/quality/crate-readiness/dependency-topology.md` - final readiness evidence updates.
-- `docs/quality/ai-slop-cleanup-report.md`, `docs/quality/final-code-review.json`, `docs/quality/final-quality-gate.json`, and `docs/quality/release-readiness-summary.md` - final gate evidence.
+- `.github/workflows/release.yml` - explicit `GH_REPO` for artifact-only release publishing.
+- `docs/quality/release-readiness-summary.md` - production-functional APPROVE/CLEAR summary.
+- `docs/quality/final-quality-gate.json` - machine-readable G016 quality gate.
+- `docs/quality/final-code-review.json` - final G016 code-review decision.
+- `docs/quality/ai-slop-cleanup-report.md` - scoped cleanup report for the final gate.
+- `.omx/ultragoal/goals.json` and `.omx/ultragoal/ledger.jsonl` - G016 completion evidence.
 
 Fallback Review:
-- Findings: one masking fallback found and repaired; grounded compatibility/UI/parser defaults retained.
-- Classification: masking fallback slop repaired; grounded defaults retained with checked alternatives or optional-display semantics.
+- Findings: no masking fallback slop in scoped final files.
+- Classification: one release-workflow boundary assumption repaired; release-failure notes retained as grounded evidence.
 - Escalation Status: none needed.
 
 Remaining Risks:
-- None for the scoped cleanup pass.
+- GitHub artifact actions should be checked again before Node.js 20 runner support is removed.
+- Local docker-compose smoke should be repeated when Docker is available locally; current dockerized evidence is from GitHub CI.
