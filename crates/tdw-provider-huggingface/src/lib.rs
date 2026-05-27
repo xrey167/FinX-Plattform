@@ -1,5 +1,13 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "http")]
+pub mod http_fetcher;
+
+#[cfg(feature = "http")]
+pub use http_fetcher::HuggingFaceHttpTextGenerationFetcher;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const PROVIDER_ID: &str = "huggingface";
@@ -16,12 +24,51 @@ pub struct InferenceRequest {
     pub auth_header: &'static str,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HuggingFaceTextGenerationQuery {
+    pub model_id: String,
+    pub inputs: String,
+    pub max_new_tokens: Option<u32>,
+}
+
+impl HuggingFaceTextGenerationQuery {
+    pub fn new(model_id: &str, inputs: &str) -> Result<Self> {
+        let inputs = inputs.trim();
+        if inputs.is_empty() {
+            return Err(HuggingFaceProviderError::EmptyInput);
+        }
+        Ok(Self {
+            model_id: normalize_model_id(model_id)?,
+            inputs: inputs.to_string(),
+            max_new_tokens: None,
+        })
+    }
+
+    pub fn with_max_new_tokens(mut self, max_new_tokens: u32) -> Result<Self> {
+        if max_new_tokens == 0 {
+            return Err(HuggingFaceProviderError::InvalidLimit);
+        }
+        self.max_new_tokens = Some(max_new_tokens);
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HuggingFaceTextGeneration {
+    pub model_id: String,
+    pub generated_text: String,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum HuggingFaceProviderError {
     #[error("huggingface model id must not be empty")]
     EmptyModelId,
     #[error("huggingface model id contains unsupported path characters")]
     InvalidModelId,
+    #[error("huggingface text-generation input must not be empty")]
+    EmptyInput,
+    #[error("huggingface text-generation token limit must be greater than zero")]
+    InvalidLimit,
     #[error("huggingface token must be supplied by the caller")]
     MissingToken,
 }
@@ -74,5 +121,23 @@ mod tests {
         assert!(text_generation_request("model", false).is_err());
         assert!(text_generation_request("", true).is_err());
         assert!(text_generation_request("../secret", true).is_err());
+    }
+
+    #[test]
+    fn builds_text_generation_query_model() {
+        let query = HuggingFaceTextGenerationQuery::new("gpt2", "Hello")
+            .and_then(|query| query.with_max_new_tokens(8))
+            .unwrap_or_else(|error| panic!("query should build: {error}"));
+
+        assert_eq!(query.model_id, "gpt2");
+        assert_eq!(query.inputs, "Hello");
+        assert_eq!(query.max_new_tokens, Some(8));
+        assert!(HuggingFaceTextGenerationQuery::new("../secret", "Hello").is_err());
+        assert!(HuggingFaceTextGenerationQuery::new("gpt2", " ").is_err());
+        assert!(
+            HuggingFaceTextGenerationQuery::new("gpt2", "Hello")
+                .and_then(|query| query.with_max_new_tokens(0))
+                .is_err()
+        );
     }
 }
