@@ -20,6 +20,7 @@ parameter is the source of truth.)
 ## Local GitHub Assets
 
 - `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
 - `.github/workflows/nightly.yml`
 - `.github/workflows/codeql.yml`
 - `.github/dependabot.yml`

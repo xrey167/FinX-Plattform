@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T19:28:55.156Z",
+  "updatedAt": "2026-05-27T20:39:56.397Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -162,10 +162,13 @@
       "id": "G014-release-packaging",
       "title": "Release Packaging",
       "objective": "Produce shippable release artifacts. Add a multi-stage Dockerfile per binary (tdw-service, tdw-cli, tdw-mcp, tdw-worker) using cargo-chef or equivalent for layer caching. Add a docker-compose.yml that brings up the full stack (tdw-service, tdw-worker, postgres, clickhouse, qdrant, meilisearch, MinIO or LocalStack) for local end-to-end testing. Add a GitHub release workflow that builds the four binaries for linux-x86_64, darwin-aarch64, and windows-x86_64 and uploads them to GitHub Releases on vMAJOR.MINOR.PATCH tag push. Add ADR 0013 documenting the release process. Update CI to build and push images to GHCR on every main push. Define the version policy (semver, pre-1.0 increment scheme) in AGENTS.md or a dedicated docs page. Verification: dockerized end-to-end smoke (from G009) must run inside docker-compose; release workflow must produce signed binaries; image scan must pass.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T20:39:56.397Z",
+      "startedAt": "2026-05-27T20:34:00.000Z",
+      "completedAt": "2026-05-27T20:39:56.397Z",
+      "evidence": "G014 complete in source: added per-binary cargo-chef Dockerfiles for tdw-service, tdw-cli, tdw-mcp, and tdw-worker; extended docker-compose.yaml with full and tools application profiles; added CI image build, Trivy scan, and GHCR push-on-main; added dockerized service/worker smoke steps to CI; added tag-driven release workflow for Linux x86_64, macOS arm64, and Windows x86_64 archives with SHA-256 checksums and GitHub build-provenance attestations; documented ADR 0013 and the SemVer/pre-1.0 release policy in docs/release.md."
     },
     {
       "id": "G015-policy-enforcement-binding",
@@ -187,5 +190,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G014-release-packaging"
+  "activeGoalId": "G015-policy-enforcement-binding"
 }
