@@ -20,14 +20,18 @@ Cross-references the per-goal docs (see *Companions* below).
 | `tdw-storage-fs` | `BlobEngine` | `LocalBlobEngine` (real disk) | — | ✅ already real |
 | `tdw-storage-postgres` | `RelationalEngine` | `PostgresRecordingEngine` (in-memory) | `PgEngine` (sqlx 0.9 `PgPool`) | ✅ shipped (PR #13) |
 | `tdw-storage-s3` | `BlobEngine` | `InMemoryS3BlobEngine` | `S3Engine` (aws-sdk-s3) | ✅ shipped (PR #14) |
-| `tdw-storage-clickhouse` | `RelationalEngine` | in-memory | (pending) | ⏳ pending |
-| `tdw-storage-qdrant` | `VectorEngine` | `InMemoryVectorEngine` | (pending) | ⏳ pending |
-| `tdw-storage-meilisearch` | `LexicalEngine` | `InMemoryLexicalEngine` | (pending) | ⏳ pending |
+| `tdw-storage-clickhouse` | `OlapEngine` | `ClickHouseRecordingEngine` | `ClickHouseHttpEngine` (reqwest HTTP) | ✅ shipped (PR #17 + #26 fix) |
+| `tdw-storage-qdrant` | `VectorEngine` | `InMemoryVectorEngine` | `QdrantHttpEngine` (reqwest HTTP) | ✅ shipped (PR #18 + #26 fix) |
+| `tdw-storage-meilisearch` | `LexicalEngine` | `InMemoryLexicalEngine` | `MeilisearchHttpEngine` (reqwest HTTP) | ✅ shipped (PR #19 / #26) |
 | `tdw-storage-parquet` | — | (utility, not an engine) | — | n/a |
 | `tdw-storage-router` | — | (router/dispatcher) | — | n/a |
-| **CI containers + env wiring** | — | — | — | ✅ shipped (PR #15) |
+| **CI containers + env wiring** | — | — | — | ✅ shipped (PR #15 + #21 + #26) |
 
 Pattern reference: `docs/quality/production-storage-transports.md`.
+
+**G010 is complete.** GitHub CI on `main` commit `04d07e3`
+passed the real-backend integration job for Postgres, MinIO/S3,
+ClickHouse, Qdrant, and Meilisearch.
 
 ## G011 provider transports
 
@@ -101,20 +105,18 @@ PRs become possible once #13 + #14 are merged.
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **Merge open G010 PRs first** (#12, #13, #14, #15) so the foundation lands. See `docs/quality/production-storage-transports.md` for the merge-order constraint.
-2. **G010 remaining backends** (1–2 sessions): ClickHouse, then Qdrant, then Meilisearch — each one PR matching the shape of PRs #13/#14.
-3. **G011 providers first slice** (1 session): add `reqwest` workspace dep + ship one provider end-to-end (recommend Yahoo first since it's already partial, then FRED because no auth).
-4. **G012 LLM first slice** (1 session): ship one Anthropic adapter end-to-end including SSE streaming.
-5. **G013 durable persistence** (1–2 sessions): Postgres-backed outbox + session, building on G010's PgEngine.
-6. **G014 packaging** (1 session): Dockerfiles + docker-compose orchestration + release workflow.
-7. **G015 policy enforcement binding** (1–2 sessions): wire auth/sandbox/mask onto the request path.
-8. **G016 aggregate gate** (1 session): final verification across G009–G015.
+1. **G011 providers first slice**: finish and merge the Yahoo HTTP provider PR, then continue with FRED because it has simple auth requirements.
+2. **G012 remaining LLM/embedding adapters**: Anthropic HTTP has landed; OpenAI-compatible, OpenAI embeddings, and Google embeddings remain.
+3. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
+4. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
+5. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
+6. **G016 aggregate gate**: final verification across G009–G015.
 
 Realistic total: **8–12 focused sessions** to land G009–G016 end to end.
 
 ## Companions
 
 - `docs/quality/end-to-end-smoke.md` — G009 smoke recipe (the baseline every later goal must keep green).
-- `docs/quality/production-storage-transports.md` — G010 status + per-backend recipes (Postgres + S3 currently).
+- `docs/quality/production-storage-transports.md` — complete G010 status + per-backend recipes.
 - `.omx/ultragoal/goals.json` — authoritative active goal pointer + per-goal objectives.
 - `.omx/ultragoal/ledger.jsonl` — append-only history of goal progress + evidence.

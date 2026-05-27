@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-23T13:29:10.000Z",
+  "updatedAt": "2026-05-27T15:31:00.000Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -116,10 +116,12 @@
       "id": "G010-production-storage-transports",
       "title": "Production Storage Transports",
       "objective": "Replace the in-memory bootstrap storage adapters with real network transports for tdw-storage-clickhouse, tdw-storage-postgres, tdw-storage-s3, tdw-storage-qdrant, and tdw-storage-meilisearch. Each must connect to a real instance (via docker-compose service or testcontainers), preserve the existing StorageRouter fanout and degraded-health contracts, pass schema/checksum/health checks against the real backend, and route errors through typed Storage error variants. tdw-storage-fs remains the canonical local FS adapter. tdw-storage-router gains routing-by-config-key tests that exercise multiple real backends. tdw-storage-parquet/table-format manifest validation remains contract-only unless a real reader is also added. Integration tests live behind a feature flag (for example 'integration-postgres') so the default workspace test stays offline. Update per-crate readiness worksheets to replace 'in-memory bootstrap' notes with 'real adapter with dockerized integration test' evidence and update matrix.md. Verification: focused cargo test plus the workspace gate set.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T15:31:00.000Z",
+      "completedAt": "2026-05-27T15:28:31.000Z",
+      "evidence": "G010 complete: all five production storage transports are landed on main and covered by CI-backed integration tests. Postgres PgEngine, S3Engine, ClickHouseHttpEngine, QdrantHttpEngine, and MeilisearchHttpEngine are feature-gated so default workspace tests remain offline. PR #26 passed GitHub CI, including Integration, Property, and E2E Subset, then merged as commit 04d07e3."
     },
     {
       "id": "G011-production-provider-transports",
@@ -177,5 +179,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G010-production-storage-transports"
+  "activeGoalId": "G011-production-provider-transports"
 }
