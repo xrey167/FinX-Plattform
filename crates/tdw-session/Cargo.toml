@@ -12,6 +12,7 @@ default = []
 # SqliteSessionStore which is always available). Off by default so
 # the workspace test set stays offline.
 postgres = ["dep:tdw-core", "dep:tdw-storage-postgres", "dep:tokio", "tdw-storage-postgres/postgres"]
+g013-cross-store = ["postgres", "tdw-bus/postgres", "tdw-outbox/postgres", "tdw-snapshot/postgres"]
 
 [dependencies]
 serde = { workspace = true }
@@ -25,6 +26,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
+tdw-bus = { path = "../tdw-bus" }
+tdw-event = { path = "../tdw-event" }
+tdw-outbox = { path = "../tdw-outbox" }
+tdw-rollout = { workspace = true }
+tdw-snapshot = { path = "../tdw-snapshot" }
 tokio = { workspace = true }
 
 [lints]
