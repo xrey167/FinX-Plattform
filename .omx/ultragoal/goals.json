@@ -127,10 +127,12 @@
       "id": "G011-production-provider-transports",
       "title": "Production Provider Transports",
       "objective": "Replace the request-contract-only provider crates with real HTTP transports for tdw-provider-alpaca, tdw-provider-binance, tdw-provider-fred, tdw-provider-polygon, tdw-provider-yahoo, and tdw-provider-huggingface. Each must execute real HTTP requests (with credentials from environment variables) and have a deterministic offline test path using replay cassettes (for example wiremock or vcr-style recordings checked into the crate). Preserve the symbol, path-traversal, and credential validation already in the contract crates; parse responses into tdw-domain shapes; route errors through typed Provider error variants. tdw-provider-fileset remains the offline FS provider. tdw-provider-ws-mock retains its mock streamer role. Add reqwest (rustls TLS) as a workspace dependency. Update worksheets and matrix.md to record real-transport evidence. Verification: focused cargo test plus the workspace gate set, with the live-API tests gated behind a feature flag and a CARGO env opt-in.",
-      "status": "pending",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T17:22:30.250Z",
+      "completedAt": "2026-05-27T17:22:30.250Z",
+      "evidence": "G011 complete: production provider transports landed for Yahoo, FRED, Polygon, Alpaca, Binance, and HuggingFace. Each real HTTP transport is feature-gated to keep default workspace tests offline, has deterministic cassette/error coverage, and has an opt-in live test gated by provider-specific env vars. GitHub CI passed for each provider PR through Unit, Lint/Schema/Audit, Coverage, Integration/Property/E2E, Windows Release, and CodeQL before merge."
     },
     {
       "id": "G012-production-llm-and-embedding-transports",
@@ -179,5 +181,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G011-production-provider-transports"
+  "activeGoalId": "G012-production-llm-and-embedding-transports"
 }

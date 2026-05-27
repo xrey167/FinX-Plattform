@@ -52,7 +52,7 @@ for offline determinism.
 | `tdw-provider-alpaca` | API key + secret via `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | `stock_bars` (`AlpacaHttpStockBarsFetcher`) | real HTTP via Alpaca `/v2/stocks/bars` behind `--features http`; cassette tests + `TDW_ALPACA_LIVE=1` live opt-in | ✅ landed |
 | `tdw-provider-binance` | none for public ticker price | `ticker_price` (`BinanceHttpTickerPriceFetcher`) | real HTTP via Binance `/api/v3/ticker/price` behind `--features http`; cassette tests + `TDW_BINANCE_LIVE=1` live opt-in | ✅ landed |
 | `tdw-provider-polygon` | API key via `POLYGON_API_KEY` | `aggregates` (`PolygonHttpAggregatesFetcher`) | real HTTP via Polygon `/v2/aggs/ticker/.../range/1/day/.../...` behind `--features http`; cassette tests + `TDW_POLYGON_LIVE=1` live opt-in | ✅ landed |
-| `tdw-provider-huggingface` | API token | `text_generation`, others | request-builder only | ⏳ pending |
+| `tdw-provider-huggingface` | API token via `HF_TOKEN` / `HUGGINGFACE_API_TOKEN` / `HF_API_TOKEN` | `text_generation` (`HuggingFaceHttpTextGenerationFetcher`) | real HTTP via HuggingFace `/models/{model_id}` behind `--features http`; cassette tests + `TDW_HUGGINGFACE_LIVE=1` live opt-in | ✅ landed |
 
 Suggested per-provider PR shape:
 1. Add `reqwest = { workspace = true, optional = true }` workspace dep (one-time).
@@ -105,10 +105,9 @@ PRs become possible once #13 + #14 are merged.
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **G011 providers next slice**: Yahoo, FRED, Polygon, Alpaca, and Binance are landed; continue with HuggingFace.
-2. **G012 remaining LLM/embedding adapters**: Anthropic HTTP has landed; OpenAI-compatible, OpenAI embeddings, and Google embeddings remain.
-3. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
-4. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
+1. **G012 remaining LLM/embedding adapters**: provider transports are complete; Anthropic HTTP has landed, while OpenAI-compatible, OpenAI embeddings, and Google embeddings remain.
+2. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
+3. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
 5. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
 6. **G016 aggregate gate**: final verification across G009–G015.
 
