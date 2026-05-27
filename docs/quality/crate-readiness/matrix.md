@@ -31,7 +31,7 @@ Initialized during G001 from cargo metadata and updated by tranche audits. Pendi
 | [tdw-feature-store](tdw-feature-store.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | tdw-tags | tdw-service-api | none | 2 | no | none | 2 | Ready with follow-ups |
 | [tdw-fn-string](tdw-fn-string.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | none | none | none | 2 | no | none | 0 | Ready with follow-ups |
 | [tdw-graph](tdw-graph.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | none | tdw-service-api | none | 2 | no | none | 0 | Ready with follow-ups |
-| [tdw-hooks](tdw-hooks.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | tdw-event, tdw-protocol | tdw-define, tdw-mask, tdw-service-api, tdw-session, tdw-tools | none | 7 | no | none | 4 | Ready with follow-ups |
+| [tdw-hooks](tdw-hooks.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | tdw-event, tdw-protocol | tdw-define, tdw-mask, tdw-service-api, tdw-session, tdw-tools | none | 11 | no | none | 4 | Ready with follow-ups |
 | [tdw-kg](tdw-kg.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | none | tdw-entity-resolver, tdw-knowledge, tdw-service-api | none | 2 | no | none | 1 | Ready with follow-ups |
 | [tdw-knowledge](tdw-knowledge.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | tdw-core, tdw-embed, tdw-embed-local, tdw-kg, tdw-storage-qdrant, tdw-tags | tdw-service-api | none | 4 | no | none | 4 | Ready with follow-ups |
 | [tdw-llm](tdw-llm.md) | G004-provider-embedding-and-model-adapter-crates | lib | tdw-config | tdw-llm-anthropic, tdw-llm-openai-compat, tdw-service-api | none | 1 | no | none | 1 | Ready with follow-ups |

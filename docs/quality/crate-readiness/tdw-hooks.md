@@ -7,11 +7,11 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 - Manifest: crates\tdw-hooks\Cargo.toml
 - Target kinds: lib
 - Local dependencies: tdw-event, tdw-protocol
-- External dependencies: serde ^1.0.228 features=[derive]; serde_json ^1.0.145; thiserror ^2.0.18
+- External dependencies: reqwest ^0.12.24 features=[blocking]; serde ^1.0.228 features=[derive]; serde_json ^1.0.145; thiserror ^2.0.18
 - Dev dependencies: none
 - Reverse local dependencies: tdw-define, tdw-mask, tdw-service-api, tdw-session, tdw-tools
 - Feature flags: none
-- Test attributes detected: 7
+- Test attributes detected: 11
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -32,9 +32,9 @@ Owner tranche: G005-agent-auth-hooks-tools-and-udf-crates - Agent, Auth, Hooks, 
 
 ## Findings
 
-- Hooks are still declarative; this crate does not spawn commands or send HTTP requests.
-- Runtime validation now prevents unsafe handler metadata from reaching downstream executors.
-- Follow-up boundary: actual command/HTTP/MCP execution must preserve these validation checks when implemented.
+- Hooks now have a policy-gated execution API in addition to declarative runtime outcomes.
+- `SystemHookHandlerBackend` executes command hooks without a shell, calls HTTPS hooks through bounded authenticated POST requests, and routes MCP hooks through registered local client handlers.
+- Follow-up boundary: service transports still need to bind `execute_handlers` into their request entrypoints with deployment-specific permission rules and MCP clients.
 
 ## Verification
 
@@ -49,5 +49,17 @@ Ready with follow-ups. No G005 blocker remains inside tdw-hooks; follow-ups are 
 
 `tdw-service-api` now executes registered hook outcomes on the secure request
 path and treats `should_stop` as a hard request veto. The hook crate remains
-responsible for validated hook metadata; real command/HTTP/MCP handler
-execution remains the next G015 slice.
+responsible for validated hook metadata.
+
+The second G015 slice adds `HookRegistry::execute_handlers`, `HookExecutionPolicy`,
+`HookExecutionOutcome`, and `SystemHookHandlerBackend`. Handler execution now
+requires explicit `PermissionRules` allow entries before any backend is called.
+Command hooks run via `std::process::Command` with no shell. HTTP hooks require
+HTTPS metadata validation, an explicit bearer token, a bounded timeout, a
+response-size cap, and cannot veto unless the policy enables handler vetoes.
+MCP hooks call registered client handlers and fail closed when a server/tool is
+not registered.
+
+Verification: `cargo +stable test -p tdw-hooks -- --nocapture` passed 11/11
+tests, including allowed command execution, registered MCP execution,
+permission denial before backend execution, and HTTP veto denial.
