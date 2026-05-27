@@ -5,10 +5,21 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+# Enables the real OpenAI Embeddings HTTP backend (reqwest).
+# Off by default so workspace tests stay offline; the live test is
+# additionally gated by TDW_OPENAI_EMBEDDING_LIVE=1 and either
+# TDW_OPENAI_EMBEDDING_API_KEY or OPENAI_API_KEY.
+http = ["dep:reqwest", "dep:serde", "dep:tokio"]
+
 [dependencies]
+reqwest = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [lints]
 workspace = true

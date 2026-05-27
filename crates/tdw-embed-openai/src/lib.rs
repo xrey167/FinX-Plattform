@@ -4,6 +4,11 @@ use serde_json::{Value, json};
 use tdw_embed::Embedding;
 use thiserror::Error;
 
+#[cfg(feature = "http")]
+pub mod http_client;
+#[cfg(feature = "http")]
+pub use http_client::{OpenAiEmbeddingHttpClient, OpenAiEmbeddingHttpError};
+
 pub const PROVIDER_ID: &str = "openai";
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 pub const EMBEDDINGS_PATH: &str = "/embeddings";

@@ -44,3 +44,49 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production OpenAI transport/runtime integration.
+
+## Production Backend Evidence (G012)
+
+`OpenAiEmbeddingHttpClient` (gated by `--features http`) at
+`crates/tdw-embed-openai/src/http_client.rs` is the real OpenAI
+Embeddings HTTP transport. It posts to `POST {base_url}/embeddings`
+when the base already ends in `/v1`, and normalizes the default
+`https://api.openai.com/v1` base to
+`https://api.openai.com/v1/embeddings`. Existing request-builder and
+decoder helpers remain available for offline tests and higher-level
+dispatchers.
+
+Public surface:
+- `OpenAiEmbeddingHttpClient::new(api_key, model_id)` validates the
+  bearer token is non-empty and validates the model id through the
+  existing adapter error contract.
+- `with_base_url(url)` accepts an OpenAI-style `/v1` base or a full
+  `/embeddings` endpoint for compatible gateways.
+- `model_id()` accessor.
+- `async fn embed(input: &str) -> Result<Embedding, OpenAiEmbeddingHttpError>`
+  executes the request and decodes the first returned embedding
+  vector.
+
+Response shape:
+- The first `data[].embedding` vector becomes the workspace
+  `tdw_embed::Embedding`.
+- Existing `decode_embedding` validation is reused, so empty vectors
+  and non-finite values remain typed adapter errors instead of being
+  accepted into the embedding contract.
+- Empty `data[]` yields `OpenAiEmbeddingHttpError::InvalidResponse`.
+
+Tests:
+- Unit tests inside `http_client.rs` cover typed missing-key/model
+  errors, debug redaction, endpoint normalization, cassette response
+  decoding, empty-data rejection, and empty/non-finite vector
+  rejection.
+- Integration test at `tests/http_client.rs`, double-gated by
+  `--features http` + env var `TDW_OPENAI_EMBEDDING_LIVE=1`. It uses
+  `TDW_OPENAI_EMBEDDING_API_KEY` or `OPENAI_API_KEY`, optional
+  `TDW_OPENAI_EMBEDDING_BASE_URL`, and optional
+  `TDW_OPENAI_EMBEDDING_MODEL` (default `text-embedding-3-small`).
+
+Verification for this slice:
+- `cargo +stable test -p tdw-embed-openai --features http --all-targets -- --nocapture`
+  passed with the live test skipped because `TDW_OPENAI_EMBEDDING_LIVE`
+  was not set.
