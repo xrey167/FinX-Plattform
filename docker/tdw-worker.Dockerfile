@@ -18,6 +18,7 @@ RUN cargo build --release --bin tdw-worker
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin tdw
