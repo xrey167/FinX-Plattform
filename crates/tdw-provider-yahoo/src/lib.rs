@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "http")]
+pub mod http_fetcher;
+
+#[cfg(feature = "http")]
+pub use http_fetcher::YahooHttpEquityHistoricalFetcher;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde_json::Value;
