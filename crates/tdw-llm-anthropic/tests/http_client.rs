@@ -64,3 +64,43 @@ async fn live_anthropic_returns_completion_when_env_var_set() {
     assert_eq!(response.model_id, "claude-haiku-4-5-20251001");
     assert_eq!(response.message.role, MessageRole::Assistant);
 }
+
+#[tokio::test]
+async fn live_anthropic_streaming_returns_deltas_when_env_var_set() {
+    if !live_enabled() {
+        eprintln!("TDW_ANTHROPIC_LIVE != 1; skipping live anthropic streaming test");
+        return;
+    }
+    let Some(key) = api_key() else {
+        eprintln!("ANTHROPIC_API_KEY not set; skipping live anthropic streaming test");
+        return;
+    };
+
+    let client = AnthropicHttpClient::new(key, "claude-haiku-4-5-20251001")
+        .unwrap_or_else(|error| panic!("client must build: {error}"));
+
+    let request = ChatRequest {
+        messages: vec![
+            ChatMessage {
+                role: MessageRole::System,
+                content: "Reply with exactly one short word.".to_string(),
+            },
+            ChatMessage {
+                role: MessageRole::User,
+                content: "Say hi.".to_string(),
+            },
+        ],
+        max_output_tokens: 32,
+    };
+
+    let mut deltas = Vec::new();
+    let response = client
+        .complete_streaming(request, |delta| deltas.push(delta.to_string()))
+        .await
+        .unwrap_or_else(|error| panic!("live streaming request must succeed: {error}"));
+
+    assert!(!deltas.is_empty(), "live stream must emit deltas");
+    assert!(!response.message.content.trim().is_empty());
+    assert_eq!(response.model_id, "claude-haiku-4-5-20251001");
+    assert_eq!(response.message.role, MessageRole::Assistant);
+}

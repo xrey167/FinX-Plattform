@@ -7,9 +7,6 @@
 //! offline default. This client is async-native because
 //! `tdw_llm::LanguageModel` is synchronous; bridging async-over-sync
 //! is a separate runtime concern.
-//!
-//! Streaming (`stream: true` SSE) is a follow-up slice; this module
-//! ships the batch endpoint only.
 
 use reqwest::{Client, Url};
 use serde::Deserialize;
@@ -146,6 +143,50 @@ impl OpenAiCompatibleHttpClient {
         let envelope: ChatCompletionEnvelope = response.json().await?;
         parse_response(&self.model_id, envelope)
     }
+
+    /// Post the supplied [`ChatRequest`] with `stream: true`, call
+    /// `on_delta` for each `choices[].delta.content` chunk received
+    /// over SSE, and return the accumulated final [`ChatResponse`].
+    ///
+    /// Usage is populated when the upstream gateway emits a streaming
+    /// usage chunk. Gateways that omit usage still return the text
+    /// stream with zero usage counts.
+    pub async fn complete_streaming(
+        &self,
+        request: ChatRequest,
+        mut on_delta: impl FnMut(&str),
+    ) -> Result<ChatResponse, OpenAiCompatibleHttpError> {
+        validate_chat_request(&request).map_err(OpenAiCompatibleHttpError::InvalidRequest)?;
+        let mut body = build_request_body(&self.model_id, &request);
+        body["stream"] = Value::Bool(true);
+        body["stream_options"] = json!({ "include_usage": true });
+        let mut builder = self
+            .client
+            .post(chat_completions_url(&self.base_url)?)
+            .header("content-type", "application/json")
+            .json(&body);
+        if let Some(api_key) = self.api_key.as_deref() {
+            builder = builder.bearer_auth(api_key);
+        }
+        let mut response = builder.send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(OpenAiCompatibleHttpError::Http { status, body });
+        }
+
+        let mut decoder = SseDecoder::default();
+        let mut stream = OpenAiStreamState::new(&self.model_id);
+        while let Some(chunk) = response.chunk().await? {
+            for event in decoder.push(&chunk)? {
+                stream.apply_event(event, &mut on_delta)?;
+            }
+        }
+        for event in decoder.finish()? {
+            stream.apply_event(event, &mut on_delta)?;
+        }
+        stream.finish()
+    }
 }
 
 fn normalize_api_key(api_key: String) -> Result<String, OpenAiCompatibleHttpError> {
@@ -213,6 +254,80 @@ pub(crate) fn build_request_body(model_id: &str, request: &ChatRequest) -> Value
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SseEvent {
+    data: String,
+}
+
+#[derive(Default)]
+struct SseDecoder {
+    pending: Vec<u8>,
+}
+
+impl SseDecoder {
+    fn push(&mut self, chunk: &[u8]) -> Result<Vec<SseEvent>, OpenAiCompatibleHttpError> {
+        self.pending.extend_from_slice(chunk);
+        let mut events = Vec::new();
+        while let Some((index, delimiter_len)) = find_sse_boundary(&self.pending) {
+            let event_bytes = self.pending[..index].to_vec();
+            self.pending.drain(..index + delimiter_len);
+            if let Some(event) = parse_sse_event(&event_bytes)? {
+                events.push(event);
+            }
+        }
+        Ok(events)
+    }
+
+    fn finish(&mut self) -> Result<Vec<SseEvent>, OpenAiCompatibleHttpError> {
+        if self.pending.iter().all(u8::is_ascii_whitespace) {
+            self.pending.clear();
+            return Ok(Vec::new());
+        }
+        let event_bytes = std::mem::take(&mut self.pending);
+        Ok(parse_sse_event(&event_bytes)?.into_iter().collect())
+    }
+}
+
+fn find_sse_boundary(bytes: &[u8]) -> Option<(usize, usize)> {
+    for index in 0..bytes.len() {
+        if bytes.get(index..index + 4) == Some(b"\r\n\r\n") {
+            return Some((index, 4));
+        }
+        if bytes.get(index..index + 2) == Some(b"\n\n") {
+            return Some((index, 2));
+        }
+    }
+    None
+}
+
+fn parse_sse_event(bytes: &[u8]) -> Result<Option<SseEvent>, OpenAiCompatibleHttpError> {
+    let raw = std::str::from_utf8(bytes).map_err(|error| {
+        OpenAiCompatibleHttpError::InvalidResponse(format!("sse event was not utf-8: {error}"))
+    })?;
+    let mut data = String::new();
+    for line in raw.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        let Some((field, value)) = line.split_once(':') else {
+            continue;
+        };
+        if field != "data" {
+            continue;
+        }
+        let value = value.strip_prefix(' ').unwrap_or(value);
+        if !data.is_empty() {
+            data.push('\n');
+        }
+        data.push_str(value);
+    }
+    if data.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(SseEvent { data }))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct ChatCompletionEnvelope {
     #[serde(default)]
@@ -239,6 +354,124 @@ pub(crate) struct ChatCompletionUsage {
     prompt_tokens: u32,
     #[serde(default, alias = "output_tokens")]
     completion_tokens: u32,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct StreamCompletionEnvelope {
+    #[serde(default)]
+    choices: Vec<StreamCompletionChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionUsage>,
+    #[serde(default)]
+    error: Option<StreamError>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct StreamCompletionChoice {
+    #[serde(default)]
+    delta: StreamCompletionDelta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct StreamCompletionDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct StreamError {
+    #[serde(rename = "type", default)]
+    error_type: String,
+    #[serde(default)]
+    message: String,
+}
+
+struct OpenAiStreamState {
+    model_id: String,
+    text: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    saw_done: bool,
+    saw_finish_reason: bool,
+}
+
+impl OpenAiStreamState {
+    fn new(model_id: &str) -> Self {
+        Self {
+            model_id: model_id.to_string(),
+            text: String::new(),
+            input_tokens: 0,
+            output_tokens: 0,
+            saw_done: false,
+            saw_finish_reason: false,
+        }
+    }
+
+    fn apply_event(
+        &mut self,
+        event: SseEvent,
+        on_delta: &mut impl FnMut(&str),
+    ) -> Result<(), OpenAiCompatibleHttpError> {
+        if event.data.trim() == "[DONE]" {
+            self.saw_done = true;
+            return Ok(());
+        }
+        let envelope: StreamCompletionEnvelope =
+            serde_json::from_str(&event.data).map_err(|error| {
+                OpenAiCompatibleHttpError::InvalidResponse(format!(
+                    "openai-compatible stream json: {error}"
+                ))
+            })?;
+        if let Some(error) = envelope.error {
+            return Err(OpenAiCompatibleHttpError::InvalidResponse(format!(
+                "openai-compatible stream error {}: {}",
+                error.error_type, error.message
+            )));
+        }
+        if let Some(usage) = envelope.usage {
+            self.input_tokens = usage.prompt_tokens;
+            self.output_tokens = usage.completion_tokens;
+        }
+        for choice in envelope.choices {
+            if choice.finish_reason.is_some() {
+                self.saw_finish_reason = true;
+            }
+            if let Some(content) = choice.delta.content
+                && !content.is_empty()
+            {
+                on_delta(&content);
+                self.text.push_str(&content);
+            }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<ChatResponse, OpenAiCompatibleHttpError> {
+        let content = self.text.trim().to_string();
+        if content.is_empty() {
+            return Err(OpenAiCompatibleHttpError::InvalidResponse(
+                "openai-compatible stream had no text deltas".to_string(),
+            ));
+        }
+        if !self.saw_done && !self.saw_finish_reason {
+            return Err(OpenAiCompatibleHttpError::InvalidResponse(
+                "openai-compatible stream ended before [DONE] or finish_reason".to_string(),
+            ));
+        }
+        Ok(ChatResponse {
+            model_id: self.model_id,
+            message: ChatMessage {
+                role: MessageRole::Assistant,
+                content,
+            },
+            usage: Usage {
+                input_tokens: self.input_tokens,
+                output_tokens: self.output_tokens,
+            },
+        })
+    }
 }
 
 /// Parse the Chat Completions response envelope into a workspace
@@ -417,5 +650,84 @@ mod tests {
             err,
             Some(OpenAiCompatibleHttpError::InvalidResponse(_))
         ));
+    }
+
+    #[test]
+    fn streaming_request_body_sets_stream_true_and_usage_options() {
+        let request = ChatRequest {
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: "hello".to_string(),
+            }],
+            max_output_tokens: 32,
+        };
+        let mut body = build_request_body("gpt-4o-mini", &request);
+        body["stream"] = Value::Bool(true);
+        body["stream_options"] = json!({ "include_usage": true });
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+        assert_eq!(body["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn sse_decoder_handles_split_chunks_and_data_only_events() {
+        let mut decoder = SseDecoder::default();
+        assert!(
+            decoder
+                .push(b"data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]")
+                .expect("partial event should parse")
+                .is_empty()
+        );
+        let events = decoder.push(b"}\n\n").expect("event should parse");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].data.contains("\"Hel\""));
+        let done = decoder
+            .push(b"data: [DONE]\r\n\r\n")
+            .expect("done should parse");
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].data, "[DONE]");
+    }
+
+    #[test]
+    fn cassette_replay_decodes_openai_stream() {
+        let raw = br#"data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"Hel"}}]}
+
+data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}
+
+data: [DONE]
+
+"#;
+        let mut decoder = SseDecoder::default();
+        let mut stream = OpenAiStreamState::new("gpt-4o-mini");
+        let mut deltas = Vec::new();
+        for event in decoder.push(raw).expect("stream should parse") {
+            stream
+                .apply_event(event, &mut |delta| deltas.push(delta.to_string()))
+                .expect("stream event should apply");
+        }
+        for event in decoder.finish().expect("tail should parse") {
+            stream
+                .apply_event(event, &mut |delta| deltas.push(delta.to_string()))
+                .expect("stream event should apply");
+        }
+        let response = stream.finish().expect("stream should finish");
+        assert_eq!(deltas, vec!["Hel", "lo"]);
+        assert_eq!(response.message.content, "Hello");
+        assert_eq!(response.usage.input_tokens, 7);
+        assert_eq!(response.usage.output_tokens, 3);
+    }
+
+    #[test]
+    fn cassette_replay_errors_on_stream_error_event() {
+        let event = SseEvent {
+            data: r#"{"error":{"type":"invalid_request_error","message":"bad stream"}}"#
+                .to_string(),
+        };
+        let mut stream = OpenAiStreamState::new("gpt-4o-mini");
+        assert!(stream.apply_event(event, &mut |_| {}).is_err());
     }
 }
