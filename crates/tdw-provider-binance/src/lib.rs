@@ -1,5 +1,13 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "http")]
+pub mod http_fetcher;
+
+#[cfg(feature = "http")]
+pub use http_fetcher::BinanceHttpTickerPriceFetcher;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const PROVIDER_ID: &str = "binance";
@@ -21,6 +29,25 @@ pub struct ProviderRequest {
     pub endpoint: &'static str,
     pub path: String,
     pub requires_credential: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BinanceTickerPriceQuery {
+    pub symbol: String,
+}
+
+impl BinanceTickerPriceQuery {
+    pub fn new(symbol: &str) -> Result<Self> {
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BinanceTickerPrice {
+    pub symbol: String,
+    pub price: f64,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -79,5 +106,15 @@ mod tests {
         assert!(!request.requires_credential);
         assert!(ticker_price_request("").is_err());
         assert!(ticker_price_request("BTCUSDT&recvWindow=1").is_err());
+    }
+
+    #[test]
+    fn builds_ticker_price_query_model() {
+        let query = BinanceTickerPriceQuery::new("ethusdt")
+            .unwrap_or_else(|error| panic!("query should build: {error}"));
+
+        assert_eq!(query.symbol, "ETHUSDT");
+        assert!(BinanceTickerPriceQuery::new("").is_err());
+        assert!(BinanceTickerPriceQuery::new("ETHUSDT&recvWindow=1").is_err());
     }
 }

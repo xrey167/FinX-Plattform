@@ -3609,7 +3609,15 @@ dependencies = [
 name = "tdw-provider-binance"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
