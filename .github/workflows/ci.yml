@@ -142,6 +142,8 @@ jobs:
       - name: Run G010 clickhouse integration test
         env:
           TDW_CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_TEST_USER: tdw
+          TDW_CLICKHOUSE_TEST_PASSWORD: tdw
         run: cargo test -p tdw-storage-clickhouse --features clickhouse --test http_engine -- --nocapture
 
       - name: Wait for Qdrant

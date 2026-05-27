@@ -36,22 +36,24 @@ async fn qdrant_engine_upserts_and_searches_against_real_qdrant() {
 
     let collection = collection_name();
 
-    // Qdrant accepts unsigned-integer or UUID point IDs. Using the
-    // simpler integer-as-string form keeps the test independent of
+    // Qdrant accepts unsigned-integer or UUID point IDs as JSON values; a
+    // bare numeric string like "1" is rejected with HTTP 400 because it is
+    // a JSON string that is neither a valid UUID nor a numeric type. Use
+    // hand-crafted deterministic v4-shaped UUIDs to stay independent of
     // any uuid crate version on the test runner.
     let points = vec![
         VectorPoint {
-            id: "1".to_string(),
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
             vector: vec![0.1, 0.2, 0.3, 0.4],
             payload: json!({"label": "alpha"}),
         },
         VectorPoint {
-            id: "2".to_string(),
+            id: "00000000-0000-4000-8000-000000000002".to_string(),
             vector: vec![0.9, 0.8, 0.7, 0.6],
             payload: json!({"label": "beta"}),
         },
         VectorPoint {
-            id: "3".to_string(),
+            id: "00000000-0000-4000-8000-000000000003".to_string(),
             vector: vec![0.15, 0.25, 0.35, 0.45],
             payload: json!({"label": "alpha-near"}),
         },
@@ -74,11 +76,11 @@ async fn qdrant_engine_upserts_and_searches_against_real_qdrant() {
         .unwrap_or_else(|error| panic!("search must succeed: {error}"));
 
     assert_eq!(results.len(), 2);
-    // The point identical to the query (id=1) should be the top hit.
-    assert_eq!(results[0].id, "1");
+    // The point identical to the query should be the top hit.
+    assert_eq!(results[0].id, "00000000-0000-4000-8000-000000000001");
     assert_eq!(results[0].payload["label"], "alpha");
-    // The near point (id=3) should be second.
-    assert_eq!(results[1].id, "3");
+    // The near point should be second.
+    assert_eq!(results[1].id, "00000000-0000-4000-8000-000000000003");
 }
 
 #[tokio::test]

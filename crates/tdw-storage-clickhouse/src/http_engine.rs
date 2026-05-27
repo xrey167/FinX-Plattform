@@ -52,14 +52,22 @@ impl ClickHouseHttpEngine {
     }
 
     fn request(&self, query: &str) -> reqwest::RequestBuilder {
-        let mut builder = self
-            .client
+        // Send the SQL in the request body (the idiomatic ClickHouse HTTP
+        // pattern). reqwest sets `Content-Length` automatically for known-
+        // length bodies; ClickHouse 25.5+ rejects POSTs lacking
+        // `Content-Length` (or `Transfer-Encoding: chunked`) with
+        // `411 Length Required` (Code 381).
+        //
+        // Always send basic_auth: when no user is configured, fall back to the
+        // well-known `default` user with no password. ClickHouse 25.5+ returns
+        // `401 Unauthorized` (Code 194) for body-style POSTs that lack
+        // explicit credentials, even though the legacy URL-parameter form was
+        // anonymous-by-default.
+        let user = self.user.as_deref().unwrap_or("default");
+        self.client
             .post(self.base_url.clone())
-            .query(&[("query", query)]);
-        if let Some(user) = self.user.as_deref() {
-            builder = builder.basic_auth(user, self.password.as_deref());
-        }
-        builder
+            .body(query.to_owned())
+            .basic_auth(user, self.password.as_deref())
     }
 }
 
