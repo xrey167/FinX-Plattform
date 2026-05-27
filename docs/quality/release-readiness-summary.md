@@ -28,4 +28,4 @@ Hardening summary:
 - Clean-room audit passed: no `finx-*` crate/dependency, copied FinX-XR code, or `tdw-provider-openbb` dependency was introduced.
 
 Residual follow-ups:
-- Production transports, durable queues, release packaging, and richer policy binding remain future integration work. They are documented as follow-ups, not blockers for this bootstrap readiness gate.
+- Later ultragoals have since landed production transports, durable persistence, and release-packaging foundations. Richer policy binding remains G015 work, and G016 remains the aggregate production-functional proof. These are follow-ups, not blockers for this bootstrap readiness gate.

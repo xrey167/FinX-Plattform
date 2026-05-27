@@ -100,8 +100,9 @@
 - `origin/main` is protected by a branch ruleset: require PR, require the CI
   status checks listed in `ci.yml`, block force-push, block deletion. Allow
   squash-and-merge only.
-- Tags follow `vMAJOR.MINOR.PATCH` once a release process is defined; not used
-  pre-release.
+- Tags follow `vMAJOR.MINOR.PATCH`. The release process, pre-1.0 increment
+  policy, binary target matrix, and GHCR image policy are defined in
+  `docs/release.md`.
 
 ## Verification Before Calling A Task Done
 

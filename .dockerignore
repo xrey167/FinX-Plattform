@@ -1,0 +1,17 @@
+target/
+.git/
+.worktrees/
+.claude/
+.nextest/
+coverage/
+lcov.info
+.omx/
+.omc/
+.remember/
+tmp/
+*.pdb
+*.profraw
+*.profdata
+.env
+.env.*
+!.env.example

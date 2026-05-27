@@ -70,6 +70,74 @@ services:
     ports:
       - "6379:6379"
 
+  tdw-service:
+    image: finx-plattform/tdw-service:local
+    build:
+      context: .
+      dockerfile: docker/tdw-service.Dockerfile
+    profiles: ["full"]
+    command: ["AAPL"]
+    environment:
+      TDW_PROFILE: docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      meilisearch:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: "no"
+
+  tdw-worker:
+    image: finx-plattform/tdw-worker:local
+    build:
+      context: .
+      dockerfile: docker/tdw-worker.Dockerfile
+    profiles: ["full"]
+    environment:
+      TDW_PROFILE: docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      meilisearch:
+        condition: service_started
+      minio:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: "no"
+
+  tdw-mcp:
+    image: finx-plattform/tdw-mcp:local
+    build:
+      context: .
+      dockerfile: docker/tdw-mcp.Dockerfile
+    profiles: ["tools"]
+    environment:
+      TDW_PROFILE: docker
+    restart: "no"
+
+  tdw-cli:
+    image: finx-plattform/tdw-cli:local
+    build:
+      context: .
+      dockerfile: docker/tdw-cli.Dockerfile
+    profiles: ["tools"]
+    command: ["AAPL"]
+    environment:
+      TDW_PROFILE: docker
+    restart: "no"
+
 volumes:
   postgres-data:
   clickhouse-data:

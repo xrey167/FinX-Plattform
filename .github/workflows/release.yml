@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.binary }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: tdw-service
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: tdw-cli
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: tdw-mcp
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: tdw-worker
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: tdw-service
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: tdw-cli
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: tdw-mcp
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: tdw-worker
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: tdw-service
+            archive: zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: tdw-cli
+            archive: zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: tdw-mcp
+            archive: zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: tdw-worker
+            archive: zip
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}-${{ matrix.binary }}
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }} --bin ${{ matrix.binary }}
+      - name: Package binary
+        shell: pwsh
+        run: |
+          $binary = "${{ matrix.binary }}"
+          $target = "${{ matrix.target }}"
+          $archiveKind = "${{ matrix.archive }}"
+          $exe = if ($IsWindows) { ".exe" } else { "" }
+          $assetBase = "$binary-$target"
+          $assetDir = Join-Path "dist" $assetBase
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+          Copy-Item "target/$target/release/$binary$exe" (Join-Path $assetDir "$binary$exe")
+          if ($archiveKind -eq "zip") {
+            $asset = "dist/$assetBase.zip"
+            Compress-Archive -Path "$assetDir/*" -DestinationPath $asset -Force
+          } else {
+            $asset = "dist/$assetBase.tar.gz"
+            tar -czf $asset -C "dist" $assetBase
+          }
+          $hash = Get-FileHash -Algorithm SHA256 $asset
+          $assetName = Split-Path $asset -Leaf
+          "$($hash.Hash.ToLowerInvariant())  $assetName" | Set-Content "$asset.sha256" -NoNewline
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* \
+            --title "$RELEASE_TAG" \
+            --notes "Automated FinX-Plattform release for $RELEASE_TAG."
