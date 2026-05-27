@@ -1,42 +1,28 @@
 {
-  "version": 1,
-  "scope": "G001-G008 crate-readiness ultragoal final diff",
+  "version": 2,
+  "scope": "G009-G016 production-functional final gate",
   "filesReviewed": [
-    "Cargo.lock",
-    "crates/tdw-acp",
-    "crates/tdw-agent",
-    "crates/tdw-agent-store",
-    "crates/tdw-app-client",
-    "crates/tdw-app-server",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
+    "Dockerfile.tdw-*",
+    "docker-compose.yaml",
+    "crates/tdw-storage-*",
+    "crates/tdw-provider-*",
+    "crates/tdw-llm-*",
+    "crates/tdw-embed-*",
+    "crates/tdw-outbox",
+    "crates/tdw-bus",
+    "crates/tdw-session",
+    "crates/tdw-snapshot",
+    "crates/tdw-rollout",
+    "crates/tdw-hooks",
     "crates/tdw-auth",
     "crates/tdw-auth-oidc",
-    "crates/tdw-define",
-    "crates/tdw-embed*",
-    "crates/tdw-entity-resolver",
-    "crates/tdw-eval-runner",
-    "crates/tdw-exec",
-    "crates/tdw-feature-store",
-    "crates/tdw-fn-string",
-    "crates/tdw-graph",
-    "crates/tdw-hooks",
-    "crates/tdw-kg",
-    "crates/tdw-knowledge",
-    "crates/tdw-llm*",
-    "crates/tdw-mask",
-    "crates/tdw-ml-registry",
-    "crates/tdw-provider-*",
-    "crates/tdw-rewrite",
     "crates/tdw-sandbox",
+    "crates/tdw-mask",
     "crates/tdw-service-api",
-    "crates/tdw-spatial",
-    "crates/tdw-tag-rules",
-    "crates/tdw-tags",
-    "crates/tdw-tools",
-    "crates/tdw-tui",
-    "crates/tdw-udf*",
-    "crates/tdw-workflow-engine",
-    "xtask",
-    "docs/quality"
+    "docs/quality",
+    ".omx/ultragoal"
   ],
   "totalUnresolvedIssues": 0,
   "architecturalStatus": "CLEAR",
@@ -50,40 +36,55 @@
   },
   "resolvedDuringReview": [
     {
-      "severity": "medium",
+      "severity": "high",
       "files": [
-        "crates/tdw-mask/src/lib.rs"
+        ".github/workflows/release.yml"
       ],
-      "issue": "Compatibility masking wrapper returned the original unmasked row when invalid mask rules were supplied.",
-      "resolution": "Changed the wrapper to fail closed by redacting all values, kept the checked error path, and added a regression test."
+      "issue": "The first tag publish attempt built all artifacts but failed in the release publish job because gh could not infer the repository from an artifact-only workspace.",
+      "resolution": "PR #45 set GH_REPO from github.repository; v0.1.1 then published successfully with 24 release assets."
     },
     {
       "severity": "low",
       "files": [
-        "docs/quality/crate-readiness/xtask.md",
-        "docs/quality/crate-readiness/matrix.md"
+        ".github/workflows/release.yml",
+        ".github/workflows/ci.yml"
       ],
-      "issue": "The final aggregate matrix still marked xtask pending.",
-      "resolution": "Completed the xtask worksheet and changed the matrix verdict to Ready with follow-ups."
+      "issue": "GitHub Actions emitted Node.js 20 deprecation annotations for artifact actions and windows-latest redirection notices.",
+      "resolution": "Recorded as a residual follow-up because the workflows completed successfully and the annotations do not invalidate the release gate."
     }
   ],
   "checksReviewed": [
-    "cargo test -p tdw-mask",
-    "cargo fmt --all -- --check",
-    "cargo check --workspace",
-    "cargo clippy --workspace --all-targets -- -D warnings",
-    "cargo test --workspace",
-    "cargo run -p xtask -- clean-room-audit",
-    "git diff --check"
+    "cargo +stable fmt --all -- --check",
+    "cargo +stable check --workspace",
+    "cargo +stable clippy --workspace --all-targets -- -D warnings",
+    "cargo +stable test --workspace",
+    "cargo +stable run -p xtask -- clean-room-audit",
+    "git diff --check",
+    ".omx/ultragoal/goals.json JSON parse",
+    ".omx/ultragoal/ledger.jsonl JSONL parse",
+    "GitHub CI run 26543584954",
+    "GitHub CodeQL run 26543584951",
+    "GitHub Release run 26543606204",
+    "GitHub release v0.1.1 asset verification"
   ],
   "securityReview": {
-    "hardcodedSecrets": "none found in changed files",
-    "unsafeCode": "crate-level forbid(unsafe_code) remains in the touched crates; verification passed",
-    "cleanRoom": "clean-room audit passed and the changed dependency set contains no finx-* crates, copied FinX-XR code, or tdw-provider-openbb dependency"
+    "hardcodedSecrets": "none found in the final changed evidence files; secret-bearing live transports are env-gated",
+    "unsafeCode": "workspace verification passed under the existing crate safety posture",
+    "cleanRoom": "clean-room audit passed; no finx-* crate/dependency, copied FinX-XR code, or tdw-provider-openbb dependency was introduced",
+    "releaseSupplyChain": "release workflow produced SHA-256 checksum files and build-provenance attestations for release archives"
   },
   "architectureReview": {
     "status": "CLEAR",
-    "rationale": "The implementation keeps the clean-room TDW boundary, routes client/MCP/service/worker entrypoints through service-api and protocol crates, keeps provider/model/auth/tool/UDF behavior in bounded crates, and records crate readiness with no pending matrix verdicts.",
-    "watchItems": []
+    "rationale": "The production-functional push preserves the clean-room TDW architecture: real transports are feature/env gated behind existing provider/storage/model traits, durable backends remain bounded by persistence crates, policy enforcement is bound at service-api request paths, and release/compose packaging is kept in CI and deployment surfaces rather than mixed into business logic.",
+    "watchItems": [
+      "Upgrade or replace artifact actions before GitHub removes Node.js 20 runner support.",
+      "Run local docker-compose smoke when Docker is available on the workstation; current dockerized evidence is GitHub CI-backed."
+    ]
+  },
+  "releaseReview": {
+    "status": "CLEAR",
+    "v0_1_0": "Tag exists but release publish failed; no GitHub Release exists for this tag.",
+    "v0_1_1": "Published successfully as latest with 24 assets at https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.1",
+    "mainCommit": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe"
   }
 }
