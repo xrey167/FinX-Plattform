@@ -3519,7 +3519,12 @@ dependencies = [
 name = "tdw-llm-openai-compat"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
  "tdw-llm",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

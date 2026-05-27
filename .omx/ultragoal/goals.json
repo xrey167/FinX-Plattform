@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T15:31:00.000Z",
+  "updatedAt": "2026-05-27T19:12:53.758Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -138,10 +138,11 @@
       "id": "G012-production-llm-and-embedding-transports",
       "title": "Production LLM and Embedding Transports",
       "objective": "Make tdw-llm-anthropic and tdw-llm-openai-compat actually execute LanguageModel chat requests against their respective HTTP APIs, with replay cassettes for deterministic CI. Add real embedding execution for tdw-embed-openai and tdw-embed-google. Preserve the tdw-llm and tdw-embed contract validation (model ID guard, base URL guard, finite-vector validation). Add streaming response support where the underlying API supports it (Anthropic, OpenAI-compatible). tdw-embed-local stays offline as the hash-embedding default. Surface credential handling as a typed error rather than panic. Worksheets updated. Verification: focused cargo test plus the workspace gate set; live-API tests gated behind a feature flag.",
-      "status": "pending",
+      "status": "in_progress",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T19:12:53.758Z",
+      "startedAt": "2026-05-24T19:22:55.250Z"
     },
     {
       "id": "G013-durable-persistence",
