@@ -44,3 +44,61 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production OpenAI-compatible transport/runtime integration.
+
+## Production Backend Evidence (G012)
+
+`OpenAiCompatibleHttpClient` (gated by `--features http`) at
+`crates/tdw-llm-openai-compat/src/http_client.rs` is the real
+OpenAI-compatible Chat Completions transport. It posts to
+`POST {base_url}/v1/chat/completions` and defaults to
+`https://api.openai.com`. Existing sync stub
+`OpenAiCompatibleModel` remains the offline default.
+
+Public surface:
+- `OpenAiCompatibleHttpClient::new(api_key, model_id)` validates
+  the bearer token is non-empty and validates the model id via
+  `tdw_llm::validate_model_id`.
+- `OpenAiCompatibleHttpClient::without_api_key(model_id)` supports
+  local/private compatible gateways that intentionally do not
+  require bearer auth.
+- `with_base_url(url)` accepts a host root such as
+  `http://localhost:11434` or an existing `/v1` base and normalizes
+  the completion endpoint to `/v1/chat/completions`.
+- `model_id()` accessor.
+- `async fn complete(request: ChatRequest) -> Result<ChatResponse, OpenAiCompatibleHttpError>`
+  is the primary surface. Async-native because `tdw_llm::LanguageModel`
+  is a synchronous trait; bridging sync/async is a follow-up concern.
+
+Role translation:
+- `MessageRole::System`, `User`, and `Assistant` map directly to the
+  same OpenAI Chat Completions role strings.
+- `MessageRole::Tool` is folded into a `user` message with a
+  `[tool] ` prefix for this slice; full tool-call envelope support is
+  a follow-up.
+
+Response shape:
+- The first non-empty `choices[].message.content` becomes
+  `ChatResponse.message.content`. Empty/missing assistant text yields
+  `OpenAiCompatibleHttpError::InvalidResponse`.
+- `usage.prompt_tokens` / `usage.completion_tokens` flow through to
+  `ChatResponse.usage`; compatible aliases `input_tokens` /
+  `output_tokens` are accepted for non-OpenAI gateways.
+
+Streaming (`stream: true` SSE) is deferred to a follow-up slice; this
+PR ships the batch endpoint only.
+
+Tests:
+- Unit tests inside `http_client.rs` cover typed missing-key errors,
+  debug redaction, base URL normalization, role/body translation,
+  cassette response decoding, compatible usage aliases, and malformed
+  cassette rejection.
+- Integration test at `tests/http_client.rs`, double-gated by
+  `--features http` + env var `TDW_OPENAI_COMPAT_LIVE=1`. It uses
+  `TDW_OPENAI_COMPAT_API_KEY` or `OPENAI_API_KEY`, optional
+  `TDW_OPENAI_COMPAT_BASE_URL`, and optional
+  `TDW_OPENAI_COMPAT_MODEL` (default `gpt-4o-mini`).
+
+Verification for this slice:
+- `cargo +stable test -p tdw-llm-openai-compat --features http --all-targets -- --nocapture`
+  passed with the live test skipped because `TDW_OPENAI_COMPAT_LIVE`
+  was not set.

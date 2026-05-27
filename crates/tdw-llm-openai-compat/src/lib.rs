@@ -5,6 +5,11 @@ use tdw_llm::{
     last_user_message, validate_base_url, validate_model_id,
 };
 
+#[cfg(feature = "http")]
+pub mod http_client;
+#[cfg(feature = "http")]
+pub use http_client::{OpenAiCompatibleHttpClient, OpenAiCompatibleHttpError};
+
 #[derive(Clone, Debug)]
 pub struct OpenAiCompatibleModel {
     model_id: String,

@@ -70,8 +70,8 @@ where the model offers it.
 
 | Crate | Vendor | Streaming | Current state | Status |
 |---|---|---|---|---|
-| `tdw-llm-anthropic` | Anthropic Messages API | yes (SSE) | model adapter only | ⏳ pending |
-| `tdw-llm-openai-compat` | OpenAI / compat | yes (SSE) | model adapter only | ⏳ pending |
+| `tdw-llm-anthropic` | Anthropic Messages API | yes (SSE) | real batch HTTP via Anthropic `/v1/messages` behind `--features http`; cassette tests + `TDW_ANTHROPIC_LIVE=1` live opt-in; SSE streaming follow-up | ✅ batch landed |
+| `tdw-llm-openai-compat` | OpenAI / compat | yes (SSE) | real batch HTTP via OpenAI-compatible `/v1/chat/completions` behind `--features http`; cassette tests + `TDW_OPENAI_COMPAT_LIVE=1` live opt-in; SSE streaming follow-up | ✅ batch landed |
 | `tdw-embed-openai` | OpenAI embeddings | no | request-builder + decoder | ⏳ pending |
 | `tdw-embed-google` | Google embeddings | no | request-builder + decoder | ⏳ pending |
 | `tdw-embed-local` | hash-based | no | real (in-process, hash) | ✅ already real |
@@ -105,7 +105,7 @@ PRs become possible once #13 + #14 are merged.
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **G012 remaining LLM/embedding adapters**: provider transports are complete; Anthropic HTTP has landed, while OpenAI-compatible, OpenAI embeddings, and Google embeddings remain.
+1. **G012 remaining LLM/embedding adapters**: provider transports are complete; Anthropic and OpenAI-compatible batch HTTP have landed, while OpenAI embeddings, Google embeddings, and LLM SSE streaming remain.
 2. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
 3. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
 5. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
