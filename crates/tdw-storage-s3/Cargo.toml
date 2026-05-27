@@ -14,8 +14,13 @@ s3 = ["dep:aws-config", "dep:aws-sdk-s3", "dep:tokio"]
 
 [dependencies]
 async-trait = { workspace = true }
-aws-config = { version = "1.5", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"], optional = true }
-aws-sdk-s3 = { version = "1.65", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"], optional = true }
+# `default-https-client` selects the modern hyper-rustls 0.27 + rustls 0.23 +
+# rustls-webpki 0.103 stack via aws-smithy-http-client's `rustls-aws-lc`
+# feature. The older `rustls` feature still routes through the legacy
+# hyper-rustls 0.24 + rustls 0.21 chain (rustls-webpki 0.101.7), which is
+# flagged by GHSA-82j2-j2ch-gfr8 / -xgp8-3hg3-c2mh / -965h-392x-2mh5.
+aws-config = { version = "1.8", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"], optional = true }
+aws-sdk-s3 = { version = "1.133", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"], optional = true }
 bytes = { workspace = true }
 tdw-core = { workspace = true }
 tokio = { workspace = true, optional = true }
