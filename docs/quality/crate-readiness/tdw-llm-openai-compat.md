@@ -7,12 +7,12 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 - Manifest: crates\tdw-llm-openai-compat\Cargo.toml
 - Target kinds: lib
 - Local dependencies: tdw-llm
-- External dependencies: none
+- External dependencies: reqwest ^0.12.24 (optional); serde ^1.0.228 (optional); serde_json ^1.0.150 (optional); thiserror ^2.0.18 (optional); tokio ^1.52.3 (optional)
 - Dev dependencies: none
 - Reverse local dependencies: tdw-service-api
-- Feature flags: none
-- Test attributes detected: 1
-- tests/ directory: no
+- Feature flags: default=[]; http
+- Test attributes detected: 13
+- tests/ directory: yes
 - README: no
 - Examples directory: no
 - Scaffold/dead-code/fallback scan signals: 2 total, 0 stub-related
@@ -66,8 +66,12 @@ Public surface:
   the completion endpoint to `/v1/chat/completions`.
 - `model_id()` accessor.
 - `async fn complete(request: ChatRequest) -> Result<ChatResponse, OpenAiCompatibleHttpError>`
-  is the primary surface. Async-native because `tdw_llm::LanguageModel`
-  is a synchronous trait; bridging sync/async is a follow-up concern.
+  is the batch Chat Completions surface.
+- `async fn complete_streaming(request: ChatRequest, on_delta: impl FnMut(&str)) -> Result<ChatResponse, OpenAiCompatibleHttpError>`
+  is the SSE surface. It calls `on_delta` for each
+  `choices[].delta.content` chunk and returns the accumulated final
+  response. Async-native because `tdw_llm::LanguageModel` is a
+  synchronous trait; bridging sync/async is a follow-up concern.
 
 Role translation:
 - `MessageRole::System`, `User`, and `Assistant` map directly to the
@@ -84,21 +88,47 @@ Response shape:
   `ChatResponse.usage`; compatible aliases `input_tokens` /
   `output_tokens` are accepted for non-OpenAI gateways.
 
-Streaming (`stream: true` SSE) is deferred to a follow-up slice; this
-PR ships the batch endpoint only.
+Streaming shape:
+- `complete_streaming` adds `stream: true` plus
+  `stream_options.include_usage=true`, consumes SSE incrementally via
+  `reqwest::Response::chunk`, and parses data-only Chat Completions
+  events.
+- `choices[].delta.content` chunks are emitted to `on_delta` and
+  accumulated into the final `ChatResponse.message.content`.
+- `[DONE]` or a final `finish_reason` is required before success.
+- Optional stream usage chunks populate `ChatResponse.usage`; gateways
+  that omit usage still return the streamed text with zero usage
+  counts.
+- Error objects and malformed SSE/JSON become
+  `OpenAiCompatibleHttpError::InvalidResponse`.
 
 Tests:
 - Unit tests inside `http_client.rs` cover typed missing-key errors,
   debug redaction, base URL normalization, role/body translation,
   cassette response decoding, compatible usage aliases, and malformed
-  cassette rejection.
+  cassette rejection. Streaming tests cover stream body flags,
+  split-chunk SSE parsing, delta accumulation, optional usage chunks,
+  `[DONE]`, and streamed error objects.
 - Integration test at `tests/http_client.rs`, double-gated by
   `--features http` + env var `TDW_OPENAI_COMPAT_LIVE=1`. It uses
   `TDW_OPENAI_COMPAT_API_KEY` or `OPENAI_API_KEY`, optional
   `TDW_OPENAI_COMPAT_BASE_URL`, and optional
-  `TDW_OPENAI_COMPAT_MODEL` (default `gpt-4o-mini`).
+  `TDW_OPENAI_COMPAT_MODEL` (default `gpt-4o-mini`). Batch and
+  streaming live tests are both env-gated.
 
 Verification for this slice:
 - `cargo +stable test -p tdw-llm-openai-compat --features http --all-targets -- --nocapture`
   passed with the live test skipped because `TDW_OPENAI_COMPAT_LIVE`
   was not set.
+- `cargo +stable test -p tdw-llm-openai-compat --all-targets -- --nocapture`
+  passed.
+- `cargo +stable clippy -p tdw-llm-openai-compat --features http --all-targets -- -D warnings`
+  passed.
+- `cargo +stable clippy -p tdw-llm-openai-compat --all-targets -- -D warnings`
+  passed.
+- `cargo +stable clippy --workspace --all-targets -- -D warnings`
+  passed.
+- `cargo +stable test --workspace` passed.
+- `cargo +stable run -p xtask -- clean-room-audit` passed.
+- `cargo +stable fmt --all -- --check` and `git diff --check`
+  passed.

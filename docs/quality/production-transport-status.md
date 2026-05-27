@@ -70,19 +70,18 @@ where the model offers it.
 
 | Crate | Vendor | Streaming | Current state | Status |
 |---|---|---|---|---|
-| `tdw-llm-anthropic` | Anthropic Messages API | yes (SSE) | real batch HTTP via Anthropic `/v1/messages` behind `--features http`; cassette tests + `TDW_ANTHROPIC_LIVE=1` live opt-in; SSE streaming follow-up | ✅ batch landed |
-| `tdw-llm-openai-compat` | OpenAI / compat | yes (SSE) | real batch HTTP via OpenAI-compatible `/v1/chat/completions` behind `--features http`; cassette tests + `TDW_OPENAI_COMPAT_LIVE=1` live opt-in; SSE streaming follow-up | ✅ batch landed |
+| `tdw-llm-anthropic` | Anthropic Messages API | yes (SSE) | real batch HTTP + SSE streaming via Anthropic `/v1/messages` behind `--features http`; cassette tests + `TDW_ANTHROPIC_LIVE=1` live opt-in | ✅ landed |
+| `tdw-llm-openai-compat` | OpenAI / compat | yes (SSE) | real batch HTTP + SSE streaming via OpenAI-compatible `/v1/chat/completions` behind `--features http`; cassette tests + `TDW_OPENAI_COMPAT_LIVE=1` live opt-in | ✅ landed |
 | `tdw-embed-openai` | OpenAI embeddings | no | real HTTP via OpenAI `/v1/embeddings` behind `--features http`; cassette tests + `TDW_OPENAI_EMBEDDING_LIVE=1` live opt-in | ✅ landed |
 | `tdw-embed-google` | Google embeddings | no | real HTTP via Gemini `/v1beta/models/{model}:embedContent` behind `--features http`; cassette tests + `TDW_GOOGLE_EMBEDDING_LIVE=1` live opt-in | ✅ landed |
 | `tdw-embed-local` | hash-based | no | real (in-process, hash) | ✅ already real |
 | `tdw-llm` | trait crate | — | trait definitions only | n/a |
 | `tdw-embed` | trait crate | — | trait definitions only | n/a |
 
-Per-vendor PR shape mirrors G011:
-1. Add `reqwest` + `eventsource-stream` (for SSE) behind a feature flag.
-2. Implement the LLM / embedding trait, executing real HTTP, parsing the streamed or batch response.
-3. Integration test gated by env var (e.g. `TDW_ANTHROPIC_TEST_KEY`); skip if unset.
-4. Optional: extend G009 smoke variant to include a tiny LLM round-trip when a key is available.
+**G012 is complete.** LLM batch HTTP, LLM SSE streaming, OpenAI
+embeddings, and Google embeddings all have feature-gated production
+transports with deterministic cassette coverage and explicit live
+test gates.
 
 ## G013 durable persistence backends
 
@@ -105,11 +104,10 @@ PRs become possible once #13 + #14 are merged.
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **G012 remaining LLM/embedding adapters**: provider transports are complete; Anthropic, OpenAI-compatible batch HTTP, OpenAI embeddings, and Google embeddings have landed, while LLM SSE streaming remains.
-2. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
-3. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
-5. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
-6. **G016 aggregate gate**: final verification across G009–G015.
+1. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
+2. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
+3. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
+4. **G016 aggregate gate**: final verification across G009–G015.
 
 Realistic total: **8–12 focused sessions** to land G009–G016 end to end.
 

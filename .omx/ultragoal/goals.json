@@ -138,11 +138,13 @@
       "id": "G012-production-llm-and-embedding-transports",
       "title": "Production LLM and Embedding Transports",
       "objective": "Make tdw-llm-anthropic and tdw-llm-openai-compat actually execute LanguageModel chat requests against their respective HTTP APIs, with replay cassettes for deterministic CI. Add real embedding execution for tdw-embed-openai and tdw-embed-google. Preserve the tdw-llm and tdw-embed contract validation (model ID guard, base URL guard, finite-vector validation). Add streaming response support where the underlying API supports it (Anthropic, OpenAI-compatible). tdw-embed-local stays offline as the hash-embedding default. Surface credential handling as a typed error rather than panic. Worksheets updated. Verification: focused cargo test plus the workspace gate set; live-API tests gated behind a feature flag.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-27T19:43:45.586Z",
-      "startedAt": "2026-05-24T19:22:55.250Z"
+      "updatedAt": "2026-05-27T20:00:11.685Z",
+      "startedAt": "2026-05-24T19:22:55.250Z",
+      "completedAt": "2026-05-27T20:00:11.685Z",
+      "evidence": "G012 complete: tdw-llm-anthropic and tdw-llm-openai-compat now have feature-gated real batch HTTP plus SSE streaming clients with cassette parser coverage and opt-in live tests. tdw-embed-openai and tdw-embed-google have feature-gated real HTTP embedding clients. The default workspace remains offline, shared chat/model and embedding validation remains in force, and live API tests are explicitly env-gated."
     },
     {
       "id": "G013-durable-persistence",
@@ -182,5 +184,5 @@
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G012-production-llm-and-embedding-transports"
+  "activeGoalId": "G013-durable-persistence"
 }

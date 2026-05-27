@@ -7,12 +7,12 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 - Manifest: crates\tdw-llm-anthropic\Cargo.toml
 - Target kinds: lib
 - Local dependencies: tdw-llm
-- External dependencies: none
+- External dependencies: reqwest ^0.12.24 (optional); serde ^1.0.228 (optional); serde_json ^1.0.150 (optional); thiserror ^2.0.18 (optional); tokio ^1.52.3 (optional)
 - Dev dependencies: none
 - Reverse local dependencies: tdw-service-api
-- Feature flags: none
-- Test attributes detected: 1
-- tests/ directory: no
+- Feature flags: default=[]; http
+- Test attributes detected: 14
+- tests/ directory: yes
 - README: no
 - Examples directory: no
 - Scaffold/dead-code/fallback scan signals: 2 total, 0 stub-related
@@ -56,15 +56,19 @@ Existing sync stub `AnthropicMessagesModel` preserved as offline
 default.
 
 Public surface:
-- `AnthropicHttpClient::new(api_key, model_id)` — validates the
-  model id via `tdw_llm::validate_model_id`.
+- `AnthropicHttpClient::new(api_key, model_id)` — validates the API
+  key is non-empty and validates the model id via
+  `tdw_llm::validate_model_id`.
 - `with_base_url(url)` — override default
   `https://api.anthropic.com` for tests / self-hosted gateways.
 - `model_id()` accessor.
 - `async fn complete(request: ChatRequest) -> Result<ChatResponse, AnthropicHttpError>`
-  — the primary surface. Async-native because `tdw_llm::LanguageModel`
-  is a synchronous trait; bridging sync/async is a follow-up
-  concern.
+  — batch Messages API surface.
+- `async fn complete_streaming(request: ChatRequest, on_delta: impl FnMut(&str)) -> Result<ChatResponse, AnthropicHttpError>`
+  — SSE surface. It calls `on_delta` for each text delta and returns
+  the accumulated final response. Async-native because
+  `tdw_llm::LanguageModel` is a synchronous trait; bridging
+  sync/async is a follow-up concern.
 
 Role translation:
 - `MessageRole::System` messages collapse into Anthropic's
@@ -82,25 +86,55 @@ Response shape:
 - `usage.input_tokens` / `usage.output_tokens` flow through to
   `ChatResponse.usage`.
 
-Streaming (`stream: true` SSE) is deferred to a follow-up slice;
-this PR ships the batch endpoint only.
+Streaming shape:
+- `complete_streaming` adds `stream: true`, consumes Anthropic SSE
+  incrementally via `reqwest::Response::chunk`, and parses
+  `content_block_delta` events with `text_delta` payloads.
+- `message_start` and `message_delta` usage are folded into the
+  final `ChatResponse.usage`.
+- `message_stop` is required before success; `error` events and
+  malformed SSE/JSON become `AnthropicHttpError::InvalidResponse`.
+- Unknown events are ignored so the client remains compatible with
+  Anthropic stream event evolution.
 
 Tests:
 - Unit tests inside `http_client.rs` (need `pub(crate)` access to
   `build_request_body` + `parse_response` + the envelope types):
+  - `authenticated_constructor_rejects_empty_key_and_debug_redacts_key`
   - `system_message_becomes_top_level_system_field_and_user_goes_in_messages`
   - `multiple_system_messages_join_with_newline`
   - `tool_role_is_folded_into_user_message_with_marker`
   - `cassette_replay_decodes_messages_response`
   - `cassette_replay_joins_multiple_text_blocks`
   - `cassette_replay_errors_when_no_text_content`
+  - `streaming_request_body_sets_stream_true`
+  - `sse_decoder_handles_split_chunks_and_crlf_boundaries`
+  - `cassette_replay_decodes_anthropic_stream`
+  - `cassette_replay_errors_on_stream_error_event`
 - Integration test at `tests/http_client.rs`, double-gated by
   `--features http` + env vars `TDW_ANTHROPIC_LIVE=1` and
-  `ANTHROPIC_API_KEY`. Calls the cheapest model
+  `ANTHROPIC_API_KEY`. Batch and streaming live tests call the cheapest model
   (`claude-haiku-4-5-20251001`) with a one-message prompt; asserts
-  non-empty content + non-zero `output_tokens`. Costs ~$0.001 per
+  non-empty content, streamed deltas, and non-zero `output_tokens`. Costs ~$0.001 per
   run.
 
 `tdw_core::Credentials` gained an `anthropic_api_key: Option<String>`
 field as part of this slice so deployments can supply the key
 through the standard credentials surface.
+
+Verification for this slice:
+- `cargo +stable test -p tdw-llm-anthropic --features http --all-targets -- --nocapture`
+  passed with live tests skipped because `TDW_ANTHROPIC_LIVE` was
+  not set.
+- `cargo +stable test -p tdw-llm-anthropic --all-targets -- --nocapture`
+  passed.
+- `cargo +stable clippy -p tdw-llm-anthropic --features http --all-targets -- -D warnings`
+  passed.
+- `cargo +stable clippy -p tdw-llm-anthropic --all-targets -- -D warnings`
+  passed.
+- `cargo +stable clippy --workspace --all-targets -- -D warnings`
+  passed.
+- `cargo +stable test --workspace` passed.
+- `cargo +stable run -p xtask -- clean-room-audit` passed.
+- `cargo +stable fmt --all -- --check` and `git diff --check`
+  passed.

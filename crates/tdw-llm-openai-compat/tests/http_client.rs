@@ -86,3 +86,48 @@ async fn live_openai_compatible_returns_completion_when_env_var_set() {
     assert_eq!(response.message.role, MessageRole::Assistant);
     assert_eq!(response.model_id, client.model_id());
 }
+
+#[tokio::test]
+async fn live_openai_compatible_streaming_returns_deltas_when_env_var_set() {
+    if !live_enabled() {
+        eprintln!("TDW_OPENAI_COMPAT_LIVE != 1; skipping live openai-compatible streaming test");
+        return;
+    }
+    let Some(key) = api_key() else {
+        eprintln!("neither TDW_OPENAI_COMPAT_API_KEY nor OPENAI_API_KEY set; skipping live test");
+        return;
+    };
+
+    let mut client = OpenAiCompatibleHttpClient::new(key, model_id())
+        .unwrap_or_else(|error| panic!("client must build: {error}"));
+    if let Some(url) = base_url() {
+        client = client
+            .with_base_url(url)
+            .unwrap_or_else(|error| panic!("base url must parse: {error}"));
+    }
+
+    let request = ChatRequest {
+        messages: vec![
+            ChatMessage {
+                role: MessageRole::System,
+                content: "Reply with exactly one short word.".to_string(),
+            },
+            ChatMessage {
+                role: MessageRole::User,
+                content: "Say hi.".to_string(),
+            },
+        ],
+        max_output_tokens: 32,
+    };
+
+    let mut deltas = Vec::new();
+    let response = client
+        .complete_streaming(request, |delta| deltas.push(delta.to_string()))
+        .await
+        .unwrap_or_else(|error| panic!("live streaming request must succeed: {error}"));
+
+    assert!(!deltas.is_empty(), "live stream must emit deltas");
+    assert!(!response.message.content.trim().is_empty());
+    assert_eq!(response.message.role, MessageRole::Assistant);
+    assert_eq!(response.model_id, client.model_id());
+}
