@@ -44,3 +44,47 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production Binance transport/runtime integration.
+
+## Production Backend Evidence (G011)
+
+`BinanceHttpTickerPriceFetcher` (gated by `--features http`) lives in
+`crates/tdw-provider-binance/src/http_fetcher.rs` and implements
+`tdw_core::Fetcher` against Binance's public `/api/v3/ticker/price`
+endpoint directly via `reqwest`. No SDK or credentials required for
+this public market-data endpoint.
+
+Existing `ticker_price_request` keeps the request-contract surface and
+symbol validation for offline tests and downstream callers.
+
+Public surface:
+- `BinanceTickerPriceQuery::new(symbol)` — validates and normalizes
+  Binance symbols.
+- `BinanceTickerPrice` — decoded row shape with `symbol` and numeric
+  `price`.
+- `BinanceHttpTickerPriceFetcher::default()` — base URL
+  `https://api.binance.com`.
+- `with_base_url(url)` — point at an alternate Binance-compatible
+  endpoint.
+- `Fetcher::transform_query` accepts `{ "symbol": "BTCUSDT" }`.
+- `Fetcher::extract_data` issues `GET /api/v3/ticker/price` with the
+  normalized `symbol` query parameter.
+- `Fetcher::transform_data` parses Binance's string price into `f64`
+  and propagates Binance `code` / `msg` error envelopes as
+  `Error::Provider`.
+
+Tests (`crates/tdw-provider-binance/tests/http_fetcher.rs`,
+double-gated by `--features http`):
+- `cassette_replay_decodes_binance_ticker_price` — always runs under
+  the feature; parses a recorded Binance response shape and asserts
+  price decoding.
+- `cassette_replay_surfaces_binance_error_envelope` — propagates
+  Binance's JSON error envelope as `Error::Provider`.
+- `transform_query_normalizes_symbol_and_rejects_query_injection` —
+  keeps the existing query-injection boundary active on the HTTP
+  fetcher.
+- `live_binance_returns_ticker_price_when_env_var_set` — additionally
+  gated by `TDW_BINANCE_LIVE=1`; performs a real HTTP request to
+  Binance.
+
+See `docs/quality/production-transport-status.md` for the broader
+G011 punch list.
