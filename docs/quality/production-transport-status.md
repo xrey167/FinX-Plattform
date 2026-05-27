@@ -49,7 +49,7 @@ for offline determinism.
 | `tdw-provider-ws-mock` | none | streamer | mock streamer (deterministic ticks) | ✅ already real |
 | `tdw-provider-yahoo` | none | `equity_historical` (`YahooHttpEquityHistoricalFetcher`) | real HTTP via Yahoo v8 chart API behind `--features http`; cassette tests + `TDW_YAHOO_LIVE=1` live opt-in | ✅ landed |
 | `tdw-provider-fred` | API key via `FRED_API_KEY` | `series_observations` (`FredHttpSeriesObservationsFetcher`) | real HTTP via FRED `/series/observations` behind `--features http`; cassette tests + `TDW_FRED_LIVE=1` live opt-in | ✅ landed |
-| `tdw-provider-alpaca` | API key + secret | `stock_bars`, others | request-builder only | ⏳ pending |
+| `tdw-provider-alpaca` | API key + secret via `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY` | `stock_bars` (`AlpacaHttpStockBarsFetcher`) | real HTTP via Alpaca `/v2/stocks/bars` behind `--features http`; cassette tests + `TDW_ALPACA_LIVE=1` live opt-in | ✅ landed |
 | `tdw-provider-binance` | API key + secret | `ticker_price`, others | request-builder only | ⏳ pending |
 | `tdw-provider-polygon` | API key via `POLYGON_API_KEY` | `aggregates` (`PolygonHttpAggregatesFetcher`) | real HTTP via Polygon `/v2/aggs/ticker/.../range/1/day/.../...` behind `--features http`; cassette tests + `TDW_POLYGON_LIVE=1` live opt-in | ✅ landed |
 | `tdw-provider-huggingface` | API token | `text_generation`, others | request-builder only | ⏳ pending |
@@ -105,7 +105,7 @@ PRs become possible once #13 + #14 are merged.
 The pattern is now established; the work is mechanical from here.
 Recommended sequence:
 
-1. **G011 providers next slices**: Yahoo, FRED, and Polygon are landed; continue with Alpaca because it is the remaining keyed market-data API before Binance/HuggingFace.
+1. **G011 providers next slices**: Yahoo, FRED, Polygon, and Alpaca are landed; continue with Binance then HuggingFace.
 2. **G012 remaining LLM/embedding adapters**: Anthropic HTTP has landed; OpenAI-compatible, OpenAI embeddings, and Google embeddings remain.
 3. **G013 durable persistence remainder**: outbox, snapshot, bus, and session Postgres slices have landed; rollout persistence and cross-store verification remain.
 4. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
