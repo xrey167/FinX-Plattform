@@ -11,7 +11,7 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - Dev dependencies: none
 - Reverse local dependencies: tdw-cli, tdw-mcp, tdw-service, tdw-worker
 - Feature flags: none
-- Test attributes detected: 12
+- Test attributes detected: 18
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -56,12 +56,18 @@ Verified with `cargo test -p tdw-test-utils --test end_to_end_smoke` — green.
 
 ## Policy Binding Evidence (G015)
 
-First G015 request-path binding landed in `tdw-service-api`:
+G015 request-path binding landed in `tdw-service-api`:
 
 - `secure_endpoint_response` validates incoming OIDC claims with
   `tdw-auth-oidc`, authorizes the endpoint with `tdw-auth`, executes registered
-  hook outcomes and honors hook vetoes, then applies `tdw-mask` rules to the
-  outgoing JSON response.
+  hooks through `tdw-hooks::HookRegistry::execute_handlers`, honors service hook
+  vetoes only when the deployment policy permits them, and applies `tdw-mask`
+  rules to the outgoing JSON response.
+- `PolicyEnforcementConfig` now carries `HookExecutionPolicy`, so service hooks
+  are deny-by-default until an explicit deployment allow rule is configured.
+- `SecureServiceRuntime` and the `*_with_backend` secure helpers bind a concrete
+  `HookHandlerBackend` to the service request path; tests prove MCP handlers run
+  through the bound backend and denied hook actions fail before backend calls.
 - `secure_endpoint_by_name` is deny-by-default for unknown service endpoint
   names.
 - `secure_udf_run` validates the same ingress/auth boundary before dispatching
@@ -72,4 +78,4 @@ First G015 request-path binding landed in `tdw-service-api`:
   execution, and denied network-capability UDF execution.
 
 Verification: `cargo +stable test -p tdw-service-api -- --nocapture` passed
-16/16 tests.
+18/18 tests.
