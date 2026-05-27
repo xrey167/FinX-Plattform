@@ -38,7 +38,9 @@ use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
 use tdw_graph::DirectedGraph;
 use tdw_hooks::{
-    AdditionalContext, HandlerKind, HookEvent, HookRegistry, HookSpec, TransactionMode, event_hook,
+    AdditionalContext, HandlerKind, HookEvent, HookExecutionPolicy, HookHandlerBackend,
+    HookRegistry, HookSpec, PermissionEffect, PermissionRule, PermissionRules,
+    SystemHookHandlerBackend, TransactionMode, event_hook,
 };
 use tdw_kg::{Entity, EntityKind, KnowledgeGraph, Relationship};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex, summarize_syntax};
@@ -140,6 +142,8 @@ impl IngressAuthContext {
 pub struct PolicyEnforcementConfig {
     pub auth: IngressAuthContext,
     pub hooks: Vec<HookSpec>,
+    #[serde(default)]
+    pub hook_execution: HookExecutionPolicy,
     pub mask_rules: Vec<MaskRule>,
 }
 
@@ -150,6 +154,110 @@ pub struct PolicyEnforcementEvidence {
     pub roles: Vec<String>,
     pub hooks: Vec<String>,
     pub masked_fields: Vec<String>,
+}
+
+pub struct SecureServiceRuntime<B> {
+    config: PolicyEnforcementConfig,
+    hook_backend: B,
+}
+
+impl<B> SecureServiceRuntime<B> {
+    pub fn new(config: PolicyEnforcementConfig, hook_backend: B) -> Self {
+        Self {
+            config,
+            hook_backend,
+        }
+    }
+
+    pub fn config(&self) -> &PolicyEnforcementConfig {
+        &self.config
+    }
+
+    pub fn hook_backend(&self) -> &B {
+        &self.hook_backend
+    }
+
+    pub fn hook_backend_mut(&mut self) -> &mut B {
+        &mut self.hook_backend
+    }
+
+    pub fn into_parts(self) -> (PolicyEnforcementConfig, B) {
+        (self.config, self.hook_backend)
+    }
+}
+
+impl<B: HookHandlerBackend> SecureServiceRuntime<B> {
+    pub fn endpoint_response(&mut self, provider: &str, symbol: &str) -> Result<Value> {
+        let evidence = enforce_request_path_with_backend(
+            &self.config,
+            ServiceEndpoint::EquityHistorical,
+            &mut self.hook_backend,
+        )?;
+        let response = crate::endpoint_response(provider, symbol)?;
+        Ok(json!({
+            "policy": evidence,
+            "response": mask_json_response(response, &self.config.mask_rules),
+        }))
+    }
+
+    pub fn endpoint_by_name(
+        &mut self,
+        endpoint: &str,
+        provider: &str,
+        symbol: &str,
+    ) -> Result<Value> {
+        match endpoint {
+            "equity_historical" => self.endpoint_response(provider, symbol),
+            other => Err(Error::Provider(format!(
+                "endpoint denied by default: {other}"
+            ))),
+        }
+    }
+
+    pub fn udf_run(&mut self, request: UdfRequest) -> Result<Value> {
+        let evidence = enforce_request_path_with_backend(
+            &self.config,
+            ServiceEndpoint::UdfRun,
+            &mut self.hook_backend,
+        )?;
+        let sandbox = LocalUdfSandbox;
+        let response = sandbox
+            .run(request)
+            .map_err(|error| Error::Provider(format!("sandbox denied request: {error}")))?;
+        Ok(json!({
+            "policy": evidence,
+            "response": mask_json_response(json!({
+                "runtime": response.runtime,
+                "output": response.output,
+            }), &self.config.mask_rules),
+        }))
+    }
+}
+
+pub fn service_hook_policy<I, S>(
+    allowed_patterns: I,
+    allow_handler_vetoes: bool,
+) -> HookExecutionPolicy
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut permissions = PermissionRules {
+        default_permission: PermissionEffect::Deny,
+        rules: Vec::new(),
+    };
+    for pattern in allowed_patterns {
+        let pattern = pattern.into();
+        permissions.push(PermissionRule::new(
+            PermissionEffect::Allow,
+            pattern.clone(),
+            pattern,
+        ));
+    }
+    HookExecutionPolicy {
+        permissions,
+        allow_handler_vetoes,
+    }
 }
 
 pub fn default_registry() -> Result<ProviderRegistry> {
@@ -337,7 +445,18 @@ pub fn secure_endpoint_response(
     provider: &str,
     symbol: &str,
 ) -> Result<Value> {
-    let evidence = enforce_request_path(config, ServiceEndpoint::EquityHistorical)?;
+    let mut backend = SystemHookHandlerBackend::default();
+    secure_endpoint_response_with_backend(config, provider, symbol, &mut backend)
+}
+
+pub fn secure_endpoint_response_with_backend(
+    config: &PolicyEnforcementConfig,
+    provider: &str,
+    symbol: &str,
+    hook_backend: &mut impl HookHandlerBackend,
+) -> Result<Value> {
+    let evidence =
+        enforce_request_path_with_backend(config, ServiceEndpoint::EquityHistorical, hook_backend)?;
     let response = endpoint_response(provider, symbol)?;
     Ok(json!({
         "policy": evidence,
@@ -351,8 +470,21 @@ pub fn secure_endpoint_by_name(
     provider: &str,
     symbol: &str,
 ) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    secure_endpoint_by_name_with_backend(config, endpoint, provider, symbol, &mut backend)
+}
+
+pub fn secure_endpoint_by_name_with_backend(
+    config: &PolicyEnforcementConfig,
+    endpoint: &str,
+    provider: &str,
+    symbol: &str,
+    hook_backend: &mut impl HookHandlerBackend,
+) -> Result<Value> {
     match endpoint {
-        "equity_historical" => secure_endpoint_response(config, provider, symbol),
+        "equity_historical" => {
+            secure_endpoint_response_with_backend(config, provider, symbol, hook_backend)
+        }
         other => Err(Error::Provider(format!(
             "endpoint denied by default: {other}"
         ))),
@@ -360,7 +492,17 @@ pub fn secure_endpoint_by_name(
 }
 
 pub fn secure_udf_run(config: &PolicyEnforcementConfig, request: UdfRequest) -> Result<Value> {
-    let evidence = enforce_request_path(config, ServiceEndpoint::UdfRun)?;
+    let mut backend = SystemHookHandlerBackend::default();
+    secure_udf_run_with_backend(config, request, &mut backend)
+}
+
+pub fn secure_udf_run_with_backend(
+    config: &PolicyEnforcementConfig,
+    request: UdfRequest,
+    hook_backend: &mut impl HookHandlerBackend,
+) -> Result<Value> {
+    let evidence =
+        enforce_request_path_with_backend(config, ServiceEndpoint::UdfRun, hook_backend)?;
     let sandbox = LocalUdfSandbox;
     let response = sandbox
         .run(request)
@@ -374,9 +516,10 @@ pub fn secure_udf_run(config: &PolicyEnforcementConfig, request: UdfRequest) -> 
     }))
 }
 
-fn enforce_request_path(
+fn enforce_request_path_with_backend(
     config: &PolicyEnforcementConfig,
     endpoint: ServiceEndpoint,
+    hook_backend: &mut impl HookHandlerBackend,
 ) -> Result<PolicyEnforcementEvidence> {
     validate_claims_strict(
         &config.auth.claims,
@@ -414,12 +557,12 @@ fn enforce_request_path(
         registry.register(hook.clone());
     }
     let hooks = registry
-        .execute_runtime(&envelope)
+        .execute_handlers(&envelope, &config.hook_execution, hook_backend)
         .map_err(|error| Error::Provider(format!("hook enforcement failed: {error}")))?;
-    if let Some(hook) = hooks.iter().find(|hook| hook.should_stop) {
+    if let Some(hook) = hooks.iter().find(|hook| hook.runtime.should_stop) {
         return Err(Error::Provider(format!(
             "hook vetoed request: {}",
-            hook.name
+            hook.runtime.name
         )));
     }
 
@@ -427,7 +570,7 @@ fn enforce_request_path(
         endpoint: endpoint.as_str().to_string(),
         principal: principal.subject,
         roles: principal.roles,
-        hooks: hooks.into_iter().map(|hook| hook.name).collect(),
+        hooks: hooks.into_iter().map(|hook| hook.runtime.name).collect(),
         masked_fields: config
             .mask_rules
             .iter()
@@ -1070,6 +1213,15 @@ mod tests {
         hooks: Vec<HookSpec>,
         mask_rules: Vec<MaskRule>,
     ) -> PolicyEnforcementConfig {
+        policy_config_with_hook_policy(roles, hooks, mask_rules, HookExecutionPolicy::default())
+    }
+
+    fn policy_config_with_hook_policy(
+        roles: Vec<&str>,
+        hooks: Vec<HookSpec>,
+        mask_rules: Vec<MaskRule>,
+        hook_execution: HookExecutionPolicy,
+    ) -> PolicyEnforcementConfig {
         PolicyEnforcementConfig {
             auth: IngressAuthContext {
                 claims: JwtClaims {
@@ -1087,7 +1239,63 @@ mod tests {
                 audience: "tdw".to_string(),
             },
             hooks,
+            hook_execution,
             mask_rules,
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingHookBackend {
+        calls: Vec<String>,
+    }
+
+    impl HookHandlerBackend for RecordingHookBackend {
+        fn run_command(
+            &mut self,
+            command: &str,
+            args: &[String],
+            payload: Value,
+        ) -> std::result::Result<Value, tdw_hooks::HookError> {
+            self.calls.push(format!("command:{command}"));
+            Ok(json!({ "command": command, "args": args, "payload": payload }))
+        }
+
+        fn call_http(
+            &mut self,
+            url: &str,
+            payload: Value,
+        ) -> std::result::Result<Value, tdw_hooks::HookError> {
+            self.calls.push(format!("http:{url}"));
+            Ok(json!({ "url": url, "payload": payload }))
+        }
+
+        fn call_mcp(
+            &mut self,
+            server: &str,
+            tool: &str,
+            payload: Value,
+        ) -> std::result::Result<Value, tdw_hooks::HookError> {
+            self.calls.push(format!("mcp:{server}.{tool}"));
+            Ok(json!({ "server": server, "tool": tool, "payload": payload }))
+        }
+
+        fn load_prompt(
+            &mut self,
+            prompt_path: &str,
+            payload: Value,
+        ) -> std::result::Result<Value, tdw_hooks::HookError> {
+            self.calls.push(format!("prompt:{prompt_path}"));
+            Ok(json!({ "prompt_path": prompt_path, "payload": payload }))
+        }
+
+        fn run_agent(
+            &mut self,
+            agent_id: &str,
+            skill_id: &str,
+            payload: Value,
+        ) -> std::result::Result<Value, tdw_hooks::HookError> {
+            self.calls.push(format!("agent:{agent_id}.{skill_id}"));
+            Ok(json!({ "agent_id": agent_id, "skill_id": skill_id, "payload": payload }))
         }
     }
 
@@ -1129,27 +1337,34 @@ mod tests {
 
     #[test]
     fn secure_endpoint_validates_auth_hooks_and_masks_response() {
-        let config = policy_config(
+        let config = policy_config_with_hook_policy(
             vec!["analyst"],
-            vec![HookSpec::new(
-                "audit_request",
-                1,
-                TransactionMode::InTransaction,
-            )],
+            vec![
+                HookSpec::new("audit_request", 1, TransactionMode::InTransaction).with_handler(
+                    HandlerKind::Mcp {
+                        server: "local".to_string(),
+                        tool: "audit".to_string(),
+                    },
+                ),
+            ],
             vec![MaskRule {
                 field: "provider".to_string(),
                 mode: MaskMode::Redact,
             }],
+            service_hook_policy(["hook.mcp.local.audit"], false),
         );
+        let mut backend = RecordingHookBackend::default();
 
-        let response = secure_endpoint_response(&config, "fileset", "aapl")
-            .unwrap_or_else(|error| panic!("secure endpoint should succeed: {error}"));
+        let response =
+            secure_endpoint_response_with_backend(&config, "fileset", "aapl", &mut backend)
+                .unwrap_or_else(|error| panic!("secure endpoint should succeed: {error}"));
 
         assert_eq!(response["policy"]["endpoint"], "equity_historical");
         assert_eq!(response["policy"]["principal"], "alice");
         assert_eq!(response["policy"]["hooks"][0], "audit_request");
         assert_eq!(response["response"]["provider"], "***");
         assert_eq!(response["response"]["rows"][0]["symbol"], "AAPL");
+        assert_eq!(backend.calls, vec!["mcp:local.audit"]);
     }
 
     #[test]
@@ -1178,14 +1393,24 @@ mod tests {
             .expect_err("bad audience must deny");
         assert!(rejected.to_string().contains("ingress jwt rejected"));
 
-        let veto = policy_config(
+        let veto = policy_config_with_hook_policy(
             vec!["analyst"],
-            vec![HookSpec::new("deny_request", 1, TransactionMode::InTransaction).should_stop()],
+            vec![
+                HookSpec::new("deny_request", 1, TransactionMode::InTransaction)
+                    .with_handler(HandlerKind::Mcp {
+                        server: "local".to_string(),
+                        tool: "deny".to_string(),
+                    })
+                    .should_stop(),
+            ],
             Vec::new(),
+            service_hook_policy(["hook.mcp.local.deny"], true),
         );
-        let stopped = secure_endpoint_response(&veto, "fileset", "aapl")
+        let mut backend = RecordingHookBackend::default();
+        let stopped = secure_endpoint_response_with_backend(&veto, "fileset", "aapl", &mut backend)
             .expect_err("stopping hook must veto");
         assert!(stopped.to_string().contains("hook vetoed request"));
+        assert_eq!(backend.calls, vec!["mcp:local.deny"]);
     }
 
     #[test]
@@ -1206,6 +1431,56 @@ mod tests {
         let denied = secure_udf_run(&allowed, uppercase_udf_request(true))
             .expect_err("network capability must deny");
         assert!(denied.to_string().contains("sandbox denied capability"));
+    }
+
+    #[test]
+    fn secure_endpoint_hook_policy_denies_before_backend_execution() {
+        let config = policy_config(
+            vec!["analyst"],
+            vec![
+                HookSpec::new("audit_request", 1, TransactionMode::InTransaction).with_handler(
+                    HandlerKind::Mcp {
+                        server: "local".to_string(),
+                        tool: "audit".to_string(),
+                    },
+                ),
+            ],
+            Vec::new(),
+        );
+        let mut backend = RecordingHookBackend::default();
+
+        let denied =
+            secure_endpoint_response_with_backend(&config, "fileset", "aapl", &mut backend)
+                .expect_err("unallowed hook action must deny before backend execution");
+
+        assert!(denied.to_string().contains("hook permission denied"));
+        assert!(backend.calls.is_empty());
+    }
+
+    #[test]
+    fn secure_service_runtime_reuses_bound_hook_backend() {
+        let config = policy_config_with_hook_policy(
+            vec!["udf_runner"],
+            vec![
+                HookSpec::new("udf_audit", 1, TransactionMode::InTransaction).with_handler(
+                    HandlerKind::Mcp {
+                        server: "local".to_string(),
+                        tool: "udf_audit".to_string(),
+                    },
+                ),
+            ],
+            Vec::new(),
+            service_hook_policy(["hook.mcp.local.udf_audit"], false),
+        );
+        let mut runtime = SecureServiceRuntime::new(config, RecordingHookBackend::default());
+
+        let response = runtime
+            .udf_run(uppercase_udf_request(false))
+            .unwrap_or_else(|error| panic!("runtime-bound udf should succeed: {error}"));
+
+        assert_eq!(response["policy"]["endpoint"], "udf.run");
+        assert_eq!(response["policy"]["hooks"][0], "udf_audit");
+        assert_eq!(runtime.hook_backend().calls, vec!["mcp:local.udf_audit"]);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-22T02:12:27.180Z",
-  "updatedAt": "2026-05-27T21:47:27.700Z",
+  "updatedAt": "2026-05-27T22:18:47.114Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -174,23 +174,26 @@
       "id": "G015-policy-enforcement-binding",
       "title": "Policy Enforcement Binding",
       "objective": "Wire the hook, auth, sandbox, and mask validation contracts into actual request-path enforcement. tdw-hooks runtime gains real handler execution (command runner with capability boundaries, HTTP caller, MCP client) instead of declarative-only. tdw-auth role checks gate every tdw-service-api endpoint with deny-by-default. tdw-auth-oidc JWT validation runs on incoming requests at the transport boundary. tdw-sandbox capabilities are enforced when tdw-udf executes user code (deny network/filesystem unless explicitly granted). tdw-mask masking rules apply to outgoing responses end-to-end. tdw-define declarative events are reachable from real end-to-end flows. Add request-path integration tests proving denied actions actually fail (and accepted actions actually succeed). Worksheets updated to record real enforcement evidence. Verification: focused cargo test plus the workspace gate set, with a dedicated permission-deny integration suite.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-27T21:47:27.700Z",
+      "updatedAt": "2026-05-27T22:18:47.114Z",
       "startedAt": "2026-05-27T21:17:38.815Z",
-      "evidence": "G015 in progress. First slice: tdw-service-api gained secure request-path wrappers that validate OIDC JWT claims at ingress, map endpoint policies to tdw-auth role checks with deny-by-default endpoint selection, execute configured tdw-hooks before request dispatch, enforce tdw-sandbox UDF capabilities through LocalUdfSandbox, and apply tdw-mask rules to outgoing JSON responses. Second slice: tdw-hooks gained HookRegistry::execute_handlers with HookExecutionPolicy/HookExecutionOutcome plus SystemHookHandlerBackend for no-shell command execution, bounded authenticated HTTPS POST hooks, and registered MCP client handlers. Focused tests cover allowed and denied service endpoint access, bad ingress claims, hook veto, denied UDF filesystem capability, allowed command execution, registered MCP execution, denial before backend execution, and HTTP veto denial. Remaining G015 work: bind hook handler execution into service transport entrypoints and complete broader transport-boundary wiring."
+      "evidence": "G015 complete: tdw-service-api secure request paths validate OIDC JWT claims at ingress, map endpoint policies to tdw-auth role checks with deny-by-default endpoint selection, route configured hooks through tdw-hooks::HookRegistry::execute_handlers with explicit HookExecutionPolicy and a concrete HookHandlerBackend, enforce tdw-sandbox UDF capabilities through LocalUdfSandbox, and apply tdw-mask rules to outgoing JSON responses. tdw-hooks provides policy-gated real handler execution with no-shell command execution, bounded authenticated HTTPS POST hooks, and registered MCP client handlers. Service-side tests cover accepted and denied endpoint calls, bad ingress claims, hook veto, denied UDF network capability, denied hook action before backend execution, registered MCP backend execution, SecureServiceRuntime backend reuse, and HTTP veto denial. Verification passed: cargo +stable fmt --all -- --check, cargo +stable check --workspace, cargo +stable clippy --workspace --all-targets -- -D warnings, cargo +stable test --workspace, cargo +stable run -p xtask -- clean-room-audit, git diff --check, and .omx JSON/ledger parse.",
+      "completedAt": "2026-05-27T22:18:47.114Z"
     },
     {
       "id": "G016-aggregate-production-functional-gate",
       "title": "Aggregate Production-Functional Gate",
       "objective": "Final verification gate for the production functionality push. Confirm every G009-G015 story has its evidence captured; every readiness worksheet for affected crates reflects 'production' rather than 'bootstrap contract'; docker-compose end-to-end run completes cleanly using the G014 stack; CI builds and pushes images on main; release artifacts exist for at least one vN.M.P tag; the policy-enforcement integration tests from G015 are part of the workspace test suite. Update docs/quality/release-readiness-summary.md to mark the production-functional push as APPROVE/CLEAR (the existing G008 summary becomes the bootstrap baseline section). Run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings, cargo check --workspace, cargo test --workspace, cargo run -p xtask -- clean-room-audit, git diff --check, ai-slop-cleaner on changed files, and a final code-review with recommendation APPROVE and architectStatus CLEAR before completing the Codex goal.",
-      "status": "pending",
+      "status": "in_progress",
       "attempt": 0,
       "createdAt": "2026-05-23T10:31:23.217Z",
-      "updatedAt": "2026-05-23T10:31:23.217Z"
+      "updatedAt": "2026-05-27T22:18:47.114Z",
+      "startedAt": "2026-05-27T22:18:47.114Z",
+      "evidence": "G016 opened after G015 completion. Next work is the aggregate production-functional gate across G009-G015 evidence, final release-readiness summary, and final verification/code-review pass."
     }
   ],
   "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-crate-readiness-rubric-inventory-and-matrix Crate Readiness Rubric, Inventory, and Matrix; G002-core-contracts-event-session-and-replay-crates Core Contracts, Event, Session, and Replay Crates; G003-data-storage-pipeline-and-sql-crates Data, Storage, Pipeline, and SQL Crates; G004-provider-embedding-and-model-adapter-crates Provider, Embedding, and Model Adapter Crates; G005-agent-auth-hooks-tools-and-udf-crates Agent, Auth, Hooks, Tools, and UDF Crates; G006-knowledge-graph-tags-ml-eval-and-utility-crates Knowledge, Graph, Tags, ML, Eval, and Utility Crates; G007-client-service-mcp-acp-runtime-and-worker-crates Client, Service, MCP, ACP, Runtime, and Worker Crates; G008-aggregate-production-readiness-gate Aggregate Production Readiness Gate; G009-end-to-end-functional-smoke End-to-End Functional Smoke; G010-production-storage-transports Production Storage Transports; G011-production-provider-transports Production Provider Transports; G012-production-llm-and-embedding-transports Production LLM and Embedding Transports; G013-durable-persistence Durable Persistence Backends; G014-release-packaging Release Packaging; G015-policy-enforcement-binding Policy Enforcement Binding; G016-aggregate-production-functional-gate Aggregate Production-Functional Gate",
-  "activeGoalId": "G015-policy-enforcement-binding"
+  "activeGoalId": "G016-aggregate-production-functional-gate"
 }
