@@ -3384,9 +3384,12 @@ dependencies = [
 name = "tdw-embed-google"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
+ "serde",
  "serde_json",
  "tdw-embed",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

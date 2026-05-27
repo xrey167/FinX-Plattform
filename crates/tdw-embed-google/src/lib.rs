@@ -4,6 +4,11 @@ use serde_json::{Value, json};
 use tdw_embed::Embedding;
 use thiserror::Error;
 
+#[cfg(feature = "http")]
+pub mod http_client;
+#[cfg(feature = "http")]
+pub use http_client::{GoogleEmbeddingHttpClient, GoogleEmbeddingHttpError};
+
 pub const PROVIDER_ID: &str = "google";
 pub const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -48,6 +53,7 @@ pub fn build_embedding_request(
         path: format!("/models/{model}:embedContent"),
         api_key_required: true,
         body: json!({
+            "model": format!("models/{model}"),
             "content": {
                 "parts": [{ "text": input }]
             }
@@ -90,6 +96,7 @@ mod tests {
 
         assert_eq!(request.provider, "google");
         assert_eq!(request.path, "/models/text-embedding-004:embedContent");
+        assert_eq!(request.body["model"], "models/text-embedding-004");
         assert_eq!(request.body["content"]["parts"][0]["text"], "macro note");
         assert_eq!(embedding.vector.len(), 2);
         assert!(build_embedding_request("model", "input", false).is_err());
