@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "meilisearch")]
+pub mod http_engine;
+
+#[cfg(feature = "meilisearch")]
+pub use http_engine::MeilisearchHttpEngine;
+
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
