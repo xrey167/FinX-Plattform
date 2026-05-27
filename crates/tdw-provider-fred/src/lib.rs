@@ -1,5 +1,13 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "http")]
+pub mod http_fetcher;
+
+#[cfg(feature = "http")]
+pub use http_fetcher::FredHttpSeriesObservationsFetcher;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const PROVIDER_ID: &str = "fred";
@@ -22,6 +30,28 @@ pub struct ProviderRequest {
     pub endpoint: &'static str,
     pub path: String,
     pub credential_param: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FredSeriesObservationsQuery {
+    pub series_id: String,
+}
+
+impl FredSeriesObservationsQuery {
+    pub fn new(series_id: &str) -> Result<Self> {
+        Ok(Self {
+            series_id: normalize_series_id(series_id)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FredObservation {
+    pub series_id: String,
+    pub date: String,
+    pub value: f64,
+    pub realtime_start: String,
+    pub realtime_end: String,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -89,5 +119,15 @@ mod tests {
         assert!(series_observations_request("GDP", false).is_err());
         assert!(series_observations_request("", true).is_err());
         assert!(series_observations_request("GDP&file_type=xml", true).is_err());
+    }
+
+    #[test]
+    fn builds_series_observation_query_model() {
+        let query = FredSeriesObservationsQuery::new("unrate")
+            .unwrap_or_else(|error| panic!("query should build: {error}"));
+
+        assert_eq!(query.series_id, "UNRATE");
+        assert!(FredSeriesObservationsQuery::new(" ").is_err());
+        assert!(FredSeriesObservationsQuery::new("GDP&limit=1").is_err());
     }
 }

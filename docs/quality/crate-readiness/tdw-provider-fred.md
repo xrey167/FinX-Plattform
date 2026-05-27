@@ -44,3 +44,53 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production FRED transport/runtime integration.
+
+## Production Backend Evidence (G011)
+
+`FredHttpSeriesObservationsFetcher` (gated by `--features http`) lives
+in `crates/tdw-provider-fred/src/http_fetcher.rs` and implements
+`tdw_core::Fetcher` against FRED's `/series/observations` endpoint
+directly via `reqwest`. No SDK required; live calls load the API key
+from `FRED_API_KEY`.
+
+Existing `series_observations_request` keeps the request-contract
+surface and series ID validation for offline tests and downstream
+callers.
+
+Public surface:
+- `FredSeriesObservationsQuery::new(series_id)` — validates and
+  normalizes FRED series IDs.
+- `FredObservation` — decoded row shape with `series_id`, `date`,
+  `value`, `realtime_start`, and `realtime_end`.
+- `FredHttpSeriesObservationsFetcher::default()` — base URL
+  `https://api.stlouisfed.org/fred`, bounded by a default
+  `limit=1000`.
+- `with_base_url(url)` — point at an alternate FRED-compatible
+  endpoint.
+- `with_observation_start(date)` / `with_observation_end(date)` /
+  `with_limit(limit)` — constrain the remote observation window.
+- `Fetcher::transform_query` accepts `{ "series_id": "GDP" }` and
+  reuses the existing series ID validation boundary.
+- `Fetcher::extract_data` issues `GET /series/observations` with
+  `series_id`, `api_key`, `file_type=json`, and optional date/limit
+  query parameters.
+- `Fetcher::transform_data` parses FRED's JSON observations envelope,
+  skips missing-value `"."` observations, and propagates FRED
+  `error_code` / `error_message` envelopes as `Error::Provider`.
+
+Tests (`crates/tdw-provider-fred/tests/http_fetcher.rs`, double-gated
+by `--features http`):
+- `cassette_replay_decodes_observations_and_skips_missing_values` —
+  always runs under the feature; parses a recorded FRED response shape
+  and asserts row decoding.
+- `cassette_replay_surfaces_fred_error_envelope` — propagates FRED's
+  JSON error envelope as `Error::Provider`.
+- `transform_query_normalizes_series_id_and_rejects_query_injection`
+  — keeps the existing query-injection boundary active on the HTTP
+  fetcher.
+- `live_fred_returns_recent_observations_when_env_vars_set` —
+  additionally gated by `TDW_FRED_LIVE=1`; requires `FRED_API_KEY` and
+  performs a real HTTP request to FRED.
+
+See `docs/quality/production-transport-status.md` for the broader
+G011 punch list.
