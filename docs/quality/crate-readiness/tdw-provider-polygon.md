@@ -44,3 +44,49 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 ## Verdict
 
 Ready with follow-ups. No G004 blocker remains; follow-ups are production Polygon transport/runtime integration.
+
+## Production Backend Evidence (G011)
+
+`PolygonHttpAggregatesFetcher` (gated by `--features http`) lives in
+`crates/tdw-provider-polygon/src/http_fetcher.rs` and implements
+`tdw_core::Fetcher` against Polygon's stock aggregates endpoint
+directly via `reqwest`. No SDK required; live calls load the API key
+from `POLYGON_API_KEY`.
+
+Existing `aggregates_request` keeps the request-contract surface and
+ticker validation for offline tests and downstream callers.
+
+Public surface:
+- `PolygonAggregatesQuery::new(ticker, from, to)` — validates and
+  normalizes tickers plus `YYYY-MM-DD` path dates.
+- `with_adjusted(adjusted)` / `with_limit(limit)` — configure
+  Polygon's adjusted-price and result-limit query parameters.
+- `PolygonHttpAggregatesFetcher::default()` — base URL
+  `https://api.polygon.io`.
+- `with_base_url(url)` — point at an alternate Polygon-compatible
+  endpoint.
+- `Fetcher::transform_query` accepts `{ "ticker": "MSFT", "from":
+  "2024-01-02", "to": "2024-01-05" }`; `symbol` is also accepted as a
+  ticker alias.
+- `Fetcher::extract_data` issues `GET
+  /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}` with `adjusted`,
+  `sort=asc`, `limit`, and `apiKey` query parameters.
+- `Fetcher::transform_data` parses Polygon's aggregates envelope into
+  `tdw_domain::MarketDataBar` rows with day granularity.
+
+Tests (`crates/tdw-provider-polygon/tests/http_fetcher.rs`,
+double-gated by `--features http`):
+- `cassette_replay_decodes_polygon_aggregates_into_market_bars` —
+  always runs under the feature; parses a recorded Polygon response
+  shape and asserts OHLCV row decoding.
+- `cassette_replay_surfaces_polygon_error_envelope` — propagates
+  Polygon's JSON error envelope as `Error::Provider`.
+- `transform_query_normalizes_ticker_and_rejects_path_injection` —
+  keeps the existing path/query-injection boundary active on the HTTP
+  fetcher.
+- `live_polygon_returns_recent_bars_when_env_vars_set` —
+  additionally gated by `TDW_POLYGON_LIVE=1`; requires
+  `POLYGON_API_KEY` and performs a real HTTP request to Polygon.
+
+See `docs/quality/production-transport-status.md` for the broader
+G011 punch list.
