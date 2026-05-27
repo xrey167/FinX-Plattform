@@ -5,8 +5,23 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+# Enables the real FRED HTTP fetcher (reqwest). Off by default so
+# workspace tests stay offline; live calls are additionally gated by
+# TDW_FRED_LIVE=1 and FRED_API_KEY.
+http = ["dep:async-trait", "dep:bytes", "dep:reqwest", "dep:tdw-core", "dep:tokio"]
+
 [dependencies]
+async-trait = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true, optional = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
 
 [lints]
 workspace = true
