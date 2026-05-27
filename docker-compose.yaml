@@ -21,6 +21,10 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.5
     profiles: ["minimal", "full"]
+    environment:
+      CLICKHOUSE_USER: tdw
+      CLICKHOUSE_PASSWORD: tdw
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "8123:8123"
       - "9000:9000"
