@@ -5,6 +5,16 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+## Select `LocalFsBlobEngine` (from `tdw-storage-fs`) as the blob backend in
+## `AppState::from_config` when `config.profile == "service"`. Without this
+## feature the default `InMemoryS3BlobEngine` is used unconditionally.
+storage-fs = ["dep:tdw-storage-fs"]
+
+## Enable the WASM fixture UDF runtime in `tdw-sandbox`. Forwarded to the
+## sandbox crate so the feature tree is consistent.
+udf-wasm = ["tdw-sandbox/udf-wasm"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -54,6 +64,7 @@ tdw-snapshot = { path = "../tdw-snapshot" }
 tdw-spatial = { path = "../tdw-spatial" }
 tdw-stage = { path = "../tdw-stage" }
 tdw-storage-clickhouse = { path = "../tdw-storage-clickhouse" }
+tdw-storage-fs = { workspace = true, optional = true }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
 tdw-storage-postgres = { path = "../tdw-storage-postgres" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
