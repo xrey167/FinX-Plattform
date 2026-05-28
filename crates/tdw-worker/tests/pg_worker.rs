@@ -94,6 +94,7 @@ async fn pg_worker_queue_full_surface_roundtrip() {
 
     let mut dead = sample_shutdown_job(&format!("{prefix}dead")).expect("dead job");
     dead.max_attempts = 1;
+    dead.priority = 20;
     queue
         .enqueue(dead)
         .await
@@ -103,6 +104,7 @@ async fn pg_worker_queue_full_surface_roundtrip() {
         .await
         .unwrap_or_else(|error| panic!("lease dead: {error}"))
         .expect("dead lease");
+    assert_eq!(dead_lease.job_id, format!("{prefix}dead"));
     assert_eq!(dead_lease.attempt, 1);
     assert_eq!(
         queue
