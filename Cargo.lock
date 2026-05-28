@@ -3177,6 +3177,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde_json",
+ "tdw-bus",
+ "tdw-core",
+ "tdw-outbox",
+ "tdw-session",
+ "tdw-snapshot",
+ "tdw-storage-postgres",
+ "tdw-storage-s3",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-bus"
 version = "0.1.0"
 dependencies = [

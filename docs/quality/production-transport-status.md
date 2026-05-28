@@ -1,7 +1,8 @@
-# Production Transport Status Matrix (G010–G013)
+# Production Transport Status Matrix (G010-G014)
 
-Workspace-wide punch list of which crates have a real production
-backend wired vs. which still ship a stub or request-builder only.
+Workspace-wide matrix of which crates have a real production backend,
+which keep local/offline defaults, and which are infrastructure
+helpers rather than networked transports.
 Cross-references the per-goal docs (see *Companions* below).
 
 ## Conventions
@@ -11,7 +12,8 @@ Cross-references the per-goal docs (see *Companions* below).
 - **`real`** — production backend implemented, gated behind an opt-in feature flag; default workspace test set stays offline.
 - **`local`** — production-ready offline implementation (filesystem, hashing); no network involved by design.
 - **`✅ shipped`** — landed on main (or in an open PR — annotated).
-- **`⏳ pending`** — work still required.
+- **`n/a`** — helper crate or non-networked path; no production
+  transport is required.
 
 ## G010 storage transports
 
@@ -102,23 +104,35 @@ and calls `sync_all` after each append. The cross-store smoke at
 `crates/tdw-session/tests/g013_durable_cross_store.rs` verifies that outbox,
 bus, session, snapshot, and rollout persistence can be exercised together.
 
-**G013 is complete.** Remaining production work moves to packaging,
-policy-enforcement binding, and the aggregate production-functional gate.
+**G013 is complete.** G014 now adds a compose-backed live data
+backend bootstrap on top of the shipped Postgres and S3 transports.
 
-## Suggested next-session order
+## G014 data backend live
 
-The pattern is now established; the work is mechanical from here.
-Recommended sequence:
+The `live` compose profile brings up Postgres and MinIO, creates the
+`tdw-default` bucket, runs the `tdw-bootstrap` one-shot binary, applies
+the G013 Postgres schemas, and writes then reads back an S3 marker
+object.
 
-1. **G014 packaging**: Dockerfiles + docker-compose orchestration + release workflow.
-2. **G015 policy enforcement binding**: wire auth/sandbox/mask onto the request path.
-3. **G016 aggregate gate**: final verification across G009–G015.
+| Component | Runtime path | Status |
+|---|---|---|
+| `postgres` | `postgres:17-alpine`, `live` profile | ✅ live profile |
+| `minio` | `minio/minio:latest`, `live` profile | ✅ live profile |
+| `minio-init` | `minio/mc:latest`, creates `tdw-default` | ✅ added |
+| `tdw-bootstrap` | `Dockerfile.bootstrap`, `crates/tdw-bootstrap` | ✅ added |
+| Runbook | `docs/release/data-backend-runbook.md` | ✅ added |
 
-Realistic total: **8–12 focused sessions** to land G009–G016 end to end.
+## Follow-up scope
+
+This live backend slice does not start long-running application
+services or bootstrap ClickHouse, Qdrant, and Meilisearch schemas.
+Those services remain covered by the `full` profile and their existing
+integration tests.
 
 ## Companions
 
 - `docs/quality/end-to-end-smoke.md` — G009 smoke recipe (the baseline every later goal must keep green).
 - `docs/quality/production-storage-transports.md` — complete G010 status + per-backend recipes.
+- `docs/release/data-backend-runbook.md` — local operator recipe for the `live` compose profile.
 - `.omx/ultragoal/goals.json` — authoritative active goal pointer + per-goal objectives.
 - `.omx/ultragoal/ledger.jsonl` — append-only history of goal progress + evidence.

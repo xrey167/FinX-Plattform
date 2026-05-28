@@ -1,0 +1,41 @@
+# Multi-stage build for the tdw-bootstrap one-shot binary.
+#
+# Stage 1 builds against the workspace's pinned Rust toolchain.
+# Stage 2 ships only the binary plus a CA-cert bundle, needed by
+# reqwest/rustls when the user points the bootstrap at managed
+# Postgres / S3 over TLS).
+
+FROM rust:1.95-slim-bookworm AS build
+
+WORKDIR /workspace
+
+# System deps required to compile sqlx-postgres, aws-sdk-s3, and
+# reqwest with the workspace's Rustls-based feature set.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the manifest files first so we can take advantage of
+# layer caching for dep compilation. The src/ tree is copied
+# afterwards.
+COPY Cargo.toml Cargo.lock ./
+COPY rust-toolchain.toml ./
+COPY crates ./crates
+COPY xtask ./xtask
+
+RUN cargo build --release -p tdw-bootstrap
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /usr/sbin/nologin tdw
+
+COPY --from=build /workspace/target/release/tdw-bootstrap /usr/local/bin/tdw-bootstrap
+
+USER tdw
+
+ENTRYPOINT ["/usr/local/bin/tdw-bootstrap"]
