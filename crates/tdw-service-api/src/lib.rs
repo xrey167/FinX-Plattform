@@ -53,9 +53,7 @@ use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
 use tdw_graph::DirectedGraph;
 use tdw_hooks::{
-    AdditionalContext, HandlerKind, HookEvent, HookExecutionPolicy, HookHandlerBackend,
-    HookRegistry, HookSpec, PermissionEffect, PermissionRule, PermissionRules, TransactionMode,
-    event_hook,
+    AdditionalContext, HandlerKind, HookEvent, HookRegistry, HookSpec, TransactionMode, event_hook,
 };
 use tdw_kg::{Entity, EntityKind, KnowledgeGraph, Relationship};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex, summarize_syntax};
