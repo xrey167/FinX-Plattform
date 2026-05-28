@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 mod app_state;
+mod dispatcher;
 
 pub use app_state::AppState;
+pub use dispatcher::dispatch_op;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -99,6 +101,9 @@ pub struct ResearchIndexEvidence {
 pub enum ServiceEndpoint {
     EquityHistorical,
     UdfRun,
+    RunQuery,
+    IngestBatch,
+    ToolCall,
 }
 
 impl ServiceEndpoint {
@@ -106,6 +111,9 @@ impl ServiceEndpoint {
         match self {
             Self::EquityHistorical => "equity_historical",
             Self::UdfRun => "udf.run",
+            Self::RunQuery => "tdw.query.run",
+            Self::IngestBatch => "tdw.ingest.run",
+            Self::ToolCall => "tdw.tool.call",
         }
     }
 
@@ -119,6 +127,21 @@ impl ServiceEndpoint {
             Self::UdfRun => AuthPolicy {
                 table: "service.udf_run".to_string(),
                 required_role: "udf_runner".to_string(),
+                row_filter: None,
+            },
+            Self::RunQuery => AuthPolicy {
+                table: "service.run_query".to_string(),
+                required_role: "analyst".to_string(),
+                row_filter: None,
+            },
+            Self::IngestBatch => AuthPolicy {
+                table: "service.ingest_batch".to_string(),
+                required_role: "analyst".to_string(),
+                row_filter: None,
+            },
+            Self::ToolCall => AuthPolicy {
+                table: "service.tool_call".to_string(),
+                required_role: "analyst".to_string(),
                 row_filter: None,
             },
         }
@@ -520,7 +543,7 @@ pub fn secure_udf_run_with_backend(
     }))
 }
 
-fn enforce_request_path_with_backend(
+pub fn enforce_request_path_with_backend(
     config: &PolicyEnforcementConfig,
     endpoint: ServiceEndpoint,
     hook_backend: &mut impl HookHandlerBackend,
@@ -583,7 +606,7 @@ fn enforce_request_path_with_backend(
     })
 }
 
-fn mask_json_response(value: Value, rules: &[MaskRule]) -> Value {
+pub fn mask_json_response(value: Value, rules: &[MaskRule]) -> Value {
     match value {
         Value::Object(mut object) => {
             let string_fields = object

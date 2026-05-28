@@ -3158,6 +3158,7 @@ dependencies = [
 name = "tdw-app-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "tdw-protocol",
  "tokio",
@@ -3687,6 +3688,7 @@ dependencies = [
 name = "tdw-service-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "serde",
  "serde_json",
@@ -3744,6 +3746,7 @@ dependencies = [
  "tdw-tui",
  "tdw-udf",
  "tdw-workflow-engine",
+ "tokio",
 ]
 
 [[package]]

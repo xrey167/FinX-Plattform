@@ -145,6 +145,21 @@ impl AgentLoop {
     }
 }
 
+/// Async operation dispatcher used by the daemon's service loop.
+///
+/// Added in P1 of the integration cycle. The blanket `Send + Sync` bound plus
+/// `async-trait` keeps the returned future `Send` so the service loop can
+/// `tokio::spawn` it onto a multi-thread runtime. The existing `AgentLoop` and
+/// `channel()` remain untouched for back-compat with the current
+/// `client_event_sample` consumer and the test below.
+#[async_trait::async_trait]
+pub trait Dispatcher: Send + Sync {
+    /// Dispatch a single `OpEnvelope`. Implementations should emit at least one
+    /// `Started` followed by a terminal `Completed`/`Failed`/`Cancelled`
+    /// per envelope, in order.
+    async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg>;
+}
+
 pub fn channel() -> (
     SubmissionHandle,
     mpsc::UnboundedReceiver<EventMsg>,
