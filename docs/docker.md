@@ -15,7 +15,7 @@ MinIO, Redis, `tdw-service`, and `tdw-worker`. `tools` adds one-shot
 Run the G014 packaged smoke path through Compose:
 
 ```powershell
-docker compose --profile full run --rm --build tdw-service AAPL
+docker compose --profile full run --rm --build tdw-service --smoke AAPL
 docker compose --profile full run --rm --build tdw-worker
 docker compose --profile tools run --rm --build tdw-cli AAPL
 docker compose --profile tools run --rm --build tdw-mcp

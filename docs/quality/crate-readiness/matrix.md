@@ -38,7 +38,7 @@ Initialized during G001 from cargo metadata and updated by tranche audits. Pendi
 | [tdw-llm-anthropic](tdw-llm-anthropic.md) | G004-provider-embedding-and-model-adapter-crates | lib | tdw-llm | tdw-service-api | none | 1 | no | none | 2 | Ready with follow-ups |
 | [tdw-llm-openai-compat](tdw-llm-openai-compat.md) | G004-provider-embedding-and-model-adapter-crates | lib | tdw-llm | tdw-service-api | none | 1 | no | none | 2 | Ready with follow-ups |
 | [tdw-mask](tdw-mask.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | tdw-hooks | tdw-service-api | none | 3 | no | none | 1 | Ready with follow-ups |
-| [tdw-mcp](tdw-mcp.md) | G007-client-service-mcp-acp-runtime-and-worker-crates | bin | tdw-service-api | none | none | 0 | no | none | 4 | Ready with follow-ups |
+| [tdw-mcp](tdw-mcp.md) | G007-client-service-mcp-acp-runtime-and-worker-crates | lib, bin | tdw-service-api | none | none | 11 | no | none | 4 | Ready with follow-ups |
 | [tdw-migration](tdw-migration.md) | G003-data-storage-pipeline-and-sql-crates | lib | none | xtask | none | 2 | no | none | 0 | Ready with follow-ups |
 | [tdw-ml-registry](tdw-ml-registry.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | none | none | none | 2 | no | none | 0 | Ready with follow-ups |
 | [tdw-outbox](tdw-outbox.md) | G002-core-contracts-event-session-and-replay-crates | lib | tdw-event | tdw-cdc, tdw-service-api | none | 1 | no | none | 0 | Ready with follow-ups |

@@ -21,7 +21,8 @@ Covered behavior:
 - AppState local policy synthesis and production fail-closed behavior.
 - Dispatcher auth/hook/mask/UDF enforcement.
 - ServiceLoop persistence and cost recording.
-- MCP JSON-RPC stdio framing contract.
+- MCP 2025-06-18 stdio lifecycle, tools, resources, prompts, cancellation, and
+  progress-notification contract.
 - Worker queue contract semantics.
 - UDF name/source/input/capability guards and Wasm fixture validation.
 
