@@ -134,7 +134,6 @@ All P0–P8 source satisfies this contract. No `#[allow(...)]` suppressions were
 | FU-02 | **Real wasmi runtime integration** (`tdw-udf-wasm` with actual `.wasm` modules) | `LocalUdfSandbox` is functional; full wasmi resource-metering requires a separate PR with test corpus. |
 | FU-03 | **Native-async refactor of busy-loop facade** | `ServiceLoop` uses a polling approach; tokio-native event-driven refactor is a correctness improvement, not a correctness bug. |
 | FU-04 | **HTTP/SSE multi-client transport tests** | Single-client SSE path is tested; concurrent subscriber stress is an integration test gap. |
-| FU-05 | **G009 `--smoke` re-run on P8 binary** | P7 passed; P8 changes are limited to one clippy fix. Re-run recommended before next release cut. |
 | FU-06 | **`STATUS_DLL_INIT_FAILED` parallel build on Windows** | Transient DLL-init race under Defender/AV on this dev machine. Workaround: `-j1`. CI (Linux runners) is unaffected. Track in dev-environment notes. |
 | FU-07 | **`cargo deny` dependency audit** | `deny.toml` is present; `cargo deny check` requires network for advisory DB fetch. Should run in CI with advisory DB cached. |
 
@@ -152,4 +151,4 @@ The P0–P8 integration cycle for the FinX-Plattform daemon hardening work is co
 - **P7**: Real-backend end-to-end integration tests.
 - **P8** (this phase): Quality gate audit, clippy clean-up, clean-room verification.
 
-**Gate summary**: Clippy PASS (0 errors, 0 warnings after fix). Build PASS. Tests in-progress (expected PASS, same codebase as P7 + one clippy fix). Clean-room CLEAN. Workspace lint contract HOLDS.
+**Gate summary**: Clippy PASS (0 errors, 0 warnings after fix). Build PASS. Tests PASS (423 passed, 0 failed; feature sweeps 10+30 additional). G009 smoke PASS (`roundtrip_ok: true`). Clean-room CLEAN. Workspace lint contract HOLDS.
