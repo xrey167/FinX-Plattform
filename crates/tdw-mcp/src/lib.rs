@@ -9,6 +9,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
 const SERVER_NAME: &str = "tdw-mcp";
 const SERVER_TITLE: &str = "TDW MCP Server";
+const MAX_CANCELLED_REQUESTS: usize = 128;
 const MCP_BOUNDARY_DOC: &str =
     include_str!("../../../docs/quality/mcp-worker-product-boundaries.md");
 const TEST_TAXONOMY_DOC: &str =
@@ -98,12 +99,28 @@ impl McpServer {
             }
             "notifications/cancelled" => {
                 if let Some(cancelled) = cancelled_request_from_params(&inbound.params) {
-                    self.cancelled_requests.push(cancelled);
+                    self.record_cancelled_request(cancelled);
                 }
             }
             _ => {}
         }
         Vec::new()
+    }
+
+    fn record_cancelled_request(&mut self, cancelled: CancelledRequest) {
+        if let Some(existing) = self
+            .cancelled_requests
+            .iter_mut()
+            .find(|request| request.request_id == cancelled.request_id)
+        {
+            *existing = cancelled;
+            return;
+        }
+
+        if self.cancelled_requests.len() == MAX_CANCELLED_REQUESTS {
+            self.cancelled_requests.remove(0);
+        }
+        self.cancelled_requests.push(cancelled);
     }
 
     fn handle_request(&mut self, inbound: JsonRpcInbound) -> Vec<Value> {
@@ -310,13 +327,21 @@ pub fn run_stdio_json_rpc() -> i32 {
     0
 }
 
-pub fn handle_json_rpc_line(line: &str) -> String {
+pub fn handle_json_rpc_lines<I, S>(lines: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut server = McpServer::new();
-    server
-        .handle_json_rpc_line(line)
-        .into_iter()
-        .last()
-        .unwrap_or_default()
+    let mut messages = Vec::new();
+    for line in lines {
+        messages.extend(server.handle_json_rpc_line(line.as_ref()));
+    }
+    messages
+}
+
+pub fn handle_json_rpc_line(line: &str) -> Vec<String> {
+    handle_json_rpc_lines([line])
 }
 
 pub fn mcp_tool_catalog() -> Vec<String> {
@@ -643,10 +668,16 @@ fn progress_notifications(progress_token: Option<Value>, events: &[String]) -> V
     };
     let mut notifications = Vec::new();
     let mut last_progress = -1.0_f64;
+    let mut last_stage: Option<String> = None;
     for event in events {
         if let Some((stage, fraction)) = parse_progress_event(event) {
-            if fraction > last_progress {
+            let stage_changed = last_stage.as_deref() != Some(stage.as_str());
+            if stage_changed {
+                last_progress = -1.0;
+            }
+            if stage_changed || fraction > last_progress {
                 last_progress = fraction;
+                last_stage = Some(stage.clone());
                 notifications.push(notification_message(
                     "notifications/progress",
                     json!({
@@ -657,8 +688,11 @@ fn progress_notifications(progress_token: Option<Value>, events: &[String]) -> V
                     }),
                 ));
             }
-        } else if event.starts_with("done:") && last_progress < 1.0 {
+        } else if event.starts_with("done:")
+            && (last_progress < 1.0 || last_stage.as_deref() != Some("complete"))
+        {
             last_progress = 1.0;
+            last_stage = Some("complete".to_string());
             notifications.push(notification_message(
                 "notifications/progress",
                 json!({
@@ -680,6 +714,9 @@ fn parse_progress_event(event: &str) -> Option<(String, f64)> {
     }
     let stage = parts.next()?.to_string();
     let fraction = parts.next()?.parse::<f64>().ok()?;
+    if !fraction.is_finite() {
+        return None;
+    }
     Some((stage, fraction))
 }
 
@@ -1048,6 +1085,33 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_requests_are_bounded_and_deduplicated() {
+        let mut server = McpServer::new();
+
+        for index in 0..(MAX_CANCELLED_REQUESTS + 2) {
+            let message = format!(
+                r#"{{"jsonrpc":"2.0","method":"notifications/cancelled","params":{{"requestId":"call-{index}"}}}}"#
+            );
+            assert!(server.handle_json_rpc_line(&message).is_empty());
+        }
+        assert_eq!(server.cancelled_requests().len(), MAX_CANCELLED_REQUESTS);
+        assert_eq!(server.cancelled_requests()[0].request_id, "call-2");
+
+        assert!(
+            server
+                .handle_json_rpc_line(
+                    r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"call-129","reason":"new reason"}}"#,
+                )
+                .is_empty()
+        );
+        assert_eq!(server.cancelled_requests().len(), MAX_CANCELLED_REQUESTS);
+        assert_eq!(
+            server.cancelled_requests()[MAX_CANCELLED_REQUESTS - 1].reason,
+            Some("new reason".to_string())
+        );
+    }
+
+    #[test]
     fn rejects_operation_before_initialize_but_allows_ping() {
         let mut server = McpServer::new();
 
@@ -1125,6 +1189,25 @@ mod tests {
     }
 
     #[test]
+    fn progress_notifications_allow_new_stage_reset() {
+        let events = vec![
+            "progress:fetch:0.9".to_string(),
+            "progress:parse:0.1".to_string(),
+            "done:fileset:2".to_string(),
+        ];
+
+        let messages = progress_notifications(Some(json!("progress-2")), &events);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["params"]["message"], "fetch");
+        assert_eq!(messages[0]["params"]["progress"], 0.9);
+        assert_eq!(messages[1]["params"]["message"], "parse");
+        assert_eq!(messages[1]["params"]["progress"], 0.1);
+        assert_eq!(messages[2]["params"]["message"], "complete");
+        assert_eq!(messages[2]["params"]["progress"], 1.0);
+    }
+
+    #[test]
     fn resources_list_and_read_safe_static_resources() {
         let mut server = McpServer::new();
         initialize(&mut server);
@@ -1184,7 +1267,9 @@ mod tests {
 
     #[test]
     fn reports_parse_and_unknown_method_errors() {
-        let malformed = decode(&handle_json_rpc_line("{"));
+        let malformed_messages = handle_json_rpc_line("{");
+        assert_eq!(malformed_messages.len(), 1);
+        let malformed = decode(&malformed_messages[0]);
         assert_eq!(malformed["error"]["code"], -32700);
 
         let mut server = McpServer::new();
@@ -1194,6 +1279,28 @@ mod tests {
         );
         assert_eq!(unknown["id"], "x");
         assert_eq!(unknown["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn session_helper_preserves_state_and_all_messages() {
+        let messages = handle_json_rpc_lines([
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tdw.progress.sample","arguments":{"symbol":"aapl"},"_meta":{"progressToken":"progress-3"}}}"#,
+        ]);
+
+        assert!(messages.len() >= 3);
+        assert!(messages.iter().any(|message| {
+            let decoded = decode(message);
+            decoded["method"] == "notifications/progress"
+                && decoded["params"]["progressToken"] == "progress-3"
+        }));
+        let last = decode(
+            messages
+                .last()
+                .unwrap_or_else(|| panic!("response should be present")),
+        );
+        assert_eq!(last["id"], 4);
+        assert_eq!(last["result"]["isError"], false);
     }
 
     #[test]
