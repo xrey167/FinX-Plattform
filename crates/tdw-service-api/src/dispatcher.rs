@@ -220,9 +220,7 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         match &events[0] {
-            EventMsg::Started {
-                op_id: started_id,
-            } => assert_eq!(started_id, &op_id),
+            EventMsg::Started { op_id: started_id } => assert_eq!(started_id, &op_id),
             other => panic!("expected Started, got {other:?}"),
         }
         match &events[1] {
