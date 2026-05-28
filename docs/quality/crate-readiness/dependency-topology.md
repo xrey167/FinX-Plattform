@@ -98,7 +98,7 @@ Baseline generated during G001 and refreshed during tranche audits. Treat this a
 | [tdw-udf-js](tdw-udf-js.md) | none | none |
 | [tdw-udf-python](tdw-udf-python.md) | none | none |
 | [tdw-udf-wasm](tdw-udf-wasm.md) | none | none |
-| [tdw-worker](tdw-worker.md) | tdw-service-api | none |
+| [tdw-worker](tdw-worker.md) | tdw-protocol, tdw-service-api | none |
 | [tdw-workflow-engine](tdw-workflow-engine.md) | tdw-agent | tdw-service-api |
 | [xtask](xtask.md) | tdw-agent, tdw-config, tdw-event, tdw-migration, tdw-protocol, tdw-sql-codegen | none |
 
@@ -160,7 +160,7 @@ Baseline scan signals count conservative matches for TODO/todo!/unimplemented!/p
 | [tdw-sandbox](tdw-sandbox.md) | 1 | 0 |
 | [tdw-service-api](tdw-service-api.md) | 51 | 0 |
 | [tdw-tui](tdw-tui.md) | 2 | 0 |
-| [tdw-worker](tdw-worker.md) | 1 | 0 |
+| [tdw-worker](tdw-worker.md) | 51 | 0 |
 | [tdw-session](tdw-session.md) | 19 | 0 |
 | [tdw-stage](tdw-stage.md) | 2 | 0 |
 | [tdw-storage-clickhouse](tdw-storage-clickhouse.md) | 7 | 0 |

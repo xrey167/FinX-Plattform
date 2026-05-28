@@ -17,6 +17,7 @@ Run the G014 packaged smoke path through Compose:
 ```powershell
 docker compose --profile full run --rm --build tdw-service --smoke AAPL
 docker compose --profile full run --rm --build tdw-worker
+docker compose --profile full run --rm --build tdw-worker --durable-smoke
 docker compose --profile tools run --rm --build tdw-cli AAPL
 docker compose --profile tools run --rm --build tdw-mcp
 ```

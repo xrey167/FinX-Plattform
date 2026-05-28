@@ -84,6 +84,6 @@ Initialized during G001 from cargo metadata and updated by tranche audits. Pendi
 | [tdw-udf-js](tdw-udf-js.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | none | none | none | 2 | no | none | 0 | Ready with follow-ups |
 | [tdw-udf-python](tdw-udf-python.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | none | none | none | 2 | no | none | 0 | Ready with follow-ups |
 | [tdw-udf-wasm](tdw-udf-wasm.md) | G005-agent-auth-hooks-tools-and-udf-crates | lib | none | none | none | 2 | no | none | 0 | Ready with follow-ups |
-| [tdw-worker](tdw-worker.md) | G007-client-service-mcp-acp-runtime-and-worker-crates | bin | tdw-service-api | none | none | 0 | no | none | 1 | Ready with follow-ups |
+| [tdw-worker](tdw-worker.md) | G007-client-service-mcp-acp-runtime-and-worker-crates | lib, bin | tdw-protocol, tdw-service-api | none | none | 8 | no | none | 51 | Ready with follow-ups |
 | [tdw-workflow-engine](tdw-workflow-engine.md) | G006-knowledge-graph-tags-ml-eval-and-utility-crates | lib | tdw-agent | tdw-service-api | none | 2 | no | none | 1 | Ready with follow-ups |
 | [xtask](xtask.md) | G008-aggregate-production-readiness-gate | bin | tdw-agent, tdw-config, tdw-event, tdw-migration, tdw-protocol, tdw-sql-codegen | none | none | 2 | no | none | 8 | Ready with follow-ups |

@@ -23,7 +23,9 @@ Covered behavior:
 - ServiceLoop persistence and cost recording.
 - MCP 2025-06-18 stdio lifecycle, tools, resources, prompts, cancellation, and
   progress-notification contract.
-- Worker queue contract semantics.
+- Worker queue contract semantics plus SQLite durable scheduling, priority
+  leasing, lease expiry, retry/dead-letter handling, idempotent enqueue, and
+  reconnect persistence.
 - UDF name/source/input/capability guards and Wasm fixture validation.
 
 ## Docker or real-backend integration tests

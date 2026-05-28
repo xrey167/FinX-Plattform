@@ -8,8 +8,11 @@ license = "UNLICENSED"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
