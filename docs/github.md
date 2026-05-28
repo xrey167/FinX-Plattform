@@ -7,15 +7,16 @@ rulesets are available on the Free tier (both are gated behind GitHub Pro for
 private repos). Any change to the remote owner, name, or visibility requires a
 new explicit approval per `AGENTS.md`.
 
-To reproduce the bootstrap, run:
+To reproduce the bootstrap (e.g., for a fork), run from the repo root:
 
 ```powershell
-.\scripts\github\create-private-repo.ps1 -Owner <owner> -Name FinX-Plattform -Visibility public
+gh repo create <owner>/FinX-Plattform --public --source . --remote origin --description "Rust workspace for the FinX-Finance trading data warehouse"
 git push -u origin main
 ```
 
-(The script name says "private" for historical reasons; the `-Visibility`
-parameter is the source of truth.)
+The repo is intentionally public from the outset — see the visibility note
+above. No wrapper script is kept in-tree; the `gh` CLI is the source of
+truth.
 
 ## Local GitHub Assets
 
