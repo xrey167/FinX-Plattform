@@ -413,12 +413,12 @@ mod tests {
     // P3 tests
     // -----------------------------------------------------------------------
 
+    use serde_json::json;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use serde_json::json;
     use tdw_bus::EventBus;
-    use tdw_outbox::InMemoryOutbox;
     use tdw_event::sample_event;
+    use tdw_outbox::InMemoryOutbox;
 
     struct FakeDispatcher;
 
@@ -436,7 +436,9 @@ mod tests {
         async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
             match &env.op {
                 Op::Shutdown => vec![
-                    EventMsg::Started { op_id: env.op_id.clone() },
+                    EventMsg::Started {
+                        op_id: env.op_id.clone(),
+                    },
                     EventMsg::Completed {
                         op_id: env.op_id,
                         summary: None,
@@ -518,7 +520,10 @@ mod tests {
         assert_eq!(entries.len(), 2, "bus should have both events");
 
         let pending = outbox.lock().expect("lock").pending_after(0);
-        assert!(pending.is_empty(), "all outbox records should be dispatched");
+        assert!(
+            pending.is_empty(),
+            "all outbox records should be dispatched"
+        );
     }
 
     #[tokio::test]
@@ -535,9 +540,8 @@ mod tests {
         });
 
         let cancel_for_serve = cancel.clone();
-        let serve_join = tokio::spawn(async move {
-            serve(service_loop, relay, cancel_for_serve).await
-        });
+        let serve_join =
+            tokio::spawn(async move { serve(service_loop, relay, cancel_for_serve).await });
 
         // Give serve a moment then cancel.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -545,7 +549,10 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(1), serve_join).await;
         assert!(result.is_ok(), "serve should complete within timeout");
-        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
+        assert!(
+            result.expect("join ok").expect("no panic").is_ok(),
+            "serve returns Ok"
+        );
     }
 
     #[tokio::test]
@@ -560,17 +567,24 @@ mod tests {
         });
 
         let cancel_for_serve = cancel.clone();
-        let serve_join = tokio::spawn(async move {
-            serve(service_loop, relay, cancel_for_serve).await
-        });
+        let serve_join =
+            tokio::spawn(async move { serve(service_loop, relay, cancel_for_serve).await });
 
         // Submit a Shutdown op.
-        submission.submit(make_envelope(Op::Shutdown)).expect("submit shutdown");
+        submission
+            .submit(make_envelope(Op::Shutdown))
+            .expect("submit shutdown");
 
         let result = tokio::time::timeout(Duration::from_secs(2), serve_join).await;
         assert!(result.is_ok(), "serve should complete within timeout");
-        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
-        assert!(cancel.is_cancelled(), "token should be cancelled after shutdown");
+        assert!(
+            result.expect("join ok").expect("no panic").is_ok(),
+            "serve returns Ok"
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "token should be cancelled after shutdown"
+        );
     }
 
     #[test]
