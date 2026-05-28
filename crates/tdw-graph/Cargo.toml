@@ -8,5 +8,8 @@ license = "UNLICENSED"
 [dependencies]
 serde = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

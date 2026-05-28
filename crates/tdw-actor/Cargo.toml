@@ -9,5 +9,8 @@ license = "UNLICENSED"
 serde = { workspace = true }
 tdw-event = { path = "../tdw-event" }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

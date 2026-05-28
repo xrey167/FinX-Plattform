@@ -1,0 +1,195 @@
+#![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used)]
+
+// Integration coverage for synchronous portions of tdw-core's trait contracts.
+// The async surface (Fetcher::fetch, Streamer::subscribe, Engine writes) is
+// intentionally exercised through tdw-service-api's higher-level samples and is
+// not duplicated here because adding tokio as a dev-dep would expand the change
+// footprint beyond what's safe under a no-shell verification regime.
+//
+// IMPORTANT: This file was authored offline. Verify with
+// `cargo test --package tdw-core` before merging.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tdw_core::{Credentials, Error, OBBject, ProviderKind, ProviderRegistry, RegistryEntry};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+struct Row {
+    symbol: String,
+}
+
+#[test]
+fn obbject_with_metadata_persists_multiple_keys() {
+    let object = OBBject::new(
+        vec![Row {
+            symbol: "AAPL".to_string(),
+        }],
+        "fileset",
+        "equity_historical",
+    )
+    .with_metadata("source", json!("golden"))
+    .with_metadata("region", json!("us"))
+    .with_metadata("rows_estimate", json!(1));
+
+    assert_eq!(object.metadata.get("source"), Some(&json!("golden")));
+    assert_eq!(object.metadata.get("region"), Some(&json!("us")));
+    assert_eq!(object.metadata.get("rows_estimate"), Some(&json!(1)));
+}
+
+#[test]
+fn obbject_with_metadata_overwrites_existing_key() {
+    let object = OBBject::new(Vec::<Row>::new(), "fileset", "equity_historical")
+        .with_metadata("source", json!("first"))
+        .with_metadata("source", json!("second"));
+
+    assert_eq!(object.metadata.get("source"), Some(&json!("second")));
+}
+
+#[test]
+fn obbject_new_defaults_to_empty_metadata() {
+    let object = OBBject::new(Vec::<Row>::new(), "fileset", "endpoint");
+    assert!(object.metadata.is_empty());
+    assert!(object.rows.is_empty());
+    assert_eq!(object.provider, "fileset");
+    assert_eq!(object.endpoint, "endpoint");
+}
+
+#[test]
+fn registry_resolve_returns_none_for_unknown_combination() {
+    let registry = ProviderRegistry::default();
+    assert!(
+        registry
+            .resolve("ghost", "endpoint", ProviderKind::Fetcher)
+            .is_none()
+    );
+}
+
+#[test]
+fn registry_distinguishes_fetcher_and_streamer_at_same_endpoint() {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(RegistryEntry::fetcher("mock", "equity_historical"))
+        .unwrap_or_else(|error| panic!("fetcher registers: {error}"));
+    registry
+        .register(RegistryEntry::streamer("mock", "equity_historical"))
+        .unwrap_or_else(|error| panic!("streamer registers: {error}"));
+
+    assert!(registry.contains("mock", "equity_historical", ProviderKind::Fetcher));
+    assert!(registry.contains("mock", "equity_historical", ProviderKind::Streamer));
+    assert_eq!(registry.entries().len(), 2);
+}
+
+#[test]
+fn registry_entries_returns_slice_in_insertion_order() {
+    let mut registry = ProviderRegistry::default();
+    registry
+        .register(RegistryEntry::fetcher("a", "ep"))
+        .unwrap_or_else(|error| panic!("a registers: {error}"));
+    registry
+        .register(RegistryEntry::fetcher("b", "ep"))
+        .unwrap_or_else(|error| panic!("b registers: {error}"));
+    registry
+        .register(RegistryEntry::fetcher("c", "ep"))
+        .unwrap_or_else(|error| panic!("c registers: {error}"));
+
+    let entries = registry.entries();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].provider, "a");
+    assert_eq!(entries[1].provider, "b");
+    assert_eq!(entries[2].provider, "c");
+}
+
+#[test]
+fn registry_rejects_duplicate_same_kind_returns_registry_error() {
+    let mut registry = ProviderRegistry::default();
+    let entry = RegistryEntry::fetcher("mock", "equity_historical");
+    registry
+        .register(entry.clone())
+        .unwrap_or_else(|error| panic!("first register: {error}"));
+
+    let err = registry.register(entry).expect_err("duplicate must fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("duplicate") && message.contains("mock"),
+        "error should mention duplicate + provider, got: {message}"
+    );
+}
+
+#[test]
+fn error_display_includes_payload_for_each_variant() {
+    let cases: [(Error, &str); 4] = [
+        (
+            Error::InvalidQuery("missing field".to_string()),
+            "missing field",
+        ),
+        (
+            Error::Provider("transient outage".to_string()),
+            "transient outage",
+        ),
+        (Error::Storage("disk full".to_string()), "disk full"),
+        (
+            Error::Registry("duplicate provider".to_string()),
+            "duplicate provider",
+        ),
+    ];
+    for (err, needle) in cases {
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(needle),
+            "Error::{err:?} display should contain '{needle}', got: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn credentials_default_starts_with_all_keys_unset() {
+    let creds = Credentials::default();
+    assert!(creds.polygon_api_key.is_none());
+    assert!(creds.openai_api_key.is_none());
+    assert!(creds.google_api_key.is_none());
+    assert!(creds.anthropic_api_key.is_none());
+}
+
+#[test]
+fn credentials_clone_preserves_set_keys() {
+    let creds = Credentials {
+        polygon_api_key: Some("poly".to_string()),
+        openai_api_key: None,
+        google_api_key: Some("goog".to_string()),
+        anthropic_api_key: Some("anthropic".to_string()),
+    };
+    let clone = creds.clone();
+    assert_eq!(clone.polygon_api_key.as_deref(), Some("poly"));
+    assert_eq!(clone.openai_api_key, None);
+    assert_eq!(clone.google_api_key.as_deref(), Some("goog"));
+    assert_eq!(clone.anthropic_api_key.as_deref(), Some("anthropic"));
+}
+
+#[test]
+fn registry_entry_fetcher_constructor_records_kind() {
+    let entry = RegistryEntry::fetcher("p", "ep");
+    assert_eq!(entry.kind, ProviderKind::Fetcher);
+    assert_eq!(entry.provider, "p");
+    assert_eq!(entry.endpoint, "ep");
+}
+
+#[test]
+fn registry_entry_streamer_constructor_records_kind() {
+    let entry = RegistryEntry::streamer("p", "ep");
+    assert_eq!(entry.kind, ProviderKind::Streamer);
+}
+
+#[test]
+fn obbject_round_trips_an_empty_collection() {
+    let original: OBBject<Row> = OBBject::new(Vec::new(), "fileset", "empty");
+    let encoded: Value =
+        serde_json::to_value(&original).unwrap_or_else(|error| panic!("serialize: {error}"));
+    let decoded: OBBject<Row> =
+        serde_json::from_value(encoded).unwrap_or_else(|error| panic!("deserialize: {error}"));
+
+    assert_eq!(decoded.rows.len(), 0);
+    assert_eq!(decoded.provider, "fileset");
+    assert_eq!(decoded.endpoint, "empty");
+}

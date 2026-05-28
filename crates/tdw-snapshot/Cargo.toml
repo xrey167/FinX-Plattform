@@ -20,5 +20,8 @@ tdw-core = { workspace = true, optional = true }
 tdw-storage-postgres = { path = "../tdw-storage-postgres", optional = true }
 tokio = { workspace = true, optional = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true
