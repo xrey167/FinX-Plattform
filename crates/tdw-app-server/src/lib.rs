@@ -6,6 +6,25 @@ use std::fmt;
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tokio::sync::mpsc;
 
+// ---------------------------------------------------------------------------
+// P4: Feature-gated transport modules
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "transport-tcp")]
+mod transport_tcp;
+#[cfg(feature = "transport-tcp")]
+pub use transport_tcp::serve_tcp;
+
+#[cfg(all(unix, feature = "transport-uds"))]
+mod transport_uds;
+#[cfg(all(unix, feature = "transport-uds"))]
+pub use transport_uds::serve_uds;
+
+#[cfg(feature = "transport-http")]
+mod transport_http;
+#[cfg(feature = "transport-http")]
+pub use transport_http::serve_http;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DaemonTransport {
     Uds,
@@ -290,6 +309,14 @@ pub fn service_channel<D: Dispatcher + 'static, S: EventSink + 'static>(
 
 pub use tokio_util::sync::CancellationToken;
 
+/// Returns a human-readable label for the transport variant (useful for logging).
+pub fn transport_label(t: DaemonTransport) -> &'static str {
+    match t {
+        DaemonTransport::Uds => "uds",
+        DaemonTransport::HttpSse => "http-sse",
+    }
+}
+
 /// Spawn the in-memory outbox→bus relay. The task polls the outbox for
 /// pending records every `tick`, publishes each on the bus, and marks it
 /// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
@@ -571,6 +598,201 @@ mod tests {
         assert!(result.is_ok(), "serve should complete within timeout");
         assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
         assert!(cancel.is_cancelled(), "token should be cancelled after shutdown");
+    }
+
+    // -----------------------------------------------------------------------
+    // P4 transport tests
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "transport-tcp")]
+    mod tcp_transport_tests {
+        use super::*;
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        async fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
+            let len = (bytes.len() as u32).to_be_bytes();
+            stream.write_all(&len).await?;
+            stream.write_all(bytes).await?;
+            stream.flush().await
+        }
+
+        async fn read_frame_client(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+            let mut len_buf = [0u8; 4];
+            match stream.read_exact(&mut len_buf).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(e) => return Err(e),
+            }
+            let len = u32::from_be_bytes(len_buf) as usize;
+            let mut buf = vec![0u8; len];
+            stream.read_exact(&mut buf).await?;
+            Ok(Some(buf))
+        }
+
+        fn make_test_envelope() -> OpEnvelope {
+            OpEnvelope::new(
+                tdw_protocol::SessionId::new("test-session").expect("session id"),
+                1,
+                tdw_protocol::ActorRef {
+                    actor_id: "test".to_string(),
+                    kind: tdw_protocol::ActorKind::System,
+                    tenant_id: None,
+                },
+                tdw_protocol::Op::Shutdown,
+            )
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn tcp_roundtrips_op_envelope_and_event_msg() {
+            let result = tokio::time::timeout(Duration::from_secs(3), async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+
+                let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<OpEnvelope>();
+                let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventMsg>();
+                let handle = SubmissionHandle { sender: sub_tx };
+
+                let cancel = CancellationToken::new();
+                let cancel_srv = cancel.clone();
+                tokio::spawn(async move {
+                    serve_tcp(listener, handle, evt_rx, cancel_srv).await.expect("serve_tcp");
+                });
+
+                // Connect a client.
+                let mut client = TcpStream::connect(addr).await.expect("connect");
+
+                // Send an OpEnvelope frame.
+                let env = make_test_envelope();
+                let json = serde_json::to_vec(&env).expect("serialize envelope");
+                write_frame(&mut client, &json).await.expect("write frame");
+
+                // Wait for the envelope to arrive at the submission receiver.
+                let received_env = sub_rx.recv().await.expect("envelope received");
+                assert_eq!(received_env.op_id, env.op_id);
+
+                // Emit an EventMsg via the events channel.
+                let event = EventMsg::Started { op_id: env.op_id.clone() };
+                evt_tx.send(event.clone()).expect("send event");
+
+                // Read the framed EventMsg back from the server.
+                let frame = read_frame_client(&mut client).await.expect("read frame").expect("frame present");
+                let decoded: EventMsg = serde_json::from_slice(&frame).expect("deserialize event");
+                assert!(matches!(decoded, EventMsg::Started { .. }));
+
+                cancel.cancel();
+            })
+            .await;
+
+            result.expect("test timed out");
+        }
+    }
+
+    #[cfg(feature = "transport-http")]
+    mod http_transport_tests {
+        use super::*;
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        fn make_test_envelope() -> OpEnvelope {
+            OpEnvelope::new(
+                tdw_protocol::SessionId::new("http-session").expect("session id"),
+                1,
+                tdw_protocol::ActorRef {
+                    actor_id: "test".to_string(),
+                    kind: tdw_protocol::ActorKind::System,
+                    tenant_id: None,
+                },
+                tdw_protocol::Op::Shutdown,
+            )
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn http_post_op_and_get_events_sse_streams_response() {
+            let result = tokio::time::timeout(Duration::from_secs(3), async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+
+                let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<OpEnvelope>();
+                let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventMsg>();
+                let handle = SubmissionHandle { sender: sub_tx };
+
+                let cancel = CancellationToken::new();
+                let cancel_srv = cancel.clone();
+                tokio::spawn(async move {
+                    serve_http(listener, handle, evt_rx, cancel_srv).await.expect("serve_http");
+                });
+
+                // Give the server a moment to be ready.
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                let env = make_test_envelope();
+                let body = serde_json::to_vec(&env).expect("serialize");
+
+                // POST /op
+                let mut post_conn = TcpStream::connect(addr).await.expect("connect post");
+                let request = format!(
+                    "POST /op HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                post_conn.write_all(request.as_bytes()).await.expect("write request");
+                post_conn.write_all(&body).await.expect("write body");
+                post_conn.flush().await.expect("flush");
+
+                // Read 202 response.
+                let mut resp_buf = vec![0u8; 512];
+                let n = post_conn.read(&mut resp_buf).await.expect("read response");
+                let resp_str = std::str::from_utf8(&resp_buf[..n]).expect("utf8");
+                assert!(resp_str.starts_with("HTTP/1.1 202"), "expected 202, got: {resp_str}");
+
+                // Confirm envelope arrived.
+                let received = sub_rx.recv().await.expect("envelope received");
+                assert_eq!(received.op_id, env.op_id);
+
+                // GET /events — open SSE stream.
+                let mut sse_conn = TcpStream::connect(addr).await.expect("connect sse");
+                sse_conn.write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\n\r\n").await.expect("write get");
+                sse_conn.flush().await.expect("flush");
+
+                // Read past the response headers.
+                let mut sse_buf = Vec::new();
+                loop {
+                    let mut chunk = vec![0u8; 512];
+                    let n = sse_conn.read(&mut chunk).await.expect("read sse");
+                    sse_buf.extend_from_slice(&chunk[..n]);
+                    let s = String::from_utf8_lossy(&sse_buf);
+                    if s.contains("\r\n\r\n") {
+                        break;
+                    }
+                }
+
+                // Emit an event.
+                let event = EventMsg::Started { op_id: env.op_id.clone() };
+                evt_tx.send(event).expect("send event");
+
+                // Read one SSE data line.
+                let mut line_buf = Vec::new();
+                loop {
+                    let mut chunk = vec![0u8; 512];
+                    let n = sse_conn.read(&mut chunk).await.expect("read event");
+                    if n == 0 { break; }
+                    line_buf.extend_from_slice(&chunk[..n]);
+                    let s = String::from_utf8_lossy(&line_buf);
+                    if s.contains("data:") {
+                        break;
+                    }
+                }
+                let sse_str = String::from_utf8_lossy(&line_buf);
+                assert!(sse_str.contains("data:"), "expected SSE data line, got: {sse_str}");
+
+                cancel.cancel();
+            })
+            .await;
+
+            result.expect("test timed out");
+        }
     }
 
     #[test]
