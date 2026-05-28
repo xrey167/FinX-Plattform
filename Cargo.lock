@@ -3122,6 +3122,7 @@ name = "tdw-actor"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-event",
 ]
 
@@ -3369,6 +3370,7 @@ name = "tdw-graph"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3779,6 +3781,7 @@ name = "tdw-spatial"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
