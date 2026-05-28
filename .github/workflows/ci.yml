@@ -127,8 +127,10 @@ jobs:
       - run: cargo test --workspace --features property
       - run: docker compose --profile full config
       - name: Run G014 dockerized service smoke
-        run: docker compose --profile full run --rm --build tdw-service AAPL
+        timeout-minutes: 10
+        run: docker compose --profile full run --rm --build tdw-service --smoke AAPL
       - name: Run G014 dockerized worker smoke
+        timeout-minutes: 10
         run: docker compose --profile full run --rm --build tdw-worker
       - run: cargo test --workspace --features e2e
       - run: cargo test -p tdw-tag-rules -p tdw-mask -p tdw-auth -p tdw-auth-oidc

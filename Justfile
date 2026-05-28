@@ -21,6 +21,16 @@ test-property:
 test-e2e:
     cargo test --workspace --features e2e
 
+# Run the P7 real-backend end-to-end test (requires TDW_POSTGRES_TEST_URL).
+#
+# Prerequisites:
+#   docker compose --profile full up -d
+#   export TDW_POSTGRES_TEST_URL="postgres://tdw:tdw@127.0.0.1:5432/tdw"
+#
+# The test skips cleanly (exit 0) when TDW_POSTGRES_TEST_URL is not set.
+test-e2e-pg:
+    cargo test --package tdw-service --test g0xx_daemon_e2e_real_pg -- --nocapture
+
 test-adversarial:
     cargo test -p tdw-tag-rules -p tdw-mask -p tdw-auth -p tdw-auth-oidc
 

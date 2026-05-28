@@ -5,10 +5,25 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = ["transport-tcp"]
+transport-tcp = []
+transport-http = []
+transport-uds = []
+
 [dependencies]
+async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-bus = { path = "../tdw-bus" }
+tdw-config = { workspace = true }
+tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tdw-event = { path = "../tdw-event" }
 
 [lints]
 workspace = true

@@ -1,5 +1,20 @@
 #![forbid(unsafe_code)]
 
+mod app_state;
+mod dispatcher;
+mod event_sink;
+mod policy;
+
+pub use app_state::AppState;
+pub use dispatcher::dispatch_op;
+pub use policy::{
+    IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
+    ServiceEndpoint, enforce_request_path_with_backend, mask_json_response,
+    secure_endpoint_by_name, secure_endpoint_by_name_with_backend, secure_endpoint_response,
+    secure_endpoint_response_with_backend, secure_udf_run, secure_udf_run_with_backend,
+    service_hook_policy,
+};
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
@@ -17,8 +32,8 @@ use tdw_agent::{
 use tdw_agent_store::AgentStore;
 use tdw_app_client::{AppClient, ClientInfo};
 use tdw_app_server::{DaemonEndpoint, DaemonTransport, channel, validate_endpoint};
-use tdw_auth::{AuthPolicy, AuthorizationDecision, Principal, authorize, authorize_with_decision};
-use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims, validate_claims_strict};
+use tdw_auth::{AuthPolicy, Principal, authorize};
+use tdw_auth_oidc::{JwksKey, JwtClaims, validate_claims};
 use tdw_bus::EventBus;
 use tdw_cdc::CdcStream;
 use tdw_config::{ConfigLayer, ConfigLayerKind, default_layer_order, merge_layers};
@@ -38,9 +53,7 @@ use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
 use tdw_graph::DirectedGraph;
 use tdw_hooks::{
-    AdditionalContext, HandlerKind, HookEvent, HookExecutionPolicy, HookHandlerBackend,
-    HookRegistry, HookSpec, PermissionEffect, PermissionRule, PermissionRules,
-    SystemHookHandlerBackend, TransactionMode, event_hook,
+    AdditionalContext, HandlerKind, HookEvent, HookRegistry, HookSpec, TransactionMode, event_hook,
 };
 use tdw_kg::{Entity, EntityKind, KnowledgeGraph, Relationship};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex, summarize_syntax};
@@ -89,175 +102,6 @@ pub struct ResearchIndexEvidence {
     pub vector_hits: Vec<ScoredPoint>,
     pub lexical_hits: Vec<ScoredDoc>,
     pub blob_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ServiceEndpoint {
-    EquityHistorical,
-    UdfRun,
-}
-
-impl ServiceEndpoint {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::EquityHistorical => "equity_historical",
-            Self::UdfRun => "udf.run",
-        }
-    }
-
-    fn auth_policy(self) -> AuthPolicy {
-        match self {
-            Self::EquityHistorical => AuthPolicy {
-                table: "service.equity_historical".to_string(),
-                required_role: "analyst".to_string(),
-                row_filter: None,
-            },
-            Self::UdfRun => AuthPolicy {
-                table: "service.udf_run".to_string(),
-                required_role: "udf_runner".to_string(),
-                row_filter: None,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct IngressAuthContext {
-    pub claims: JwtClaims,
-    pub jwks: Vec<JwksKey>,
-    pub issuer: String,
-    pub audience: String,
-}
-
-impl IngressAuthContext {
-    fn principal(&self) -> Principal {
-        Principal {
-            subject: self.claims.sub.clone(),
-            roles: self.claims.roles.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PolicyEnforcementConfig {
-    pub auth: IngressAuthContext,
-    pub hooks: Vec<HookSpec>,
-    #[serde(default)]
-    pub hook_execution: HookExecutionPolicy,
-    pub mask_rules: Vec<MaskRule>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PolicyEnforcementEvidence {
-    pub endpoint: String,
-    pub principal: String,
-    pub roles: Vec<String>,
-    pub hooks: Vec<String>,
-    pub masked_fields: Vec<String>,
-}
-
-pub struct SecureServiceRuntime<B> {
-    config: PolicyEnforcementConfig,
-    hook_backend: B,
-}
-
-impl<B> SecureServiceRuntime<B> {
-    pub fn new(config: PolicyEnforcementConfig, hook_backend: B) -> Self {
-        Self {
-            config,
-            hook_backend,
-        }
-    }
-
-    pub fn config(&self) -> &PolicyEnforcementConfig {
-        &self.config
-    }
-
-    pub fn hook_backend(&self) -> &B {
-        &self.hook_backend
-    }
-
-    pub fn hook_backend_mut(&mut self) -> &mut B {
-        &mut self.hook_backend
-    }
-
-    pub fn into_parts(self) -> (PolicyEnforcementConfig, B) {
-        (self.config, self.hook_backend)
-    }
-}
-
-impl<B: HookHandlerBackend> SecureServiceRuntime<B> {
-    pub fn endpoint_response(&mut self, provider: &str, symbol: &str) -> Result<Value> {
-        let evidence = enforce_request_path_with_backend(
-            &self.config,
-            ServiceEndpoint::EquityHistorical,
-            &mut self.hook_backend,
-        )?;
-        let response = crate::endpoint_response(provider, symbol)?;
-        Ok(json!({
-            "policy": evidence,
-            "response": mask_json_response(response, &self.config.mask_rules),
-        }))
-    }
-
-    pub fn endpoint_by_name(
-        &mut self,
-        endpoint: &str,
-        provider: &str,
-        symbol: &str,
-    ) -> Result<Value> {
-        match endpoint {
-            "equity_historical" => self.endpoint_response(provider, symbol),
-            other => Err(Error::Provider(format!(
-                "endpoint denied by default: {other}"
-            ))),
-        }
-    }
-
-    pub fn udf_run(&mut self, request: UdfRequest) -> Result<Value> {
-        let evidence = enforce_request_path_with_backend(
-            &self.config,
-            ServiceEndpoint::UdfRun,
-            &mut self.hook_backend,
-        )?;
-        let sandbox = LocalUdfSandbox;
-        let response = sandbox
-            .run(request)
-            .map_err(|error| Error::Provider(format!("sandbox denied request: {error}")))?;
-        Ok(json!({
-            "policy": evidence,
-            "response": mask_json_response(json!({
-                "runtime": response.runtime,
-                "output": response.output,
-            }), &self.config.mask_rules),
-        }))
-    }
-}
-
-pub fn service_hook_policy<I, S>(
-    allowed_patterns: I,
-    allow_handler_vetoes: bool,
-) -> HookExecutionPolicy
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    let mut permissions = PermissionRules {
-        default_permission: PermissionEffect::Deny,
-        rules: Vec::new(),
-    };
-    for pattern in allowed_patterns {
-        let pattern = pattern.into();
-        permissions.push(PermissionRule::new(
-            PermissionEffect::Allow,
-            pattern.clone(),
-            pattern,
-        ));
-    }
-    HookExecutionPolicy {
-        permissions,
-        allow_handler_vetoes,
-    }
 }
 
 pub fn default_registry() -> Result<ProviderRegistry> {
@@ -438,177 +282,6 @@ pub fn endpoint_response(provider: &str, symbol: &str) -> Result<Value> {
         "endpoint": object.endpoint,
         "rows": object.rows,
     }))
-}
-
-pub fn secure_endpoint_response(
-    config: &PolicyEnforcementConfig,
-    provider: &str,
-    symbol: &str,
-) -> Result<Value> {
-    let mut backend = SystemHookHandlerBackend::default();
-    secure_endpoint_response_with_backend(config, provider, symbol, &mut backend)
-}
-
-pub fn secure_endpoint_response_with_backend(
-    config: &PolicyEnforcementConfig,
-    provider: &str,
-    symbol: &str,
-    hook_backend: &mut impl HookHandlerBackend,
-) -> Result<Value> {
-    let evidence =
-        enforce_request_path_with_backend(config, ServiceEndpoint::EquityHistorical, hook_backend)?;
-    let response = endpoint_response(provider, symbol)?;
-    Ok(json!({
-        "policy": evidence,
-        "response": mask_json_response(response, &config.mask_rules),
-    }))
-}
-
-pub fn secure_endpoint_by_name(
-    config: &PolicyEnforcementConfig,
-    endpoint: &str,
-    provider: &str,
-    symbol: &str,
-) -> Result<Value> {
-    let mut backend = SystemHookHandlerBackend::default();
-    secure_endpoint_by_name_with_backend(config, endpoint, provider, symbol, &mut backend)
-}
-
-pub fn secure_endpoint_by_name_with_backend(
-    config: &PolicyEnforcementConfig,
-    endpoint: &str,
-    provider: &str,
-    symbol: &str,
-    hook_backend: &mut impl HookHandlerBackend,
-) -> Result<Value> {
-    match endpoint {
-        "equity_historical" => {
-            secure_endpoint_response_with_backend(config, provider, symbol, hook_backend)
-        }
-        other => Err(Error::Provider(format!(
-            "endpoint denied by default: {other}"
-        ))),
-    }
-}
-
-pub fn secure_udf_run(config: &PolicyEnforcementConfig, request: UdfRequest) -> Result<Value> {
-    let mut backend = SystemHookHandlerBackend::default();
-    secure_udf_run_with_backend(config, request, &mut backend)
-}
-
-pub fn secure_udf_run_with_backend(
-    config: &PolicyEnforcementConfig,
-    request: UdfRequest,
-    hook_backend: &mut impl HookHandlerBackend,
-) -> Result<Value> {
-    let evidence =
-        enforce_request_path_with_backend(config, ServiceEndpoint::UdfRun, hook_backend)?;
-    let sandbox = LocalUdfSandbox;
-    let response = sandbox
-        .run(request)
-        .map_err(|error| Error::Provider(format!("sandbox denied request: {error}")))?;
-    Ok(json!({
-        "policy": evidence,
-        "response": mask_json_response(json!({
-            "runtime": response.runtime,
-            "output": response.output,
-        }), &config.mask_rules),
-    }))
-}
-
-fn enforce_request_path_with_backend(
-    config: &PolicyEnforcementConfig,
-    endpoint: ServiceEndpoint,
-    hook_backend: &mut impl HookHandlerBackend,
-) -> Result<PolicyEnforcementEvidence> {
-    validate_claims_strict(
-        &config.auth.claims,
-        &config.auth.jwks,
-        &config.auth.issuer,
-        &config.auth.audience,
-        &tdw_auth_oidc::DEFAULT_ALLOWED_ALGORITHMS,
-    )
-    .map_err(|error| Error::Provider(format!("ingress jwt rejected: {error:?}")))?;
-
-    let principal = config.auth.principal();
-    let policy = endpoint.auth_policy();
-    match authorize_with_decision(&principal, &policy) {
-        AuthorizationDecision::Allow => {}
-        AuthorizationDecision::Deny(reason) => {
-            return Err(Error::Provider(format!(
-                "authorization denied for {}: {reason:?}",
-                endpoint.as_str()
-            )));
-        }
-    }
-
-    let context = ActorContext::service("tdw-service-api");
-    let task = OmcSpawn::capture(&context, endpoint.as_str());
-    let envelope = EventEnvelope::new(
-        "policy.pre_request",
-        task.actor,
-        task.origin,
-        task.trace,
-        "2026-05-27T00:00:00Z",
-        json!({ "endpoint": endpoint.as_str(), "principal": principal.subject }),
-    );
-    let mut registry = HookRegistry::default();
-    for hook in &config.hooks {
-        registry.register(hook.clone());
-    }
-    let hooks = registry
-        .execute_handlers(&envelope, &config.hook_execution, hook_backend)
-        .map_err(|error| Error::Provider(format!("hook enforcement failed: {error}")))?;
-    if let Some(hook) = hooks.iter().find(|hook| hook.runtime.should_stop) {
-        return Err(Error::Provider(format!(
-            "hook vetoed request: {}",
-            hook.runtime.name
-        )));
-    }
-
-    Ok(PolicyEnforcementEvidence {
-        endpoint: endpoint.as_str().to_string(),
-        principal: principal.subject,
-        roles: principal.roles,
-        hooks: hooks.into_iter().map(|hook| hook.runtime.name).collect(),
-        masked_fields: config
-            .mask_rules
-            .iter()
-            .map(|rule| rule.field.clone())
-            .collect(),
-    })
-}
-
-fn mask_json_response(value: Value, rules: &[MaskRule]) -> Value {
-    match value {
-        Value::Object(mut object) => {
-            let string_fields = object
-                .iter()
-                .filter_map(|(field, value)| {
-                    value
-                        .as_str()
-                        .map(|string| (field.clone(), string.to_string()))
-                })
-                .collect::<BTreeMap<_, _>>();
-            let masked = apply_masks(&string_fields, rules);
-            for (field, masked_value) in masked {
-                if object.contains_key(&field) {
-                    object.insert(field, Value::String(masked_value));
-                }
-            }
-            for value in object.values_mut() {
-                *value = mask_json_response(value.take(), rules);
-            }
-            Value::Object(object)
-        }
-        Value::Array(values) => Value::Array(
-            values
-                .into_iter()
-                .map(|value| mask_json_response(value, rules))
-                .collect(),
-        ),
-        other => other,
-    }
 }
 
 pub fn agent_schema_names() -> Vec<String> {
@@ -1207,6 +880,7 @@ fn poll_stream_next<T: tdw_core::DataModel>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tdw_hooks::{HookExecutionPolicy, HookHandlerBackend};
 
     fn policy_config(
         roles: Vec<&str>,

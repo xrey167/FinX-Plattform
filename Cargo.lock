@@ -3158,9 +3158,16 @@ dependencies = [
 name = "tdw-app-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
+ "serde_json",
+ "tdw-bus",
+ "tdw-config",
+ "tdw-event",
+ "tdw-outbox",
  "tdw-protocol",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3221,6 +3228,8 @@ name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tdw-config",
+ "tdw-protocol",
  "tdw-service-api",
  "tdw-test-utils",
  "tokio",
@@ -3453,6 +3462,8 @@ dependencies = [
 name = "tdw-mcp"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tdw-service-api",
 ]
 
@@ -3670,6 +3681,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "tdw-udf",
+ "tdw-udf-wasm",
  "thiserror 2.0.18",
 ]
 
@@ -3678,15 +3690,22 @@ name = "tdw-service"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tdw-app-server",
+ "tdw-auth-oidc",
+ "tdw-config",
+ "tdw-protocol",
  "tdw-service-api",
  "tdw-test-utils",
  "tokio",
+ "tokio-util",
+ "toml",
 ]
 
 [[package]]
 name = "tdw-service-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "serde",
  "serde_json",
@@ -3729,10 +3748,14 @@ dependencies = [
  "tdw-rollout",
  "tdw-runtime",
  "tdw-sandbox",
+ "tdw-session",
  "tdw-snapshot",
  "tdw-spatial",
  "tdw-stage",
+ "tdw-storage-clickhouse",
+ "tdw-storage-fs",
  "tdw-storage-meilisearch",
+ "tdw-storage-postgres",
  "tdw-storage-qdrant",
  "tdw-storage-s3",
  "tdw-table-format",
@@ -3742,6 +3765,7 @@ dependencies = [
  "tdw-tui",
  "tdw-udf",
  "tdw-workflow-engine",
+ "tokio",
 ]
 
 [[package]]
@@ -3976,6 +4000,9 @@ version = "0.1.0"
 name = "tdw-worker"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-protocol",
  "tdw-service-api",
 ]
 
@@ -4157,6 +4184,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -4203,6 +4231,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

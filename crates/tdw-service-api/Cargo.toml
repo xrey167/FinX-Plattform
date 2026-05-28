@@ -5,7 +5,23 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+## Select `LocalFsBlobEngine` (from `tdw-storage-fs`) as the blob backend in
+## `AppState::from_config` when `config.profile == "service"`. Without this
+## feature the default `InMemoryS3BlobEngine` is used unconditionally.
+storage-fs = ["dep:tdw-storage-fs"]
+
+## Enable the WASM fixture UDF runtime in `tdw-sandbox`. Forwarded to the
+## sandbox crate so the feature tree is consistent.
+udf-wasm = ["tdw-sandbox/udf-wasm"]
+
+## Swap the relational engine in `AppState` for the real `PgEngine`
+## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
+## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
+real-postgres = ["tdw-storage-postgres/postgres"]
+
 [dependencies]
+async-trait = { workspace = true }
 bytes = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -46,12 +62,16 @@ tdw-provider-yahoo = { path = "../tdw-provider-yahoo" }
 tdw-protocol = { workspace = true }
 tdw-replay = { path = "../tdw-replay" }
 tdw-rollout = { workspace = true }
+tdw-session = { path = "../tdw-session" }
 tdw-runtime = { workspace = true }
 tdw-sandbox = { workspace = true }
 tdw-snapshot = { path = "../tdw-snapshot" }
 tdw-spatial = { path = "../tdw-spatial" }
 tdw-stage = { path = "../tdw-stage" }
+tdw-storage-clickhouse = { path = "../tdw-storage-clickhouse" }
+tdw-storage-fs = { workspace = true, optional = true }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-postgres = { path = "../tdw-storage-postgres" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 tdw-storage-s3 = { path = "../tdw-storage-s3" }
 tdw-table-format = { path = "../tdw-table-format" }
@@ -61,6 +81,9 @@ tdw-tools = { workspace = true }
 tdw-tui = { workspace = true }
 tdw-udf = { path = "../tdw-udf" }
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

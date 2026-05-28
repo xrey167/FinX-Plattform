@@ -95,11 +95,13 @@ pub struct PathsConfig {
 pub struct DaemonConfig {
     pub transport: DaemonTransport,
     pub uds_path: String,
+    pub tcp_bind: Option<String>,
     pub http_bind: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum DaemonTransport {
+    Tcp,
     Uds,
     HttpSse,
 }
@@ -156,8 +158,9 @@ impl Default for TdwConfig {
                 rollout_dir: "~/.tdw/sessions".to_string(),
             },
             daemon: DaemonConfig {
-                transport: DaemonTransport::Uds,
+                transport: DaemonTransport::Tcp,
                 uds_path: "~/.tdw/daemon.sock".to_string(),
+                tcp_bind: Some("127.0.0.1:8787".to_string()),
                 http_bind: None,
             },
             session: SessionConfig {

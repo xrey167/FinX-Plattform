@@ -5,9 +5,18 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+## Enable the WASM UDF fixture runtime. Without this feature the `Wasm` runtime
+## variant falls back to the `tdw-udf` built-in dispatcher (which handles
+## "upper" and "identity" without actual WASM execution). With this feature
+## enabled, `LocalUdfSandbox` routes `UdfRuntime::Wasm` requests through
+## `WasmUdfRuntime` in `tdw-udf-wasm`.
+udf-wasm = ["dep:tdw-udf-wasm"]
+
 [dependencies]
 serde = { workspace = true }
 tdw-udf = { path = "../tdw-udf" }
+tdw-udf-wasm = { path = "../tdw-udf-wasm", optional = true }
 thiserror = { workspace = true }
 
 [lints]

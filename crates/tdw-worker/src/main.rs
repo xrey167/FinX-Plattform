@@ -1,6 +1,11 @@
 #![forbid(unsafe_code)]
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--contract") {
+        println!("{}", tdw_worker::worker_contract_json());
+        return;
+    }
+
     match tdw_service_api::fetch_equity_historical("yahoo", "MSFT") {
         Ok(object) => match tdw_service_api::event_spine_sample("worker") {
             Ok(event) => println!(

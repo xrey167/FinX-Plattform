@@ -5,13 +5,13 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 ## Baseline Inventory
 
 - Manifest: crates\tdw-mcp\Cargo.toml
-- Target kinds: bin
+- Target kinds: lib, bin
 - Local dependencies: tdw-service-api
 - External dependencies: none
 - Dev dependencies: none
 - Reverse local dependencies: none
 - Feature flags: none
-- Test attributes detected: 0
+- Test attributes detected: 11
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -32,14 +32,27 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Findings
 
-- Binary delegates progress, agent tools, tag tools, extensibility tools, event-spine, KG/tag, and client-event evidence to `tdw-service-api`.
-- It has no local protocol fork or business logic; it formats service evidence and exits non-zero on service errors.
-- Scan signals are sample calls that prove integration surfaces; no stub, copied FinX-XR, OpenBB, or fallback path was found.
+- `--stdio-json-rpc` now runs a stateful MCP 2025-06-18 stdio protocol handler
+  with initialization, notification semantics, tools, resources, prompts,
+  cancellation tracking, and progress notifications.
+- `tools/call` delegates deterministic read-only tool execution to
+  `tdw-service-api` for provider discovery, equity historical fixtures,
+  progress samples, agent evidence, extensibility evidence, event-spine
+  evidence, KG/tag evidence, and client-event evidence.
+- Resources are safe static/dynamic TDW status surfaces; prompts are
+  finance-specific equity research, daemon triage, and ingest-planning
+  templates.
+- The default binary smoke path remains intact for fast offline evidence.
+- Scan signals are sample calls that prove integration surfaces; no stub,
+  copied FinX-XR, OpenBB, or fallback path was found.
 
 ## Verification
 
-- Focused G007 command passed: `cargo test -p tdw-acp -p tdw-app-client -p tdw-app-server -p tdw-exec -p tdw-runtime -p tdw-service-api -p tdw-tui -p tdw-cli -p tdw-mcp -p tdw-service -p tdw-worker`.
+- Focused MCP command passed: `cargo test -p tdw-mcp` using an isolated
+  `%TEMP%` target directory.
 
 ## Verdict
 
-Ready with follow-ups. The MCP binary is a thin service API surface; real JSON-RPC transport framing remains future integration work.
+Ready with follow-ups. The stdio MCP server is now a real protocol handler;
+Streamable HTTP transport and daemon-backed tool execution remain follow-up
+product work.

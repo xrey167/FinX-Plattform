@@ -8,6 +8,12 @@
             "null"
           ]
         },
+        "tcp_bind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "transport": {
           "$ref": "#/$defs/DaemonTransport"
         },
@@ -23,6 +29,7 @@
     },
     "DaemonTransport": {
       "enum": [
+        "Tcp",
         "Uds",
         "HttpSse"
       ],

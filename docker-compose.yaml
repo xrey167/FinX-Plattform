@@ -122,7 +122,7 @@ services:
       context: .
       dockerfile: docker/tdw-service.Dockerfile
     profiles: ["full"]
-    command: ["AAPL"]
+    command: ["--smoke", "AAPL"]
     environment:
       TDW_PROFILE: docker
     depends_on:
