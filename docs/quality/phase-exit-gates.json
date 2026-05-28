@@ -121,6 +121,14 @@
       "tier": "mutation"
     },
     {
+      "artifact": "mutation-summary.json (CI artifact)",
+      "cadence": "nightly",
+      "command": "cargo run -p xtask -- mutation report",
+      "id": "mutation-summary",
+      "requiredForPhaseExit": false,
+      "tier": "mutation"
+    },
+    {
       "artifact": "cargo test stdout",
       "cadence": "nightly",
       "command": "cargo test --workspace --features e2e",
