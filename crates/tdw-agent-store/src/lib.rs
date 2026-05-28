@@ -31,6 +31,7 @@ pub struct AgentStore {
 }
 
 impl AgentStore {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -39,6 +40,9 @@ impl AgentStore {
         self.agents.insert(card.agent_id.clone(), card);
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_upsert_agent(&mut self, card: AgentCard) -> Result<(), StoreError> {
         validate_agent_card_contract(&card).map_err(|_| StoreError::InvalidAgent)?;
         self.upsert_agent(card);
@@ -54,6 +58,9 @@ impl AgentStore {
             .insert(workflow.workflow_id.clone(), workflow);
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_upsert_workflow(&mut self, workflow: WorkflowDefinition) -> Result<(), StoreError> {
         validate_workflow_contract(&workflow).map_err(|_| StoreError::InvalidWorkflow)?;
         self.upsert_workflow(workflow);
@@ -64,6 +71,9 @@ impl AgentStore {
         self.eval_runs.insert(run.request.run_id.clone(), run);
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_record_eval_run(&mut self, run: StoredEvalRun) -> Result<(), StoreError> {
         if run.request.run_id.trim().is_empty()
             || run.request.agent_id.trim().is_empty()
@@ -79,22 +89,27 @@ impl AgentStore {
         Ok(())
     }
 
+    #[must_use]
     pub fn agent(&self, agent_id: &str) -> Option<&AgentCard> {
         self.agents.get(agent_id)
     }
 
+    #[must_use]
     pub fn gotcha(&self, gotcha_id: &str) -> Option<&Gotcha> {
         self.gotchas.get(gotcha_id)
     }
 
+    #[must_use]
     pub fn workflow(&self, workflow_id: &str) -> Option<&WorkflowDefinition> {
         self.workflows.get(workflow_id)
     }
 
+    #[must_use]
     pub fn eval_run(&self, run_id: &str) -> Option<&StoredEvalRun> {
         self.eval_runs.get(run_id)
     }
 
+    #[must_use]
     pub fn storage_mappings(&self) -> Vec<StorageMapping> {
         agent_storage_mappings()
     }

@@ -90,6 +90,7 @@ impl Default for McpServer {
 }
 
 impl McpServer {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -103,14 +104,17 @@ impl McpServer {
         }
     }
 
-    pub fn is_initialized(&self) -> bool {
+    #[must_use]
+    pub const fn is_initialized(&self) -> bool {
         self.initialized
     }
 
-    pub fn client_info(&self) -> Option<&Value> {
+    #[must_use]
+    pub const fn client_info(&self) -> Option<&Value> {
         self.client_info.as_ref()
     }
 
+    #[must_use]
     pub fn cancelled_requests(&self) -> &[CancelledRequest] {
         &self.cancelled_requests
     }
@@ -340,6 +344,7 @@ impl McpServer {
     }
 }
 
+#[must_use]
 pub fn run_stdio_json_rpc() -> i32 {
     let stdin = std::io::stdin();
     let mut server = McpServer::new();
@@ -373,10 +378,12 @@ where
     messages
 }
 
+#[must_use]
 pub fn handle_json_rpc_line(line: &str) -> Vec<String> {
     handle_json_rpc_lines([line])
 }
 
+#[must_use]
 pub fn mcp_tool_catalog() -> Vec<String> {
     tool_descriptors()
         .into_iter()
@@ -538,6 +545,7 @@ pub struct StreamableHttpConfig {
 }
 
 impl StreamableHttpConfig {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -574,6 +582,7 @@ impl StreamableHttpRequest {
         }
     }
 
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         header_value(&self.headers, name)
     }
@@ -594,19 +603,23 @@ struct ParsedHttpHead {
 }
 
 impl StreamableHttpResponse {
+    #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         header_value(&self.headers, name)
     }
 
+    #[must_use]
     pub fn body_text(&self) -> Option<&str> {
         std::str::from_utf8(&self.body).ok()
     }
 }
 
-pub fn default_streamable_http_bind() -> &'static str {
+#[must_use]
+pub const fn default_streamable_http_bind() -> &'static str {
     DEFAULT_STREAMABLE_HTTP_BIND
 }
 
+#[must_use]
 pub fn run_streamable_http(bind: &str) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -655,6 +668,7 @@ pub fn run_streamable_http(bind: &str) -> i32 {
     0
 }
 
+#[must_use]
 pub fn run_streamable_http_smoke() -> i32 {
     let mut server = McpServer::new();
     let initialize = StreamableHttpRequest::new(
@@ -1013,8 +1027,7 @@ fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHtt
 fn bind_is_loopback(bind: &str) -> bool {
     let host = bind
         .rsplit_once(':')
-        .map(|(host, _)| host)
-        .unwrap_or(bind)
+        .map_or(bind, |(host, _)| host)
         .trim_matches(['[', ']']);
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
@@ -1579,7 +1592,7 @@ fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
     }
 }
 
-fn structured(structured: Value) -> ToolExecution {
+const fn structured(structured: Value) -> ToolExecution {
     ToolExecution {
         structured,
         progress_events: Vec::new(),

@@ -27,9 +27,15 @@ pub struct Embedding {
 
 pub trait EmbeddingProvider: Send + Sync {
     fn model_id(&self) -> &str;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn embed(&self, text: &str) -> Result<Embedding>;
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_embedding(embedding: &Embedding) -> Result<()> {
     if embedding.model_id.trim().is_empty() {
         return Err(EmbeddingError::EmptyModelId);

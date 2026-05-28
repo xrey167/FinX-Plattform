@@ -46,7 +46,7 @@ impl<T> DataModel for T where
 {
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
 pub struct OBBject<T: DataModel> {
     pub provider: String,
@@ -56,6 +56,7 @@ pub struct OBBject<T: DataModel> {
 }
 
 impl<T: DataModel> OBBject<T> {
+    #[must_use]
     pub fn new(rows: Vec<T>, provider: &'static str, endpoint: &'static str) -> Self {
         Self {
             provider: provider.to_string(),
@@ -88,8 +89,14 @@ where
     const PROVIDER: &'static str;
     const ENDPOINT: &'static str;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn transform_query(params: Value) -> Result<Q>;
     async fn extract_data(&self, query: &Q, creds: &Credentials) -> Result<Bytes>;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn transform_data(&self, query: &Q, raw: Bytes) -> Result<Vec<D>>;
 
     async fn fetch(&self, params: Value, creds: &Credentials) -> Result<OBBject<D>> {
@@ -189,14 +196,14 @@ pub struct ScoredPoint {
     pub payload: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LexicalDoc {
     pub id: String,
     pub body: String,
     pub fields: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextQuery {
     pub text: String,
     pub top_k: usize,
@@ -240,6 +247,9 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register(&mut self, entry: RegistryEntry) -> Result<()> {
         if self.entries.iter().any(|existing| {
             existing.provider == entry.provider
@@ -255,6 +265,9 @@ impl ProviderRegistry {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register_fetcher<F, Q, D>(&mut self) -> Result<()>
     where
         F: Fetcher<Q, D>,
@@ -264,6 +277,9 @@ impl ProviderRegistry {
         self.register(RegistryEntry::fetcher(F::PROVIDER, F::ENDPOINT))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register_streamer<S, Q, D>(&mut self) -> Result<()>
     where
         S: Streamer<Q, D>,
@@ -273,6 +289,9 @@ impl ProviderRegistry {
         self.register(RegistryEntry::streamer(S::PROVIDER, S::ENDPOINT))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn from_inventory() -> Result<Self> {
         let registry = Self::default();
         #[cfg(feature = "inventory-registration")]
@@ -293,6 +312,7 @@ impl ProviderRegistry {
         Ok(registry)
     }
 
+    #[must_use]
     pub fn resolve(
         &self,
         provider: &str,
@@ -304,16 +324,19 @@ impl ProviderRegistry {
         })
     }
 
+    #[must_use]
     pub fn contains(&self, provider: &str, endpoint: &str, kind: ProviderKind) -> bool {
         self.resolve(provider, endpoint, kind).is_some()
     }
 
+    #[must_use]
     pub fn entries(&self) -> &[RegistryEntry] {
         &self.entries
     }
 }
 
 impl RegistryEntry {
+    #[must_use]
     pub const fn fetcher(provider: &'static str, endpoint: &'static str) -> Self {
         Self {
             provider,
@@ -322,6 +345,7 @@ impl RegistryEntry {
         }
     }
 
+    #[must_use]
     pub const fn streamer(provider: &'static str, endpoint: &'static str) -> Self {
         Self {
             provider,

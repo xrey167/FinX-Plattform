@@ -187,7 +187,7 @@ pub struct RiskMetric {
     pub currency: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct TradingCalendarEvent {
     #[validate(length(min = 1))]
     pub calendar_id: String,
@@ -201,7 +201,7 @@ pub struct TradingCalendarEvent {
     pub note: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct OperationalEvent {
     #[validate(length(min = 1))]
     pub event_id: String,
@@ -215,7 +215,7 @@ pub struct OperationalEvent {
     pub correlation_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct ReferenceInstrument {
     #[validate(length(min = 1))]
     pub symbol: String,
@@ -228,7 +228,7 @@ pub struct ReferenceInstrument {
     pub isin: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Instrument {
     #[validate(length(min = 1))]
     pub symbol: String,
@@ -253,7 +253,7 @@ pub struct CostFeeEvent {
     pub charged_at: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct ResearchNote {
     #[validate(length(min = 1))]
     pub id: String,

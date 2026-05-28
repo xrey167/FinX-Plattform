@@ -32,6 +32,9 @@ pub struct HuggingFaceTextGenerationQuery {
 }
 
 impl HuggingFaceTextGenerationQuery {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(model_id: &str, inputs: &str) -> Result<Self> {
         let inputs = inputs.trim();
         if inputs.is_empty() {
@@ -44,6 +47,9 @@ impl HuggingFaceTextGenerationQuery {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn with_max_new_tokens(mut self, max_new_tokens: u32) -> Result<Self> {
         if max_new_tokens == 0 {
             return Err(HuggingFaceProviderError::InvalidLimit);
@@ -73,6 +79,9 @@ pub enum HuggingFaceProviderError {
     MissingToken,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn text_generation_request(model_id: &str, token_present: bool) -> Result<InferenceRequest> {
     if !token_present {
         return Err(HuggingFaceProviderError::MissingToken);

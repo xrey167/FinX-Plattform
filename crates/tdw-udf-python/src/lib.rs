@@ -20,6 +20,9 @@ pub enum PythonUdfError {
     NetworkAccessDenied,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_module(module: &PythonUdfModule) -> Result<(), PythonUdfError> {
     if module.module_name.trim().is_empty() {
         return Err(PythonUdfError::EmptyModuleName);

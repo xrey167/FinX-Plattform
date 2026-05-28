@@ -17,6 +17,9 @@ pub struct OpenAiCompatibleModel {
 }
 
 impl OpenAiCompatibleModel {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(model_id: impl Into<String>, base_url: Option<String>) -> Result<Self> {
         let model_id = model_id.into();
         validate_model_id(&model_id)?;
@@ -26,6 +29,7 @@ impl OpenAiCompatibleModel {
         Ok(Self { model_id, base_url })
     }
 
+    #[must_use]
     pub fn base_url(&self) -> Option<&str> {
         self.base_url.as_deref()
     }

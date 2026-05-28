@@ -17,6 +17,9 @@ pub struct AnthropicMessagesModel {
 }
 
 impl AnthropicMessagesModel {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(model_id: impl Into<String>) -> Result<Self> {
         let model_id = model_id.into();
         validate_model_id(&model_id)?;

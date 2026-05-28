@@ -23,10 +23,14 @@ pub enum SpatialError {
 }
 
 impl BoundingBox {
+    #[must_use]
     pub fn contains(&self, point: Point) -> bool {
         self.try_contains(point).unwrap_or(false)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_contains(&self, point: Point) -> Result<bool, SpatialError> {
         validate_bounding_box(self)?;
         validate_point(point)?;
@@ -41,16 +45,23 @@ impl BoundingBox {
     }
 }
 
+#[must_use]
 pub fn manhattan_distance(left: Point, right: Point) -> f64 {
     try_manhattan_distance(left, right).unwrap_or(f64::NAN)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn try_manhattan_distance(left: Point, right: Point) -> Result<f64, SpatialError> {
     validate_point(left)?;
     validate_point(right)?;
     Ok((left.lat - right.lat).abs() + (left.lon - right.lon).abs())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_point(point: Point) -> Result<(), SpatialError> {
     if !point.lat.is_finite() || !point.lon.is_finite() {
         return Err(SpatialError::NonFiniteCoordinate);
@@ -64,6 +75,9 @@ pub fn validate_point(point: Point) -> Result<(), SpatialError> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_bounding_box(bbox: &BoundingBox) -> Result<(), SpatialError> {
     validate_point(bbox.min)?;
     validate_point(bbox.max)?;

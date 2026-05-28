@@ -19,19 +19,27 @@ pub struct DefineEvent {
 }
 
 impl DefineEvent {
+    #[must_use]
     pub fn compile_hook(&self) -> HookSpec {
         HookSpec::new(self.hook_name.clone(), 100, self.transaction_mode)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_compile_hook(&self) -> Result<HookSpec, DefineError> {
         self.validate()?;
         Ok(self.compile_hook())
     }
 
+    #[must_use]
     pub fn idempotency_key(&self) -> String {
         format!("{}:{}:{}", self.on_table, self.event_name, self.hook_name)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn validate(&self) -> Result<(), DefineError> {
         if !is_action_name(&self.event_name) {
             return Err(DefineError::InvalidEventName);

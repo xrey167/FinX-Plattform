@@ -71,6 +71,10 @@ impl AppState {
     ///   the `storage-fs` feature is enabled **and** `config.profile == "service"`.
     /// - **udf/wasm**: routing is handled inside `tdw-sandbox` (enabled by the
     ///   `udf-wasm` feature on this crate which is forwarded to `tdw-sandbox`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn from_config(config: TdwConfig) -> Result<Self> {
         let session = SqliteSessionStore::connect(&config.session.sqlite_path)
             .await
@@ -97,6 +101,7 @@ impl AppState {
         })
     }
 
+    #[must_use]
     pub fn with_policy(mut self, policy: PolicyEnforcementConfig) -> Self {
         self.policy = Some(policy);
         self
@@ -118,6 +123,10 @@ impl AppState {
     ///     .await
     ///     .expect("pg connect");
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     #[cfg(feature = "real-postgres")]
     pub async fn with_real_postgres(mut self, database_url: &str) -> tdw_core::Result<Self> {
         let engine = tdw_storage_postgres::PgEngine::connect(database_url)

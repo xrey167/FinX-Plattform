@@ -57,6 +57,10 @@ pub struct SmokeReport {
 /// Returns a populated [`SmokeReport`] on success. Any failure (provider
 /// error, serialization, storage I/O, roundtrip mismatch) yields a
 /// [`tdw_core::Error`].
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub async fn run_end_to_end_smoke(symbol: &str, storage_root: PathBuf) -> Result<SmokeReport> {
     let object = tdw_service_api::fetch_equity_historical("fileset", symbol)?;
 

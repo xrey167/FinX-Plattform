@@ -45,7 +45,7 @@ pub struct ContentRef {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentSkill {
     #[validate(length(min = 1))]
     pub skill_id: String,
@@ -58,7 +58,7 @@ pub struct AgentSkill {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentCard {
     #[validate(length(min = 1))]
     pub agent_id: String,
@@ -97,7 +97,7 @@ pub struct SlashCommandInvocation {
     pub args: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct EvalCase {
     #[validate(length(min = 1))]
     pub case_id: String,
@@ -106,7 +106,7 @@ pub struct EvalCase {
     pub expected_refs: Vec<ContentRef>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct EvalRunRequest {
     #[validate(length(min = 1))]
     pub run_id: String,
@@ -149,7 +149,7 @@ pub struct WorkflowDefinition {
     pub edges: Vec<WorkflowEdge>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Gotcha {
     #[validate(length(min = 1))]
     pub gotcha_id: String,
@@ -209,6 +209,9 @@ pub enum AgentContractError {
 }
 
 impl WorkflowDefinition {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn validate_dag(&self) -> Result<Vec<String>, WorkflowValidationError> {
         let mut indegree = BTreeMap::<String, usize>::new();
         let mut outgoing = BTreeMap::<String, Vec<String>>::new();
@@ -262,6 +265,9 @@ impl WorkflowDefinition {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn parse_skill_manifest(input: &str) -> Result<AgentSkill, AgentParseError> {
     if input.trim().is_empty() {
         return Err(AgentParseError::EmptyManifest);
@@ -306,6 +312,9 @@ pub fn parse_skill_manifest(input: &str) -> Result<AgentSkill, AgentParseError> 
     })
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn parse_slash_command_invocation(
     input: &str,
 ) -> Result<SlashCommandInvocation, AgentParseError> {
@@ -338,6 +347,9 @@ pub fn parse_slash_command_invocation(
     Ok(SlashCommandInvocation { command, args })
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_agent_card_contract(card: &AgentCard) -> Result<(), AgentContractError> {
     validate_identifier_field("agent_id", &card.agent_id)?;
     require_non_empty("name", &card.name)?;
@@ -357,6 +369,9 @@ pub fn validate_agent_card_contract(card: &AgentCard) -> Result<(), AgentContrac
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_workflow_contract(
     workflow: &WorkflowDefinition,
 ) -> Result<Vec<String>, AgentContractError> {
@@ -371,6 +386,7 @@ pub fn validate_workflow_contract(
     workflow.validate_dag().map_err(AgentContractError::from)
 }
 
+#[must_use]
 pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     vec![
         StorageMapping {
@@ -406,6 +422,7 @@ pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     ]
 }
 
+#[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
         ("agent_card", schema_json::<AgentCard>()),
@@ -423,6 +440,7 @@ pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     ])
 }
 
+#[must_use]
 pub fn sample_agent_card() -> AgentCard {
     AgentCard {
         agent_id: "market-researcher".to_string(),
@@ -447,6 +465,7 @@ pub fn sample_agent_card() -> AgentCard {
     }
 }
 
+#[must_use]
 pub fn gotcha_seed() -> Vec<Gotcha> {
     vec![Gotcha {
         gotcha_id: "agent-output-needs-provenance".to_string(),
@@ -474,6 +493,7 @@ fn schema_json<T: JsonSchema>() -> Value {
         .unwrap_or_else(|error| panic!("schema for agent type should serialize: {error}"))
 }
 
+#[must_use]
 pub fn schema_name_set() -> BTreeSet<&'static str> {
     AGENT_SCHEMA_NAMES.into_iter().collect()
 }

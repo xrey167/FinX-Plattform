@@ -38,6 +38,9 @@ pub struct FredSeriesObservationsQuery {
 }
 
 impl FredSeriesObservationsQuery {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(series_id: &str) -> Result<Self> {
         Ok(Self {
             series_id: normalize_series_id(series_id)?,
@@ -64,7 +67,8 @@ pub enum FredProviderError {
     MissingApiKey,
 }
 
-pub fn endpoints() -> &'static [ProviderEndpoint] {
+#[must_use]
+pub const fn endpoints() -> &'static [ProviderEndpoint] {
     const ENDPOINTS: &[ProviderEndpoint] = &[ProviderEndpoint {
         provider: PROVIDER_ID,
         name: "series_observations",
@@ -74,6 +78,9 @@ pub fn endpoints() -> &'static [ProviderEndpoint] {
     ENDPOINTS
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn series_observations_request(
     series_id: &str,
     api_key_present: bool,

@@ -48,7 +48,7 @@ pub enum WorkerJobStatus {
 }
 
 impl WorkerJobStatus {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "Pending",
             Self::Leased => "Leased",
@@ -78,7 +78,7 @@ pub struct WorkerJob {
     pub priority: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerLease {
     pub job_id: String,
     pub worker_id: String,
@@ -86,7 +86,7 @@ pub struct WorkerLease {
     pub lease_expires_at_ms: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnqueueOutcome {
     pub job_id: String,
     pub inserted: bool,
@@ -109,20 +109,38 @@ pub struct WorkerQueueStats {
 }
 
 pub trait DurableWorkerQueue {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn enqueue(&mut self, job: WorkerJob) -> Result<EnqueueOutcome>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn lease_next(&mut self, worker_id: &str) -> Result<Option<WorkerLease>> {
         self.lease_next_with_ttl(worker_id, DEFAULT_LEASE_TTL_MS)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn lease_next_with_ttl(
         &mut self,
         worker_id: &str,
         lease_ttl_ms: u64,
     ) -> Result<Option<WorkerLease>>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn complete(&mut self, job_id: &str) -> Result<()>;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn fail(&mut self, job_id: &str, error: &str, retry_after_ms: u64) -> Result<WorkerJobStatus>;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn reap_expired_leases(&mut self) -> Result<u64>;
     fn dead_letters(&self) -> Vec<DeadLetterRecord>;
     fn stats(&self) -> WorkerQueueStats;
@@ -321,6 +339,9 @@ pub struct SqliteWorkerQueue {
 }
 
 impl SqliteWorkerQueue {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let options = database_url
             .parse::<SqliteConnectOptions>()?
@@ -334,10 +355,14 @@ impl SqliteWorkerQueue {
         Ok(queue)
     }
 
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    #[must_use]
+    pub const fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn migrate(&self) -> Result<()> {
         for statement in SQLITE_WORKER_MIGRATION
             .split(';')
@@ -349,19 +374,22 @@ impl SqliteWorkerQueue {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn enqueue(&self, job: WorkerJob) -> Result<EnqueueOutcome> {
         validate_job(&job)?;
         let now_ms = unix_epoch_millis()?;
         let envelope_json = serde_json::to_string(&job.envelope)?;
         let result = sqlx::query(
-            r#"
+            r"
             insert into worker_jobs (
                 job_id, queue, envelope_json, max_attempts, not_before_ms, priority,
                 status, attempts, created_at_ms, updated_at_ms
             )
             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?8)
             on conflict(job_id) do nothing
-            "#,
+            ",
         )
         .bind(&job.job_id)
         .bind(&job.queue)
@@ -380,11 +408,17 @@ impl SqliteWorkerQueue {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn lease_next(&self, worker_id: &str) -> Result<Option<WorkerLease>> {
         self.lease_next_with_ttl(worker_id, DEFAULT_LEASE_TTL_MS)
             .await
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn lease_next_with_ttl(
         &self,
         worker_id: &str,
@@ -397,13 +431,13 @@ impl SqliteWorkerQueue {
 
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
-            r#"
+            r"
             select job_id, attempts
             from worker_jobs
             where status = ?1 and not_before_ms <= ?2
             order by priority desc, not_before_ms asc, created_at_ms asc, job_id asc
             limit 1
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::Pending.as_str())
         .bind(u64_to_i64(now_ms)?)
@@ -419,7 +453,7 @@ impl SqliteWorkerQueue {
         let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
         let attempt = attempts.saturating_add(1);
         let update = sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 attempts = attempts + 1,
@@ -427,7 +461,7 @@ impl SqliteWorkerQueue {
                 lease_expires_at_ms = ?3,
                 updated_at_ms = ?4
             where job_id = ?5 and status = ?6
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::Leased.as_str())
         .bind(worker_id)
@@ -451,6 +485,9 @@ impl SqliteWorkerQueue {
         }))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn complete(&self, job_id: &str) -> Result<()> {
         let Some(status) = self.job_status(job_id).await? else {
             return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
@@ -461,7 +498,7 @@ impl SqliteWorkerQueue {
 
         let now_ms = unix_epoch_millis()?;
         sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 leased_by = null,
@@ -469,7 +506,7 @@ impl SqliteWorkerQueue {
                 completed_at_ms = ?2,
                 updated_at_ms = ?2
             where job_id = ?3
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::Completed.as_str())
         .bind(u64_to_i64(now_ms)?)
@@ -479,6 +516,9 @@ impl SqliteWorkerQueue {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn fail(
         &self,
         job_id: &str,
@@ -504,7 +544,7 @@ impl SqliteWorkerQueue {
 
         let not_before_ms = now_ms.saturating_add(retry_after_ms);
         sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 not_before_ms = ?2,
@@ -513,7 +553,7 @@ impl SqliteWorkerQueue {
                 last_error = ?3,
                 updated_at_ms = ?4
             where job_id = ?5
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::Pending.as_str())
         .bind(u64_to_i64(not_before_ms)?)
@@ -525,15 +565,21 @@ impl SqliteWorkerQueue {
         Ok(WorkerJobStatus::Pending)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn reap_expired_leases(&self) -> Result<u64> {
         let now_ms = unix_epoch_millis()?;
         self.reap_expired_leases_at(now_ms).await
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn reap_expired_leases_at(&self, now_ms: u64) -> Result<u64> {
         let now_i64 = u64_to_i64(now_ms)?;
         let dead_lettered = sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 leased_by = null,
@@ -545,7 +591,7 @@ impl SqliteWorkerQueue {
               and lease_expires_at_ms is not null
               and lease_expires_at_ms <= ?2
               and attempts >= max_attempts
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .bind(now_i64)
@@ -555,7 +601,7 @@ impl SqliteWorkerQueue {
         .rows_affected();
 
         let requeued = sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 leased_by = null,
@@ -565,7 +611,7 @@ impl SqliteWorkerQueue {
               and lease_expires_at_ms is not null
               and lease_expires_at_ms <= ?2
               and attempts < max_attempts
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::Pending.as_str())
         .bind(now_i64)
@@ -577,15 +623,18 @@ impl SqliteWorkerQueue {
         Ok(dead_lettered + requeued)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn dead_letters(&self) -> Result<Vec<DeadLetterRecord>> {
         let rows = sqlx::query(
-            r#"
+            r"
             select job_id, queue, envelope_json, max_attempts, not_before_ms, priority,
                    attempts, last_error, dead_lettered_at_ms
             from worker_jobs
             where status = ?1
             order by dead_lettered_at_ms asc, job_id asc
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .fetch_all(&self.pool)
@@ -594,6 +643,9 @@ impl SqliteWorkerQueue {
         rows.into_iter().map(row_to_dead_letter).collect()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn job_status(&self, job_id: &str) -> Result<Option<WorkerJobStatus>> {
         let row = sqlx::query("select status from worker_jobs where job_id = ?1 limit 1")
             .bind(job_id)
@@ -603,13 +655,16 @@ impl SqliteWorkerQueue {
             .transpose()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn stats(&self) -> Result<WorkerQueueStats> {
         let rows = sqlx::query(
-            r#"
+            r"
             select status, count(*) as count
             from worker_jobs
             group by status
-            "#,
+            ",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -630,7 +685,7 @@ impl SqliteWorkerQueue {
 
     async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             update worker_jobs
             set status = ?1,
                 leased_by = null,
@@ -639,7 +694,7 @@ impl SqliteWorkerQueue {
                 dead_lettered_at_ms = ?3,
                 updated_at_ms = ?3
             where job_id = ?4
-            "#,
+            ",
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .bind(error)
@@ -989,7 +1044,7 @@ impl PgWorkerQueue {
     }
 }
 
-pub const SQLITE_WORKER_MIGRATION: &str = r#"
+pub const SQLITE_WORKER_MIGRATION: &str = r"
 create table if not exists worker_jobs (
     job_id text primary key,
     queue text not null,
@@ -1011,11 +1066,12 @@ create index if not exists idx_worker_jobs_ready
     on worker_jobs(status, queue, not_before_ms, priority, created_at_ms);
 create index if not exists idx_worker_jobs_expired_leases
     on worker_jobs(status, lease_expires_at_ms);
-"#;
+";
 
 pub const POSTGRES_WORKER_MIGRATION: &str =
     include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql");
 
+#[must_use]
 pub fn worker_contract_json() -> String {
     serde_json::json!({
         "contract": "tdw.worker.queue.v1",
@@ -1048,6 +1104,9 @@ pub fn worker_contract_json() -> String {
     .to_string()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn sample_shutdown_job(job_id: &str) -> Result<WorkerJob> {
     Ok(WorkerJob {
         job_id: job_id.to_string(),

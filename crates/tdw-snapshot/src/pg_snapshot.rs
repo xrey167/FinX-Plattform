@@ -40,6 +40,7 @@ pub struct PgSnapshotStore {
 impl PgSnapshotStore {
     /// Build a store against the supplied [`PgEngine`]. Uses
     /// `tdw_snapshot` as the default table name.
+    #[must_use]
     pub fn new(engine: PgEngine) -> Self {
         Self {
             engine,
@@ -54,6 +55,10 @@ impl PgSnapshotStore {
     }
 
     /// Idempotently create the snapshot table + uniqueness index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_schema(&self) -> Result<()> {
         let sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (\
@@ -76,6 +81,10 @@ impl PgSnapshotStore {
     /// reject the loser of a race so callers may need to retry on
     /// `Error::Storage`. The returned [`Snapshot`] reflects the
     /// row that actually persisted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn commit(
         &self,
         table: impl Into<String>,
@@ -107,6 +116,10 @@ impl PgSnapshotStore {
 
     /// Look up a specific version of `table`. Returns `None` if the
     /// version has not been committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn as_of_version(&self, table: &str, version: u64) -> Result<Option<Snapshot>> {
         let sql = format!(
             "SELECT table_name, version, created_at, row_ids::text AS row_ids_text \
@@ -125,6 +138,10 @@ impl PgSnapshotStore {
 
     /// Look up the latest version of `table`. Returns `None` if no
     /// snapshot has been committed for the table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn latest(&self, table: &str) -> Result<Option<Snapshot>> {
         let sql = format!(
             "SELECT table_name, version, created_at, row_ids::text AS row_ids_text \

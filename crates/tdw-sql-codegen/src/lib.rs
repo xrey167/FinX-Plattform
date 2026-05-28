@@ -6,13 +6,15 @@ pub enum SqlTarget {
     ClickHouse,
 }
 
-pub fn export_market_data_bar(target: SqlTarget) -> &'static str {
+#[must_use]
+pub const fn export_market_data_bar(target: SqlTarget) -> &'static str {
     match target {
         SqlTarget::Postgres => include_str!("../../../sql/ddl/postgres_bronze.sql"),
         SqlTarget::ClickHouse => include_str!("../../../sql/ddl/clickhouse_bronze.sql"),
     }
 }
 
+#[must_use]
 pub fn export_domain_ddl(target: SqlTarget) -> String {
     let schema_count = tdw_domain::BOM_SCHEMA_NAMES.len();
     format!(

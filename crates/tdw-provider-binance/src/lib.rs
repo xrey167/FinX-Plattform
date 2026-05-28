@@ -37,6 +37,9 @@ pub struct BinanceTickerPriceQuery {
 }
 
 impl BinanceTickerPriceQuery {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(symbol: &str) -> Result<Self> {
         Ok(Self {
             symbol: normalize_symbol(symbol)?,
@@ -58,7 +61,8 @@ pub enum BinanceProviderError {
     InvalidSymbol,
 }
 
-pub fn endpoints() -> &'static [ProviderEndpoint] {
+#[must_use]
+pub const fn endpoints() -> &'static [ProviderEndpoint] {
     const ENDPOINTS: &[ProviderEndpoint] = &[ProviderEndpoint {
         provider: PROVIDER_ID,
         name: "ticker_price",
@@ -68,6 +72,9 @@ pub fn endpoints() -> &'static [ProviderEndpoint] {
     ENDPOINTS
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn ticker_price_request(symbol: &str) -> Result<ProviderRequest> {
     let symbol = normalize_symbol(symbol)?;
     Ok(ProviderRequest {

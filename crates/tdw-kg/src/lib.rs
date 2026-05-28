@@ -51,6 +51,9 @@ impl KnowledgeGraph {
         self.entities.insert(entity.entity_id.clone(), entity);
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_upsert_entity(&mut self, entity: Entity) -> Result<(), KnowledgeGraphError> {
         validate_entity(&entity)?;
         self.upsert_entity(entity);
@@ -61,6 +64,9 @@ impl KnowledgeGraph {
         self.edges.push(relationship);
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_add_relationship(
         &mut self,
         relationship: Relationship,
@@ -75,10 +81,12 @@ impl KnowledgeGraph {
         Ok(())
     }
 
+    #[must_use]
     pub fn entity(&self, entity_id: &str) -> Option<&Entity> {
         self.entities.get(entity_id)
     }
 
+    #[must_use]
     pub fn neighbors(&self, entity_id: &str) -> Vec<&Entity> {
         let ids = self
             .edges
@@ -102,11 +110,15 @@ impl KnowledgeGraph {
         true
     }
 
+    #[must_use]
     pub fn merge_audit(&self) -> &[String] {
         &self.merge_audit
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_entity(entity: &Entity) -> Result<(), KnowledgeGraphError> {
     if !is_graph_id(&entity.entity_id) {
         return Err(KnowledgeGraphError::InvalidEntityId);
@@ -124,6 +136,9 @@ pub fn validate_entity(entity: &Entity) -> Result<(), KnowledgeGraphError> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_relationship(relationship: &Relationship) -> Result<(), KnowledgeGraphError> {
     if !is_graph_id(&relationship.from)
         || !is_graph_id(&relationship.to)

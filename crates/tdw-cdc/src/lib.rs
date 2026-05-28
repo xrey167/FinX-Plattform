@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tdw_outbox::OutboxRecord;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CdcRecord {
     pub offset: u64,
     pub event_id: String,
@@ -12,12 +12,13 @@ pub struct CdcRecord {
     pub payload: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CdcStream {
     pub records: Vec<CdcRecord>,
 }
 
 impl CdcStream {
+    #[must_use]
     pub fn from_outbox(records: &[OutboxRecord]) -> Self {
         Self {
             records: records
@@ -32,6 +33,7 @@ impl CdcStream {
         }
     }
 
+    #[must_use]
     pub fn after(&self, offset: u64) -> Vec<CdcRecord> {
         self.records
             .iter()

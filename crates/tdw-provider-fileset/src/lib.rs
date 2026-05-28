@@ -17,7 +17,8 @@ pub struct EquityHistoricalQuery {
 pub struct FilesetEquityHistoricalFetcher;
 
 impl FilesetEquityHistoricalFetcher {
-    pub fn registry_entry() -> RegistryEntry {
+    #[must_use]
+    pub const fn registry_entry() -> RegistryEntry {
         RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
     }
 }
@@ -57,6 +58,7 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for FilesetEquityHisto
     }
 }
 
+#[must_use]
 pub fn fixture_rows(symbol: &str) -> Vec<EquityHistoricalData> {
     vec![
         EquityHistoricalData {

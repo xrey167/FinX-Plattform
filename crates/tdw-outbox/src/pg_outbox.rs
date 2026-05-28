@@ -38,6 +38,7 @@ pub struct PgOutboxStore {
 impl PgOutboxStore {
     /// Build a store against the supplied [`PgEngine`]. Uses
     /// `tdw_outbox` as the default table name.
+    #[must_use]
     pub fn new(engine: PgEngine) -> Self {
         Self {
             engine,
@@ -54,6 +55,10 @@ impl PgOutboxStore {
 
     /// Idempotently create the outbox table. Callers should run this
     /// once at startup (or on first append).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_schema(&self) -> Result<()> {
         let sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (\
@@ -70,6 +75,10 @@ impl PgOutboxStore {
 
     /// Append an event envelope. Returns the auto-assigned sequence
     /// number (matches the in-memory outbox contract).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn append(&self, envelope: EventEnvelope<Value>) -> Result<u64> {
         let envelope_text = serde_json::to_string(&envelope)
             .map_err(|error| Error::Storage(format!("outbox encode envelope: {error}")))?;
@@ -95,6 +104,10 @@ impl PgOutboxStore {
     /// Mark the given sequence as dispatched. Returns `false` if no
     /// row matched (already dispatched or unknown sequence) — same
     /// semantics as `InMemoryOutbox::mark_dispatched`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn mark_dispatched(&self, sequence: u64) -> Result<bool> {
         let sql = format!(
             "UPDATE {} SET status = 'Dispatched' WHERE sequence = $1 AND status = 'Pending'",
@@ -106,6 +119,10 @@ impl PgOutboxStore {
 
     /// Fetch all pending records strictly after the supplied
     /// sequence, in ascending order. Empty `Vec` if nothing pending.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn pending_after(&self, sequence: u64) -> Result<Vec<OutboxRecord>> {
         let sql = format!(
             "SELECT sequence, envelope_json::text AS envelope_text \

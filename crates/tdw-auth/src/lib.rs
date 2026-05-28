@@ -30,10 +30,12 @@ pub struct AuthPolicy {
     pub row_filter: Option<String>,
 }
 
+#[must_use]
 pub fn authorize(principal: &Principal, policy: &AuthPolicy) -> bool {
     authorize_with_decision(principal, policy) == AuthorizationDecision::Allow
 }
 
+#[must_use]
 pub fn authorize_with_decision(
     principal: &Principal,
     policy: &AuthPolicy,

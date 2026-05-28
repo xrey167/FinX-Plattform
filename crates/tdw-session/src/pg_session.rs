@@ -46,6 +46,7 @@ impl PgSessionStore {
     /// `tdw_sessions` as the base table; companion tables
     /// (`<base>_permission_state`, `<base>_pending_approvals`,
     /// `<base>_cost_ledger`) are derived by suffix.
+    #[must_use]
     pub fn new(engine: PgEngine) -> Self {
         Self {
             engine,
@@ -73,6 +74,10 @@ impl PgSessionStore {
     }
 
     /// Idempotently create all four backing tables.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_schema(&self) -> Result<(), Error> {
         let sessions_sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (\
@@ -126,6 +131,9 @@ impl PgSessionStore {
 
     // ─── session CRUD ────────────────────────────────────────────
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn upsert_session(&self, record: &SessionRecord) -> Result<(), Error> {
         let sql = format!(
             "INSERT INTO {table} (session_id, status, created_at, updated_at) \
@@ -149,6 +157,9 @@ impl PgSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn get_session(
         &self,
         session_id: &SessionId,
@@ -170,6 +181,9 @@ impl PgSessionStore {
 
     // ─── permission rules ────────────────────────────────────────
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn save_permission_rules(
         &self,
         session_id: &SessionId,
@@ -189,6 +203,9 @@ impl PgSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn load_permission_rules(
         &self,
         session_id: &SessionId,
@@ -219,6 +236,9 @@ impl PgSessionStore {
 
     // ─── approvals ───────────────────────────────────────────────
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn request_approval(
         &self,
         session_id: &SessionId,
@@ -240,6 +260,9 @@ impl PgSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn resolve_approval(
         &self,
         permission_id: &PermissionId,
@@ -258,6 +281,9 @@ impl PgSessionStore {
         self.pending_approval(permission_id).await
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn pending_approval(
         &self,
         permission_id: &PermissionId,
@@ -279,6 +305,9 @@ impl PgSessionStore {
 
     // ─── cost ledger ─────────────────────────────────────────────
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<(), Error> {
         let sql = format!(
             "INSERT INTO {} (session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend) \
@@ -302,6 +331,9 @@ impl PgSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn cost_entries(
         &self,
         session_id: &SessionId,
@@ -373,7 +405,7 @@ fn pull_i64(row: &Value, field: &str) -> Result<i64, Error> {
         .ok_or_else(|| Error::Storage(format!("session row: missing or non-int {field}")))
 }
 
-fn status_to_text(status: SessionStatus) -> &'static str {
+const fn status_to_text(status: SessionStatus) -> &'static str {
     match status {
         SessionStatus::Active => "Active",
         SessionStatus::Completed => "Completed",
@@ -392,7 +424,7 @@ fn parse_status(text: &str) -> Result<SessionStatus, Error> {
     }
 }
 
-fn decision_to_text(decision: ApprovalDecision) -> &'static str {
+const fn decision_to_text(decision: ApprovalDecision) -> &'static str {
     match decision {
         ApprovalDecision::AllowOnce => "AllowOnce",
         ApprovalDecision::AlwaysAllow => "AlwaysAllow",

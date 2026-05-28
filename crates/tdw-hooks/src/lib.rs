@@ -84,27 +84,32 @@ impl HookSpec {
         }
     }
 
+    #[must_use]
     pub fn for_event(mut self, event: HookEvent) -> Self {
         self.event = event;
         self
     }
 
+    #[must_use]
     pub fn with_handler(mut self, handler: HandlerKind) -> Self {
         self.handler = handler;
         self
     }
 
-    pub fn should_stop(mut self) -> Self {
+    #[must_use]
+    pub const fn should_stop(mut self) -> Self {
         self.should_stop = true;
         self
     }
 
+    #[must_use]
     pub fn with_context(mut self, context: AdditionalContext) -> Self {
         self.additional_contexts.push(context);
         self
     }
 
-    pub fn disabled(mut self) -> Self {
+    #[must_use]
+    pub const fn disabled(mut self) -> Self {
         self.enabled = false;
         self
     }
@@ -128,7 +133,7 @@ pub struct HookRuntimeOutcome {
     pub additional_contexts: Vec<AdditionalContext>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookExecutionOutcome {
     pub runtime: HookRuntimeOutcome,
     pub action: String,
@@ -155,6 +160,9 @@ impl Default for HookExecutionPolicy {
 }
 
 pub trait HookHandlerBackend {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn run_command(
         &mut self,
         command: &str,
@@ -162,12 +170,24 @@ pub trait HookHandlerBackend {
         payload: Value,
     ) -> Result<Value, HookError>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn call_http(&mut self, url: &str, payload: Value) -> Result<Value, HookError>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn call_mcp(&mut self, server: &str, tool: &str, payload: Value) -> Result<Value, HookError>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn load_prompt(&mut self, prompt_path: &str, payload: Value) -> Result<Value, HookError>;
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn run_agent(
         &mut self,
         agent_id: &str,
@@ -186,6 +206,7 @@ pub struct SystemHookHandlerBackend {
 }
 
 impl SystemHookHandlerBackend {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             mcp_handlers: BTreeMap::new(),
@@ -205,7 +226,8 @@ impl SystemHookHandlerBackend {
             .insert((server.into(), tool.into()), handler);
     }
 
-    pub fn with_http_timeout(mut self, timeout: Duration) -> Self {
+    #[must_use]
+    pub const fn with_http_timeout(mut self, timeout: Duration) -> Self {
         self.http_timeout = timeout;
         self
     }
@@ -215,7 +237,8 @@ impl SystemHookHandlerBackend {
         self
     }
 
-    pub fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+    #[must_use]
+    pub const fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
         self
     }
@@ -359,6 +382,9 @@ impl HookRegistry {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn execute(
         &mut self,
         envelope: &EventEnvelope<Value>,
@@ -374,6 +400,9 @@ impl HookRegistry {
             .collect())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn execute_runtime(
         &mut self,
         envelope: &EventEnvelope<Value>,
@@ -402,6 +431,9 @@ impl HookRegistry {
         Ok(outcomes)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn execute_handlers(
         &mut self,
         envelope: &EventEnvelope<Value>,
@@ -447,6 +479,7 @@ impl HookRegistry {
         Ok(outcomes)
     }
 
+    #[must_use]
     pub fn hook_names(&self) -> Vec<String> {
         self.hooks.iter().map(|hook| hook.name.clone()).collect()
     }
@@ -500,6 +533,7 @@ impl PermissionRules {
         self.rules.push(rule);
     }
 
+    #[must_use]
     pub fn evaluate(&self, action: &str) -> PermissionEffect {
         if !is_action_name(action) {
             return PermissionEffect::Deny;
@@ -559,15 +593,20 @@ impl DeferredApprovals {
             })
     }
 
+    #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
 }
 
-pub fn tool_prompt_text() -> &'static str {
+#[must_use]
+pub const fn tool_prompt_text() -> &'static str {
     TOOL_PROMPT_TEXT
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_hook_spec(hook: &HookSpec) -> Result<(), HookError> {
     if !is_action_name(&hook.name) {
         return Err(HookError::InvalidSpec(hook.name.clone(), "name"));

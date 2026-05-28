@@ -26,6 +26,9 @@ pub struct StoredObject {
 }
 
 impl InMemoryS3BlobEngine {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn object_count(&self) -> Result<usize> {
         self.objects
             .lock()

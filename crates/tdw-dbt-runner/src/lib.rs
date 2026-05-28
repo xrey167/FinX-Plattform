@@ -38,10 +38,16 @@ pub enum DbtCommandError {
 }
 
 impl DbtCommand {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn build_run(project_dir: impl Into<String>, selector: impl Into<String>) -> Result<Self> {
         Self::build_run_with_profiles(project_dir, "dbt/finx_finance", selector)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn build_run_with_profiles(
         project_dir: impl Into<String>,
         profiles_dir: impl Into<String>,
@@ -66,10 +72,14 @@ impl DbtCommand {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn parse_run_results(json: &str) -> std::result::Result<DbtRunResult, serde_json::Error> {
     serde_json::from_str(json)
 }
 
+#[must_use]
 pub fn run_step_rows(result: &DbtRunResult) -> Vec<(String, String, f64)> {
     result
         .results

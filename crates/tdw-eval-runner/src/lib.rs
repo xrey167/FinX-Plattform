@@ -52,6 +52,9 @@ impl EvalRunner {
         outcome
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_run(
         request: EvalRunRequest,
         store: &mut AgentStore,
@@ -65,6 +68,9 @@ impl EvalRunner {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_request(request: &EvalRunRequest) -> Result<(), EvalRunError> {
     if request.run_id.trim().is_empty()
         || request.agent_id.trim().is_empty()

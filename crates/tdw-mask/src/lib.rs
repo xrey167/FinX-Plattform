@@ -22,10 +22,14 @@ pub struct MaskRule {
     pub mode: MaskMode,
 }
 
+#[must_use]
 pub fn apply_masks(row: &BTreeMap<String, String>, rules: &[MaskRule]) -> BTreeMap<String, String> {
     try_apply_masks(row, rules).unwrap_or_else(|_| redact_all(row))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn try_apply_masks(
     row: &BTreeMap<String, String>,
     rules: &[MaskRule],
@@ -47,6 +51,9 @@ pub fn try_apply_masks(
     Ok(masked)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_rules(rules: &[MaskRule]) -> Result<(), MaskError> {
     if rules.iter().any(|rule| !is_field_name(&rule.field)) {
         return Err(MaskError::InvalidFieldName);
@@ -54,6 +61,7 @@ pub fn validate_rules(rules: &[MaskRule]) -> Result<(), MaskError> {
     Ok(())
 }
 
+#[must_use]
 pub fn masking_hook() -> HookSpec {
     HookSpec::new("mask.sync_filter", 5, TransactionMode::InTransaction)
 }
@@ -65,7 +73,7 @@ fn is_field_name(value: &str) -> bool {
             .all(|part| !part.is_empty() && part.chars().all(is_field_character))
 }
 
-fn is_field_character(character: char) -> bool {
+const fn is_field_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
 

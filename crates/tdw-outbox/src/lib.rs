@@ -16,7 +16,7 @@ pub enum OutboxStatus {
     Dispatched,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutboxRecord {
     pub sequence: u64,
     pub envelope: EventEnvelope<Value>,
@@ -55,6 +55,7 @@ impl InMemoryOutbox {
         false
     }
 
+    #[must_use]
     pub fn pending_after(&self, sequence: u64) -> Vec<OutboxRecord> {
         self.records
             .iter()

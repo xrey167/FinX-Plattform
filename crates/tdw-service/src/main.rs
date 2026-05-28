@@ -22,8 +22,7 @@ async fn main() -> Result<(), ServiceError> {
             .iter()
             .position(|a| a == "--smoke")
             .and_then(|i| args.get(i + 1))
-            .map(|s| s.as_str())
-            .unwrap_or("AAPL");
+            .map_or("AAPL", |s| s.as_str());
         let root = allocate_storage_root("tdw-service-smoke");
         let report = run_end_to_end_smoke(symbol, root.clone())
             .await

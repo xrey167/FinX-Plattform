@@ -160,7 +160,7 @@ fn credentials_clone_preserves_set_keys() {
         google_api_key: Some("goog".to_string()),
         anthropic_api_key: Some("anthropic".to_string()),
     };
-    let clone = creds.clone();
+    let clone = creds;
     assert_eq!(clone.polygon_api_key.as_deref(), Some("poly"));
     assert_eq!(clone.openai_api_key, None);
     assert_eq!(clone.google_api_key.as_deref(), Some("goog"));

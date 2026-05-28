@@ -36,6 +36,9 @@ pub struct ModelRegistry {
 }
 
 impl ModelRegistry {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register(&mut self, model: ModelRegistration) -> Result<(), ModelRegistryError> {
         validate_registration(&model)?;
         if self.models.contains_key(&model.model_id) {
@@ -45,15 +48,20 @@ impl ModelRegistry {
         Ok(())
     }
 
+    #[must_use]
     pub fn get(&self, model_id: &str) -> Option<&ModelRegistration> {
         self.models.get(model_id)
     }
 
+    #[must_use]
     pub fn model_ids(&self) -> Vec<String> {
         self.models.keys().cloned().collect()
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_registration(model: &ModelRegistration) -> Result<(), ModelRegistryError> {
     if !is_model_id(&model.model_id) {
         return Err(ModelRegistryError::InvalidModelId);

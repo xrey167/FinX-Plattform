@@ -34,6 +34,9 @@ pub struct PolygonAggregatesQuery {
 }
 
 impl PolygonAggregatesQuery {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(ticker: &str, from: &str, to: &str) -> Result<Self> {
         Ok(Self {
             ticker: normalize_ticker(ticker)?,
@@ -44,11 +47,15 @@ impl PolygonAggregatesQuery {
         })
     }
 
-    pub fn with_adjusted(mut self, adjusted: bool) -> Self {
+    #[must_use]
+    pub const fn with_adjusted(mut self, adjusted: bool) -> Self {
         self.adjusted = adjusted;
         self
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn with_limit(mut self, limit: u32) -> Result<Self> {
         if limit == 0 {
             return Err(PolygonProviderError::InvalidLimit);
@@ -72,6 +79,9 @@ pub enum PolygonProviderError {
     MissingApiKey,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn aggregates_request(ticker: &str, api_key_present: bool) -> Result<ProviderRequest> {
     if !api_key_present {
         return Err(PolygonProviderError::MissingApiKey);

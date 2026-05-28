@@ -777,6 +777,9 @@ fn is_timeout(error: &std::io::Error) -> bool {
     )
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_client_info(info: &ClientInfo) -> Result<()> {
     let name = info.name.trim();
     if name.is_empty()
@@ -794,19 +797,27 @@ pub fn validate_client_info(info: &ClientInfo) -> Result<()> {
 }
 
 impl AppClient {
-    pub fn new(info: ClientInfo, submissions: SubmissionHandle) -> Self {
+    #[must_use]
+    pub const fn new(info: ClientInfo, submissions: SubmissionHandle) -> Self {
         Self { info, submissions }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_new(info: ClientInfo, submissions: SubmissionHandle) -> Result<Self> {
         validate_client_info(&info)?;
         Ok(Self::new(info, submissions))
     }
 
-    pub fn info(&self) -> &ClientInfo {
+    #[must_use]
+    pub const fn info(&self) -> &ClientInfo {
         &self.info
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn submit(&self, envelope: OpEnvelope) -> std::result::Result<(), SubmissionError> {
         self.submissions.submit(envelope)
     }

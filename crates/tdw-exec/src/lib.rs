@@ -36,11 +36,15 @@ impl fmt::Display for ExecError {
 
 impl Error for ExecError {}
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn try_run_headless(envelope: OpEnvelope) -> Result<ExecRun> {
     validate_op(&envelope.op)?;
     Ok(run_headless(envelope))
 }
 
+#[must_use]
 pub fn run_headless(envelope: OpEnvelope) -> ExecRun {
     let mut events = vec![EventMsg::Started {
         op_id: envelope.op_id.clone(),
@@ -60,6 +64,9 @@ pub fn run_headless(envelope: OpEnvelope) -> ExecRun {
     ExecRun { events }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_op(op: &Op) -> Result<()> {
     match op {
         Op::RunQuery { sql, .. } => validate_read_only_sql(sql),

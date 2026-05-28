@@ -30,10 +30,14 @@ pub enum ClaimValidationError {
     InvalidRole,
 }
 
+#[must_use]
 pub fn validate_claims(claims: &JwtClaims, jwks: &[JwksKey], issuer: &str, audience: &str) -> bool {
     validate_claims_strict(claims, jwks, issuer, audience, &DEFAULT_ALLOWED_ALGORITHMS).is_ok()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_claims_strict(
     claims: &JwtClaims,
     jwks: &[JwksKey],

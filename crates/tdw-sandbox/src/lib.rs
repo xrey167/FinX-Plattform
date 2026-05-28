@@ -45,6 +45,9 @@ pub struct UdfResponse {
 
 pub trait SandboxRuntime: Send + Sync {
     fn runtime_name(&self) -> &'static str;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn run(&self, request: UdfRequest) -> Result<UdfResponse>;
 }
 
@@ -123,6 +126,9 @@ fn run_wasm(request: &UdfRequest) -> Result<UdfResponse> {
         })
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_request(request: &UdfRequest) -> Result<()> {
     if !is_udf_name(&request.name) {
         return Err(SandboxError::InvalidRequest("name"));

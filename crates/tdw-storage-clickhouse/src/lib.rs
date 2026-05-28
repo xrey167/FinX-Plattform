@@ -21,6 +21,9 @@ pub struct ClickHouseRecordingEngine {
 }
 
 impl ClickHouseRecordingEngine {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn statements(&self) -> Result<Vec<String>> {
         self.statements
             .lock()
@@ -28,6 +31,9 @@ impl ClickHouseRecordingEngine {
             .map_err(|error| Error::Storage(error.to_string()))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn rows_written(&self) -> Result<usize> {
         self.rows_written
             .lock()

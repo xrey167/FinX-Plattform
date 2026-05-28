@@ -18,6 +18,7 @@ pub struct CommandRunner {
 }
 
 impl CommandRunner {
+    #[must_use]
     pub fn new(registry: ProviderRegistry) -> Self {
         Self {
             registry,
@@ -25,19 +26,27 @@ impl CommandRunner {
         }
     }
 
+    #[must_use]
     pub fn with_credentials(mut self, creds: Credentials) -> Self {
         self.creds = creds;
         self
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register_provider(&mut self, entry: RegistryEntry) -> Result<()> {
         self.registry.register(entry)
     }
 
+    #[must_use]
     pub fn registered_providers(&self) -> &[RegistryEntry] {
         self.registry.entries()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn run<F, Q, D>(&self, fetcher: &F, params: Value) -> Result<tdw_core::OBBject<D>>
     where
         F: Fetcher<Q, D>,
@@ -47,6 +56,9 @@ impl CommandRunner {
         fetcher.fetch(params, &self.creds).await
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn run_streaming<F, Q, D>(
         &self,
         fetcher: &F,
