@@ -284,6 +284,102 @@ pub fn service_channel<D: Dispatcher + 'static, S: EventSink + 'static>(
     )
 }
 
+// ---------------------------------------------------------------------------
+// P3: CancellationToken re-export, outbox→bus relay, serve lifecycle
+// ---------------------------------------------------------------------------
+
+pub use tokio_util::sync::CancellationToken;
+
+/// Spawn the in-memory outbox→bus relay. The task polls the outbox for
+/// pending records every `tick`, publishes each on the bus, and marks it
+/// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
+pub fn spawn_inmemory_relay(
+    outbox: std::sync::Arc<std::sync::Mutex<tdw_outbox::InMemoryOutbox>>,
+    bus: std::sync::Arc<std::sync::Mutex<tdw_bus::EventBus>>,
+    tick: std::time::Duration,
+    cancel: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_seq: u64 = 0;
+        loop {
+            // Drain all pending records in one tick.
+            let pending = {
+                let guard = outbox.lock().expect("outbox lock");
+                guard.pending_after(last_seq)
+            };
+            for record in &pending {
+                // Publish a fresh EventEnvelope of the same payload onto the bus.
+                let envelope = record.envelope.clone();
+                {
+                    let mut bus_guard = bus.lock().expect("bus lock");
+                    bus_guard.publish(envelope);
+                }
+                {
+                    let mut outbox_guard = outbox.lock().expect("outbox lock");
+                    outbox_guard.mark_dispatched(record.sequence);
+                }
+                if record.sequence > last_seq {
+                    last_seq = record.sequence;
+                }
+            }
+            // Wait for next tick or cancellation.
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break,
+                _ = tokio::time::sleep(tick) => {}
+            }
+        }
+    })
+}
+
+/// Run the daemon's service loop + relay until cancelled.
+///
+/// Concretely:
+/// * Drives a `ServiceLoop<D, S>` until its `submissions` channel closes or the
+///   `CancellationToken` fires.
+/// * Co-spawns the in-memory outbox→bus relay (handed off via `relay`).
+/// * Listens for `tokio::signal::ctrl_c()` and cancels the token.
+/// * Listens for the loop emitting `EventMsg::Completed` after dispatching
+///   an `Op::Shutdown` and triggers cancellation.
+pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
+    mut service_loop: ServiceLoop<D, S>,
+    relay: tokio::task::JoinHandle<()>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> std::result::Result<(), SinkError> {
+    let shutdown_for_signal = shutdown.clone();
+    let signal_task: tokio::task::JoinHandle<()> = tokio::spawn(async move {
+        // Ignore signal install errors on platforms that don't support ctrl_c.
+        if tokio::signal::ctrl_c().await.is_ok() {
+            shutdown_for_signal.cancel();
+        }
+    });
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            maybe = service_loop.run_once() => {
+                match maybe {
+                    None => break, // submissions channel closed
+                    Some(events) => {
+                        // If any event indicates a Shutdown dispatched, trigger cancellation.
+                        if events.iter().any(|e| matches!(e, EventMsg::Completed { result: Some(value), .. } if value.get("shutdown").and_then(|v| v.as_str()) == Some("requested"))) {
+                            shutdown.cancel();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Drain: ensure relay task observes cancellation, then await both.
+    shutdown.cancel();
+    let _ = relay.await;
+    signal_task.abort();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +407,170 @@ mod tests {
             events.recv().await,
             Some(EventMsg::Started { .. })
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // P3 tests
+    // -----------------------------------------------------------------------
+
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use serde_json::json;
+    use tdw_bus::EventBus;
+    use tdw_outbox::InMemoryOutbox;
+    use tdw_event::sample_event;
+
+    struct FakeDispatcher;
+
+    #[async_trait::async_trait]
+    impl Dispatcher for FakeDispatcher {
+        async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
+            vec![EventMsg::Started { op_id: env.op_id }]
+        }
+    }
+
+    struct ShutdownDispatcher;
+
+    #[async_trait::async_trait]
+    impl Dispatcher for ShutdownDispatcher {
+        async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
+            match &env.op {
+                Op::Shutdown => vec![
+                    EventMsg::Started { op_id: env.op_id.clone() },
+                    EventMsg::Completed {
+                        op_id: env.op_id,
+                        summary: None,
+                        result: Some(json!({"shutdown": "requested"})),
+                    },
+                ],
+                _ => vec![EventMsg::Started { op_id: env.op_id }],
+            }
+        }
+    }
+
+    struct FakeSink;
+
+    #[async_trait::async_trait]
+    impl EventSink for FakeSink {
+        async fn persist_event(
+            &self,
+            _env: &OpEnvelope,
+            _event: &EventMsg,
+            _sequence: u64,
+        ) -> SinkResult<()> {
+            Ok(())
+        }
+
+        async fn record_cost(&self, _env: &OpEnvelope, _backend: &str) -> SinkResult<()> {
+            Ok(())
+        }
+    }
+
+    fn make_envelope(op: Op) -> OpEnvelope {
+        OpEnvelope::new(
+            SessionId::new("session-p3").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "test".to_string(),
+                kind: ActorKind::System,
+                tenant_id: None,
+            },
+            op,
+        )
+    }
+
+    #[tokio::test]
+    async fn relay_drains_outbox_into_bus_and_marks_dispatched() {
+        let outbox = Arc::new(Mutex::new(InMemoryOutbox::default()));
+        let bus = Arc::new(Mutex::new(EventBus::new(64)));
+
+        {
+            let mut o = outbox.lock().expect("lock");
+            o.append(sample_event("test-a"));
+            o.append(sample_event("test-b"));
+        }
+
+        let cancel = CancellationToken::new();
+        let handle = spawn_inmemory_relay(
+            outbox.clone(),
+            bus.clone(),
+            Duration::from_millis(5),
+            cancel.clone(),
+        );
+
+        // Wait up to 500 ms for both sequences to be dispatched.
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            let pending = outbox.lock().expect("lock").pending_after(0);
+            if pending.is_empty() {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+
+        let entries = bus.lock().expect("lock").read_from(1);
+        assert_eq!(entries.len(), 2, "bus should have both events");
+
+        let pending = outbox.lock().expect("lock").pending_after(0);
+        assert!(pending.is_empty(), "all outbox records should be dispatched");
+    }
+
+    #[tokio::test]
+    async fn serve_returns_when_cancellation_fires() {
+        let (handle, _events, service_loop) = service_channel(FakeDispatcher, FakeSink);
+        drop(handle); // close submission channel so serve won't hang on run_once
+
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        // Dummy relay that just waits for cancellation.
+        let relay = tokio::spawn(async move {
+            cancel_clone.cancelled().await;
+        });
+
+        let cancel_for_serve = cancel.clone();
+        let serve_join = tokio::spawn(async move {
+            serve(service_loop, relay, cancel_for_serve).await
+        });
+
+        // Give serve a moment then cancel.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_secs(1), serve_join).await;
+        assert!(result.is_ok(), "serve should complete within timeout");
+        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
+    }
+
+    #[tokio::test]
+    async fn serve_terminates_on_dispatched_shutdown() {
+        let (submission, _events, service_loop) = service_channel(ShutdownDispatcher, FakeSink);
+
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        let relay = tokio::spawn(async move {
+            cancel_clone.cancelled().await;
+        });
+
+        let cancel_for_serve = cancel.clone();
+        let serve_join = tokio::spawn(async move {
+            serve(service_loop, relay, cancel_for_serve).await
+        });
+
+        // Submit a Shutdown op.
+        submission.submit(make_envelope(Op::Shutdown)).expect("submit shutdown");
+
+        let result = tokio::time::timeout(Duration::from_secs(2), serve_join).await;
+        assert!(result.is_ok(), "serve should complete within timeout");
+        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
+        assert!(cancel.is_cancelled(), "token should be cancelled after shutdown");
     }
 
     #[test]

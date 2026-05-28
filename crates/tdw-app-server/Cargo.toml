@@ -8,8 +8,15 @@ license = "UNLICENSED"
 [dependencies]
 async-trait = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-bus = { path = "../tdw-bus" }
+tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time", "signal", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tdw-event = { path = "../tdw-event" }
 
 [lints]
 workspace = true
