@@ -24,8 +24,8 @@ impl EventSink for AppState {
         sequence: u64,
     ) -> SinkResult<()> {
         // 1. Append to the in-memory outbox.
-        let payload = serde_json::to_value(event)
-            .map_err(|e| SinkError(format!("serialize event: {e}")))?;
+        let payload =
+            serde_json::to_value(event).map_err(|e| SinkError(format!("serialize event: {e}")))?;
         let (actor, origin, trace) = sample_actor_context("tdw-service");
         let envelope: EventEnvelope<Value> = EventEnvelope::new(
             "daemon.event",
@@ -141,8 +141,7 @@ mod tests {
             .await
             .with_policy(analyst_policy());
 
-        let session_id =
-            SessionId::new("session-sink-test").expect("session id");
+        let session_id = SessionId::new("session-sink-test").expect("session id");
         let env = make_envelope(
             session_id.clone(),
             Op::RunQuery {
@@ -152,8 +151,7 @@ mod tests {
             },
         );
 
-        let (handle, _event_rx, mut service_loop) =
-            service_channel(state.clone(), state.clone());
+        let (handle, _event_rx, mut service_loop) = service_channel(state.clone(), state.clone());
 
         handle.submit(env.clone()).expect("submission accepted");
 
