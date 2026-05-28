@@ -2231,11 +2231,15 @@ mod tests {
 
         assert_eq!(response["id"], 12);
         assert_eq!(response["result"]["isError"], true);
+        let error_text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("daemon error text");
         assert!(
-            response["result"]["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.contains("daemon unavailable")),
+            error_text.contains("daemon unavailable")
+                || error_text.contains("daemon timed out during connect"),
+            "unexpected daemon error text: {error_text}"
         );
+        assert!(error_text.contains(&format!("endpoint=tcp://{addr}")));
     }
 
     #[test]
@@ -2296,6 +2300,76 @@ mod tests {
         let structured = &response["result"]["structuredContent"];
         assert_eq!(structured["tool"], "tdw.daemon.query.submit");
         assert_eq!(structured["daemon"]["transport"], "tcp");
+        assert_eq!(structured["extra"]["sql"], "select 1");
+        assert!(
+            structured["events"]
+                .as_array()
+                .is_some_and(|events| events.iter().any(|event| event["type"] == "completed")),
+        );
+    }
+
+    #[test]
+    fn daemon_query_submit_roundtrips_against_in_process_http_sse_daemon() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|error| panic!("tokio runtime: {error}"));
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap_or_else(|error| panic!("bind in-process HTTP/SSE daemon: {error}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("daemon local addr: {error}"));
+        let state = runtime.block_on(tdw_service_api::AppState::in_memory_for_tests());
+        let (handle, events_rx, mut service_loop) =
+            tdw_app_server::service_channel(state.clone(), state);
+        let cancel = tdw_app_server::CancellationToken::new();
+
+        let loop_cancel = cancel.clone();
+        let loop_task = runtime.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = loop_cancel.cancelled() => break,
+                    maybe = service_loop.run_once() => {
+                        if maybe.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let http_cancel = cancel.clone();
+        let http_task = runtime.spawn(async move {
+            tdw_app_server::serve_http(listener, handle, events_rx, http_cancel).await
+        });
+
+        let mut server = McpServer::with_daemon_config(
+            DaemonClientConfig::new(DaemonEndpoint {
+                transport: DaemonTransport::HttpSse,
+                address: format!("http://{addr}/events"),
+            })
+            .with_timeout(Duration::from_secs(2)),
+        );
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"tdw.daemon.query.submit","arguments":{"sql":"select 1","session_id":"session-mcp-http-test"}}}"#,
+            )[0],
+        );
+
+        cancel.cancel();
+        runtime.block_on(async {
+            let _ = tokio::time::timeout(Duration::from_secs(1), loop_task).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), http_task).await;
+        });
+
+        assert_eq!(response["id"], 14);
+        assert_eq!(response["result"]["isError"], false);
+        let structured = &response["result"]["structuredContent"];
+        assert_eq!(structured["tool"], "tdw.daemon.query.submit");
+        assert_eq!(structured["daemon"]["transport"], "http-sse");
         assert_eq!(structured["extra"]["sql"], "select 1");
         assert!(
             structured["events"]

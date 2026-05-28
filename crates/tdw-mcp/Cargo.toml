@@ -15,6 +15,7 @@ tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 
 [dev-dependencies]
+tdw-app-server = { workspace = true, features = ["transport-http"] }
 tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "time"] }
 
 [lints]

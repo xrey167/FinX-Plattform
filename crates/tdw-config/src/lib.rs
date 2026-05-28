@@ -112,6 +112,19 @@ pub struct SessionConfig {
     pub jsonl_archive: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum WorkerBackend {
+    Sqlite,
+    Postgres,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkerConfig {
+    pub backend: WorkerBackend,
+    pub sqlite_path: String,
+    pub postgres_url_env: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PermissionConfig {
     pub default_action: PermissionAction,
@@ -144,6 +157,7 @@ pub struct TdwConfig {
     pub paths: PathsConfig,
     pub daemon: DaemonConfig,
     pub session: SessionConfig,
+    pub worker: WorkerConfig,
     pub permissions: PermissionConfig,
     pub model: ModelConfig,
     pub protocol: ProtocolConfig,
@@ -166,6 +180,11 @@ impl Default for TdwConfig {
             session: SessionConfig {
                 sqlite_path: "~/.tdw/session.sqlite".to_string(),
                 jsonl_archive: true,
+            },
+            worker: WorkerConfig {
+                backend: WorkerBackend::Sqlite,
+                sqlite_path: "~/.tdw/worker.sqlite".to_string(),
+                postgres_url_env: "TDW_POSTGRES_URL".to_string(),
             },
             permissions: PermissionConfig {
                 default_action: PermissionAction::Ask,
@@ -328,6 +347,11 @@ profile = "dev"
 
 [session]
 sqlite_path = ".tdw/session.sqlite"
+
+[worker]
+backend = "Postgres"
+sqlite_path = ".tdw/worker.sqlite"
+postgres_url_env = "TDW_WORKER_POSTGRES_URL"
 "#,
         )
         .expect("toml parses");
@@ -336,6 +360,9 @@ sqlite_path = ".tdw/session.sqlite"
         assert_eq!(config.profile, "dev");
         assert_eq!(config.session.sqlite_path, ".tdw/session.sqlite");
         assert!(config.session.jsonl_archive);
+        assert_eq!(config.worker.backend, WorkerBackend::Postgres);
+        assert_eq!(config.worker.sqlite_path, ".tdw/worker.sqlite");
+        assert_eq!(config.worker.postgres_url_env, "TDW_WORKER_POSTGRES_URL");
     }
 
     #[test]

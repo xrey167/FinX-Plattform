@@ -222,3 +222,62 @@ Remaining Risks:
 - `work/g014-data-backend-live` still has dirty local state; PR #47 salvaged
   the useful product payload, but the old worktree should not be deleted by
   the guarded helper until cleaned or explicitly discarded.
+
+## Post-Merge Follow-Ups Cleanup
+
+Scope: changed files for `work/post-merge-followups`, including
+`.omx/ultragoal/*`, `.github/workflows/ci.yml`, `tdw-app-client`, `tdw-mcp`,
+`tdw-worker`, `tdw-config`, `tdw-migration`, the new Postgres migration, and
+the related quality/release-decision docs.
+
+Behavior Lock: targeted G004/G005/G006 gates passed before cleanup, followed by
+the final gate set: `cargo fmt --all -- --check`, `cargo check --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+--workspace`, `cargo run -p xtask -- quality-gate check`, `cargo run -p xtask
+-- clean-room-audit`, `cargo run -p tdw-mcp -- --streamable-http-smoke`, and
+`git diff --check`, all with `CARGO_TARGET_DIR` under `%TEMP%` for cargo
+commands.
+
+Cleanup Plan: keep the pass bounded to the changed files; preserve the
+implemented daemon transports, Postgres worker backend, integration gates, and
+test-policy decisions; classify fallback-like signals before changing anything;
+avoid broad refactors during the final aggregate gate.
+
+Fallback Findings:
+- `rg` over changed files found no `TODO`/`FIXME`, silent-default, or
+  swallowed-error signals.
+- `expect(...)` and `panic!(...)` matches are in tests and assert paths; they
+  are explicit failure evidence, not production fallback behavior.
+- Existing "fallback" text appears in quality/readiness documentation and is
+  classified as documented audit vocabulary, not masking fallback slop.
+
+Passes Completed:
+- Fallback-like code resolution gate: no masking fallback slop found; no nested
+  ralplan escalation needed.
+1. Pass 1: Dead code deletion: no dead source code found in the final scan.
+2. Pass 2: Duplicate removal: no duplicate transport or worker scheduler paths
+   removed; shared framing helpers remain centralized in `tdw-app-client`.
+3. Pass 3: Naming/error handling cleanup: env-gated integration variables are
+   explicit (`TDW_MCP_DAEMON_INTEGRATION_ADDR`,
+   `TDW_POSTGRES_TEST_URL`) and documented.
+4. Pass 4: Test reinforcement: always-on framing tests, MCP daemon integration
+   skip-path coverage, and worker Postgres integration skip-path coverage are
+   present and verified.
+
+Quality Gates:
+- Regression tests: PASS via targeted G004/G005/G006 cargo tests and
+  `cargo test --workspace`
+- Lint: PASS via `cargo clippy --workspace --all-targets -- -D warnings`
+- Typecheck: PASS via `cargo check --workspace`
+- Tests: PASS via `cargo test --workspace`
+- Static/security scan: PASS via `cargo run -p xtask -- clean-room-audit`
+- Generated quality gate: PASS via `cargo run -p xtask -- quality-gate check`
+- MCP smoke: PASS via `cargo run -p tdw-mcp -- --streamable-http-smoke`
+- Diff hygiene: PASS via `git diff --check`
+
+Remaining Risks:
+- No release is cut from this worktree because it is unmerged and one commit
+  behind `origin/main`; see
+  `docs/quality/post-merge-followups-release-decision.md`.
+- Live MCP daemon and Postgres worker integration paths are env-gated. Default
+  workspace tests compile and skip them without the required service URLs.

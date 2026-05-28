@@ -21,8 +21,10 @@ cycle does not silently claim a broader product surface than it ships.
 - `tools/call` also exposes a narrow daemon-backed path for live daemon state:
   `tdw.daemon.triage` and `tdw.daemon.query.submit` build `OpEnvelope`
   `RunQuery` operations, submit them through `tdw-app-client` to the configured
-  TCP daemon endpoint, wait for the terminal `EventMsg`, and return the daemon
-  event evidence as structured MCP output. The default daemon target is
+  daemon endpoint, wait for the terminal `EventMsg`, and return the daemon
+  event evidence as structured MCP output. TCP, UDS on Unix, and plain HTTP/SSE
+  daemon endpoints are supported by the app-client boundary; HTTPS daemon URLs
+  fail closed. The default daemon target is
   `127.0.0.1:7878`; `TDW_CONFIG`, `TDW_CONFIG_CONTENT`,
   `TDW_MCP_DAEMON_TRANSPORT`, `TDW_MCP_DAEMON_ADDR`, and
   `TDW_MCP_DAEMON_TIMEOUT_MS` can override it. If the daemon is unavailable or
@@ -45,31 +47,34 @@ cycle does not silently claim a broader product surface than it ships.
 - `tdw-worker --contract` prints the durable worker queue contract shape.
 - `tdw-worker` has a typed `WorkerJob`, `WorkerLease`,
   `DeadLetterRecord`, `WorkerQueueStats`, and `DurableWorkerQueue` interface.
-  It includes both an in-memory contract backend and a SQLite-backed durable
-  scheduler. The durable backend persists `OpEnvelope` jobs, leases by
-  priority, reaps expired leases, tracks retry attempts, dead-letters exhausted
-  jobs, and treats duplicate enqueue / repeated completion as idempotent.
+  It includes an in-memory contract backend, a SQLite-backed durable scheduler,
+  and a Postgres-backed distributed scheduler behind `--features postgres`.
+  The durable backends persist `OpEnvelope` jobs, lease by priority, reap
+  expired leases, track retry attempts, dead-letter exhausted jobs, expose
+  stats, and treat duplicate enqueue / repeated completion as idempotent.
 - `tdw-worker --durable-smoke` exercises the SQLite scheduler end to end with
   enqueue -> lease -> complete -> stats.
 - The existing smoke modes remain intact for fast offline verification.
+- Always-on app-client tests cover daemon length-delimited framing, malformed
+  frame rejection, terminal-event matching, and HTTP/SSE submit-path derivation.
+- Env-gated integration coverage now exists for daemon-backed MCP execution
+  (`TDW_MCP_DAEMON_INTEGRATION_ADDR`) and durable Postgres worker execution
+  (`TDW_POSTGRES_TEST_URL`).
 
 ## Deliberately not shipped here
 
-- Worker scheduling is durable for the local/embedded SQLite backend. A
-  RiverQueue/Postgres-backed distributed scheduler is still a follow-up for
-  deployments that need multi-process lease recovery across machines.
-- The MCP daemon-backed surface is intentionally TCP-only in this slice. UDS
-  and HTTP/SSE daemon client transports still need explicit client support
-  before they can be enabled through MCP configuration.
 - The MCP HTTP transport is intentionally local-first. Remote deployment still
   needs a deployment-level TLS/reverse-proxy/OAuth story; direct non-loopback
   binding is refused unless `TDW_MCP_HTTP_TOKEN` is set.
+- The Postgres worker backend is a scheduler primitive, not a full production
+  worker process supervisor. Operational rollout still needs deployment wiring,
+  process ownership, and monitoring around leases/dead letters.
 
 ## Follow-up implementation path
 
-1. Extend the daemon client beyond TCP when deployments need UDS or HTTP/SSE
-   submission from MCP.
-2. Add a Postgres/RiverQueue worker backend that mirrors the SQLite scheduler
-   contract for distributed deployments.
-3. Add always-on protocol tests for framing and env-gated integration tests for
-   daemon-backed MCP and durable worker execution.
+1. Add deployment-level TLS/reverse-proxy/OAuth guidance for remote MCP HTTP
+   exposure.
+2. Wire `PgWorkerQueue` into the selected worker deployment mode once process
+   supervision and monitoring requirements are fixed.
+3. Promote the live daemon integration recipe into a dedicated CI job when a
+   long-running daemon service is available in the target environment.

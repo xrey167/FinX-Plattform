@@ -93,6 +93,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
                 "../../../migrations/postgres/20260521_0007_kg_tags_feature_store.sql"
             ),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260521_0008",
+            name: "worker_queue",
+            sql: include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql"),
+        },
     ]
 }
 
@@ -222,6 +228,7 @@ mod tests {
             "system.tag_assignment",
             "system.tag_rule",
             "system.feature_snapshot",
+            "system.worker_jobs",
         ] {
             assert!(
                 postgres_sql.contains(table),

@@ -1,0 +1,34 @@
+{
+  "ultragoal": "G007-release-decision-and-aggregate-gate",
+  "date": "2026-05-28",
+  "branch": "work/post-merge-followups",
+  "releaseDecision": {
+    "status": "deferred",
+    "cutReleaseNow": false,
+    "evidence": "docs/quality/post-merge-followups-release-decision.md"
+  },
+  "aiSlopCleaner": {
+    "status": "passed",
+    "evidence": "docs/quality/ai-slop-cleanup-report.md#post-merge-follow-ups-cleanup",
+    "summary": "Changed-file cleanup pass found no masking fallback slop, no TODO/FIXME signals, and no cleanup edits required beyond the report artifact."
+  },
+  "verification": {
+    "status": "passed",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo check --workspace",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo clippy --workspace --all-targets -- -D warnings",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo test --workspace",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo run -p xtask -- clean-room-audit",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo run -p xtask -- quality-gate check",
+      "CARGO_TARGET_DIR=%TEMP%/finx-post-merge-followups-target cargo run -p tdw-mcp -- --streamable-http-smoke",
+      "git diff --check"
+    ],
+    "evidence": "All commands passed after the AI-slop cleanup report was appended. Cargo commands used CARGO_TARGET_DIR under %TEMP%."
+  },
+  "codeReview": {
+    "recommendation": "APPROVE",
+    "architectStatus": "CLEAR",
+    "evidence": "docs/quality/post-merge-followups-code-review.json"
+  }
+}

@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "postgres")]
+use sqlx::PgPool;
+#[cfg(feature = "postgres")]
+use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -647,6 +651,344 @@ impl SqliteWorkerQueue {
     }
 }
 
+#[cfg(feature = "postgres")]
+#[derive(Clone)]
+pub struct PgWorkerQueue {
+    pool: PgPool,
+}
+
+#[cfg(feature = "postgres")]
+impl PgWorkerQueue {
+    pub async fn connect(database_url: &str) -> Result<Self> {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(database_url)
+            .await?;
+        let queue = Self { pool };
+        queue.migrate().await?;
+        Ok(queue)
+    }
+
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn migrate(&self) -> Result<()> {
+        for statement in POSTGRES_WORKER_MIGRATION
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| !statement.is_empty())
+        {
+            sqlx::query(statement).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn enqueue(&self, job: WorkerJob) -> Result<EnqueueOutcome> {
+        validate_job(&job)?;
+        let now_ms = unix_epoch_millis()?;
+        let envelope_json = serde_json::to_string(&job.envelope)?;
+        let result = sqlx::query(
+            r#"
+            insert into system.worker_jobs (
+                job_id, queue, envelope_json, max_attempts, not_before_ms, priority,
+                status, attempts, created_at_ms, updated_at_ms
+            )
+            values ($1, $2, $3::jsonb, $4, $5, $6, $7, 0, $8, $8)
+            on conflict(job_id) do nothing
+            "#,
+        )
+        .bind(&job.job_id)
+        .bind(&job.queue)
+        .bind(envelope_json)
+        .bind(u32_to_i64(job.max_attempts))
+        .bind(u64_to_i64(job.not_before_ms)?)
+        .bind(job.priority)
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(EnqueueOutcome {
+            job_id: job.job_id,
+            inserted: result.rows_affected() == 1,
+        })
+    }
+
+    pub async fn lease_next(&self, worker_id: &str) -> Result<Option<WorkerLease>> {
+        self.lease_next_with_ttl(worker_id, DEFAULT_LEASE_TTL_MS)
+            .await
+    }
+
+    pub async fn lease_next_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<WorkerLease>> {
+        validate_worker_id(worker_id)?;
+        let now_ms = unix_epoch_millis()?;
+        self.reap_expired_leases_at(now_ms).await?;
+        let lease_expires_at_ms = now_ms.saturating_add(lease_ttl_ms);
+
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            select job_id, attempts
+            from system.worker_jobs
+            where status = $1 and not_before_ms <= $2
+            order by priority desc, not_before_ms asc, created_at_ms asc, job_id asc
+            for update skip locked
+            limit 1
+            "#,
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        let job_id: String = row.get("job_id");
+        let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
+        let attempt = attempts.saturating_add(1);
+        let update = sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                attempts = attempts + 1,
+                leased_by = $2,
+                lease_expires_at_ms = $3,
+                updated_at_ms = $4
+            where job_id = $5 and status = $6
+            "#,
+        )
+        .bind(WorkerJobStatus::Leased.as_str())
+        .bind(worker_id)
+        .bind(u64_to_i64(lease_expires_at_ms)?)
+        .bind(u64_to_i64(now_ms)?)
+        .bind(&job_id)
+        .bind(WorkerJobStatus::Pending.as_str())
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        if update.rows_affected() == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(WorkerLease {
+            job_id,
+            worker_id: worker_id.to_string(),
+            attempt,
+            lease_expires_at_ms,
+        }))
+    }
+
+    pub async fn complete(&self, job_id: &str) -> Result<()> {
+        let Some(status) = self.job_status(job_id).await? else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+        if status == WorkerJobStatus::Completed {
+            return Ok(());
+        }
+
+        let now_ms = unix_epoch_millis()?;
+        sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                completed_at_ms = $2,
+                updated_at_ms = $2
+            where job_id = $3
+            "#,
+        )
+        .bind(WorkerJobStatus::Completed.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn fail(
+        &self,
+        job_id: &str,
+        error: &str,
+        retry_after_ms: u64,
+    ) -> Result<WorkerJobStatus> {
+        let row = sqlx::query(
+            "select attempts, max_attempts from system.worker_jobs where job_id = $1 limit 1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+
+        let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
+        let max_attempts = i64_to_u32(row.get("max_attempts"), "max_attempts")?;
+        let now_ms = unix_epoch_millis()?;
+        if attempts >= max_attempts {
+            self.dead_letter(job_id, error, now_ms).await?;
+            return Ok(WorkerJobStatus::DeadLettered);
+        }
+
+        let not_before_ms = now_ms.saturating_add(retry_after_ms);
+        sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                not_before_ms = $2,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = $3,
+                updated_at_ms = $4
+            where job_id = $5
+            "#,
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(not_before_ms)?)
+        .bind(error)
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(WorkerJobStatus::Pending)
+    }
+
+    pub async fn reap_expired_leases(&self) -> Result<u64> {
+        let now_ms = unix_epoch_millis()?;
+        self.reap_expired_leases_at(now_ms).await
+    }
+
+    pub async fn reap_expired_leases_at(&self, now_ms: u64) -> Result<u64> {
+        let now_i64 = u64_to_i64(now_ms)?;
+        let dead_lettered = sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = coalesce(last_error, 'lease expired'),
+                dead_lettered_at_ms = $2,
+                updated_at_ms = $2
+            where status = $3
+              and lease_expires_at_ms is not null
+              and lease_expires_at_ms <= $2
+              and attempts >= max_attempts
+            "#,
+        )
+        .bind(WorkerJobStatus::DeadLettered.as_str())
+        .bind(now_i64)
+        .bind(WorkerJobStatus::Leased.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        let requeued = sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                updated_at_ms = $2
+            where status = $3
+              and lease_expires_at_ms is not null
+              and lease_expires_at_ms <= $2
+              and attempts < max_attempts
+            "#,
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(now_i64)
+        .bind(WorkerJobStatus::Leased.as_str())
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+
+        Ok(dead_lettered + requeued)
+    }
+
+    pub async fn dead_letters(&self) -> Result<Vec<DeadLetterRecord>> {
+        let rows = sqlx::query(
+            r#"
+            select job_id, queue, envelope_json::text as envelope_json,
+                   max_attempts, not_before_ms, priority,
+                   attempts, last_error, dead_lettered_at_ms
+            from system.worker_jobs
+            where status = $1
+            order by dead_lettered_at_ms asc, job_id asc
+            "#,
+        )
+        .bind(WorkerJobStatus::DeadLettered.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(row_to_dead_letter_pg).collect()
+    }
+
+    pub async fn job_status(&self, job_id: &str) -> Result<Option<WorkerJobStatus>> {
+        let row = sqlx::query("select status from system.worker_jobs where job_id = $1 limit 1")
+            .bind(job_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| WorkerJobStatus::parse(row.get::<&str, _>("status")))
+            .transpose()
+    }
+
+    pub async fn stats(&self) -> Result<WorkerQueueStats> {
+        let rows = sqlx::query(
+            r#"
+            select status, count(*) as count
+            from system.worker_jobs
+            group by status
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut stats = WorkerQueueStats::default();
+        for row in rows {
+            let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+            let count = i64_to_u64(row.get("count"), "count")?;
+            match status {
+                WorkerJobStatus::Pending => stats.pending = count,
+                WorkerJobStatus::Leased => stats.leased = count,
+                WorkerJobStatus::Completed => stats.completed = count,
+                WorkerJobStatus::DeadLettered => stats.dead_lettered = count,
+            }
+        }
+        Ok(stats)
+    }
+
+    async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<()> {
+        sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = $2,
+                dead_lettered_at_ms = $3,
+                updated_at_ms = $3
+            where job_id = $4
+            "#,
+        )
+        .bind(WorkerJobStatus::DeadLettered.as_str())
+        .bind(error)
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 pub const SQLITE_WORKER_MIGRATION: &str = r#"
 create table if not exists worker_jobs (
     job_id text primary key,
@@ -671,6 +1013,9 @@ create index if not exists idx_worker_jobs_expired_leases
     on worker_jobs(status, lease_expires_at_ms);
 "#;
 
+pub const POSTGRES_WORKER_MIGRATION: &str =
+    include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql");
+
 pub fn worker_contract_json() -> String {
     serde_json::json!({
         "contract": "tdw.worker.queue.v1",
@@ -691,7 +1036,7 @@ pub fn worker_contract_json() -> String {
             "dead_letters",
             "stats"
         ],
-        "backends": ["in_memory_contract", "sqlite_durable"],
+        "backends": ["in_memory_contract", "sqlite_durable", "postgres_distributed"],
         "durability": {
             "lease_timeout": true,
             "retry_counter": true,
@@ -794,6 +1139,28 @@ fn row_to_job(row: &SqliteRow) -> Result<WorkerJob> {
 fn row_to_dead_letter(row: SqliteRow) -> Result<DeadLetterRecord> {
     Ok(DeadLetterRecord {
         job: row_to_job(&row)?,
+        attempts: i64_to_u32(row.get("attempts"), "attempts")?,
+        last_error: row.get("last_error"),
+        dead_lettered_at_ms: i64_to_u64(row.get("dead_lettered_at_ms"), "dead_lettered_at_ms")?,
+    })
+}
+
+#[cfg(feature = "postgres")]
+fn row_to_job_pg(row: &PgRow) -> Result<WorkerJob> {
+    Ok(WorkerJob {
+        job_id: row.get("job_id"),
+        queue: row.get("queue"),
+        envelope: serde_json::from_str(row.get::<&str, _>("envelope_json"))?,
+        max_attempts: i64_to_u32(row.get("max_attempts"), "max_attempts")?,
+        not_before_ms: i64_to_u64(row.get("not_before_ms"), "not_before_ms")?,
+        priority: row.get("priority"),
+    })
+}
+
+#[cfg(feature = "postgres")]
+fn row_to_dead_letter_pg(row: PgRow) -> Result<DeadLetterRecord> {
+    Ok(DeadLetterRecord {
+        job: row_to_job_pg(&row)?,
         attempts: i64_to_u32(row.get("attempts"), "attempts")?,
         last_error: row.get("last_error"),
         dead_lettered_at_ms: i64_to_u64(row.get("dead_lettered_at_ms"), "dead_lettered_at_ms")?,
@@ -921,6 +1288,27 @@ mod tests {
                 .to_string()
                 .contains("unknown job_id")
         );
+    }
+
+    #[test]
+    fn worker_contract_advertises_postgres_distributed_backend() {
+        let contract: serde_json::Value =
+            serde_json::from_str(&worker_contract_json()).expect("contract json");
+        assert!(contract["backends"].as_array().is_some_and(|backends| {
+            backends
+                .iter()
+                .any(|backend| backend == "postgres_distributed")
+        }));
+    }
+
+    #[test]
+    fn postgres_worker_migration_declares_distributed_queue_contract() {
+        assert!(
+            POSTGRES_WORKER_MIGRATION.contains("create table if not exists system.worker_jobs")
+        );
+        assert!(POSTGRES_WORKER_MIGRATION.contains("idx_worker_jobs_ready"));
+        assert!(POSTGRES_WORKER_MIGRATION.contains("idx_worker_jobs_expired_leases"));
+        assert!(POSTGRES_WORKER_MIGRATION.contains("DeadLettered"));
     }
 
     #[tokio::test]

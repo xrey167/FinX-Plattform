@@ -179,6 +179,11 @@ jobs:
           TDW_POSTGRES_TEST_URL: postgres://tdw:tdw@127.0.0.1:5432/tdw
         run: cargo test -p tdw-storage-postgres --features postgres --test sqlx_engine -- --nocapture
 
+      - name: Run G005 worker postgres queue integration test
+        env:
+          TDW_POSTGRES_TEST_URL: postgres://tdw:tdw@127.0.0.1:5432/tdw
+        run: cargo test -p tdw-worker --features postgres --test pg_worker -- --nocapture
+
       - name: Run G010 s3 integration test
         env:
           TDW_S3_TEST_BUCKET: tdw-smoke

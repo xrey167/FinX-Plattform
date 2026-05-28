@@ -11,7 +11,7 @@
 use serde_json::json;
 use tdw_config::{
     ConfigError, ConfigLayer, ConfigLayerKind, DaemonTransport, PermissionAction, TdwConfig,
-    config_schema, default_layer_order, merge_layers, schema_bundle,
+    WorkerBackend, config_schema, default_layer_order, merge_layers, schema_bundle,
 };
 
 #[test]
@@ -130,6 +130,9 @@ fn default_config_has_stable_invariants() {
     assert_eq!(cfg.protocol.max_event_bytes, 1_048_576);
     assert!(cfg.protocol.replay_enabled);
     assert!(cfg.session.jsonl_archive);
+    assert_eq!(cfg.worker.backend, WorkerBackend::Sqlite);
+    assert_eq!(cfg.worker.sqlite_path, "~/.tdw/worker.sqlite");
+    assert_eq!(cfg.worker.postgres_url_env, "TDW_POSTGRES_URL");
 }
 
 #[test]
@@ -152,6 +155,7 @@ max_event_bytes = 2048
     // unchanged defaults
     assert!(merged.protocol.replay_enabled);
     assert_eq!(merged.session.sqlite_path, "~/.tdw/session.sqlite");
+    assert_eq!(merged.worker.backend, WorkerBackend::Sqlite);
 }
 
 #[test]
