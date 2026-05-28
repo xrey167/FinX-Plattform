@@ -3,9 +3,16 @@
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use tdw_app_client::{
+    DEFAULT_DAEMON_TCP_ADDR, DaemonClient, DaemonClientConfig, DaemonClientError, DaemonSubmission,
+};
+use tdw_app_server::{DaemonEndpoint, DaemonTransport};
+use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
+use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const DEFAULT_STREAMABLE_HTTP_BIND: &str = "127.0.0.1:8788";
@@ -64,16 +71,36 @@ impl JsonRpcProblem {
     }
 }
 
-#[derive(Default)]
 pub struct McpServer {
     initialized: bool,
     client_info: Option<Value>,
     cancelled_requests: Vec<CancelledRequest>,
+    daemon: DaemonToolRuntime,
+}
+
+impl Default for McpServer {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            client_info: None,
+            cancelled_requests: Vec::new(),
+            daemon: DaemonToolRuntime::from_env(),
+        }
+    }
 }
 
 impl McpServer {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_daemon_config(config: DaemonClientConfig) -> Self {
+        Self {
+            initialized: false,
+            client_info: None,
+            cancelled_requests: Vec::new(),
+            daemon: DaemonToolRuntime::configured(config),
+        }
     }
 
     pub fn is_initialized(&self) -> bool {
@@ -186,7 +213,7 @@ impl McpServer {
                     "version": env!("CARGO_PKG_VERSION"),
                 },
                 "instructions": format!(
-                    "TDW exposes read-only warehouse discovery, deterministic provider samples, safe resources, and finance workflow prompts over MCP stdio. Requested protocol: {requested}."
+                    "TDW exposes deterministic offline tools plus explicitly daemon-backed query and triage tools over MCP stdio or Streamable HTTP. Requested protocol: {requested}."
                 ),
             }),
         )
@@ -226,7 +253,7 @@ impl McpServer {
         }
 
         let progress_token = progress_token(&params);
-        let result = execute_tool(name, &arguments);
+        let result = execute_tool(&self.daemon, name, &arguments);
         match result {
             Ok(ToolExecution {
                 structured,
@@ -355,6 +382,154 @@ pub fn mcp_tool_catalog() -> Vec<String> {
         .into_iter()
         .map(|tool| tool.name)
         .collect()
+}
+
+#[derive(Clone, Debug)]
+struct DaemonToolRuntime {
+    config: Result<DaemonClientConfig, String>,
+}
+
+impl DaemonToolRuntime {
+    fn from_env() -> Self {
+        match daemon_client_config_from_env() {
+            Ok(config) => Self::configured(config),
+            Err(error) => Self { config: Err(error) },
+        }
+    }
+
+    fn configured(config: DaemonClientConfig) -> Self {
+        Self { config: Ok(config) }
+    }
+
+    fn submit(&self, envelope: OpEnvelope) -> Result<DaemonSubmission, String> {
+        let config = self.config.as_ref().map_err(Clone::clone)?;
+        DaemonClient::new(config.clone())
+            .submit_and_wait(envelope)
+            .map_err(|error| daemon_client_error_message(config, error))
+    }
+}
+
+fn daemon_client_error_message(config: &DaemonClientConfig, error: DaemonClientError) -> String {
+    format!(
+        "{error}; endpoint={}://{}",
+        daemon_transport_label(config.endpoint().transport),
+        config.endpoint().address
+    )
+}
+
+fn daemon_client_config_from_env() -> Result<DaemonClientConfig, String> {
+    let config = tdw_config_from_env()?;
+    daemon_client_config_from_sources(
+        config,
+        non_empty_env("TDW_MCP_DAEMON_TRANSPORT"),
+        non_empty_env("TDW_MCP_DAEMON_ADDR").or_else(|| non_empty_env("TDW_DAEMON_TCP_BIND")),
+        non_empty_env("TDW_MCP_DAEMON_TIMEOUT_MS"),
+    )
+}
+
+fn tdw_config_from_env() -> Result<TdwConfig, String> {
+    let mut layers = Vec::new();
+    if let Some(path) = non_empty_env("TDW_CONFIG") {
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|error| format!("TDW_CONFIG read failed for {path}: {error}"))?;
+        layers.push(
+            ConfigLayer::from_toml(ConfigLayerKind::EnvFile, "TDW_CONFIG", &contents)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+    if let Some(contents) = non_empty_env("TDW_CONFIG_CONTENT") {
+        layers.push(
+            ConfigLayer::from_toml(ConfigLayerKind::InlineEnv, "TDW_CONFIG_CONTENT", &contents)
+                .map_err(|error| error.to_string())?,
+        );
+    }
+
+    if layers.is_empty() {
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Tcp;
+        config.daemon.tcp_bind = Some(DEFAULT_DAEMON_TCP_ADDR.to_string());
+        return Ok(config);
+    }
+
+    merge_layers(&layers).map_err(|error| error.to_string())
+}
+
+fn daemon_client_config_from_sources(
+    config: TdwConfig,
+    transport_override: Option<String>,
+    address_override: Option<String>,
+    timeout_ms: Option<String>,
+) -> Result<DaemonClientConfig, String> {
+    let transport = match transport_override {
+        Some(value) => parse_daemon_transport(&value)?,
+        None => config.daemon.transport,
+    };
+    let address = match address_override {
+        Some(value) => value,
+        None => daemon_endpoint_address_from_config(&config, transport),
+    };
+    let timeout = timeout_ms
+        .as_deref()
+        .map(parse_timeout_ms)
+        .transpose()?
+        .unwrap_or_else(|| Duration::from_secs(2));
+
+    let client_config =
+        DaemonClientConfig::new(DaemonEndpoint { transport, address }).with_timeout(timeout);
+    client_config
+        .validate()
+        .map_err(|error| format!("invalid daemon client config: {error}"))?;
+    Ok(client_config)
+}
+
+fn daemon_endpoint_address_from_config(config: &TdwConfig, transport: DaemonTransport) -> String {
+    match transport {
+        DaemonTransport::Tcp => config
+            .daemon
+            .tcp_bind
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DAEMON_TCP_ADDR.to_string()),
+        DaemonTransport::Uds => config.daemon.uds_path.clone(),
+        DaemonTransport::HttpSse => config
+            .daemon
+            .http_bind
+            .as_deref()
+            .map(|bind| {
+                if bind.starts_with("http://") || bind.starts_with("https://") {
+                    bind.to_string()
+                } else {
+                    format!("http://{bind}/events")
+                }
+            })
+            .unwrap_or_else(|| "http://127.0.0.1:7879/events".to_string()),
+    }
+}
+
+fn parse_daemon_transport(value: &str) -> Result<DaemonTransport, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "tcp" => Ok(DaemonTransport::Tcp),
+        "uds" | "unix" => Ok(DaemonTransport::Uds),
+        "http" | "http-sse" | "httpsse" => Ok(DaemonTransport::HttpSse),
+        other => Err(format!("unknown daemon transport: {other}")),
+    }
+}
+
+fn parse_timeout_ms(value: &str) -> Result<Duration, String> {
+    let millis = value
+        .trim()
+        .parse::<u64>()
+        .map_err(|error| format!("invalid TDW_MCP_DAEMON_TIMEOUT_MS: {error}"))?;
+    if millis == 0 {
+        return Err("TDW_MCP_DAEMON_TIMEOUT_MS must be greater than zero".to_string());
+    }
+    Ok(Duration::from_millis(millis))
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1157,10 +1332,55 @@ fn tool_descriptors() -> Vec<ToolDescriptor> {
             "Return deterministic app-client, app-server, exec, TUI, and replay evidence.",
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
+        daemon_tool(
+            "tdw.daemon.triage",
+            "Daemon Operation Triage",
+            "Submit a bounded diagnostic query through the configured TDW daemon and return event-spine evidence for the operation.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "op_id": { "type": "string", "description": "Optional external operation id to include in the triage evidence." },
+                    "session_id": { "type": "string", "description": "Optional TDW session id, defaults to session-mcp-daemon." },
+                    "sequence": { "type": "integer", "minimum": 1, "description": "Optional operation sequence, defaults to 1." }
+                },
+                "additionalProperties": false
+            }),
+        ),
+        daemon_tool(
+            "tdw.daemon.query.submit",
+            "Submit Daemon Query",
+            "Submit a RunQuery operation through the configured TDW daemon and wait for the terminal event.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "sql": { "type": "string", "description": "SQL query to submit to the daemon request path." },
+                    "session_id": { "type": "string", "description": "Optional TDW session id, defaults to session-mcp-daemon." },
+                    "sequence": { "type": "integer", "minimum": 1, "description": "Optional operation sequence, defaults to 1." },
+                    "plan_id": { "type": "string", "description": "Optional plan id attached to the RunQuery op." }
+                },
+                "required": ["sql"],
+                "additionalProperties": false
+            }),
+        ),
     ]
 }
 
 fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
+    tool_with_annotations(name, title, description, input_schema, true, true)
+}
+
+fn daemon_tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
+    tool_with_annotations(name, title, description, input_schema, false, false)
+}
+
+fn tool_with_annotations(
+    name: &str,
+    title: &str,
+    description: &str,
+    input_schema: Value,
+    read_only: bool,
+    idempotent: bool,
+) -> ToolDescriptor {
     ToolDescriptor {
         name: name.to_string(),
         title: title.to_string(),
@@ -1176,9 +1396,9 @@ fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> Tool
             "required": ["content", "isError"]
         })),
         annotations: json!({
-            "readOnlyHint": true,
+            "readOnlyHint": read_only,
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": idempotent,
             "openWorldHint": false,
         }),
     }
@@ -1194,7 +1414,11 @@ enum ToolFailure {
     Execution(String),
 }
 
-fn execute_tool(name: &str, arguments: &Value) -> Result<ToolExecution, ToolFailure> {
+fn execute_tool(
+    daemon: &DaemonToolRuntime,
+    name: &str,
+    arguments: &Value,
+) -> Result<ToolExecution, ToolFailure> {
     let arguments_object = arguments.as_object().ok_or_else(|| {
         ToolFailure::Protocol(JsonRpcProblem::new(
             Value::Null,
@@ -1242,11 +1466,116 @@ fn execute_tool(name: &str, arguments: &Value) -> Result<ToolExecution, ToolFail
         "tdw.client_event.sample" => tdw_service_api::client_event_sample()
             .map(structured)
             .map_err(|error| ToolFailure::Execution(error.to_string())),
+        "tdw.daemon.triage" => execute_daemon_triage(daemon, arguments_object),
+        "tdw.daemon.query.submit" => execute_daemon_query_submit(daemon, arguments_object),
         _ => Err(ToolFailure::Protocol(JsonRpcProblem::new(
             Value::Null,
             -32602,
             format!("unknown tool: {name}"),
         ))),
+    }
+}
+
+fn execute_daemon_triage(
+    daemon: &DaemonToolRuntime,
+    arguments: &Map<String, Value>,
+) -> Result<ToolExecution, ToolFailure> {
+    let requested_op_id = optional_argument(arguments, "op_id").map(ToString::to_string);
+    let sql = "select 'tdw.daemon.triage' as diagnostic_check";
+    let envelope = daemon_run_query_envelope(arguments, sql)?;
+    let submission = daemon.submit(envelope).map_err(ToolFailure::Execution)?;
+    Ok(structured(daemon_submission_value(
+        "tdw.daemon.triage",
+        &submission,
+        json!({
+            "requested_op_id": requested_op_id,
+            "diagnostic_sql": sql,
+            "checks": [
+                "daemon connection accepted the OpEnvelope",
+                "event stream emitted a terminal event for the submitted op",
+                "service policy and relational dispatch path returned structured evidence"
+            ]
+        }),
+    )))
+}
+
+fn execute_daemon_query_submit(
+    daemon: &DaemonToolRuntime,
+    arguments: &Map<String, Value>,
+) -> Result<ToolExecution, ToolFailure> {
+    let sql = required_argument(arguments, "sql")?;
+    validate_daemon_sql(sql)?;
+    let envelope = daemon_run_query_envelope(arguments, sql)?;
+    let submission = daemon.submit(envelope).map_err(ToolFailure::Execution)?;
+    Ok(structured(daemon_submission_value(
+        "tdw.daemon.query.submit",
+        &submission,
+        json!({
+            "sql": sql,
+        }),
+    )))
+}
+
+fn daemon_run_query_envelope(
+    arguments: &Map<String, Value>,
+    sql: &str,
+) -> Result<OpEnvelope, ToolFailure> {
+    let session_id = optional_argument(arguments, "session_id").unwrap_or("session-mcp-daemon");
+    let session_id = SessionId::new(session_id.to_string())
+        .map_err(|error| protocol_argument_failure(error.to_string()))?;
+    let sequence = optional_u64_argument(arguments, "sequence")?.unwrap_or(1);
+    let plan_id = optional_argument(arguments, "plan_id")
+        .map(|value| PlanId::new(value.to_string()))
+        .transpose()
+        .map_err(|error| protocol_argument_failure(error.to_string()))?;
+
+    Ok(OpEnvelope::new(
+        session_id,
+        sequence,
+        ActorRef {
+            actor_id: "mcp:tdw-mcp".to_string(),
+            kind: ActorKind::Service,
+            tenant_id: Some("default".to_string()),
+        },
+        Op::RunQuery {
+            sql: sql.to_string(),
+            plan_id,
+            cost_hint: Some(CostHint {
+                backend: "tdw-daemon".to_string(),
+                estimated_bytes_scanned: None,
+                estimated_rows_read: None,
+            }),
+        },
+    ))
+}
+
+fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: Value) -> Value {
+    let terminal_event = submission
+        .events
+        .last()
+        .cloned()
+        .unwrap_or_else(|| EventMsg::Failed {
+            op_id: tdw_protocol::OpId::generated(),
+            error: "missing terminal event".to_string(),
+        });
+    json!({
+        "tool": tool,
+        "daemon": {
+            "transport": daemon_transport_label(submission.endpoint.transport),
+            "address": submission.endpoint.address.clone(),
+        },
+        "submitted_op_id": submission.op_id,
+        "events": submission.events.clone(),
+        "terminal_event": terminal_event,
+        "extra": extra,
+    })
+}
+
+fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
+    match transport {
+        DaemonTransport::Tcp => "tcp",
+        DaemonTransport::Uds => "uds",
+        DaemonTransport::HttpSse => "http-sse",
     }
 }
 
@@ -1391,6 +1720,63 @@ fn required_argument<'a>(
 
 fn optional_argument<'a>(arguments: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
     arguments.get(name).and_then(Value::as_str)
+}
+
+fn optional_u64_argument(
+    arguments: &Map<String, Value>,
+    name: &str,
+) -> Result<Option<u64>, ToolFailure> {
+    let Some(value) = arguments.get(name) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Number(number) => positive_u64(number.as_u64(), name),
+        Value::String(value) => positive_u64(
+            value.parse::<u64>().map(Some).map_err(|error| {
+                protocol_argument_failure(format!("{name} must be a positive integer: {error}"))
+            })?,
+            name,
+        ),
+        _ => Err(protocol_argument_failure(format!(
+            "{name} must be a positive integer"
+        ))),
+    }
+}
+
+fn positive_u64(value: Option<u64>, name: &str) -> Result<Option<u64>, ToolFailure> {
+    match value {
+        Some(value) if value > 0 => Ok(Some(value)),
+        _ => Err(protocol_argument_failure(format!(
+            "{name} must be a positive integer"
+        ))),
+    }
+}
+
+fn validate_daemon_sql(sql: &str) -> Result<(), ToolFailure> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err(protocol_argument_failure(
+            "sql must not be empty".to_string(),
+        ));
+    }
+    if trimmed.len() > 4096 {
+        return Err(protocol_argument_failure(
+            "sql must not exceed 4096 bytes".to_string(),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t'))
+    {
+        return Err(protocol_argument_failure(
+            "sql must not contain control characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn protocol_argument_failure(message: String) -> ToolFailure {
+    ToolFailure::Protocol(JsonRpcProblem::new(Value::Null, -32602, message))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1799,6 +2185,123 @@ mod tests {
             "AAPL"
         );
         assert_eq!(response["result"]["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn daemon_config_uses_config_and_env_style_overrides() {
+        let mut config = TdwConfig::default();
+        config.daemon.tcp_bind = Some("127.0.0.1:9001".to_string());
+
+        let from_config =
+            daemon_client_config_from_sources(config, None, None, Some("75".to_string()))
+                .unwrap_or_else(|error| panic!("config override should resolve: {error}"));
+        assert_eq!(from_config.endpoint().address, "127.0.0.1:9001");
+        assert_eq!(from_config.timeout(), Duration::from_millis(75));
+
+        let from_env_style = daemon_client_config_from_sources(
+            TdwConfig::default(),
+            Some("tcp".to_string()),
+            Some("127.0.0.1:9002".to_string()),
+            None,
+        )
+        .unwrap_or_else(|error| panic!("env-style override should resolve: {error}"));
+        assert_eq!(from_env_style.endpoint().transport, DaemonTransport::Tcp);
+        assert_eq!(from_env_style.endpoint().address, "127.0.0.1:9002");
+    }
+
+    #[test]
+    fn daemon_backed_tool_fails_closed_when_daemon_unavailable() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap_or_else(|error| panic!("reserve local port: {error}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("reserved listener address: {error}"));
+        drop(listener);
+
+        let mut server = McpServer::with_daemon_config(
+            DaemonClientConfig::tcp(addr.to_string()).with_timeout(Duration::from_millis(100)),
+        );
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"tdw.daemon.query.submit","arguments":{"sql":"select 1"}}}"#,
+            )[0],
+        );
+
+        assert_eq!(response["id"], 12);
+        assert_eq!(response["result"]["isError"], true);
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("daemon unavailable")),
+        );
+    }
+
+    #[test]
+    fn daemon_query_submit_roundtrips_against_in_process_tcp_daemon() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|error| panic!("tokio runtime: {error}"));
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap_or_else(|error| panic!("bind in-process daemon: {error}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("daemon local addr: {error}"));
+        let state = runtime.block_on(tdw_service_api::AppState::in_memory_for_tests());
+        let (handle, events_rx, mut service_loop) =
+            tdw_app_server::service_channel(state.clone(), state);
+        let cancel = tdw_app_server::CancellationToken::new();
+
+        let loop_cancel = cancel.clone();
+        let loop_task = runtime.spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = loop_cancel.cancelled() => break,
+                    maybe = service_loop.run_once() => {
+                        if maybe.is_none() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let tcp_cancel = cancel.clone();
+        let tcp_task = runtime.spawn(async move {
+            tdw_app_server::serve_tcp(listener, handle, events_rx, tcp_cancel).await
+        });
+
+        let mut server = McpServer::with_daemon_config(
+            DaemonClientConfig::tcp(addr.to_string()).with_timeout(Duration::from_secs(2)),
+        );
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"tdw.daemon.query.submit","arguments":{"sql":"select 1","session_id":"session-mcp-test"}}}"#,
+            )[0],
+        );
+
+        cancel.cancel();
+        runtime.block_on(async {
+            let _ = tokio::time::timeout(Duration::from_secs(1), loop_task).await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), tcp_task).await;
+        });
+
+        assert_eq!(response["id"], 13);
+        assert_eq!(response["result"]["isError"], false);
+        let structured = &response["result"]["structuredContent"];
+        assert_eq!(structured["tool"], "tdw.daemon.query.submit");
+        assert_eq!(structured["daemon"]["transport"], "tcp");
+        assert_eq!(structured["extra"]["sql"], "select 1");
+        assert!(
+            structured["events"]
+                .as_array()
+                .is_some_and(|events| events.iter().any(|event| event["type"] == "completed")),
+        );
     }
 
     #[test]

@@ -6,12 +6,12 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 - Manifest: crates\tdw-mcp\Cargo.toml
 - Target kinds: lib, bin
-- Local dependencies: tdw-service-api
-- External dependencies: none
-- Dev dependencies: none
+- Local dependencies: tdw-app-client, tdw-app-server, tdw-config, tdw-protocol, tdw-service-api
+- External dependencies: serde, serde_json
+- Dev dependencies: tokio
 - Reverse local dependencies: none
 - Feature flags: none
-- Test attributes detected: 20
+- Test attributes detected: 23
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -46,6 +46,11 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
   `tdw-service-api` for provider discovery, equity historical fixtures,
   progress samples, agent evidence, extensibility evidence, event-spine
   evidence, KG/tag evidence, and client-event evidence.
+- `tools/call` routes `tdw.daemon.triage` and
+  `tdw.daemon.query.submit` through `tdw-app-client` to the configured TCP
+  daemon endpoint, defaulting to `127.0.0.1:7878` with env/config overrides.
+  These daemon-backed tools fail closed when the daemon is unavailable or a
+  non-TCP transport is configured; deterministic fixture tools remain offline.
 - Resources are safe static/dynamic TDW status surfaces; prompts are
   finance-specific equity research, daemon triage, and ingest-planning
   templates.
@@ -62,5 +67,7 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Verdict
 
-Ready with follow-ups. The MCP server now has stdio and local Streamable HTTP
-transports; daemon-backed tool execution remains follow-up product work.
+Ready with follow-ups. The MCP server now has stdio, local Streamable HTTP,
+and narrow TCP daemon-backed tool execution. Follow-up product work is broader
+daemon client transport coverage for UDS/HTTP-SSE deployments and a remote
+auth/TLS deployment story.

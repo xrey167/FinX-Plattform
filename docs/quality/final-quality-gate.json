@@ -1,127 +1,96 @@
 {
-  "version": 2,
-  "ultragoal": "G009-G016 production-functional gate",
+  "version": 3,
+  "ultragoal": "G001-implement-mcp-daemon-backed-tool-exe",
   "recommendation": "APPROVE",
   "architectStatus": "CLEAR",
   "target": {
-    "mainCommit": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
-    "releaseTag": "v0.1.1",
-    "releaseUrl": "https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.1",
-    "releaseWorkflowRun": 26543606204,
-    "releaseAssets": 24
-  },
-  "bootstrapBaseline": {
-    "scope": "G001-G008 crate-readiness hardening",
-    "recommendation": "APPROVE",
-    "architectStatus": "CLEAR",
-    "evidence": "docs/quality/release-readiness-summary.md"
+    "branch": "work/mcp-daemon-tool-exec",
+    "worktree": "C:/Users/ReyDa/FinX-Finance/FinX-Plattform-mcp-daemon-tool-exec",
+    "primaryRoot": "C:/Users/ReyDa/FinX-Finance/FinX-Plattform"
   },
   "aiSlopCleaner": {
     "status": "passed",
     "evidence": "docs/quality/ai-slop-cleanup-report.md",
-    "scope": "G016 final evidence files and release workflow fix"
+    "scope": "G001 changed files only"
   },
   "verification": {
     "status": "passed",
     "localCommands": [
-      "cargo +stable fmt --all -- --check",
-      "cargo +stable check --workspace",
-      "cargo +stable clippy --workspace --all-targets -- -D warnings",
-      "cargo +stable test --workspace",
-      "cargo +stable run -p xtask -- clean-room-audit",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo fmt --all -- --check",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo check --workspace",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo clippy --workspace --all-targets -- -D warnings",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo test --workspace",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p xtask -- clean-room-audit",
       "git diff --check",
-      ".omx JSON and JSONL parse"
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p tdw-mcp -- --streamable-http-smoke",
+      ".omx JSON and JSONL parse",
+      "final evidence JSON parse"
     ],
-    "github": [
-      {
-        "workflow": "CI",
-        "run": 26543584954,
-        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
-        "status": "PASS"
-      },
-      {
-        "workflow": "CodeQL",
-        "run": 26543584951,
-        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
-        "status": "PASS"
-      },
-      {
-        "workflow": "Release",
-        "run": 26543606204,
-        "headSha": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe",
-        "tag": "v0.1.1",
-        "status": "PASS"
-      }
+    "focusedCommands": [
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo test -p tdw-app-client -p tdw-mcp",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo clippy -p tdw-app-client -p tdw-mcp --all-targets -- -D warnings"
     ],
     "notes": [
-      "Local Docker is unavailable on this workstation, so compose/service-worker smoke evidence is taken from GitHub CI.",
-      "The v0.1.0 release workflow failure was resolved by PR #45 and superseded by the successful v0.1.1 release."
+      "The default E:/cargo-target path failed on this workstation with Windows os error 5 while launching a build-script executable, so verification used a fresh temporary CARGO_TARGET_DIR under $env:TEMP.",
+      "No Docker daemon was required; daemon-backed MCP coverage uses an in-process tdw-app-server TCP integration test."
     ]
   },
   "codeReview": {
     "recommendation": "APPROVE",
     "architectStatus": "CLEAR",
-    "evidence": "docs/quality/final-code-review.json"
+    "evidence": "docs/quality/final-code-review.json",
+    "unresolvedIssues": 0
   },
   "gates": [
     {
-      "id": "g009-end-to-end-smoke",
+      "id": "daemon-client-tcp",
       "status": "PASS",
-      "evidence": "docs/quality/end-to-end-smoke.md and docs/quality/end-to-end-smoke-transcript.md"
+      "evidence": "tdw-app-client exposes a bounded local TCP daemon client with explicit unsupported-transport and endpoint validation failures."
     },
     {
-      "id": "g010-production-storage-transports",
+      "id": "mcp-daemon-tools",
       "status": "PASS",
-      "evidence": "Real Postgres, S3, ClickHouse, Qdrant, and Meilisearch adapters are feature/env gated and covered by CI-backed integration jobs."
+      "evidence": "tdw.daemon.triage and tdw.daemon.query.submit route through tdw-app-client and submit protocol operations to the daemon boundary."
     },
     {
-      "id": "g011-production-provider-transports",
+      "id": "fail-closed",
       "status": "PASS",
-      "evidence": "Provider HTTP transports use cassette tests plus opt-in live tests and passed CI before merge."
+      "evidence": "daemon-backed tools return structured errors for unavailable local daemon endpoints and unsupported configured transports."
     },
     {
-      "id": "g012-production-llm-and-embedding-transports",
+      "id": "deterministic-tools-offline",
       "status": "PASS",
-      "evidence": "LLM batch/streaming and embedding HTTP transports are feature/env gated and covered by focused tests."
+      "evidence": "existing deterministic MCP fixture tools continue to use tdw-service-api in-memory state without requiring a daemon."
     },
     {
-      "id": "g013-durable-persistence",
+      "id": "daemon-roundtrip-test",
       "status": "PASS",
-      "evidence": "Durable Postgres and locked filesystem persistence paths landed with gated cross-store coverage."
+      "evidence": "tdw-mcp integration test starts an in-process tdw-app-server TCP daemon and observes terminal event evidence from a submitted query operation."
     },
     {
-      "id": "g014-release-packaging",
+      "id": "stdio-and-streamable-http-preserved",
       "status": "PASS",
-      "evidence": "Dockerfiles, compose profiles, GHCR image build/scan/push, release workflow, ADR, and release policy landed."
+      "evidence": "stdio path remained unchanged and tdw-mcp --streamable-http-smoke passed."
     },
     {
-      "id": "g015-policy-enforcement-binding",
+      "id": "docs-readiness",
       "status": "PASS",
-      "evidence": "Secure request paths enforce OIDC, roles, hooks, sandbox capabilities, and masks; focused and workspace tests passed."
+      "evidence": "agent runtime, product-boundary, hardening taxonomy, crate-readiness, and ai-slop-cleanup docs were updated for G001."
     },
     {
-      "id": "release-artifacts",
+      "id": "clean-room",
       "status": "PASS",
-      "evidence": "GitHub release v0.1.1 published 24 assets from release workflow run 26543606204."
-    },
-    {
-      "id": "main-ci-codeql",
-      "status": "PASS",
-      "evidence": "Main CI run 26543584954 and CodeQL run 26543584951 passed for af6f5e4."
-    },
-    {
-      "id": "final-local-gates",
-      "status": "PASS",
-      "evidence": "fmt, check, clippy, workspace tests, clean-room audit, diff check, and .omx parse passed in the G016 final evidence branch."
+      "evidence": "cargo run -p xtask -- clean-room-audit passed after implementation."
     },
     {
       "id": "code-review",
       "status": "PASS",
       "evidence": "final-code-review.json recommendation APPROVE and architectural status CLEAR."
+    },
+    {
+      "id": "final-local-gates",
+      "status": "PASS",
+      "evidence": "fmt, check, clippy, workspace tests, clean-room audit, streamable HTTP smoke, diff check, and JSON/JSONL parse passed in the G001 worktree."
     }
-  ],
-  "annotations": [
-    "GitHub Actions reports Node.js 20 deprecation annotations for artifact actions; no gate failure.",
-    "GitHub Actions reports windows-latest redirection notices; no gate failure."
   ]
 }

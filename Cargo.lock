@@ -3150,6 +3150,7 @@ name = "tdw-app-client"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-app-server",
  "tdw-protocol",
 ]
@@ -3464,7 +3465,12 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tdw-app-client",
+ "tdw-app-server",
+ "tdw-config",
+ "tdw-protocol",
  "tdw-service-api",
+ "tokio",
 ]
 
 [[package]]

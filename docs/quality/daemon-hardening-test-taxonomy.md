@@ -23,6 +23,8 @@ Covered behavior:
 - ServiceLoop persistence and cost recording.
 - MCP 2025-06-18 stdio lifecycle, tools, resources, prompts, cancellation, and
   progress-notification contract.
+- MCP daemon-backed tools fail closed when the configured daemon endpoint is
+  unavailable and roundtrip against an in-process TCP daemon without Docker.
 - Worker queue contract semantics plus SQLite durable scheduling, priority
   leasing, lease expiry, retry/dead-letter handling, idempotent enqueue, and
   reconnect persistence.

@@ -7,11 +7,11 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - Manifest: crates\tdw-app-client\Cargo.toml
 - Target kinds: lib
 - Local dependencies: tdw-app-server, tdw-protocol
-- External dependencies: serde ^1.0.228 features=[derive]
+- External dependencies: serde ^1.0.228 features=[derive], serde_json
 - Dev dependencies: none
 - Reverse local dependencies: none
 - Feature flags: none
-- Test attributes detected: 2
+- Test attributes detected: 3
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -33,6 +33,12 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 ## Findings
 
 - Added `AppClient::try_new` and `validate_client_info` so client identity and daemon endpoint validation can fail before enqueueing protocol ops.
+- Added `DaemonClient` and `DaemonClientConfig` for blocking TCP daemon
+  submission using the same length-delimited `OpEnvelope` / `EventMsg` frame
+  contract as `tdw-app-server`. The client defaults to local TCP
+  `127.0.0.1:7878`, validates endpoint shape, bounds frames, waits for the
+  submitted op's terminal event, and fails closed on unsupported transports or
+  unavailable daemons.
 - Runtime behavior remains thin by design: submission is delegated to `tdw-app-server::SubmissionHandle`, with no copied service business logic.
 - Scan signals are test `expect` calls only; no stub, copied FinX-XR, OpenBB, or fallback runtime branch was found.
 
@@ -42,4 +48,6 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Verdict
 
-Ready with follow-ups. The app client is a validated thin submission wrapper; production retry/backoff policy belongs above this crate.
+Ready with follow-ups. The app client is a validated thin submission wrapper
+and TCP daemon submitter; production retry/backoff policy and non-TCP daemon
+client transports belong above or beside this crate.

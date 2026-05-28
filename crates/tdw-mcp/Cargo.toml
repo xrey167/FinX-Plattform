@@ -8,7 +8,14 @@ license = "UNLICENSED"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-app-client = { workspace = true }
+tdw-app-server = { workspace = true }
+tdw-config = { workspace = true }
+tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "time"] }
 
 [lints]
 workspace = true
