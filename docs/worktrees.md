@@ -39,4 +39,8 @@ The helper refuses to remove a worktree unless:
 - the branch is already an ancestor of `main`, or every branch commit is
   patch-equivalent to `main` according to `git cherry main <branch>`.
 
+When `-RemoveBranch` is set, ancestor-merged branches are deleted with
+`git branch -d`; patch-equivalent squash-merged branches are deleted with
+`git branch -D` only after the patch-equivalence check passes.
+
 Use `-DryRun` first when auditing many stale worktrees.
