@@ -4002,8 +4002,11 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sqlx",
  "tdw-protocol",
  "tdw-service-api",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

@@ -78,12 +78,15 @@ Run the packaged smoke path through Compose:
 ```powershell
 docker compose --profile full run --rm --build tdw-service --smoke AAPL
 docker compose --profile full run --rm --build tdw-worker
+docker compose --profile full run --rm --build tdw-worker --durable-smoke
 docker compose --profile tools run --rm --build tdw-cli AAPL
 docker compose --profile tools run --rm --build tdw-mcp
 ```
 
 `tdw-service` and `tdw-cli` execute the G009 deterministic smoke path. The
-`full` profile also declares the production storage services so the same
+default `tdw-worker` run keeps the fast worker evidence path, and
+`tdw-worker --durable-smoke` exercises the embedded SQLite durable scheduler.
+The `full` profile also declares the production storage services so the same
 composition can be extended by G015/G016 without changing the service graph.
 
 ## Release Cut Checklist

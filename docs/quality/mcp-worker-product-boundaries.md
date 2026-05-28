@@ -24,9 +24,14 @@ cycle does not silently claim a broader product surface than it ships.
   expose finance-specific equity research, daemon triage, and ingest planning
   templates.
 - `tdw-worker --contract` prints the durable worker queue contract shape.
-- `tdw-worker` has a typed `WorkerJob`, `WorkerLease`, and
-  `DurableWorkerQueue` interface plus an in-memory implementation that validates
-  idempotency keys, queue names, attempts, leasing, and completion semantics.
+- `tdw-worker` has a typed `WorkerJob`, `WorkerLease`,
+  `DeadLetterRecord`, `WorkerQueueStats`, and `DurableWorkerQueue` interface.
+  It includes both an in-memory contract backend and a SQLite-backed durable
+  scheduler. The durable backend persists `OpEnvelope` jobs, leases by
+  priority, reaps expired leases, tracks retry attempts, dead-letters exhausted
+  jobs, and treats duplicate enqueue / repeated completion as idempotent.
+- `tdw-worker --durable-smoke` exercises the SQLite scheduler end to end with
+  enqueue -> lease -> complete -> stats.
 - The existing smoke modes remain intact for fast offline verification.
 
 ## Deliberately not shipped here
@@ -34,9 +39,9 @@ cycle does not silently claim a broader product surface than it ships.
 - Streamable HTTP MCP transport is not shipped yet. The current MCP server
   implements its advertised stdio capabilities but does not expose the
   2025-06-18 HTTP endpoint.
-- Worker scheduling is not durable yet. The in-memory queue is a contract
-  harness, not a SQL/RiverQueue-backed scheduler with visibility timeouts,
-  retries, dead-lettering, priority, or distributed lease recovery.
+- Worker scheduling is durable for the local/embedded SQLite backend. A
+  RiverQueue/Postgres-backed distributed scheduler is still a follow-up for
+  deployments that need multi-process lease recovery across machines.
 - The MCP and worker processes do not yet call the daemon transport as real
   clients. MCP `tools/call` currently routes through deterministic service-api
   functions; daemon-backed MCP calls should happen after the daemon TCP/auth
@@ -48,8 +53,7 @@ cycle does not silently claim a broader product surface than it ships.
    and authentication.
 2. Route MCP `tools/call` through the daemon client boundary where the tool
    semantics require live daemon state.
-3. Move the worker queue contract into a library module when another crate needs
-   it, then implement a durable backend with lease expiration, retry counters,
-   dead-letter rows, and idempotent completion.
+3. Add a Postgres/RiverQueue worker backend that mirrors the SQLite scheduler
+   contract for distributed deployments.
 4. Add always-on protocol tests for framing and env-gated integration tests for
    daemon-backed MCP and durable worker execution.

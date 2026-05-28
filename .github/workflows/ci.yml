@@ -132,6 +132,9 @@ jobs:
       - name: Run G014 dockerized worker smoke
         timeout-minutes: 10
         run: docker compose --profile full run --rm --build tdw-worker
+      - name: Run G014 dockerized worker durable smoke
+        timeout-minutes: 10
+        run: docker compose --profile full run --rm --build tdw-worker --durable-smoke
       - run: cargo test --workspace --features e2e
       - run: cargo test -p tdw-tag-rules -p tdw-mask -p tdw-auth -p tdw-auth-oidc
 
