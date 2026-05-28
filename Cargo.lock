@@ -3731,6 +3731,7 @@ dependencies = [
  "tdw-rollout",
  "tdw-runtime",
  "tdw-sandbox",
+ "tdw-session",
  "tdw-snapshot",
  "tdw-spatial",
  "tdw-stage",

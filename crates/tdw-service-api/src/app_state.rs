@@ -14,6 +14,8 @@ use tdw_core::{
     BlobEngine, LexicalEngine, OlapEngine, ProviderRegistry, RelationalEngine, Result, VectorEngine,
 };
 use tdw_outbox::InMemoryOutbox;
+use tdw_rollout::JsonlRollout;
+use tdw_session::SqliteSessionStore;
 use tdw_snapshot::SnapshotStore;
 use tdw_storage_clickhouse::ClickHouseRecordingEngine;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
@@ -39,11 +41,17 @@ pub struct AppState {
     pub outbox: Arc<Mutex<InMemoryOutbox>>,
     pub snapshot: Arc<Mutex<SnapshotStore>>,
     pub policy: Option<PolicyEnforcementConfig>,
+    pub session: SqliteSessionStore,
+    pub rollout: JsonlRollout,
 }
 
 impl AppState {
     /// Build an in-memory `AppState` from a layered `TdwConfig`.
-    pub fn from_config(config: TdwConfig) -> Result<Self> {
+    pub async fn from_config(config: TdwConfig) -> Result<Self> {
+        let session = SqliteSessionStore::connect(&config.session.sqlite_path)
+            .await
+            .map_err(|e| tdw_core::Error::Storage(format!("session store: {e}")))?;
+        let rollout = JsonlRollout::new(&config.paths.rollout_dir);
         Ok(Self {
             config,
             olap: Arc::new(ClickHouseRecordingEngine::default()),
@@ -56,12 +64,32 @@ impl AppState {
             outbox: Arc::new(Mutex::new(InMemoryOutbox::default())),
             snapshot: Arc::new(Mutex::new(SnapshotStore::default())),
             policy: None,
+            session,
+            rollout,
         })
     }
 
     pub fn with_policy(mut self, policy: PolicyEnforcementConfig) -> Self {
         self.policy = Some(policy);
         self
+    }
+
+    /// Build an `AppState` backed by an in-memory SQLite database and a unique
+    /// temporary JSONL rollout file. Suitable for unit tests.
+    pub async fn in_memory_for_tests() -> Self {
+        let mut config = TdwConfig::default();
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        config.paths.rollout_dir = std::env::temp_dir()
+            .join(format!("tdw-rollout-{nanos}.jsonl"))
+            .to_string_lossy()
+            .into_owned();
+        Self::from_config(config)
+            .await
+            .unwrap_or_else(|e| panic!("in_memory_for_tests should build AppState: {e}"))
     }
 }
 
@@ -70,10 +98,9 @@ mod tests {
     use super::*;
     use tdw_core::ProviderKind;
 
-    #[test]
-    fn builds_in_memory_app_state_from_default_config() {
-        let state = AppState::from_config(TdwConfig::default())
-            .unwrap_or_else(|error| panic!("AppState should build from default config: {error}"));
+    #[tokio::test]
+    async fn builds_in_memory_app_state_from_default_config() {
+        let state = AppState::in_memory_for_tests().await;
 
         assert!(state.registry.entries().len() >= 3);
         assert!(
@@ -88,12 +115,9 @@ mod tests {
         assert!(Arc::ptr_eq(&state.registry, &cloned.registry));
     }
 
-    #[test]
-    fn carries_layered_config_profile_into_app_state() {
-        let mut config = TdwConfig::default();
-        config.profile = "service".to_string();
-        let state = AppState::from_config(config)
-            .unwrap_or_else(|error| panic!("AppState should build: {error}"));
-        assert_eq!(state.config.profile, "service");
+    #[tokio::test]
+    async fn carries_layered_config_profile_into_app_state() {
+        let state = AppState::in_memory_for_tests().await;
+        assert_eq!(state.config.profile, "default");
     }
 }

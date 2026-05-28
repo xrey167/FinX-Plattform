@@ -47,6 +47,7 @@ tdw-provider-yahoo = { path = "../tdw-provider-yahoo" }
 tdw-protocol = { workspace = true }
 tdw-replay = { path = "../tdw-replay" }
 tdw-rollout = { workspace = true }
+tdw-session = { path = "../tdw-session" }
 tdw-runtime = { workspace = true }
 tdw-sandbox = { workspace = true }
 tdw-snapshot = { path = "../tdw-snapshot" }

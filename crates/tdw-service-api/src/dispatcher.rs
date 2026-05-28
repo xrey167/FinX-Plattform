@@ -164,7 +164,6 @@ async fn dispatch_tool(
 mod tests {
     use super::*;
     use tdw_auth_oidc::{JwksKey, JwtClaims};
-    use tdw_config::TdwConfig;
     use tdw_protocol::{ActorKind, ActorRef, SessionId};
 
     use crate::IngressAuthContext;
@@ -207,8 +206,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_query_dispatches_through_relational_engine() {
-        let state = AppState::from_config(TdwConfig::default())
-            .expect("state builds")
+        let state = AppState::in_memory_for_tests()
+            .await
             .with_policy(analyst_policy());
         let env = make_envelope(Op::RunQuery {
             sql: "select 1".to_string(),
@@ -243,7 +242,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_without_policy_fails_deny_by_default() {
-        let state = AppState::from_config(TdwConfig::default()).expect("state builds");
+        let state = AppState::in_memory_for_tests().await;
         let env = make_envelope(Op::RunQuery {
             sql: "select 1".to_string(),
             plan_id: None,
@@ -269,8 +268,8 @@ mod tests {
     async fn run_query_with_wrong_role_is_denied_by_authorize() {
         let mut policy = analyst_policy();
         policy.auth.claims.roles = vec!["guest".to_string()];
-        let state = AppState::from_config(TdwConfig::default())
-            .expect("state builds")
+        let state = AppState::in_memory_for_tests()
+            .await
             .with_policy(policy);
         let env = make_envelope(Op::RunQuery {
             sql: "select 1".to_string(),
@@ -292,8 +291,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_op_returns_completed_with_shutdown_marker() {
-        let state = AppState::from_config(TdwConfig::default())
-            .expect("state builds")
+        let state = AppState::in_memory_for_tests()
+            .await
             .with_policy(analyst_policy());
         let env = make_envelope(Op::Shutdown);
         let events = dispatch_op(&state, env).await;

@@ -2,6 +2,7 @@
 
 mod app_state;
 mod dispatcher;
+mod event_sink;
 
 pub use app_state::AppState;
 pub use dispatcher::dispatch_op;

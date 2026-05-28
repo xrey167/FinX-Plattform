@@ -179,6 +179,111 @@ pub fn channel() -> (
     )
 }
 
+// ---------------------------------------------------------------------------
+// P2: EventSink + ServiceLoop
+// ---------------------------------------------------------------------------
+
+/// Error type returned by `EventSink` operations.
+#[derive(Debug)]
+pub struct SinkError(pub String);
+
+impl std::fmt::Display for SinkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sink error: {}", self.0)
+    }
+}
+
+impl std::error::Error for SinkError {}
+
+pub type SinkResult<T> = std::result::Result<T, SinkError>;
+
+/// Durable persistence sink invoked by `ServiceLoop` for each dispatched event
+/// and for the per-operation cost ledger record.
+#[async_trait::async_trait]
+pub trait EventSink: Send + Sync {
+    /// Persist a single event from the dispatch result of `env`.
+    async fn persist_event(
+        &self,
+        env: &OpEnvelope,
+        event: &EventMsg,
+        sequence: u64,
+    ) -> SinkResult<()>;
+
+    /// Record cost metadata for the completed operation `env`.
+    async fn record_cost(&self, env: &OpEnvelope, backend: &str) -> SinkResult<()>;
+}
+
+/// Durable service loop that pairs a `Dispatcher` with an `EventSink`.
+///
+/// Added alongside the existing `AgentLoop` / `channel()` in P2. The existing
+/// types are preserved for back-compat.
+pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
+    submissions: mpsc::UnboundedReceiver<OpEnvelope>,
+    events: mpsc::UnboundedSender<EventMsg>,
+    dispatcher: D,
+    sink: S,
+    next_sequence: std::sync::atomic::AtomicU64,
+}
+
+impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
+    pub fn new(
+        submissions: mpsc::UnboundedReceiver<OpEnvelope>,
+        events: mpsc::UnboundedSender<EventMsg>,
+        dispatcher: D,
+        sink: S,
+    ) -> Self {
+        Self {
+            submissions,
+            events,
+            dispatcher,
+            sink,
+            next_sequence: std::sync::atomic::AtomicU64::new(1),
+        }
+    }
+
+    /// Receive one envelope, dispatch it, persist each event, send events on
+    /// the channel, then record cost. Returns the events emitted, or `None` if
+    /// the submission channel is closed.
+    pub async fn run_once(&mut self) -> Option<Vec<EventMsg>> {
+        let env = self.submissions.recv().await?;
+        let emitted = self.dispatcher.dispatch(env.clone()).await;
+        for event in &emitted {
+            let seq = self
+                .next_sequence
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Err(e) = self.sink.persist_event(&env, event, seq).await {
+                eprintln!("[ServiceLoop] persist_event error (seq={seq}): {e}");
+            }
+            let _ = self.events.send(event.clone());
+        }
+        if let Err(e) = self.sink.record_cost(&env, "in-memory").await {
+            eprintln!("[ServiceLoop] record_cost error: {e}");
+        }
+        Some(emitted)
+    }
+}
+
+/// Factory that mirrors `channel()` but wires a `Dispatcher` and `EventSink`
+/// into a `ServiceLoop`.
+pub fn service_channel<D: Dispatcher + 'static, S: EventSink + 'static>(
+    dispatcher: D,
+    sink: S,
+) -> (
+    SubmissionHandle,
+    mpsc::UnboundedReceiver<EventMsg>,
+    ServiceLoop<D, S>,
+) {
+    let (submission_tx, submission_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    (
+        SubmissionHandle {
+            sender: submission_tx,
+        },
+        event_rx,
+        ServiceLoop::new(submission_rx, event_tx, dispatcher, sink),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
