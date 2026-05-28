@@ -3,9 +3,10 @@
 Operational guide for running `tdw-worker`'s durable queue in production. It
 closes follow-up #2 in
 [`docs/quality/mcp-worker-product-boundaries.md`](../quality/mcp-worker-product-boundaries.md):
-the Postgres backend is a **scheduler primitive**, not a finished worker
-process. This page fixes the supervision and monitoring requirements that must
-be satisfied before `PgWorkerQueue` is wired into a long-running deployment.
+the durable queue is now driven by a supervised `tdw-worker --serve` lease loop
+(`WorkerRunner`), and this page is its operating guide - the supervision and
+monitoring you wrap around it, plus the one seam you must supply (the job
+handler).
 
 ## What ships today vs. what you operate
 
@@ -17,12 +18,19 @@ Source of truth: `crates/tdw-worker/src/lib.rs` and `crates/tdw-worker/src/main.
 | SQLite durable scheduler + in-memory contract backend | shipped (library) |
 | `tdw-worker --contract` (prints the queue contract) | shipped (CLI) |
 | `tdw-worker --durable-smoke` (SQLite enqueue→lease→complete→stats) | shipped (CLI) |
-| **Long-running worker process** (lease loop, signal handling, supervision) | **not shipped** - you build/operate it |
+| `tdw-worker --serve` (supervised lease loop, Ctrl-C drain) | shipped (CLI) |
+| `tdw-worker --serve-once` (drain ready backlog, then exit) | shipped (CLI) |
+| `WorkerRunner` + `JobHandler` (generic over the backend) | shipped (library) |
+| Job business logic (the `JobHandler` impl) | **your code** - default is `LoggingAckHandler` |
 | Metrics endpoint / alerting | **not shipped** - requirements below |
 
-`tdw-worker` has no `--serve` daemon yet. The queue is consumed in-process via
-the library API. The deployment work is: write the lease loop around
-`PgWorkerQueue`, then run it under a supervisor with the monitoring below.
+`tdw-worker --serve` runs the lease loop over a `SqliteWorkerQueue` (file path
+from `TDW_WORKER_DB`, default `sqlite://tdw-worker.sqlite`) and drains in-flight
+work on Ctrl-C. The one thing you supply is the `JobHandler` that executes each
+job's `OpEnvelope`; the shipped default, `LoggingAckHandler`, acknowledges and
+completes each job so the loop, retry, and dead-letter wiring can be exercised
+end to end before real dispatch is plugged in. Tunables come from
+`TDW_WORKER_ID`, `TDW_WORKER_LEASE_TTL_MS`, and `TDW_WORKER_POLL_MS`.
 
 ## Backend contract (the numbers you deploy against)
 
@@ -46,22 +54,25 @@ the library API. The deployment work is: write the lease loop around
 
 ## Reference lease loop
 
-A production worker wraps the library like this (sketch, not shipped):
+This is what `WorkerRunner` (behind `--serve`) does each iteration; it leases
+the job *with its payload* via `lease_next_job_with_ttl`, so the handler gets
+the full `OpEnvelope`:
 
 ```text
-connect(DATABASE_URL) -> migrate()
+connect(TDW_WORKER_DB) -> migrate()
 loop:
-    lease = lease_next_with_ttl(worker_id, lease_ttl)
-    if lease is None:
-        sleep(poll_interval); reap_expired_leases(); continue
-    try:
-        run(lease.job.envelope)           # the actual OpEnvelope work
-        complete(lease.job_id)            # idempotent
-    except retryable:
-        fail(lease.job_id, error)         # increments attempts; dead-letters at max
-    on shutdown signal:
-        stop leasing, let in-flight job finish or let its lease expire
+    if shutdown signaled (observed between jobs): stop
+    leased = lease_next_job_with_ttl(worker_id, lease_ttl)
+    if leased is None:
+        reap_expired_leases(); sleep(poll_interval) or break on shutdown; continue
+    match handler.handle(leased.job):       # your JobHandler runs the OpEnvelope
+        Ok  => complete(leased.job.job_id)   # idempotent
+        Err => fail(leased.job.job_id, err)  # increments attempts; dead-letters at max
 ```
+
+In-flight jobs are never cancelled: the loop only observes the shutdown signal
+between jobs and while idle, so a `SIGTERM`/Ctrl-C lets the current job finish
+before the process exits.
 
 Operational rules:
 
@@ -132,8 +143,12 @@ table. Suggested signals:
 
 ## What this does NOT cover
 
-- A shipped `tdw-worker --serve` binary. Building the lease loop above is the
-  open implementation step; this page is its operating contract.
+- The job business logic. `--serve` ships with `LoggingAckHandler`, which
+  acknowledges each job; wiring a `JobHandler` that dispatches the `OpEnvelope`
+  (e.g. through `tdw-app-client` to a daemon) is the remaining integration step.
+- A Postgres-backed `--serve` mode. The lease loop is generic over `ServeQueue`
+  (both backends implement it), but the CLI currently serves the SQLite backend;
+  selecting `PgWorkerQueue` from the CLI is a small follow-up.
 - Cross-region or multi-cluster job routing.
 - Exactly-once side effects in `run()`. The queue guarantees at-least-once
   delivery with idempotent completion; effect idempotency is the job's job.

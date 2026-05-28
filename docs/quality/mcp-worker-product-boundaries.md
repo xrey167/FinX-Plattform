@@ -74,10 +74,12 @@ cycle does not silently claim a broader product surface than it ships.
 
 1. ✅ Deployment-level TLS/reverse-proxy/OAuth guidance for remote MCP HTTP
    exposure: [`docs/release/mcp-remote-deployment.md`](../release/mcp-remote-deployment.md).
-2. Wire `PgWorkerQueue` into the selected worker deployment mode once process
-   supervision and monitoring requirements are fixed. The operating contract for
-   that rollout (lease loop, supervision, lease/dead-letter monitoring) is
-   specified in [`docs/release/worker-deployment.md`](../release/worker-deployment.md);
-   the long-running worker process itself is still the open implementation step.
+2. ✅ Supervised worker process: `tdw-worker --serve` / `--serve-once` run a
+   `WorkerRunner` lease loop over the durable queue (graceful Ctrl-C drain,
+   retry/dead-letter wiring, `JobHandler` seam), with the operating guide in
+   [`docs/release/worker-deployment.md`](../release/worker-deployment.md).
+   Remaining: a `JobHandler` that dispatches the `OpEnvelope` to a daemon, and a
+   Postgres-backed `--serve` mode (the loop is already generic over both
+   backends via `ServeQueue`).
 3. Promote the live daemon integration recipe into a dedicated CI job when a
    long-running daemon service is available in the target environment.
