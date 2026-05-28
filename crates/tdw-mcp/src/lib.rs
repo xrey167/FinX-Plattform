@@ -1,15 +1,21 @@
 #![forbid(unsafe_code)]
 
-use std::io::BufRead;
+use std::io::{BufRead, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+pub const DEFAULT_STREAMABLE_HTTP_BIND: &str = "127.0.0.1:8788";
 
 const SERVER_NAME: &str = "tdw-mcp";
 const SERVER_TITLE: &str = "TDW MCP Server";
 const MAX_CANCELLED_REQUESTS: usize = 128;
+const STREAMABLE_HTTP_PATH: &str = "/mcp";
+const MAX_HTTP_HEADER_BYTES: usize = 16 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
 const MCP_BOUNDARY_DOC: &str =
     include_str!("../../../docs/quality/mcp-worker-product-boundaries.md");
 const TEST_TAXONOMY_DOC: &str =
@@ -349,6 +355,637 @@ pub fn mcp_tool_catalog() -> Vec<String> {
         .into_iter()
         .map(|tool| tool.name)
         .collect()
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StreamableHttpConfig {
+    auth_token: Option<String>,
+}
+
+impl StreamableHttpConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        let token = token.into();
+        if !token.is_empty() {
+            self.auth_token = Some(token);
+        }
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamableHttpRequest {
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl StreamableHttpRequest {
+    pub fn new(
+        method: impl Into<String>,
+        path: impl Into<String>,
+        headers: Vec<(String, String)>,
+        body: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            method: method.into(),
+            path: path.into(),
+            headers,
+            body: body.into(),
+        }
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header_value(&self.headers, name)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamableHttpResponse {
+    pub status: u16,
+    pub reason: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+struct ParsedHttpHead {
+    method: String,
+    path: String,
+    headers: Vec<(String, String)>,
+}
+
+impl StreamableHttpResponse {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header_value(&self.headers, name)
+    }
+
+    pub fn body_text(&self) -> Option<&str> {
+        std::str::from_utf8(&self.body).ok()
+    }
+}
+
+pub fn default_streamable_http_bind() -> &'static str {
+    DEFAULT_STREAMABLE_HTTP_BIND
+}
+
+pub fn run_streamable_http(bind: &str) -> i32 {
+    if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
+        eprintln!(
+            "tdw-mcp refusing non-loopback bind {bind}; set TDW_MCP_HTTP_TOKEN to enable authenticated remote binding"
+        );
+        return 2;
+    }
+
+    let listener = match TcpListener::bind(bind) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-mcp Streamable HTTP bind failed on {bind}: {error}");
+            return 1;
+        }
+    };
+    eprintln!("tdw-mcp Streamable HTTP listening on http://{bind}{STREAMABLE_HTTP_PATH}");
+
+    let server = Arc::new(Mutex::new(McpServer::new()));
+    let config = Arc::new(streamable_http_config_from_env());
+    for accepted in listener.incoming() {
+        match accepted {
+            Ok(stream) => {
+                let server = Arc::clone(&server);
+                let config = Arc::clone(&config);
+                if let Err(error) = std::thread::Builder::new()
+                    .name("tdw-mcp-http".to_string())
+                    .spawn(move || {
+                        if let Err(error) =
+                            handle_streamable_http_connection(stream, &server, &config)
+                        {
+                            eprintln!("tdw-mcp Streamable HTTP connection error: {error}");
+                        }
+                    })
+                {
+                    eprintln!("tdw-mcp Streamable HTTP worker spawn failed: {error}");
+                    return 1;
+                }
+            }
+            Err(error) => {
+                eprintln!("tdw-mcp Streamable HTTP accept failed: {error}");
+                return 1;
+            }
+        }
+    }
+
+    0
+}
+
+pub fn run_streamable_http_smoke() -> i32 {
+    let mut server = McpServer::new();
+    let initialize = StreamableHttpRequest::new(
+        "POST",
+        STREAMABLE_HTTP_PATH,
+        vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "application/json".to_string()),
+        ],
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{MCP_PROTOCOL_VERSION}","capabilities":{{}},"clientInfo":{{"name":"tdw-smoke","version":"1.0.0"}}}}}}"#
+        ),
+    );
+    let initialized = handle_streamable_http_request(&mut server, initialize);
+    if initialized.status != 200 {
+        eprintln!(
+            "tdw-mcp Streamable HTTP smoke initialize failed: {} {}",
+            initialized.status, initialized.reason
+        );
+        return 1;
+    }
+
+    let tool_call = StreamableHttpRequest::new(
+        "POST",
+        STREAMABLE_HTTP_PATH,
+        vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("Accept".to_string(), "text/event-stream".to_string()),
+        ],
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tdw.progress.sample","arguments":{"symbol":"AAPL"},"_meta":{"progressToken":"smoke-progress"}}}"#,
+    );
+    let response = handle_streamable_http_request(&mut server, tool_call);
+    let body = response.body_text().unwrap_or("");
+    if response.status == 200
+        && response.header("content-type") == Some("text/event-stream")
+        && body.contains("notifications/progress")
+        && body.contains("\"id\":2")
+    {
+        println!(
+            "tdw-mcp streamable-http-smoke status=ok endpoint={STREAMABLE_HTTP_PATH} protocol={MCP_PROTOCOL_VERSION}"
+        );
+        return 0;
+    }
+
+    eprintln!(
+        "tdw-mcp Streamable HTTP smoke tool call failed: {} {}",
+        response.status, response.reason
+    );
+    1
+}
+
+pub fn handle_streamable_http_request(
+    server: &mut McpServer,
+    request: StreamableHttpRequest,
+) -> StreamableHttpResponse {
+    handle_streamable_http_request_with_config(server, request, &StreamableHttpConfig::new())
+}
+
+pub fn handle_streamable_http_request_with_config(
+    server: &mut McpServer,
+    request: StreamableHttpRequest,
+    config: &StreamableHttpConfig,
+) -> StreamableHttpResponse {
+    if request.path != STREAMABLE_HTTP_PATH {
+        return text_response(404, "Not Found", "unknown MCP endpoint");
+    }
+
+    if let Some(origin) = request.header("origin")
+        && !origin_is_allowed(origin)
+    {
+        return text_response(403, "Forbidden", "forbidden Origin");
+    }
+
+    if let Some(protocol_version) = request.header("mcp-protocol-version")
+        && protocol_version.trim() != MCP_PROTOCOL_VERSION
+    {
+        return text_response(400, "Bad Request", "unsupported MCP-Protocol-Version");
+    }
+
+    if !request_is_authorized(&request, config) {
+        let mut response = text_response(401, "Unauthorized", "missing or invalid bearer token");
+        response.headers.push((
+            "WWW-Authenticate".to_string(),
+            "Bearer realm=\"tdw-mcp\"".to_string(),
+        ));
+        return response;
+    }
+
+    match request.method.as_str() {
+        "OPTIONS" => {
+            let mut response = empty_response(204, "No Content");
+            response
+                .headers
+                .push(("Allow".to_string(), "GET, POST, OPTIONS".to_string()));
+            response.headers.push((
+                "Access-Control-Allow-Headers".to_string(),
+                "Accept, Authorization, Content-Type, MCP-Protocol-Version".to_string(),
+            ));
+            response.headers.push((
+                "Access-Control-Allow-Methods".to_string(),
+                "GET, POST, OPTIONS".to_string(),
+            ));
+            attach_protocol_headers(&mut response);
+            attach_cors_origin(&mut response, &request);
+            response
+        }
+        "GET" if accepts_sse(&request) => {
+            let mut response = bytes_response(
+                200,
+                "OK",
+                "text/event-stream",
+                b": tdw-mcp stream ready\n\n".to_vec(),
+            );
+            response
+                .headers
+                .push(("Cache-Control".to_string(), "no-cache".to_string()));
+            attach_protocol_headers(&mut response);
+            attach_cors_origin(&mut response, &request);
+            response
+        }
+        "GET" => method_not_allowed(),
+        "POST" => handle_streamable_http_post(server, request),
+        _ => method_not_allowed(),
+    }
+}
+
+fn handle_streamable_http_post(
+    server: &mut McpServer,
+    request: StreamableHttpRequest,
+) -> StreamableHttpResponse {
+    if request.body.len() > MAX_HTTP_BODY_BYTES {
+        return text_response(413, "Payload Too Large", "request body too large");
+    }
+    if !request
+        .header("content-type")
+        .is_some_and(content_type_is_json)
+    {
+        return text_response(415, "Unsupported Media Type", "expected application/json");
+    }
+    let body = match std::str::from_utf8(&request.body) {
+        Ok(body) => body,
+        Err(_) => return text_response(400, "Bad Request", "request body must be UTF-8 JSON"),
+    };
+
+    let messages = server.handle_json_rpc_line(body);
+    if messages.is_empty() {
+        let mut response = empty_response(202, "Accepted");
+        attach_protocol_headers(&mut response);
+        attach_cors_origin(&mut response, &request);
+        return response;
+    }
+
+    let mut response = if accepts_sse(&request) {
+        let body = encode_sse_messages(&messages);
+        let mut response = bytes_response(200, "OK", "text/event-stream", body.into_bytes());
+        response
+            .headers
+            .push(("Cache-Control".to_string(), "no-cache".to_string()));
+        response
+    } else {
+        bytes_response(
+            200,
+            "OK",
+            "application/json",
+            encode_json_messages(&messages).into_bytes(),
+        )
+    };
+    attach_protocol_headers(&mut response);
+    attach_cors_origin(&mut response, &request);
+    response
+}
+
+fn handle_streamable_http_connection(
+    mut stream: TcpStream,
+    server: &Arc<Mutex<McpServer>>,
+    config: &StreamableHttpConfig,
+) -> std::io::Result<()> {
+    let response = match read_streamable_http_request(&mut stream) {
+        Ok(request) => match server.lock() {
+            Ok(mut server) => {
+                handle_streamable_http_request_with_config(&mut server, request, config)
+            }
+            Err(_) => text_response(
+                500,
+                "Internal Server Error",
+                "MCP server state lock poisoned",
+            ),
+        },
+        Err(response) => response,
+    };
+    write_streamable_http_response(&mut stream, &response)
+}
+
+fn read_streamable_http_request(
+    stream: &mut TcpStream,
+) -> Result<StreamableHttpRequest, StreamableHttpResponse> {
+    let mut buffer = Vec::new();
+    let mut scratch = [0_u8; 1024];
+    let header_end = loop {
+        if buffer.len() > MAX_HTTP_HEADER_BYTES {
+            return Err(text_response(
+                431,
+                "Request Header Fields Too Large",
+                "headers too large",
+            ));
+        }
+        let read = stream
+            .read(&mut scratch)
+            .map_err(|_| text_response(400, "Bad Request", "could not read request"))?;
+        if read == 0 {
+            return Err(text_response(400, "Bad Request", "empty request"));
+        }
+        buffer.extend_from_slice(&scratch[..read]);
+        if let Some(position) = find_header_end(&buffer) {
+            break position;
+        }
+    };
+
+    let header_bytes = &buffer[..header_end];
+    let header_text = std::str::from_utf8(header_bytes)
+        .map_err(|_| text_response(400, "Bad Request", "headers must be UTF-8"))?;
+    let head = parse_http_header_section(header_text)?;
+    let content_length = content_length(&head.headers)?;
+    if content_length > MAX_HTTP_BODY_BYTES {
+        return Err(text_response(
+            413,
+            "Payload Too Large",
+            "request body too large",
+        ));
+    }
+
+    let mut body = buffer[header_end + 4..].to_vec();
+    while body.len() < content_length {
+        let mut next = vec![0_u8; content_length - body.len()];
+        let read = stream
+            .read(&mut next)
+            .map_err(|_| text_response(400, "Bad Request", "could not read request body"))?;
+        if read == 0 {
+            return Err(text_response(400, "Bad Request", "incomplete request body"));
+        }
+        body.extend_from_slice(&next[..read]);
+    }
+    body.truncate(content_length);
+
+    Ok(StreamableHttpRequest::new(
+        head.method,
+        head.path,
+        head.headers,
+        body,
+    ))
+}
+
+fn write_streamable_http_response(
+    stream: &mut TcpStream,
+    response: &StreamableHttpResponse,
+) -> std::io::Result<()> {
+    let mut head = format!("HTTP/1.1 {} {}\r\n", response.status, response.reason);
+    let has_content_length = response
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
+    let has_connection = response
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"));
+
+    for (name, value) in &response.headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    if !has_content_length {
+        head.push_str("Content-Length: ");
+        head.push_str(&response.body.len().to_string());
+        head.push_str("\r\n");
+    }
+    if !has_connection {
+        head.push_str("Connection: close\r\n");
+    }
+    head.push_str("\r\n");
+
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(&response.body)?;
+    stream.flush()
+}
+
+fn parse_http_header_section(header_text: &str) -> Result<ParsedHttpHead, StreamableHttpResponse> {
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| text_response(400, "Bad Request", "missing request line"))?;
+    let mut parts = request_line.split_ascii_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| text_response(400, "Bad Request", "missing method"))?;
+    let path = parts
+        .next()
+        .ok_or_else(|| text_response(400, "Bad Request", "missing path"))?;
+    let version = parts
+        .next()
+        .ok_or_else(|| text_response(400, "Bad Request", "missing HTTP version"))?;
+    if version != "HTTP/1.1" {
+        return Err(text_response(
+            505,
+            "HTTP Version Not Supported",
+            "expected HTTP/1.1",
+        ));
+    }
+    if parts.next().is_some() {
+        return Err(text_response(400, "Bad Request", "invalid request line"));
+    }
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(text_response(400, "Bad Request", "invalid header"));
+        };
+        headers.push((name.trim().to_string(), value.trim().to_string()));
+    }
+
+    Ok(ParsedHttpHead {
+        method: method.to_string(),
+        path: path.to_string(),
+        headers,
+    })
+}
+
+fn streamable_http_config_from_env() -> StreamableHttpConfig {
+    match std::env::var("TDW_MCP_HTTP_TOKEN") {
+        Ok(token) => StreamableHttpConfig::new().with_auth_token(token),
+        Err(_) => StreamableHttpConfig::new(),
+    }
+}
+
+fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHttpConfig) -> bool {
+    let Some(token) = config.auth_token.as_deref() else {
+        return true;
+    };
+    let Some(value) = request.header("authorization") else {
+        return false;
+    };
+    let mut parts = value.splitn(2, ' ');
+    let Some(scheme) = parts.next() else {
+        return false;
+    };
+    let Some(candidate) = parts.next() else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("bearer") && candidate == token
+}
+
+fn bind_is_loopback(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(bind)
+        .trim_matches(['[', ']']);
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn origin_is_allowed(origin: &str) -> bool {
+    let origin = origin.trim().to_ascii_lowercase();
+    let Some(rest) = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn content_type_is_json(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+}
+
+fn accepts_sse(request: &StreamableHttpRequest) -> bool {
+    request.header("accept").is_some_and(|accept| {
+        accept.split(',').any(|entry| {
+            entry
+                .split(';')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+        })
+    })
+}
+
+fn content_length(headers: &[(String, String)]) -> Result<usize, StreamableHttpResponse> {
+    let Some(value) = header_value(headers, "content-length") else {
+        return Ok(0);
+    };
+    value
+        .parse::<usize>()
+        .map_err(|_| text_response(400, "Bad Request", "invalid Content-Length"))
+}
+
+fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn encode_json_messages(messages: &[String]) -> String {
+    if messages.len() == 1 {
+        return messages[0].clone();
+    }
+    let values = messages
+        .iter()
+        .map(|message| {
+            serde_json::from_str::<Value>(message).unwrap_or(Value::String(message.clone()))
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&values).unwrap_or_else(|error| {
+        encode_message(&error_message(JsonRpcProblem::new(
+            Value::Null,
+            -32603,
+            format!("serialize error: {error}"),
+        )))
+    })
+}
+
+fn encode_sse_messages(messages: &[String]) -> String {
+    let mut encoded = String::new();
+    for message in messages {
+        encoded.push_str("event: message\n");
+        encoded.push_str("data: ");
+        encoded.push_str(message);
+        encoded.push_str("\n\n");
+    }
+    encoded
+}
+
+fn method_not_allowed() -> StreamableHttpResponse {
+    let mut response = text_response(405, "Method Not Allowed", "method not allowed");
+    response
+        .headers
+        .push(("Allow".to_string(), "GET, POST, OPTIONS".to_string()));
+    attach_protocol_headers(&mut response);
+    response
+}
+
+fn text_response(status: u16, reason: &str, body: &str) -> StreamableHttpResponse {
+    bytes_response(
+        status,
+        reason,
+        "text/plain; charset=utf-8",
+        body.as_bytes().to_vec(),
+    )
+}
+
+fn empty_response(status: u16, reason: &str) -> StreamableHttpResponse {
+    StreamableHttpResponse {
+        status,
+        reason: reason.to_string(),
+        headers: Vec::new(),
+        body: Vec::new(),
+    }
+}
+
+fn bytes_response(
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> StreamableHttpResponse {
+    let mut response = empty_response(status, reason);
+    response
+        .headers
+        .push(("Content-Type".to_string(), content_type.to_string()));
+    response.body = body;
+    response
+}
+
+fn attach_protocol_headers(response: &mut StreamableHttpResponse) {
+    response.headers.push((
+        "MCP-Protocol-Version".to_string(),
+        MCP_PROTOCOL_VERSION.to_string(),
+    ));
+}
+
+fn attach_cors_origin(response: &mut StreamableHttpResponse, request: &StreamableHttpRequest) {
+    if let Some(origin) = request.header("origin")
+        && origin_is_allowed(origin)
+    {
+        response.headers.push((
+            "Access-Control-Allow-Origin".to_string(),
+            origin.to_string(),
+        ));
+    }
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
 }
 
 fn parse_inbound(line: &str) -> Result<JsonRpcInbound, JsonRpcProblem> {
@@ -1301,6 +1938,243 @@ mod tests {
         );
         assert_eq!(last["id"], 4);
         assert_eq!(last["result"]["isError"], false);
+    }
+
+    #[test]
+    fn streamable_http_post_initialize_returns_json_response() {
+        let mut server = McpServer::new();
+        let response = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Origin".to_string(), "http://localhost:3000".to_string()),
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept".to_string(), "application/json".to_string()),
+                    (
+                        "MCP-Protocol-Version".to_string(),
+                        MCP_PROTOCOL_VERSION.to_string(),
+                    ),
+                ],
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"http-test","version":"1.0.0"}}}"#,
+            ),
+        );
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.header("content-type"), Some("application/json"));
+        assert_eq!(
+            response.header("mcp-protocol-version"),
+            Some(MCP_PROTOCOL_VERSION)
+        );
+        assert_eq!(
+            response.header("access-control-allow-origin"),
+            Some("http://localhost:3000")
+        );
+        let body = response
+            .body_text()
+            .unwrap_or_else(|| panic!("HTTP response body should be text"));
+        let decoded = decode(body);
+        assert_eq!(decoded["result"]["protocolVersion"], MCP_PROTOCOL_VERSION);
+        assert!(server.is_initialized());
+    }
+
+    #[test]
+    fn streamable_http_notifications_return_accepted_without_body() {
+        let mut server = McpServer::new();
+        let response = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            ),
+        );
+
+        assert_eq!(response.status, 202);
+        assert!(response.body.is_empty());
+        assert_eq!(
+            response.header("mcp-protocol-version"),
+            Some(MCP_PROTOCOL_VERSION)
+        );
+        assert!(server.is_initialized());
+    }
+
+    #[test]
+    fn streamable_http_rejects_bad_origin_protocol_and_auth() {
+        let mut server = McpServer::new();
+        let bad_origin = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Origin".to_string(), "https://example.com".to_string()),
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                ],
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            ),
+        );
+        assert_eq!(bad_origin.status, 403);
+
+        let bad_protocol = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("MCP-Protocol-Version".to_string(), "2024-11-05".to_string()),
+                ],
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            ),
+        );
+        assert_eq!(bad_protocol.status, 400);
+
+        let config = StreamableHttpConfig::new().with_auth_token("secret");
+        let unauthorized = handle_streamable_http_request_with_config(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            ),
+            &config,
+        );
+        assert_eq!(unauthorized.status, 401);
+        assert_eq!(
+            unauthorized.header("www-authenticate"),
+            Some("Bearer realm=\"tdw-mcp\"")
+        );
+
+        let authorized = handle_streamable_http_request_with_config(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Authorization".to_string(), "Bearer secret".to_string()),
+                ],
+                r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+            ),
+            &config,
+        );
+        assert_eq!(authorized.status, 200);
+    }
+
+    #[test]
+    fn streamable_http_sse_streams_progress_before_response() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+
+        let response = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept".to_string(), "text/event-stream".to_string()),
+                ],
+                r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tdw.progress.sample","arguments":{"symbol":"aapl"},"_meta":{"progressToken":"progress-http"}}}"#,
+            ),
+        );
+
+        assert_eq!(response.status, 200);
+        assert_eq!(response.header("content-type"), Some("text/event-stream"));
+        let body = response
+            .body_text()
+            .unwrap_or_else(|| panic!("SSE response body should be text"));
+        assert!(body.contains("event: message"));
+        assert!(body.contains("notifications/progress"));
+        assert!(body.contains("progress-http"));
+        assert!(body.contains("\"id\":4"));
+    }
+
+    #[test]
+    fn streamable_http_json_mode_preserves_multi_message_tool_output() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+
+        let response = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![
+                    ("Content-Type".to_string(), "application/json".to_string()),
+                    ("Accept".to_string(), "application/json".to_string()),
+                ],
+                r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tdw.progress.sample","arguments":{"symbol":"aapl"},"_meta":{"progressToken":"progress-json"}}}"#,
+            ),
+        );
+
+        assert_eq!(response.status, 200);
+        let body = response
+            .body_text()
+            .unwrap_or_else(|| panic!("JSON response body should be text"));
+        let decoded: Value = serde_json::from_str(body)
+            .unwrap_or_else(|error| panic!("HTTP response should be JSON: {error}; {body}"));
+        let messages = decoded
+            .as_array()
+            .unwrap_or_else(|| panic!("progress response should preserve all JSON-RPC messages"));
+        assert!(messages.len() >= 2);
+        assert_eq!(messages[0]["method"], "notifications/progress");
+        assert_eq!(
+            messages
+                .last()
+                .unwrap_or_else(|| panic!("final response should be present"))["id"],
+            4
+        );
+    }
+
+    #[test]
+    fn streamable_http_get_and_method_boundaries_are_explicit() {
+        let mut server = McpServer::new();
+
+        let sse_ready = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "GET",
+                "/mcp",
+                vec![("Accept".to_string(), "text/event-stream".to_string())],
+                "",
+            ),
+        );
+        assert_eq!(sse_ready.status, 200);
+        assert_eq!(sse_ready.header("content-type"), Some("text/event-stream"));
+        assert!(
+            sse_ready
+                .body_text()
+                .is_some_and(|body| body.contains("stream ready"))
+        );
+
+        let no_sse = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new("GET", "/mcp", Vec::new(), ""),
+        );
+        assert_eq!(no_sse.status, 405);
+        assert_eq!(no_sse.header("allow"), Some("GET, POST, OPTIONS"));
+
+        let wrong_path = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new("POST", "/other", Vec::new(), ""),
+        );
+        assert_eq!(wrong_path.status, 404);
+
+        let wrong_media = handle_streamable_http_request(
+            &mut server,
+            StreamableHttpRequest::new(
+                "POST",
+                "/mcp",
+                vec![("Content-Type".to_string(), "text/plain".to_string())],
+                r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+            ),
+        );
+        assert_eq!(wrong_media.status, 415);
     }
 
     #[test]

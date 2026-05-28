@@ -23,6 +23,15 @@ cycle does not silently claim a broader product surface than it ships.
 - MCP resources expose safe TDW status/config/readiness documents; prompts
   expose finance-specific equity research, daemon triage, and ingest planning
   templates.
+- `tdw-mcp --streamable-http [bind]` exposes the same MCP server over a local
+  Streamable HTTP endpoint at `/mcp`. It defaults to `127.0.0.1:8788`, accepts
+  JSON-RPC POST bodies, returns `application/json` or `text/event-stream`
+  depending on `Accept`, returns `202 Accepted` for fire-and-forget
+  notifications, validates `Origin` against localhost loopback origins, checks
+  `MCP-Protocol-Version`, bounds HTTP header/body sizes, and supports optional
+  bearer authentication through `TDW_MCP_HTTP_TOKEN`.
+- `tdw-mcp --streamable-http-smoke` exercises initialize plus an SSE
+  progress-emitting tool call without opening a long-running listener.
 - `tdw-worker --contract` prints the durable worker queue contract shape.
 - `tdw-worker` has a typed `WorkerJob`, `WorkerLease`,
   `DeadLetterRecord`, `WorkerQueueStats`, and `DurableWorkerQueue` interface.
@@ -36,9 +45,6 @@ cycle does not silently claim a broader product surface than it ships.
 
 ## Deliberately not shipped here
 
-- Streamable HTTP MCP transport is not shipped yet. The current MCP server
-  implements its advertised stdio capabilities but does not expose the
-  2025-06-18 HTTP endpoint.
 - Worker scheduling is durable for the local/embedded SQLite backend. A
   RiverQueue/Postgres-backed distributed scheduler is still a follow-up for
   deployments that need multi-process lease recovery across machines.
@@ -46,14 +52,15 @@ cycle does not silently claim a broader product surface than it ships.
   clients. MCP `tools/call` currently routes through deterministic service-api
   functions; daemon-backed MCP calls should happen after the daemon TCP/auth
   surface is stable.
+- The MCP HTTP transport is intentionally local-first. Remote deployment still
+  needs a deployment-level TLS/reverse-proxy/OAuth story; direct non-loopback
+  binding is refused unless `TDW_MCP_HTTP_TOKEN` is set.
 
 ## Follow-up implementation path
 
-1. Add Streamable HTTP MCP transport with localhost binding, Origin validation,
-   and authentication.
-2. Route MCP `tools/call` through the daemon client boundary where the tool
+1. Route MCP `tools/call` through the daemon client boundary where the tool
    semantics require live daemon state.
-3. Add a Postgres/RiverQueue worker backend that mirrors the SQLite scheduler
+2. Add a Postgres/RiverQueue worker backend that mirrors the SQLite scheduler
    contract for distributed deployments.
-4. Add always-on protocol tests for framing and env-gated integration tests for
+3. Add always-on protocol tests for framing and env-gated integration tests for
    daemon-backed MCP and durable worker execution.
