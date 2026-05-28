@@ -25,5 +25,11 @@ tokio-util = { version = "0.7", features = ["rt"] }
 [dev-dependencies]
 tdw-event = { path = "../tdw-event" }
 
+# Loom is only compiled under `--cfg loom` and never enters the default build,
+# default `cargo test`, or the release profile. See `tests/loom_relay.rs` and
+# TEST-POLICY-003 in `docs/quality/test-policy-backlog.md`.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [lints]
 workspace = true

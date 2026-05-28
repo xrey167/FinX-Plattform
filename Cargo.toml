@@ -56,6 +56,10 @@ tdw-service-api = { path = "crates/tdw-service-api" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "allow"
+# `--cfg loom` is set manually via RUSTFLAGS for TEST-POLICY-003 loom models
+# (see crates/tdw-app-server/tests/loom_relay.rs). Declare it here so the
+# `unexpected_cfgs` lint does not warn in the normal (loom-off) build.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
