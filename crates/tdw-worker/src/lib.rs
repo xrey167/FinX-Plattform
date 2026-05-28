@@ -86,6 +86,14 @@ pub struct WorkerLease {
     pub lease_expires_at_ms: u64,
 }
 
+/// A leased job paired with its full payload, so a worker process can execute
+/// the `OpEnvelope` without a second round trip to the queue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LeasedJob {
+    pub lease: WorkerLease,
+    pub job: WorkerJob,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnqueueOutcome {
     pub job_id: String,
@@ -424,6 +432,30 @@ impl SqliteWorkerQueue {
         worker_id: &str,
         lease_ttl_ms: u64,
     ) -> Result<Option<WorkerLease>> {
+        Ok(self
+            .lease_next_job_with_ttl(worker_id, lease_ttl_ms)
+            .await?
+            .map(|leased| leased.lease))
+    }
+
+    /// Lease the next ready job and return it with its full payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn lease_next_job(&self, worker_id: &str) -> Result<Option<LeasedJob>> {
+        self.lease_next_job_with_ttl(worker_id, DEFAULT_LEASE_TTL_MS)
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn lease_next_job_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<LeasedJob>> {
         validate_worker_id(worker_id)?;
         let now_ms = unix_epoch_millis()?;
         self.reap_expired_leases_at(now_ms).await?;
@@ -432,7 +464,7 @@ impl SqliteWorkerQueue {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             r"
-            select job_id, attempts
+            select job_id, queue, envelope_json, max_attempts, not_before_ms, priority, attempts
             from worker_jobs
             where status = ?1 and not_before_ms <= ?2
             order by priority desc, not_before_ms asc, created_at_ms asc, job_id asc
@@ -449,7 +481,7 @@ impl SqliteWorkerQueue {
             return Ok(None);
         };
 
-        let job_id: String = row.get("job_id");
+        let job = row_to_job(&row)?;
         let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
         let attempt = attempts.saturating_add(1);
         let update = sqlx::query(
@@ -467,7 +499,7 @@ impl SqliteWorkerQueue {
         .bind(worker_id)
         .bind(u64_to_i64(lease_expires_at_ms)?)
         .bind(u64_to_i64(now_ms)?)
-        .bind(&job_id)
+        .bind(&job.job_id)
         .bind(WorkerJobStatus::Pending.as_str())
         .execute(&mut *tx)
         .await?;
@@ -477,11 +509,14 @@ impl SqliteWorkerQueue {
             return Ok(None);
         }
 
-        Ok(Some(WorkerLease {
-            job_id,
-            worker_id: worker_id.to_string(),
-            attempt,
-            lease_expires_at_ms,
+        Ok(Some(LeasedJob {
+            lease: WorkerLease {
+                job_id: job.job_id.clone(),
+                worker_id: worker_id.to_string(),
+                attempt,
+                lease_expires_at_ms,
+            },
+            job,
         }))
     }
 
@@ -780,6 +815,30 @@ impl PgWorkerQueue {
         worker_id: &str,
         lease_ttl_ms: u64,
     ) -> Result<Option<WorkerLease>> {
+        Ok(self
+            .lease_next_job_with_ttl(worker_id, lease_ttl_ms)
+            .await?
+            .map(|leased| leased.lease))
+    }
+
+    /// Lease the next ready job and return it with its full payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn lease_next_job(&self, worker_id: &str) -> Result<Option<LeasedJob>> {
+        self.lease_next_job_with_ttl(worker_id, DEFAULT_LEASE_TTL_MS)
+            .await
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn lease_next_job_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<LeasedJob>> {
         validate_worker_id(worker_id)?;
         let now_ms = unix_epoch_millis()?;
         self.reap_expired_leases_at(now_ms).await?;
@@ -788,7 +847,8 @@ impl PgWorkerQueue {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             r#"
-            select job_id, attempts
+            select job_id, queue, envelope_json::text as envelope_json,
+                   max_attempts, not_before_ms, priority, attempts
             from system.worker_jobs
             where status = $1 and not_before_ms <= $2
             order by priority desc, not_before_ms asc, created_at_ms asc, job_id asc
@@ -806,7 +866,7 @@ impl PgWorkerQueue {
             return Ok(None);
         };
 
-        let job_id: String = row.get("job_id");
+        let job = row_to_job_pg(&row)?;
         let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
         let attempt = attempts.saturating_add(1);
         let update = sqlx::query(
@@ -824,7 +884,7 @@ impl PgWorkerQueue {
         .bind(worker_id)
         .bind(u64_to_i64(lease_expires_at_ms)?)
         .bind(u64_to_i64(now_ms)?)
-        .bind(&job_id)
+        .bind(&job.job_id)
         .bind(WorkerJobStatus::Pending.as_str())
         .execute(&mut *tx)
         .await?;
@@ -834,11 +894,14 @@ impl PgWorkerQueue {
             return Ok(None);
         }
 
-        Ok(Some(WorkerLease {
-            job_id,
-            worker_id: worker_id.to_string(),
-            attempt,
-            lease_expires_at_ms,
+        Ok(Some(LeasedJob {
+            lease: WorkerLease {
+                job_id: job.job_id.clone(),
+                worker_id: worker_id.to_string(),
+                attempt,
+                lease_expires_at_ms,
+            },
+            job,
         }))
     }
 
@@ -1224,6 +1287,329 @@ fn row_to_dead_letter_pg(row: PgRow) -> Result<DeadLetterRecord> {
         last_error: row.get("last_error"),
         dead_lettered_at_ms: i64_to_u64(row.get("dead_lettered_at_ms"), "dead_lettered_at_ms")?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Worker serve loop
+//
+// `WorkerRunner` turns a durable queue plus a `JobHandler` into a supervised
+// lease loop: lease the next ready job, run the handler, then complete it (on
+// success) or fail it (on error, which retries or dead-letters per the job's
+// `max_attempts`). The loop drains in-flight work on shutdown and never cancels
+// a job that has already been leased. See `docs/release/worker-deployment.md`.
+// ---------------------------------------------------------------------------
+
+/// Async queue surface a long-running worker leases against. Implemented by
+/// both [`SqliteWorkerQueue`] and the Postgres-backed `PgWorkerQueue`, so
+/// [`WorkerRunner`] is generic over the backend.
+#[async_trait::async_trait]
+pub trait ServeQueue: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn lease_next_job_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<LeasedJob>>;
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn complete(&self, job_id: &str) -> Result<()>;
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn fail(&self, job_id: &str, error: &str, retry_after_ms: u64)
+    -> Result<WorkerJobStatus>;
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn reap_expired_leases(&self) -> Result<u64>;
+}
+
+#[async_trait::async_trait]
+impl ServeQueue for SqliteWorkerQueue {
+    async fn lease_next_job_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<LeasedJob>> {
+        Self::lease_next_job_with_ttl(self, worker_id, lease_ttl_ms).await
+    }
+
+    async fn complete(&self, job_id: &str) -> Result<()> {
+        Self::complete(self, job_id).await
+    }
+
+    async fn fail(
+        &self,
+        job_id: &str,
+        error: &str,
+        retry_after_ms: u64,
+    ) -> Result<WorkerJobStatus> {
+        Self::fail(self, job_id, error, retry_after_ms).await
+    }
+
+    async fn reap_expired_leases(&self) -> Result<u64> {
+        Self::reap_expired_leases(self).await
+    }
+}
+
+#[cfg(feature = "postgres")]
+#[async_trait::async_trait]
+impl ServeQueue for PgWorkerQueue {
+    async fn lease_next_job_with_ttl(
+        &self,
+        worker_id: &str,
+        lease_ttl_ms: u64,
+    ) -> Result<Option<LeasedJob>> {
+        Self::lease_next_job_with_ttl(self, worker_id, lease_ttl_ms).await
+    }
+
+    async fn complete(&self, job_id: &str) -> Result<()> {
+        Self::complete(self, job_id).await
+    }
+
+    async fn fail(
+        &self,
+        job_id: &str,
+        error: &str,
+        retry_after_ms: u64,
+    ) -> Result<WorkerJobStatus> {
+        Self::fail(self, job_id, error, retry_after_ms).await
+    }
+
+    async fn reap_expired_leases(&self) -> Result<u64> {
+        Self::reap_expired_leases(self).await
+    }
+}
+
+/// Business logic a worker runs for each leased job. Returning `Err` fails the
+/// lease, which retries the job or dead-letters it once `max_attempts` is hit.
+#[async_trait::async_trait]
+pub trait JobHandler: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns the failure reason to record against the job's lease.
+    async fn handle(&self, job: &WorkerJob) -> std::result::Result<(), String>;
+}
+
+/// Default handler that acknowledges each job without side effects.
+///
+/// It is the seam a real deployment replaces with `OpEnvelope` dispatch; the
+/// leasing, retry, and dead-letter wiring around it is production code.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoggingAckHandler;
+
+#[async_trait::async_trait]
+impl JobHandler for LoggingAckHandler {
+    async fn handle(&self, job: &WorkerJob) -> std::result::Result<(), String> {
+        eprintln!("tdw-worker ack job_id={} queue={}", job.job_id, job.queue);
+        Ok(())
+    }
+}
+
+/// Tunables for [`WorkerRunner`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServeConfig {
+    pub worker_id: String,
+    pub lease_ttl_ms: u64,
+    pub poll_interval_ms: u64,
+}
+
+impl Default for ServeConfig {
+    fn default() -> Self {
+        Self {
+            worker_id: "tdw-worker".to_string(),
+            lease_ttl_ms: DEFAULT_LEASE_TTL_MS,
+            poll_interval_ms: 500,
+        }
+    }
+}
+
+/// Tally of what a serve run did, returned by [`WorkerRunner::run`] and
+/// [`WorkerRunner::run_until_idle`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServeReport {
+    pub processed: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub dead_lettered: u64,
+}
+
+/// A supervised lease loop over a [`ServeQueue`] driving a [`JobHandler`].
+pub struct WorkerRunner<Q, H> {
+    queue: Q,
+    handler: H,
+    config: ServeConfig,
+}
+
+impl<Q, H> WorkerRunner<Q, H>
+where
+    Q: ServeQueue,
+    H: JobHandler,
+{
+    #[must_use]
+    pub fn new(queue: Q, handler: H, config: ServeConfig) -> Self {
+        Self {
+            queue,
+            handler,
+            config,
+        }
+    }
+
+    async fn process_once(&self, report: &mut ServeReport) -> Result<bool> {
+        let Some(leased) = self
+            .queue
+            .lease_next_job_with_ttl(&self.config.worker_id, self.config.lease_ttl_ms)
+            .await?
+        else {
+            return Ok(false);
+        };
+
+        report.processed = report.processed.saturating_add(1);
+        match self.handler.handle(&leased.job).await {
+            Ok(()) => {
+                self.queue.complete(&leased.job.job_id).await?;
+                report.completed = report.completed.saturating_add(1);
+            }
+            Err(error) => {
+                let status = self.queue.fail(&leased.job.job_id, &error, 0).await?;
+                report.failed = report.failed.saturating_add(1);
+                if status == WorkerJobStatus::DeadLettered {
+                    report.dead_lettered = report.dead_lettered.saturating_add(1);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Drain every ready job, reap expired leases, and return. Bounded: stops
+    /// as soon as the queue reports no ready job. Used by `--serve-once` and
+    /// tests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if a queue operation fails.
+    pub async fn run_until_idle(&self) -> Result<ServeReport> {
+        let mut report = ServeReport::default();
+        while self.process_once(&mut report).await? {}
+        self.queue.reap_expired_leases().await?;
+        Ok(report)
+    }
+
+    /// Run the lease loop until `shutdown` resolves. In-flight jobs always run
+    /// to completion: `shutdown` is observed only between jobs and while idle,
+    /// so a stop signal never cancels work that has already been leased.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if a queue operation fails.
+    pub async fn run<S>(&self, shutdown: S) -> Result<ServeReport>
+    where
+        S: std::future::Future<Output = ()> + Send,
+    {
+        let mut report = ServeReport::default();
+        let mut shutdown = std::pin::pin!(shutdown);
+        loop {
+            // Observe shutdown without cancelling any in-flight work.
+            let stop = tokio::select! {
+                biased;
+                () = &mut shutdown => true,
+                () = std::future::ready(()) => false,
+            };
+            if stop {
+                break;
+            }
+
+            if self.process_once(&mut report).await? {
+                continue;
+            }
+
+            // Idle: reap expired leases, then wait for work or shutdown.
+            self.queue.reap_expired_leases().await?;
+            tokio::select! {
+                biased;
+                () = &mut shutdown => break,
+                () = tokio::time::sleep(std::time::Duration::from_millis(
+                    self.config.poll_interval_ms,
+                )) => {}
+            }
+        }
+        Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::*;
+
+    fn job_with(job_id: &str, max_attempts: u32) -> WorkerJob {
+        let mut job = sample_shutdown_job(job_id).expect("sample job builds");
+        job.max_attempts = max_attempts;
+        job
+    }
+
+    struct FailHandler;
+
+    #[async_trait::async_trait]
+    impl JobHandler for FailHandler {
+        async fn handle(&self, _job: &WorkerJob) -> std::result::Result<(), String> {
+            Err("boom".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_until_idle_completes_all_ready_jobs() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        queue
+            .enqueue(job_with("job-a", 3))
+            .await
+            .expect("enqueue a");
+        queue
+            .enqueue(job_with("job-b", 3))
+            .await
+            .expect("enqueue b");
+
+        let runner = WorkerRunner::new(queue, LoggingAckHandler, ServeConfig::default());
+        let report = runner.run_until_idle().await.expect("run");
+
+        assert_eq!(report.processed, 2);
+        assert_eq!(report.completed, 2);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.dead_lettered, 0);
+    }
+
+    #[tokio::test]
+    async fn failing_handler_dead_letters_after_max_attempts() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        queue.enqueue(job_with("job-x", 1)).await.expect("enqueue");
+
+        let runner = WorkerRunner::new(queue, FailHandler, ServeConfig::default());
+        let report = runner.run_until_idle().await.expect("run");
+
+        assert_eq!(report.processed, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.dead_lettered, 1);
+        assert_eq!(report.completed, 0);
+    }
+
+    #[tokio::test]
+    async fn run_stops_promptly_on_resolved_shutdown() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let runner = WorkerRunner::new(queue, LoggingAckHandler, ServeConfig::default());
+        let report = runner.run(std::future::ready(())).await.expect("run");
+        assert_eq!(report, ServeReport::default());
+    }
 }
 
 #[cfg(test)]

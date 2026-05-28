@@ -10,13 +10,14 @@ default = []
 postgres = ["sqlx/postgres"]
 
 [dependencies]
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 thiserror = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time", "signal"] }
 
 [lints]
 workspace = true
