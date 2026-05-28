@@ -22,7 +22,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-mutants
-      - run: cargo mutants -p tdw-core --features inventory-registration --timeout 120
+      # TEST-POLICY-001: report-only baseline mutation coverage across the
+      # protocol, daemon, MCP, and worker boundaries plus the core domain crate.
+      # No score-floor enforcement yet (per ADR 0014); each run is allowed to
+      # surface survivors without failing the job until a baseline exists.
+      - name: tdw-core mutants
+        run: cargo mutants -p tdw-core --features inventory-registration --timeout 120 --output mutants.out/tdw-core
+        continue-on-error: true
+      - name: tdw-protocol mutants
+        run: cargo mutants -p tdw-protocol --timeout 120 --output mutants.out/tdw-protocol
+        continue-on-error: true
+      - name: tdw-app-client mutants
+        run: cargo mutants -p tdw-app-client --timeout 120 --output mutants.out/tdw-app-client
+        continue-on-error: true
+      - name: tdw-mcp mutants
+        run: cargo mutants -p tdw-mcp --timeout 120 --output mutants.out/tdw-mcp
+        continue-on-error: true
+      - name: tdw-worker mutants
+        run: cargo mutants -p tdw-worker --timeout 120 --output mutants.out/tdw-worker
+        continue-on-error: true
+      - name: Aggregate machine-readable summary
+        run: cargo run -p xtask -- mutation report mutants.out
+      - name: Upload mutation summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-summary
+          path: |
+            mutants.out/mutation-summary.json
+            mutants.out/**/outcomes.json
 
   e2e-full:
     runs-on: ubuntu-latest
