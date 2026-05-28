@@ -20,8 +20,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_bus::EventBus;
-use tdw_config::TdwConfig;
+use tdw_config::{PermissionAction, TdwConfig};
 use tdw_core::{
     BlobEngine, LexicalEngine, OlapEngine, ProviderRegistry, RelationalEngine, Result, VectorEngine,
 };
@@ -35,9 +36,12 @@ use tdw_storage_postgres::PostgresRecordingEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_storage_s3::InMemoryS3BlobEngine;
 
-use crate::{PolicyEnforcementConfig, default_registry};
+use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry};
 
 const DEFAULT_BUS_CAPACITY: usize = 1024;
+const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
+const LOCAL_POLICY_AUDIENCE: &str = "tdw-daemon";
+const LOCAL_POLICY_KID: &str = "local-dev";
 
 /// Composition root for the daemon.
 #[derive(Clone)]
@@ -74,6 +78,7 @@ impl AppState {
         let rollout = JsonlRollout::new(&config.paths.rollout_dir);
 
         let blob: Arc<dyn BlobEngine> = select_blob_engine(&config);
+        let policy = build_policy(&config);
 
         Ok(Self {
             config,
@@ -86,7 +91,7 @@ impl AppState {
             bus: Arc::new(Mutex::new(EventBus::new(DEFAULT_BUS_CAPACITY))),
             outbox: Arc::new(Mutex::new(InMemoryOutbox::default())),
             snapshot: Arc::new(Mutex::new(SnapshotStore::default())),
-            policy: None,
+            policy,
             session,
             rollout,
         })
@@ -158,6 +163,46 @@ fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
     Arc::new(InMemoryS3BlobEngine::default())
 }
 
+/// Build the daemon policy from config.
+///
+/// Local/non-production profiles synthesize a deterministic principal so
+/// offline daemon tests can execute real dispatch paths. Production profiles do
+/// not synthesize credentials; they remain fail-closed until real ingress auth
+/// attaches a policy.
+fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
+    if matches!(config.profile.as_str(), "prod" | "production") {
+        return None;
+    }
+
+    let roles = match config.permissions.default_action {
+        PermissionAction::Allow | PermissionAction::Ask => {
+            vec!["analyst".to_string(), "udf_runner".to_string()]
+        }
+        PermissionAction::Deny => Vec::new(),
+    };
+
+    Some(PolicyEnforcementConfig {
+        auth: IngressAuthContext {
+            claims: JwtClaims {
+                sub: "local:default".to_string(),
+                iss: LOCAL_POLICY_ISSUER.to_string(),
+                aud: LOCAL_POLICY_AUDIENCE.to_string(),
+                kid: LOCAL_POLICY_KID.to_string(),
+                roles,
+            },
+            jwks: vec![JwksKey {
+                kid: LOCAL_POLICY_KID.to_string(),
+                alg: "RS256".to_string(),
+            }],
+            issuer: LOCAL_POLICY_ISSUER.to_string(),
+            audience: LOCAL_POLICY_AUDIENCE.to_string(),
+        },
+        hooks: Vec::new(),
+        hook_execution: Default::default(),
+        mask_rules: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,7 +218,16 @@ mod tests {
                 .registry
                 .contains("fileset", "equity_historical", ProviderKind::Fetcher)
         );
-        assert!(state.policy.is_none());
+        let policy = state.policy.as_ref().expect("local policy");
+        assert_eq!(policy.auth.claims.sub, "local:default");
+        assert!(
+            policy
+                .auth
+                .claims
+                .roles
+                .iter()
+                .any(|role| role == "analyst")
+        );
         assert_eq!(state.config.profile, "default");
 
         let cloned = state.clone();
@@ -184,6 +238,35 @@ mod tests {
     async fn carries_layered_config_profile_into_app_state() {
         let state = AppState::in_memory_for_tests().await;
         assert_eq!(state.config.profile, "default");
+    }
+
+    #[tokio::test]
+    async fn deny_permissions_build_local_fail_closed_policy() {
+        let mut config = TdwConfig::default();
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+        config.permissions.default_action = PermissionAction::Deny;
+
+        let state = AppState::from_config(config)
+            .await
+            .unwrap_or_else(|e| panic!("AppState should build: {e}"));
+
+        let roles = &state.policy.expect("local policy").auth.claims.roles;
+        assert!(roles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn production_profile_does_not_synthesize_local_policy() {
+        let mut config = TdwConfig {
+            profile: "production".to_string(),
+            ..TdwConfig::default()
+        };
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+
+        let state = AppState::from_config(config)
+            .await
+            .unwrap_or_else(|e| panic!("AppState should build: {e}"));
+
+        assert!(state.policy.is_none());
     }
 
     /// With `storage-fs` feature: "default" profile must still use the
@@ -201,8 +284,10 @@ mod tests {
     #[cfg(feature = "storage-fs")]
     #[tokio::test]
     async fn service_profile_selects_fs_blob_engine() {
-        let mut config = TdwConfig::default();
-        config.profile = "service".to_string();
+        let mut config = TdwConfig {
+            profile: "service".to_string(),
+            ..TdwConfig::default()
+        };
         config.session.sqlite_path = "sqlite::memory:".to_string();
         config.paths.data_dir = std::env::temp_dir()
             .join("tdw-blob-test")

@@ -3,7 +3,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, SubmissionHandle, service_channel, serve, spawn_inmemory_relay};
+use tdw_app_server::{
+    CancellationToken, SubmissionHandle, serve, service_channel, spawn_inmemory_relay,
+};
 use tdw_config::{DaemonTransport, TdwConfig};
 use tdw_protocol::EventMsg;
 use tdw_service_api::AppState;
@@ -28,8 +30,7 @@ async fn main() -> Result<(), ServiceError> {
             .map_err(|e| format!("smoke error: {e}"))?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|e| format!("serialize error: {e}"))?
+            serde_json::to_string_pretty(&report).map_err(|e| format!("serialize error: {e}"))?
         );
         let _ = std::fs::remove_dir_all(&root);
         return Ok(());
@@ -47,8 +48,7 @@ async fn main() -> Result<(), ServiceError> {
         "tdw-service: daemon starting (no policy attached; dispatches will return Failed until P7)"
     );
 
-    let (handle, events_rx, service_loop) =
-        service_channel(state.clone(), state.clone());
+    let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
 
     let cancel = CancellationToken::new();
 
@@ -60,8 +60,7 @@ async fn main() -> Result<(), ServiceError> {
     );
 
     let transport_addr = effective_transport_addr(&config);
-    let transport_task =
-        spawn_transport(&config, handle, events_rx, cancel.clone()).await?;
+    let transport_task = spawn_transport(&config, handle, events_rx, cancel.clone()).await?;
 
     println!(
         "tdw-service: daemon up. transport={:?} addr={}. ctrl-c to exit.",
@@ -86,8 +85,8 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
             &contents,
         )
         .map_err(|e| format!("TDW_CONFIG parse error: {e}"))?;
-        let mut config = tdw_config::merge_layers(&[layer])
-            .map_err(|e| format!("config merge error: {e}"))?;
+        let mut config =
+            tdw_config::merge_layers(&[layer]).map_err(|e| format!("config merge error: {e}"))?;
         // Override volatile paths to safe in-memory defaults for daemon boot.
         config.session.sqlite_path = "sqlite::memory:".to_string();
         let rollout = std::env::temp_dir()
@@ -105,7 +104,7 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
         .join("tdw-rollout.jsonl")
         .to_string_lossy()
         .into_owned();
-    // Switch to TCP so the daemon is reachable on all platforms (default is Uds).
+    // Use a fixed local TCP port so the daemon is reachable on all platforms.
     config.daemon.transport = DaemonTransport::Tcp;
     config.daemon.tcp_bind = Some("127.0.0.1:7878".to_string());
     Ok(config)
@@ -160,26 +159,24 @@ async fn spawn_transport(
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .map_err(|e| format!("TCP bind failed ({addr}): {e}"))?;
-            let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
+            let bound = listener
+                .local_addr()
+                .map_err(|e| format!("local_addr: {e}"))?;
             eprintln!("tdw-service: TCP listener bound on {bound}");
             Ok(tokio::spawn(async move {
                 tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await
             }))
         }
 
-        DaemonTransport::Uds => {
-            spawn_uds_or_fallback(config, handle, events_rx, cancel).await
-        }
+        DaemonTransport::Uds => spawn_uds(config, handle, events_rx, cancel).await,
 
-        DaemonTransport::HttpSse => {
-            spawn_http_or_fallback(config, handle, events_rx, cancel).await
-        }
+        DaemonTransport::HttpSse => spawn_http(config, handle, events_rx, cancel).await,
     }
 }
 
 // Feature-gated UDS helper — only compiled on Unix with the transport-uds feature.
 #[cfg(all(unix, feature = "transport-uds"))]
-async fn spawn_uds_or_fallback(
+async fn spawn_uds(
     config: &TdwConfig,
     handle: SubmissionHandle,
     events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
@@ -193,25 +190,20 @@ async fn spawn_uds_or_fallback(
     }))
 }
 
-// Fallback: UDS requested but unavailable (Windows or feature not compiled in).
+// UDS is explicit: fail startup instead of silently binding a different transport.
 #[cfg(not(all(unix, feature = "transport-uds")))]
-async fn spawn_uds_or_fallback(
-    config: &TdwConfig,
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
+async fn spawn_uds(
+    _config: &TdwConfig,
+    _handle: SubmissionHandle,
+    _events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
+    _cancel: CancellationToken,
 ) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    let _ = config;
-    eprintln!(
-        "tdw-service: UDS transport not available on this platform/build; \
-         falling back to TCP loopback 127.0.0.1:7878"
-    );
-    tcp_fallback(handle, events_rx, cancel).await
+    Err("UDS transport requested but this binary was not built for transport-uds on Unix".into())
 }
 
 // Feature-gated HTTP/SSE helper.
 #[cfg(feature = "transport-http")]
-async fn spawn_http_or_fallback(
+async fn spawn_http(
     config: &TdwConfig,
     handle: SubmissionHandle,
     events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
@@ -228,41 +220,64 @@ async fn spawn_http_or_fallback(
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("HTTP bind failed ({addr}): {e}"))?;
-    let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|e| format!("local_addr: {e}"))?;
     eprintln!("tdw-service: HTTP/SSE listener bound on {bound}");
     Ok(tokio::spawn(async move {
         tdw_app_server::serve_http(listener, handle, events_rx, cancel).await
     }))
 }
 
-// Fallback: HTTP transport requested but feature not compiled in.
+// HTTP/SSE is explicit: fail startup instead of silently binding a different transport.
 #[cfg(not(feature = "transport-http"))]
-async fn spawn_http_or_fallback(
-    config: &TdwConfig,
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
+async fn spawn_http(
+    _config: &TdwConfig,
+    _handle: SubmissionHandle,
+    _events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
+    _cancel: CancellationToken,
 ) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    let _ = config;
-    eprintln!(
-        "tdw-service: HTTP/SSE transport requested but feature 'transport-http' \
-         not compiled in; falling back to TCP loopback 127.0.0.1:7878"
-    );
-    tcp_fallback(handle, events_rx, cancel).await
+    Err(
+        "HTTP/SSE transport requested but this binary was not built with feature 'transport-http'"
+            .into(),
+    )
 }
 
-async fn tcp_fallback(
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    let addr: SocketAddr = "127.0.0.1:7878".parse().expect("static addr parses");
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("TCP fallback bind failed ({addr}): {e}"))?;
-    let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
-    eprintln!("tdw-service: TCP fallback listener bound on {bound}");
-    Ok(tokio::spawn(async move {
-        tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await
-    }))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(feature = "transport-http"))]
+    #[tokio::test]
+    async fn http_transport_without_feature_fails_startup() {
+        let state = AppState::in_memory_for_tests().await;
+        let (handle, events_rx, _service_loop) = service_channel(state.clone(), state);
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::HttpSse;
+
+        let result = spawn_transport(&config, handle, events_rx, CancellationToken::new()).await;
+        let error = match result {
+            Ok(_) => panic!("HTTP/SSE should fail when transport-http is not compiled"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("transport-http"));
+    }
+
+    #[cfg(not(all(unix, feature = "transport-uds")))]
+    #[tokio::test]
+    async fn uds_transport_without_feature_fails_startup() {
+        let state = AppState::in_memory_for_tests().await;
+        let (handle, events_rx, _service_loop) = service_channel(state.clone(), state);
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Uds;
+
+        let result = spawn_transport(&config, handle, events_rx, CancellationToken::new()).await;
+        let error = match result {
+            Ok(_) => panic!("UDS should fail when transport-uds is not compiled for Unix"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("transport-uds"));
+    }
 }

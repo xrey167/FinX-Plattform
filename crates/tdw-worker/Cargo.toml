@@ -6,6 +6,9 @@ publish = false
 license = "UNLICENSED"
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 
 [lints]

@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use tdw_udf::{MAX_UDF_INPUT_BYTES, UdfDefinition, UdfError, UdfRuntime, evaluate};
+use tdw_udf::{
+    MAX_UDF_INPUT_BYTES, MAX_UDF_SOURCE_BYTES, UdfDefinition, UdfError, UdfRuntime, evaluate,
+};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, SandboxError>;
@@ -122,16 +124,26 @@ fn run_wasm(request: &UdfRequest) -> Result<UdfResponse> {
 }
 
 pub fn validate_request(request: &UdfRequest) -> Result<()> {
-    if request.name.trim().is_empty() {
+    if !is_udf_name(&request.name) {
         return Err(SandboxError::InvalidRequest("name"));
     }
     if request.source.trim().is_empty() {
+        return Err(SandboxError::InvalidRequest("source"));
+    }
+    if request.source.len() > MAX_UDF_SOURCE_BYTES {
         return Err(SandboxError::InvalidRequest("source"));
     }
     if request.input.len() > MAX_UDF_INPUT_BYTES {
         return Err(SandboxError::InvalidRequest("input"));
     }
     Ok(())
+}
+
+fn is_udf_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
 
 #[cfg(test)]
@@ -184,6 +196,33 @@ mod tests {
         });
 
         assert_eq!(rejected, Err(SandboxError::InvalidRequest("source")));
+    }
+
+    #[test]
+    fn local_sandbox_rejects_bad_name_and_oversized_source_before_dispatch() {
+        let sandbox = LocalUdfSandbox;
+        let bad_name = sandbox.run(UdfRequest {
+            name: "../upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            input: "aapl".to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        });
+        assert_eq!(bad_name, Err(SandboxError::InvalidRequest("name")));
+
+        let oversized_source = sandbox.run(UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "x".repeat(MAX_UDF_SOURCE_BYTES + 1),
+            input: "aapl".to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        });
+        assert_eq!(
+            oversized_source,
+            Err(SandboxError::InvalidRequest("source"))
+        );
     }
 
     /// When compiled with `udf-wasm`, the Wasm runtime routes through

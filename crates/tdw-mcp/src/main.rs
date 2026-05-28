@@ -1,6 +1,10 @@
 #![forbid(unsafe_code)]
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--stdio-json-rpc") {
+        std::process::exit(tdw_mcp::run_stdio_json_rpc());
+    }
+
     match tdw_service_api::mcp_progress_sample("AAPL") {
         Ok(events) => {
             let tools = tdw_service_api::mcp_agent_tools();

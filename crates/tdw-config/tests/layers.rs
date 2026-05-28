@@ -97,7 +97,11 @@ fn nested_keys_merge_without_clobbering_siblings() {
             ConfigLayerKind::ProjectConfig,
             "project",
             json!({
-                "daemon": { "transport": "Uds", "uds_path": "/tmp/tdw.sock" }
+                "daemon": {
+                    "transport": "Uds",
+                    "uds_path": "/tmp/tdw.sock",
+                    "tcp_bind": "127.0.0.1:9000"
+                }
             }),
         ),
         ConfigLayer::new(
@@ -110,6 +114,7 @@ fn nested_keys_merge_without_clobbering_siblings() {
     ];
     let merged = merge_layers(&layers).unwrap_or_else(|e| panic!("merge: {e}"));
     assert_eq!(merged.daemon.uds_path, "/tmp/tdw.sock");
+    assert_eq!(merged.daemon.tcp_bind.as_deref(), Some("127.0.0.1:9000"));
     assert_eq!(merged.daemon.http_bind.as_deref(), Some("127.0.0.1:7777"));
     assert_eq!(merged.daemon.transport, DaemonTransport::Uds);
 }
@@ -118,7 +123,8 @@ fn nested_keys_merge_without_clobbering_siblings() {
 fn default_config_has_stable_invariants() {
     let cfg = TdwConfig::default();
     assert_eq!(cfg.profile, "default");
-    assert_eq!(cfg.daemon.transport, DaemonTransport::Uds);
+    assert_eq!(cfg.daemon.transport, DaemonTransport::Tcp);
+    assert_eq!(cfg.daemon.tcp_bind.as_deref(), Some("127.0.0.1:8787"));
     assert_eq!(cfg.permissions.default_action, PermissionAction::Ask);
     assert!(cfg.permissions.last_match_wins);
     assert_eq!(cfg.protocol.max_event_bytes, 1_048_576);

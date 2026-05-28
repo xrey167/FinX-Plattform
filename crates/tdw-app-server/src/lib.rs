@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::net::SocketAddr;
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tokio::sync::mpsc;
 
@@ -25,11 +26,7 @@ mod transport_http;
 #[cfg(feature = "transport-http")]
 pub use transport_http::serve_http;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DaemonTransport {
-    Uds,
-    HttpSse,
-}
+pub use tdw_config::DaemonTransport;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonEndpoint {
@@ -43,6 +40,7 @@ pub type EndpointResult<T> = std::result::Result<T, EndpointError>;
 pub enum EndpointError {
     EmptyAddress,
     InvalidUdsAddress,
+    InvalidTcpAddress,
     InvalidHttpSseAddress,
 }
 
@@ -51,6 +49,7 @@ impl fmt::Display for EndpointError {
         match self {
             Self::EmptyAddress => write!(formatter, "daemon endpoint address must not be empty"),
             Self::InvalidUdsAddress => write!(formatter, "invalid UDS daemon endpoint address"),
+            Self::InvalidTcpAddress => write!(formatter, "invalid TCP daemon endpoint address"),
             Self::InvalidHttpSseAddress => {
                 write!(formatter, "invalid HTTP/SSE daemon endpoint address")
             }
@@ -73,15 +72,24 @@ pub fn validate_endpoint(endpoint: &DaemonEndpoint) -> EndpointResult<()> {
     }
     if address.chars().any(char::is_control) {
         return Err(match endpoint.transport {
+            DaemonTransport::Tcp => EndpointError::InvalidTcpAddress,
             DaemonTransport::Uds => EndpointError::InvalidUdsAddress,
             DaemonTransport::HttpSse => EndpointError::InvalidHttpSseAddress,
         });
     }
 
     match endpoint.transport {
+        DaemonTransport::Tcp => validate_tcp_address(address),
         DaemonTransport::Uds => validate_uds_address(address),
         DaemonTransport::HttpSse => validate_http_sse_address(address),
     }
+}
+
+fn validate_tcp_address(address: &str) -> EndpointResult<()> {
+    address
+        .parse::<SocketAddr>()
+        .map(|_| ())
+        .map_err(|_| EndpointError::InvalidTcpAddress)
 }
 
 fn validate_uds_address(address: &str) -> EndpointResult<()> {
@@ -312,6 +320,7 @@ pub use tokio_util::sync::CancellationToken;
 /// Returns a human-readable label for the transport variant (useful for logging).
 pub fn transport_label(t: DaemonTransport) -> &'static str {
     match t {
+        DaemonTransport::Tcp => "tcp",
         DaemonTransport::Uds => "uds",
         DaemonTransport::HttpSse => "http-sse",
     }
@@ -440,12 +449,12 @@ mod tests {
     // P3 tests
     // -----------------------------------------------------------------------
 
+    use serde_json::json;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use serde_json::json;
     use tdw_bus::EventBus;
-    use tdw_outbox::InMemoryOutbox;
     use tdw_event::sample_event;
+    use tdw_outbox::InMemoryOutbox;
 
     struct FakeDispatcher;
 
@@ -463,7 +472,9 @@ mod tests {
         async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
             match &env.op {
                 Op::Shutdown => vec![
-                    EventMsg::Started { op_id: env.op_id.clone() },
+                    EventMsg::Started {
+                        op_id: env.op_id.clone(),
+                    },
                     EventMsg::Completed {
                         op_id: env.op_id,
                         summary: None,
@@ -545,7 +556,10 @@ mod tests {
         assert_eq!(entries.len(), 2, "bus should have both events");
 
         let pending = outbox.lock().expect("lock").pending_after(0);
-        assert!(pending.is_empty(), "all outbox records should be dispatched");
+        assert!(
+            pending.is_empty(),
+            "all outbox records should be dispatched"
+        );
     }
 
     #[tokio::test]
@@ -562,9 +576,8 @@ mod tests {
         });
 
         let cancel_for_serve = cancel.clone();
-        let serve_join = tokio::spawn(async move {
-            serve(service_loop, relay, cancel_for_serve).await
-        });
+        let serve_join =
+            tokio::spawn(async move { serve(service_loop, relay, cancel_for_serve).await });
 
         // Give serve a moment then cancel.
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -572,7 +585,10 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(1), serve_join).await;
         assert!(result.is_ok(), "serve should complete within timeout");
-        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
+        assert!(
+            result.expect("join ok").expect("no panic").is_ok(),
+            "serve returns Ok"
+        );
     }
 
     #[tokio::test]
@@ -587,17 +603,24 @@ mod tests {
         });
 
         let cancel_for_serve = cancel.clone();
-        let serve_join = tokio::spawn(async move {
-            serve(service_loop, relay, cancel_for_serve).await
-        });
+        let serve_join =
+            tokio::spawn(async move { serve(service_loop, relay, cancel_for_serve).await });
 
         // Submit a Shutdown op.
-        submission.submit(make_envelope(Op::Shutdown)).expect("submit shutdown");
+        submission
+            .submit(make_envelope(Op::Shutdown))
+            .expect("submit shutdown");
 
         let result = tokio::time::timeout(Duration::from_secs(2), serve_join).await;
         assert!(result.is_ok(), "serve should complete within timeout");
-        assert!(result.expect("join ok").expect("no panic").is_ok(), "serve returns Ok");
-        assert!(cancel.is_cancelled(), "token should be cancelled after shutdown");
+        assert!(
+            result.expect("join ok").expect("no panic").is_ok(),
+            "serve returns Ok"
+        );
+        assert!(
+            cancel.is_cancelled(),
+            "token should be cancelled after shutdown"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -657,7 +680,9 @@ mod tests {
                 let cancel = CancellationToken::new();
                 let cancel_srv = cancel.clone();
                 tokio::spawn(async move {
-                    serve_tcp(listener, handle, evt_rx, cancel_srv).await.expect("serve_tcp");
+                    serve_tcp(listener, handle, evt_rx, cancel_srv)
+                        .await
+                        .expect("serve_tcp");
                 });
 
                 // Connect a client.
@@ -673,11 +698,16 @@ mod tests {
                 assert_eq!(received_env.op_id, env.op_id);
 
                 // Emit an EventMsg via the events channel.
-                let event = EventMsg::Started { op_id: env.op_id.clone() };
+                let event = EventMsg::Started {
+                    op_id: env.op_id.clone(),
+                };
                 evt_tx.send(event.clone()).expect("send event");
 
                 // Read the framed EventMsg back from the server.
-                let frame = read_frame_client(&mut client).await.expect("read frame").expect("frame present");
+                let frame = read_frame_client(&mut client)
+                    .await
+                    .expect("read frame")
+                    .expect("frame present");
                 let decoded: EventMsg = serde_json::from_slice(&frame).expect("deserialize event");
                 assert!(matches!(decoded, EventMsg::Started { .. }));
 
@@ -797,6 +827,20 @@ mod tests {
 
     #[test]
     fn validates_daemon_endpoints() {
+        assert!(
+            validate_endpoint(&DaemonEndpoint {
+                transport: DaemonTransport::Tcp,
+                address: "127.0.0.1:8787".to_string(),
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            validate_endpoint(&DaemonEndpoint {
+                transport: DaemonTransport::Tcp,
+                address: "localhost:not-a-port".to_string(),
+            }),
+            Err(EndpointError::InvalidTcpAddress)
+        );
         assert!(
             validate_endpoint(&DaemonEndpoint {
                 transport: DaemonTransport::Uds,

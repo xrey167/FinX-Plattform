@@ -193,8 +193,7 @@ async fn handle_http_conn(
 
 /// Find the position of `\r\n\r\n` in a byte slice, returning the index of `\r`.
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
 /// Parse `Content-Length: N` from header lines (case-insensitive key).

@@ -3462,6 +3462,8 @@ dependencies = [
 name = "tdw-mcp"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tdw-service-api",
 ]
 
@@ -3998,6 +4000,9 @@ version = "0.1.0"
 name = "tdw-worker"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-protocol",
  "tdw-service-api",
 ]
 

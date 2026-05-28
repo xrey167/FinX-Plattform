@@ -219,9 +219,7 @@ mod tests {
 
         assert_eq!(events.len(), 2);
         match &events[0] {
-            EventMsg::Started {
-                op_id: started_id,
-            } => assert_eq!(started_id, &op_id),
+            EventMsg::Started { op_id: started_id } => assert_eq!(started_id, &op_id),
             other => panic!("expected Started, got {other:?}"),
         }
         match &events[1] {
@@ -242,7 +240,8 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_without_policy_fails_deny_by_default() {
-        let state = AppState::in_memory_for_tests().await;
+        let mut state = AppState::in_memory_for_tests().await;
+        state.policy = None;
         let env = make_envelope(Op::RunQuery {
             sql: "select 1".to_string(),
             plan_id: None,
@@ -265,12 +264,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_query_uses_policy_built_from_config() {
+        let state = AppState::in_memory_for_tests().await;
+        let env = make_envelope(Op::RunQuery {
+            sql: "select 1".to_string(),
+            plan_id: None,
+            cost_hint: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["evidence"]["principal"], "local:default");
+                assert_eq!(value["evidence"]["endpoint"], "tdw.query.run");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn run_query_with_wrong_role_is_denied_by_authorize() {
         let mut policy = analyst_policy();
         policy.auth.claims.roles = vec!["guest".to_string()];
-        let state = AppState::in_memory_for_tests()
-            .await
-            .with_policy(policy);
+        let state = AppState::in_memory_for_tests().await.with_policy(policy);
         let env = make_envelope(Op::RunQuery {
             sql: "select 1".to_string(),
             plan_id: None,

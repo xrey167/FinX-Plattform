@@ -204,6 +204,18 @@ mod tests {
     }
 
     #[test]
+    fn runtime_rejects_oversized_module_before_dispatch() {
+        let rt = WasmUdfRuntime::new();
+        let mut oversized = vec![0x00, 0x61, 0x73, 0x6d];
+        oversized.resize(MAX_WASM_MODULE_BYTES + 1, 0x00);
+
+        assert_eq!(
+            rt.execute(&oversized, "upper", "x"),
+            Err(WasmUdfError::ModuleTooLarge)
+        );
+    }
+
+    #[test]
     fn runtime_rejects_unknown_export() {
         let rt = WasmUdfRuntime::new();
         let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
