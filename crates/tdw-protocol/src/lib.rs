@@ -24,14 +24,19 @@ pub enum ProtocolError {
 pub struct SessionId(String);
 
 impl SessionId {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         non_empty(value.into(), "session_id").map(Self)
     }
 
+    #[must_use]
     pub fn generated() -> Self {
         Self(format!("session-{}", Ulid::new()))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -44,10 +49,12 @@ impl SessionId {
 pub struct OpId(String);
 
 impl OpId {
+    #[must_use]
     pub fn generated() -> Self {
         Self(Uuid::now_v7().to_string())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -60,6 +67,9 @@ impl OpId {
 pub struct PlanId(String);
 
 impl PlanId {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         non_empty(value.into(), "plan_id").map(Self)
     }
@@ -72,10 +82,14 @@ impl PlanId {
 pub struct PermissionId(String);
 
 impl PermissionId {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         non_empty(value.into(), "permission_id").map(Self)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -88,10 +102,14 @@ impl PermissionId {
 pub struct ToolCallId(String);
 
 impl ToolCallId {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(value: impl Into<String>) -> Result<Self> {
         non_empty(value.into(), "tool_call_id").map(Self)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -113,7 +131,7 @@ pub struct ActorRef {
     pub tenant_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct OpEnvelope {
     pub op_id: OpId,
     pub session_id: SessionId,
@@ -123,6 +141,7 @@ pub struct OpEnvelope {
 }
 
 impl OpEnvelope {
+    #[must_use]
     pub fn new(session_id: SessionId, sequence: u64, submitted_by: ActorRef, op: Op) -> Self {
         Self {
             op_id: OpId::generated(),
@@ -154,7 +173,7 @@ pub enum ApprovalDecision {
     Deny,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Op {
     AppendUserMessage {
@@ -258,6 +277,7 @@ pub struct ReplayFrame {
     pub event: EventMsg,
 }
 
+#[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
         ("op", schema_json::<Op>()),

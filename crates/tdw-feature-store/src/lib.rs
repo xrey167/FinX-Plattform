@@ -44,6 +44,9 @@ impl FeatureStore {
         snapshot
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_materialize(
         &mut self,
         entity_id: &str,
@@ -55,6 +58,7 @@ impl FeatureStore {
         Ok(self.materialize(entity_id, as_of, features, tags))
     }
 
+    #[must_use]
     pub fn latest(&self, entity_id: &str) -> Option<&FeatureSnapshot> {
         self.snapshots
             .iter()
@@ -63,6 +67,9 @@ impl FeatureStore {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_feature_request(
     entity_id: &str,
     as_of: &str,

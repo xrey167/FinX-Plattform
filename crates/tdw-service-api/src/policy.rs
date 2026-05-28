@@ -21,7 +21,7 @@ pub enum ServiceEndpoint {
 }
 
 impl ServiceEndpoint {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::EquityHistorical => "equity_historical",
             Self::RunQuery => "tdw.query.run",
@@ -31,14 +31,14 @@ impl ServiceEndpoint {
         }
     }
 
-    fn required_role(self) -> &'static str {
+    const fn required_role(self) -> &'static str {
         match self {
             Self::EquityHistorical | Self::RunQuery | Self::IngestBatch => "analyst",
             Self::ToolCall | Self::UdfRun => "udf_runner",
         }
     }
 
-    fn policy_table(self) -> &'static str {
+    const fn policy_table(self) -> &'static str {
         match self {
             Self::EquityHistorical => "market.equity_historical",
             Self::RunQuery => "analytics.query_run",
@@ -57,7 +57,7 @@ pub struct IngressAuthContext {
     pub audience: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyEnforcementConfig {
     pub auth: IngressAuthContext,
     pub hooks: Vec<HookSpec>,
@@ -78,18 +78,21 @@ pub struct SecureServiceRuntime<B: HookHandlerBackend> {
 }
 
 impl<B: HookHandlerBackend> SecureServiceRuntime<B> {
-    pub fn new(config: PolicyEnforcementConfig, hook_backend: B) -> Self {
+    pub const fn new(config: PolicyEnforcementConfig, hook_backend: B) -> Self {
         Self {
             config,
             hook_backend,
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn udf_run(&mut self, request: UdfRequest) -> Result<Value> {
         secure_udf_run_with_backend(&self.config, request, &mut self.hook_backend)
     }
 
-    pub fn hook_backend(&self) -> &B {
+    pub const fn hook_backend(&self) -> &B {
         &self.hook_backend
     }
 }
@@ -120,6 +123,9 @@ where
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_endpoint_response(
     config: &PolicyEnforcementConfig,
     provider: &str,
@@ -129,6 +135,9 @@ pub fn secure_endpoint_response(
     secure_endpoint_response_with_backend(config, provider, symbol, &mut backend)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_endpoint_response_with_backend(
     config: &PolicyEnforcementConfig,
     provider: &str,
@@ -138,6 +147,9 @@ pub fn secure_endpoint_response_with_backend(
     secure_endpoint_by_name_with_backend(config, "equity_historical", provider, symbol, backend)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_endpoint_by_name(
     config: &PolicyEnforcementConfig,
     endpoint: &str,
@@ -148,6 +160,9 @@ pub fn secure_endpoint_by_name(
     secure_endpoint_by_name_with_backend(config, endpoint, provider, symbol, &mut backend)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_endpoint_by_name_with_backend(
     config: &PolicyEnforcementConfig,
     endpoint: &str,
@@ -169,11 +184,17 @@ pub fn secure_endpoint_by_name_with_backend(
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_udf_run(config: &PolicyEnforcementConfig, request: UdfRequest) -> Result<Value> {
     let mut backend = tdw_hooks::SystemHookHandlerBackend::default();
     secure_udf_run_with_backend(config, request, &mut backend)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn secure_udf_run_with_backend(
     config: &PolicyEnforcementConfig,
     request: UdfRequest,
@@ -190,6 +211,9 @@ pub fn secure_udf_run_with_backend(
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn enforce_request_path_with_backend(
     config: &PolicyEnforcementConfig,
     endpoint: ServiceEndpoint,
@@ -248,6 +272,7 @@ pub fn enforce_request_path_with_backend(
     })
 }
 
+#[must_use]
 pub fn mask_json_response(mut value: Value, rules: &[MaskRule]) -> Value {
     for rule in rules {
         mask_json_value(&mut value, rule);

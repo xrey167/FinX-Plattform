@@ -31,6 +31,10 @@ impl S3Engine {
     /// Construct from the ambient AWS environment (env vars, shared
     /// config files, instance profile, etc.) — same resolution chain
     /// the AWS CLI uses.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn from_env(bucket: impl Into<String>) -> Result<Self> {
         let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
         Ok(Self {
@@ -79,6 +83,7 @@ impl S3Engine {
     }
 
     /// Expose the bucket name this engine writes to.
+    #[must_use]
     pub fn bucket(&self) -> &str {
         &self.bucket
     }

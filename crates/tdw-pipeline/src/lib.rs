@@ -35,6 +35,7 @@ pub enum PipelineValidationError {
     },
 }
 
+#[must_use]
 pub fn market_data_dbt_jobs() -> Vec<PipelineJob> {
     vec![
         PipelineJob {
@@ -64,6 +65,9 @@ pub fn market_data_dbt_jobs() -> Vec<PipelineJob> {
     ]
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_jobs(jobs: &[PipelineJob]) -> Result<()> {
     if jobs.is_empty() {
         return Err(PipelineValidationError::EmptyPipeline);
@@ -102,6 +106,7 @@ pub fn validate_jobs(jobs: &[PipelineJob]) -> Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn can_enqueue(job: &PipelineJob, completed_jobs: &[&str]) -> bool {
     job.depends_on
         .iter()

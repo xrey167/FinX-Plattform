@@ -46,6 +46,9 @@ pub struct AlpacaStockBarsQuery {
 }
 
 impl AlpacaStockBarsQuery {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(symbol: &str, start: &str, end: &str) -> Result<Self> {
         Ok(Self {
             symbol: normalize_symbol(symbol)?,
@@ -57,11 +60,17 @@ impl AlpacaStockBarsQuery {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn with_timeframe(mut self, timeframe: &str) -> Result<Self> {
         self.timeframe = normalize_token(timeframe)?;
         Ok(self)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn with_limit(mut self, limit: u32) -> Result<Self> {
         if limit == 0 {
             return Err(AlpacaProviderError::InvalidLimit);
@@ -70,6 +79,9 @@ impl AlpacaStockBarsQuery {
         Ok(self)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn with_feed(mut self, feed: Option<&str>) -> Result<Self> {
         self.feed = feed.map(normalize_token).transpose()?;
         Ok(self)
@@ -94,7 +106,8 @@ pub enum AlpacaProviderError {
     MissingApiSecret,
 }
 
-pub fn endpoints() -> &'static [ProviderEndpoint] {
+#[must_use]
+pub const fn endpoints() -> &'static [ProviderEndpoint] {
     const ENDPOINTS: &[ProviderEndpoint] = &[ProviderEndpoint {
         provider: PROVIDER_ID,
         name: "stock_bars",
@@ -105,6 +118,9 @@ pub fn endpoints() -> &'static [ProviderEndpoint] {
     ENDPOINTS
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn stock_bars_request(symbol: &str, api_key_present: bool) -> Result<ProviderRequest> {
     if !api_key_present {
         return Err(AlpacaProviderError::MissingApiKey);

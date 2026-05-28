@@ -23,7 +23,7 @@ pub enum ToolError {
     PermissionDenied(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
@@ -46,6 +46,9 @@ impl RegisteredTool {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn call(&self, input: Value) -> Result<Value> {
         (self.handler)(input)
     }
@@ -57,6 +60,9 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn register(&mut self, tool: RegisteredTool) -> Result<()> {
         validate_tool_definition(&tool.definition)?;
         if self.tools.contains_key(&tool.definition.name) {
@@ -66,10 +72,12 @@ impl ToolRegistry {
         Ok(())
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&RegisteredTool> {
         self.tools.get(name)
     }
 
+    #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .values()
@@ -78,6 +86,9 @@ impl ToolRegistry {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_tool_definition(definition: &ToolDefinition) -> Result<()> {
     if !is_tool_name(&definition.name) {
         return Err(ToolError::InvalidDefinition("name"));
@@ -97,10 +108,14 @@ pub struct ToolRouter {
 }
 
 impl ToolRouter {
-    pub fn new(registry: ToolRegistry) -> Self {
+    #[must_use]
+    pub const fn new(registry: ToolRegistry) -> Self {
         Self { registry }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn route(&self, tool_name: &str) -> Result<&RegisteredTool> {
         self.registry
             .get(tool_name)
@@ -115,13 +130,17 @@ pub struct ToolOrchestrator {
 }
 
 impl ToolOrchestrator {
-    pub fn new(registry: ToolRegistry, permissions: PermissionRules) -> Self {
+    #[must_use]
+    pub const fn new(registry: ToolRegistry, permissions: PermissionRules) -> Self {
         Self {
             router: ToolRouter::new(registry),
             permissions,
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn run(
         &self,
         call_id: ToolCallId,
@@ -162,7 +181,7 @@ impl ToolOrchestrator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrchestratorRunResult {
     pub call_id: ToolCallId,
     pub tool_name: String,
@@ -193,13 +212,13 @@ fn is_tool_name(value: &str) -> bool {
 
 fn is_permission_pattern(value: &str) -> bool {
     value == "*"
-        || value
-            .strip_suffix('*')
-            .map(|prefix| prefix.ends_with('.') && is_tool_name(prefix.trim_end_matches('.')))
-            .unwrap_or_else(|| is_tool_name(value))
+        || value.strip_suffix('*').map_or_else(
+            || is_tool_name(value),
+            |prefix| prefix.ends_with('.') && is_tool_name(prefix.trim_end_matches('.')),
+        )
 }
 
-fn is_name_character(character: char) -> bool {
+const fn is_name_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
 }
 

@@ -34,10 +34,14 @@ impl JsonlRollout {
         Self { path: path.into() }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn append(&self, record: &RolloutRecord) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -54,6 +58,9 @@ impl JsonlRollout {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn read_all(&self) -> Result<Vec<RolloutRecord>> {
         let file = OpenOptions::new().read(true).open(&self.path)?;
         file.lock_shared()?;

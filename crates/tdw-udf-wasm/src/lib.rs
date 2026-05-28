@@ -57,6 +57,10 @@ impl std::fmt::Display for WasmUdfError {
 }
 
 /// Validate a module descriptor before execution.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_module(module: &WasmUdfModule) -> Result<(), WasmUdfError> {
     if module.module_name.trim().is_empty() {
         return Err(WasmUdfError::EmptyModuleName);
@@ -92,7 +96,8 @@ fn is_export_name(value: &str) -> bool {
 pub struct WasmUdfRuntime;
 
 impl WasmUdfRuntime {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 
@@ -101,6 +106,10 @@ impl WasmUdfRuntime {
     /// Currently implemented as a deterministic fixture interpreter (see module
     /// doc). The public signature is stable — a real wasmi backend replaces the
     /// body of `fixture_dispatch` without changing callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn execute(
         &self,
         wasm_bytes: &[u8],

@@ -37,6 +37,9 @@ pub struct RuleEngine {
 }
 
 impl RuleEngine {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn hot_reload(&mut self, rules: Vec<TagRule>) -> Result<(), RuleError> {
         for rule in &rules {
             validate_rule(rule)?;
@@ -46,6 +49,9 @@ impl RuleEngine {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn apply(
         &self,
         entity_id: &str,
@@ -76,7 +82,8 @@ impl RuleEngine {
         Ok(assignments)
     }
 
-    pub fn version(&self) -> u64 {
+    #[must_use]
+    pub const fn version(&self) -> u64 {
         self.version
     }
 }

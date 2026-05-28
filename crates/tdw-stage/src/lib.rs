@@ -36,6 +36,9 @@ pub enum StagePlanError {
 }
 
 impl CopyIntoPlan {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(
         stage: StageLocation,
         target_table: impl Into<String>,
@@ -51,6 +54,9 @@ impl CopyIntoPlan {
         Ok(plan)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn validate(&self) -> Result<()> {
         if self.stage.name.trim().is_empty() {
             return Err(StagePlanError::EmptyStageName);

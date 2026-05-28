@@ -17,6 +17,7 @@ impl<T: DataModel> Default for StorageRouter<T> {
 }
 
 impl<T: DataModel> StorageRouter<T> {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -25,6 +26,7 @@ impl<T: DataModel> StorageRouter<T> {
         self.sinks.push(sink);
     }
 
+    #[must_use]
     pub fn sink_count(&self) -> usize {
         self.sinks.len()
     }
@@ -76,13 +78,17 @@ pub struct RecordingSink {
 }
 
 impl RecordingSink {
-    pub fn new(name: &'static str) -> Self {
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
         Self {
             name,
             writes: Mutex::new(0),
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn writes(&self) -> Result<usize> {
         self.writes
             .lock()

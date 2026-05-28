@@ -20,7 +20,8 @@ pub struct EquityTickQuery {
 pub struct MockEquityStreamer;
 
 impl MockEquityStreamer {
-    pub fn registry_entry() -> RegistryEntry {
+    #[must_use]
+    pub const fn registry_entry() -> RegistryEntry {
         RegistryEntry::streamer(Self::PROVIDER, Self::ENDPOINT)
     }
 }

@@ -61,6 +61,9 @@ pub struct ChatResponse {
 
 pub trait LanguageModel: Send + Sync {
     fn model_id(&self) -> &str;
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse>;
 }
 
@@ -72,6 +75,7 @@ pub struct ModelSelection {
 }
 
 impl ModelSelection {
+    #[must_use]
     pub fn from_config(config: &TdwConfig) -> Self {
         Self {
             provider: config.model.provider.clone(),
@@ -81,6 +85,9 @@ impl ModelSelection {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn last_user_message(request: &ChatRequest) -> Result<&str> {
     validate_chat_request(request)?;
     request
@@ -92,6 +99,9 @@ pub fn last_user_message(request: &ChatRequest) -> Result<&str> {
         .ok_or(LlmError::EmptyMessages)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_chat_request(request: &ChatRequest) -> Result<()> {
     if request.messages.is_empty() {
         return Err(LlmError::EmptyMessages);
@@ -109,6 +119,9 @@ pub fn validate_chat_request(request: &ChatRequest) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_model_id(model_id: &str) -> Result<()> {
     let model_id = model_id.trim();
     if model_id.is_empty() {
@@ -120,6 +133,9 @@ pub fn validate_model_id(model_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_base_url(base_url: &str) -> Result<()> {
     if base_url
         .chars()

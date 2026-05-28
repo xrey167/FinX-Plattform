@@ -24,10 +24,14 @@ pub enum ResolveError {
     InvalidMergeEndpoint,
 }
 
+#[must_use]
 pub fn resolve_symbol(symbol: &str, entities: &[Entity]) -> Vec<ResolveCandidate> {
     try_resolve_symbol(symbol, entities).unwrap_or_default()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn try_resolve_symbol(
     symbol: &str,
     entities: &[Entity],
@@ -54,6 +58,7 @@ pub fn try_resolve_symbol(
         .collect())
 }
 
+#[must_use]
 pub fn manual_merge_decision(source: &str, target: &str, approved: bool) -> MergeDecision {
     MergeDecision {
         source: source.to_string(),
@@ -63,6 +68,9 @@ pub fn manual_merge_decision(source: &str, target: &str, approved: bool) -> Merg
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn try_manual_merge_decision(
     source: &str,
     target: &str,

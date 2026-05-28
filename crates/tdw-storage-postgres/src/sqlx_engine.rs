@@ -27,6 +27,10 @@ pub struct PgEngine {
 impl PgEngine {
     /// Open a connection pool against `database_url` (e.g.
     /// `postgres://user:pass@localhost:5432/db`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(8)
@@ -38,12 +42,14 @@ impl PgEngine {
 
     /// Adopt a caller-built pool (useful for testcontainers or shared
     /// pools).
-    pub fn with_pool(pool: PgPool) -> Self {
+    #[must_use]
+    pub const fn with_pool(pool: PgPool) -> Self {
         Self { pool }
     }
 
     /// Expose the underlying pool for code that needs sqlx APIs directly.
-    pub fn pool(&self) -> &PgPool {
+    #[must_use]
+    pub const fn pool(&self) -> &PgPool {
         &self.pool
     }
 }

@@ -38,6 +38,9 @@ pub enum OpenAiEmbeddingAdapterError {
     NonFiniteVector,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn build_embedding_request(
     model: &str,
     input: &str,
@@ -60,6 +63,9 @@ pub fn build_embedding_request(
     })
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn decode_embedding(model: &str, vector: Vec<f32>) -> Result<Embedding> {
     let model = normalize_component(model, OpenAiEmbeddingAdapterError::EmptyModel)?;
     if vector.is_empty() {

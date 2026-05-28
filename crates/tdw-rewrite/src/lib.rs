@@ -22,6 +22,9 @@ pub enum RewriteError {
     UnsafePattern,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn apply_rewrites(input: &str, plan: &RewritePlan) -> Result<String, RewriteError> {
     validate_plan(plan)?;
     let mut output = input.to_string();
@@ -31,6 +34,9 @@ pub fn apply_rewrites(input: &str, plan: &RewritePlan) -> Result<String, Rewrite
     Ok(output)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_plan(plan: &RewritePlan) -> Result<(), RewriteError> {
     for rule in &plan.rules {
         if !is_identifier(&rule.rule_id) {

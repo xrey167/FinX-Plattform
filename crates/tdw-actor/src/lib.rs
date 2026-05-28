@@ -11,7 +11,8 @@ pub struct ActorContext {
 }
 
 impl ActorContext {
-    pub fn new(actor: Actor, origin: Origin, trace: TraceContext) -> Self {
+    #[must_use]
+    pub const fn new(actor: Actor, origin: Origin, trace: TraceContext) -> Self {
         Self {
             actor,
             origin,

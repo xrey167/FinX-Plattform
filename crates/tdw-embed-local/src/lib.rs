@@ -18,6 +18,9 @@ impl Default for HashEmbeddingProvider {
 }
 
 impl HashEmbeddingProvider {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(model_id: impl Into<String>, dimensions: usize) -> Result<Self> {
         let model_id = model_id.into();
         if model_id.trim().is_empty() {

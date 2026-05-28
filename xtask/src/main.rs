@@ -146,7 +146,7 @@ struct QualityGate {
     required_for_phase_exit: bool,
 }
 
-fn quality_gates() -> &'static [QualityGate] {
+const fn quality_gates() -> &'static [QualityGate] {
     &[
         QualityGate {
             id: "fmt",

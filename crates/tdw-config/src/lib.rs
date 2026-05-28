@@ -36,6 +36,7 @@ pub enum ConfigLayerKind {
 }
 
 impl ConfigLayerKind {
+    #[must_use]
     pub const fn precedence(self) -> u8 {
         match self {
             Self::UserDefaults => 10,
@@ -55,7 +56,7 @@ pub struct ConfigLayerDescriptor {
     pub precedence: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigLayer {
     pub kind: ConfigLayerKind,
     pub name: String,
@@ -71,6 +72,9 @@ impl ConfigLayer {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn from_toml(kind: ConfigLayerKind, name: impl Into<String>, input: &str) -> Result<Self> {
         let name = name.into();
         let parsed = toml::from_str::<toml::Value>(input).map_err(|source| ConfigError::Toml {
@@ -203,6 +207,7 @@ impl Default for TdwConfig {
     }
 }
 
+#[must_use]
 pub fn default_layer_order() -> Vec<ConfigLayerDescriptor> {
     [
         (ConfigLayerKind::UserDefaults, "~/.tdw/config.toml"),
@@ -227,6 +232,9 @@ pub fn default_layer_order() -> Vec<ConfigLayerDescriptor> {
     .collect()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn merge_layers(layers: &[ConfigLayer]) -> Result<TdwConfig> {
     let mut ordered = layers.to_vec();
     ordered.sort_by_key(|layer| layer.kind.precedence());
@@ -246,10 +254,12 @@ pub fn merge_layers(layers: &[ConfigLayer]) -> Result<TdwConfig> {
     })
 }
 
+#[must_use]
 pub fn config_schema() -> Value {
     schema_json::<TdwConfig>()
 }
 
+#[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
         ("tdw_config", config_schema()),

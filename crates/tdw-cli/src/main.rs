@@ -20,8 +20,7 @@ async fn main() -> Result<(), CliError> {
             .iter()
             .position(|a| a == "--smoke")
             .and_then(|i| args.get(i + 1))
-            .map(|s| s.as_str())
-            .unwrap_or("AAPL");
+            .map_or("AAPL", |s| s.as_str());
         let root = allocate_storage_root("tdw-cli-smoke");
         let report = run_end_to_end_smoke(symbol, root.clone())
             .await
@@ -80,6 +79,10 @@ async fn main() -> Result<(), CliError> {
 
 /// Connect to `addr`, submit `op` as a length-delimited JSON frame, then read
 /// `EventMsg` frames until the connection closes or a 5-second timeout elapses.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, CliError> {
     let mut stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
         .await

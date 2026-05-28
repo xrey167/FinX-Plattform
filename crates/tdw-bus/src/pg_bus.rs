@@ -39,6 +39,7 @@ pub struct PgEventBus {
 impl PgEventBus {
     /// Build a bus against the supplied [`PgEngine`]. Uses
     /// `tdw_bus` as the default table name.
+    #[must_use]
     pub fn new(engine: PgEngine) -> Self {
         Self {
             engine,
@@ -53,6 +54,10 @@ impl PgEventBus {
     }
 
     /// Idempotently create the bus table.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_schema(&self) -> Result<()> {
         let sql = format!(
             "CREATE TABLE IF NOT EXISTS {} (\
@@ -67,6 +72,10 @@ impl PgEventBus {
     }
 
     /// Publish an envelope. Returns the assigned sequence (BIGSERIAL).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn publish(&self, envelope: EventEnvelope<Value>) -> Result<u64> {
         let envelope_text = serde_json::to_string(&envelope)
             .map_err(|error| Error::Storage(format!("bus encode envelope: {error}")))?;
@@ -88,6 +97,10 @@ impl PgEventBus {
     }
 
     /// Read all bus entries with sequence >= `sequence`, ordered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn read_from(&self, sequence: u64) -> Result<Vec<BusEntry>> {
         let sql = format!(
             "SELECT sequence, envelope_json::text AS envelope_text \
@@ -120,6 +133,10 @@ impl PgEventBus {
 
     /// Return the current retention window (min..max sequence).
     /// Returns `None` if the bus is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn retention_window(&self) -> Result<Option<RetentionWindow>> {
         let sql = format!(
             "SELECT MIN(sequence) AS oldest, MAX(sequence) AS newest FROM {}",

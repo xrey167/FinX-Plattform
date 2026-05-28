@@ -7,7 +7,7 @@
 
 use tdw_spatial::{BoundingBox, Point, manhattan_distance};
 
-fn nyc_box() -> BoundingBox {
+const fn nyc_box() -> BoundingBox {
     BoundingBox {
         min: Point {
             lat: 40.0,

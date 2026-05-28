@@ -12,6 +12,9 @@ pub struct PipeDefinition {
 }
 
 impl PipeDefinition {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn copy_plan(&self, files: Vec<String>) -> StageResult<CopyIntoPlan> {
         CopyIntoPlan::new(self.stage.clone(), self.target_table.clone(), files)
     }

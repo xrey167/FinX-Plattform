@@ -47,6 +47,7 @@ pub enum MigrationCatalogError {
     },
 }
 
+#[must_use]
 pub fn postgres_migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -102,6 +103,7 @@ pub fn postgres_migrations() -> Vec<Migration> {
     ]
 }
 
+#[must_use]
 pub fn clickhouse_migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -119,6 +121,7 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
     ]
 }
 
+#[must_use]
 pub fn all_migrations() -> Vec<Migration> {
     postgres_migrations()
         .into_iter()
@@ -126,6 +129,9 @@ pub fn all_migrations() -> Vec<Migration> {
         .collect()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_migration_catalog(migrations: &[Migration]) -> Result<()> {
     let mut versions = BTreeSet::new();
     for migration in migrations {
@@ -163,6 +169,7 @@ pub fn validate_migration_catalog(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn migration_status() -> String {
     format!(
         "postgres={} clickhouse={}",

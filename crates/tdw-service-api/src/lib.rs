@@ -88,7 +88,7 @@ use tdw_tui::event_lines;
 use tdw_udf::{UdfDefinition, UdfRuntime, evaluate};
 use tdw_workflow_engine::WorkflowEngine;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSummary {
     pub provider: String,
     pub endpoint: String,
@@ -104,6 +104,9 @@ pub struct ResearchIndexEvidence {
     pub blob_bytes: usize,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
@@ -112,6 +115,9 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     Ok(registry)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn list_providers() -> Result<Vec<ProviderSummary>> {
     Ok(default_registry()?
         .entries()
@@ -124,6 +130,9 @@ pub fn list_providers() -> Result<Vec<ProviderSummary>> {
         .collect())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn fetch_equity_historical(
     provider: &str,
     symbol: &str,
@@ -138,6 +147,9 @@ pub fn fetch_equity_historical(
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn mcp_progress_sample(symbol: &str) -> Result<Vec<String>> {
     let runner = CommandRunner::new(default_registry()?);
     let mut stream = block_on(
@@ -161,6 +173,9 @@ pub fn mcp_progress_sample(symbol: &str) -> Result<Vec<String>> {
     Ok(events)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn protocol_config_sample() -> Result<Value> {
     let config = merge_layers(&[
         ConfigLayer::from_toml(
@@ -215,6 +230,9 @@ model = "unset"
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> {
     let embedder = HashEmbeddingProvider::default();
     let embedding = embedder
@@ -275,6 +293,9 @@ pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> 
     })
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn endpoint_response(provider: &str, symbol: &str) -> Result<Value> {
     let object = fetch_equity_historical(provider, symbol)?;
     Ok(json!({
@@ -284,6 +305,7 @@ pub fn endpoint_response(provider: &str, symbol: &str) -> Result<Value> {
     }))
 }
 
+#[must_use]
 pub fn agent_schema_names() -> Vec<String> {
     schema_bundle()
         .keys()
@@ -291,6 +313,7 @@ pub fn agent_schema_names() -> Vec<String> {
         .collect()
 }
 
+#[must_use]
 pub fn mcp_agent_tools() -> Vec<String> {
     vec![
         "agent.card.get".to_string(),
@@ -302,6 +325,7 @@ pub fn mcp_agent_tools() -> Vec<String> {
     ]
 }
 
+#[must_use]
 pub fn mcp_extensibility_tools() -> Vec<String> {
     vec![
         "tdw.query.plan".to_string(),
@@ -313,6 +337,9 @@ pub fn mcp_extensibility_tools() -> Vec<String> {
     ]
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn extensibility_sample() -> Result<Value> {
     let mut registry = ToolRegistry::default();
     registry
@@ -360,6 +387,9 @@ pub fn extensibility_sample() -> Result<Value> {
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn agent_tool_sample() -> Result<Value> {
     let mut store = AgentStore::new();
     let card = sample_agent_card();
@@ -418,6 +448,7 @@ pub fn agent_tool_sample() -> Result<Value> {
     }))
 }
 
+#[must_use]
 pub fn event_schema_names() -> Vec<String> {
     event_schema_bundle()
         .keys()
@@ -425,6 +456,9 @@ pub fn event_schema_names() -> Vec<String> {
         .collect()
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn event_spine_sample(entrypoint: &str) -> Result<Value> {
     let context = ActorContext::service(entrypoint);
     let task = OmcSpawn::capture(&context, "ingress");
@@ -480,6 +514,9 @@ pub fn event_spine_sample(entrypoint: &str) -> Result<Value> {
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn parity_layer_sample() -> Result<Value> {
     let mut snapshots = SnapshotStore::default();
     snapshots.commit(
@@ -526,7 +563,7 @@ pub fn parity_layer_sample() -> Result<Value> {
     };
     let mut pipe = PipeDefinition {
         name: "market-pipe".to_string(),
-        stage: stage.clone(),
+        stage,
         target_table: "raw.market_data_bar".to_string(),
         last_offset: 0,
     };
@@ -604,7 +641,7 @@ pub fn parity_layer_sample() -> Result<Value> {
             "tdw"
         ),
         "authorized": authorize(
-            &Principal { subject: "alice".to_string(), roles: claims.roles.clone() },
+            &Principal { subject: "alice".to_string(), roles: claims.roles },
             &auth_policy
         ),
         "define_hook": define.compile_hook().name,
@@ -614,6 +651,7 @@ pub fn parity_layer_sample() -> Result<Value> {
     }))
 }
 
+#[must_use]
 pub fn mcp_tag_tools() -> Vec<String> {
     vec![
         "kg.entity.get".to_string(),
@@ -625,6 +663,9 @@ pub fn mcp_tag_tools() -> Vec<String> {
     ]
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn kg_tag_sample() -> Result<Value> {
     let instrument = Entity {
         entity_id: "instrument:AAPL".to_string(),
@@ -643,7 +684,7 @@ pub fn kg_tag_sample() -> Result<Value> {
     kg.upsert_entity(dataset.clone());
     kg.add_relationship(Relationship {
         from: instrument.entity_id.clone(),
-        to: dataset.entity_id.clone(),
+        to: dataset.entity_id,
         rel_type: "has_prices".to_string(),
         provenance: "dbt:bronze_ohlcv".to_string(),
     });
@@ -697,7 +738,7 @@ pub fn kg_tag_sample() -> Result<Value> {
     let mut live_bus = EventBus::new(8);
     let live_event = tdw_event::sample_event("tag-live").child_event(
         "tag.assignment.changed",
-        json!({ "entity_id": instrument.entity_id.clone(), "tags": feature_snapshot.tags.clone() }),
+        json!({ "entity_id": instrument.entity_id.clone(), "tags": feature_snapshot.tags }),
     );
     let live_offset = live_bus.publish(live_event);
 
@@ -720,6 +761,9 @@ pub fn kg_tag_sample() -> Result<Value> {
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn llm_knowledge_sample() -> Result<Value> {
     let anthropic = AnthropicMessagesModel::new("claude-fixture")
         .map_err(|error| Error::Provider(error.to_string()))?;
@@ -765,6 +809,9 @@ pub fn llm_knowledge_sample() -> Result<Value> {
     }))
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn client_event_sample() -> Result<Value> {
     let session_id = SessionId::new("session-client-sample")
         .map_err(|error| Error::Provider(error.to_string()))?;

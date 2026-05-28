@@ -24,6 +24,9 @@ pub enum StringFnError {
     UnsafePattern,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn apply_pipeline(input: &str, pipeline: &StringPipeline) -> Result<String, StringFnError> {
     validate_pipeline(pipeline)?;
     let mut value = input.to_string();
@@ -38,6 +41,9 @@ pub fn apply_pipeline(input: &str, pipeline: &StringPipeline) -> Result<String, 
     Ok(value)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_pipeline(pipeline: &StringPipeline) -> Result<(), StringFnError> {
     if !is_identifier(&pipeline.name) {
         return Err(StringFnError::InvalidPipelineName);

@@ -43,6 +43,9 @@ pub enum ParquetManifestError {
 }
 
 impl ParquetDatasetManifest {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(table: impl Into<String>, files: Vec<ParquetFile>) -> Result<Self> {
         let mut manifest = Self {
             table: table.into(),
@@ -54,14 +57,19 @@ impl ParquetDatasetManifest {
         Ok(manifest)
     }
 
+    #[must_use]
     pub fn total_rows(&self) -> u64 {
         self.files.iter().map(|file| file.row_count).sum()
     }
 
+    #[must_use]
     pub fn total_bytes(&self) -> u64 {
         self.files.iter().map(|file| file.content_length).sum()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn verify_checksums(&self) -> Result<()> {
         self.validate_shape()?;
         for file in &self.files {
@@ -100,6 +108,9 @@ impl ParquetDatasetManifest {
 }
 
 impl ParquetFile {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(path: impl Into<String>, row_count: u64, content_length: u64) -> Result<Self> {
         let path = path.into();
         let file = Self {
@@ -112,6 +123,9 @@ impl ParquetFile {
         Ok(file)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn verify_checksum(&self) -> Result<()> {
         self.validate_shape()?;
         let expected = parquet_file_checksum(&self.path, self.row_count, self.content_length);

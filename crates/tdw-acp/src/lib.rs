@@ -25,7 +25,7 @@ impl Default for AcpServerInfo {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AcpRequest {
     Initialize {
@@ -82,6 +82,9 @@ impl fmt::Display for AcpValidationError {
 
 impl Error for AcpValidationError {}
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_request(request: &AcpRequest) -> Result<()> {
     match request {
         AcpRequest::Initialize { client_name } => validate_token("client_name", client_name),
@@ -101,6 +104,9 @@ pub fn validate_request(request: &AcpRequest) -> Result<()> {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn parse_approval_decision(value: &str) -> Result<ApprovalDecision> {
     let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
     match normalized.as_str() {

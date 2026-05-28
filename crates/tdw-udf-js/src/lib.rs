@@ -19,6 +19,9 @@ pub enum JavaScriptUdfError {
     NetworkAccessDenied,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_module(module: &JavaScriptUdfModule) -> Result<(), JavaScriptUdfError> {
     if module.module_name.trim().is_empty() {
         return Err(JavaScriptUdfError::EmptyModuleName);
@@ -46,7 +49,7 @@ fn is_identifier_path(value: &str) -> bool {
             .all(|part| !part.is_empty() && part.chars().all(is_identifier_character))
 }
 
-fn is_identifier_character(character: char) -> bool {
+const fn is_identifier_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_' || character == '$'
 }
 

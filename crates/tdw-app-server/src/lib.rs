@@ -60,11 +60,17 @@ impl fmt::Display for EndpointError {
 impl Error for EndpointError {}
 
 impl DaemonEndpoint {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn validate(&self) -> EndpointResult<()> {
         validate_endpoint(self)
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_endpoint(endpoint: &DaemonEndpoint) -> EndpointResult<()> {
     let address = endpoint.address.trim();
     if address.is_empty() {
@@ -141,12 +147,16 @@ pub struct SubmissionError {
 }
 
 impl SubmissionError {
+    #[must_use]
     pub fn into_envelope(self) -> OpEnvelope {
         *self.envelope
     }
 }
 
 impl SubmissionHandle {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn submit(&self, envelope: OpEnvelope) -> std::result::Result<(), SubmissionError> {
         self.sender.send(envelope).map_err(|error| SubmissionError {
             envelope: Box::new(error.0),
@@ -187,6 +197,7 @@ pub trait Dispatcher: Send + Sync {
     async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg>;
 }
 
+#[must_use]
 pub fn channel() -> (
     SubmissionHandle,
     mpsc::UnboundedReceiver<EventMsg>,
@@ -253,7 +264,7 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
 }
 
 impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
-    pub fn new(
+    pub const fn new(
         submissions: mpsc::UnboundedReceiver<OpEnvelope>,
         events: mpsc::UnboundedSender<EventMsg>,
         dispatcher: D,
@@ -318,7 +329,8 @@ pub fn service_channel<D: Dispatcher + 'static, S: EventSink + 'static>(
 pub use tokio_util::sync::CancellationToken;
 
 /// Returns a human-readable label for the transport variant (useful for logging).
-pub fn transport_label(t: DaemonTransport) -> &'static str {
+#[must_use]
+pub const fn transport_label(t: DaemonTransport) -> &'static str {
     match t {
         DaemonTransport::Tcp => "tcp",
         DaemonTransport::Uds => "uds",
@@ -361,8 +373,8 @@ pub fn spawn_inmemory_relay(
             // Wait for next tick or cancellation.
             tokio::select! {
                 biased;
-                _ = cancel.cancelled() => break,
-                _ = tokio::time::sleep(tick) => {}
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
             }
         }
     })
@@ -377,6 +389,10 @@ pub fn spawn_inmemory_relay(
 /// * Listens for `tokio::signal::ctrl_c()` and cancels the token.
 /// * Listens for the loop emitting `EventMsg::Completed` after dispatching
 ///   an `Op::Shutdown` and triggers cancellation.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     mut service_loop: ServiceLoop<D, S>,
     relay: tokio::task::JoinHandle<()>,
@@ -393,7 +409,7 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown.cancelled() => break,
+            () = shutdown.cancelled() => break,
             maybe = service_loop.run_once() => {
                 match maybe {
                     None => break, // submissions channel closed

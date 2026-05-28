@@ -7,6 +7,7 @@ use tdw_domain::{EquityHistoricalData, Instrument, ResearchNote};
 pub mod fixtures {
     use super::*;
 
+    #[must_use]
     pub fn ohlcv(symbol: &str) -> Vec<EquityHistoricalData> {
         vec![
             EquityHistoricalData {
@@ -30,6 +31,7 @@ pub mod fixtures {
         ]
     }
 
+    #[must_use]
     pub fn instrument(symbol: &str) -> Instrument {
         Instrument {
             symbol: symbol.to_string(),
@@ -38,6 +40,7 @@ pub mod fixtures {
         }
     }
 
+    #[must_use]
     pub fn research_note(id: &str) -> ResearchNote {
         ResearchNote {
             id: id.to_string(),
@@ -56,7 +59,8 @@ pub mod containers {
         pub default_port: u16,
     }
 
-    pub fn postgres() -> ContainerSpec {
+    #[must_use]
+    pub const fn postgres() -> ContainerSpec {
         ContainerSpec {
             name: "postgres",
             image: "postgres:17-alpine",
@@ -64,7 +68,8 @@ pub mod containers {
         }
     }
 
-    pub fn clickhouse() -> ContainerSpec {
+    #[must_use]
+    pub const fn clickhouse() -> ContainerSpec {
         ContainerSpec {
             name: "clickhouse",
             image: "clickhouse/clickhouse-server:25.5",
@@ -72,7 +77,8 @@ pub mod containers {
         }
     }
 
-    pub fn qdrant() -> ContainerSpec {
+    #[must_use]
+    pub const fn qdrant() -> ContainerSpec {
         ContainerSpec {
             name: "qdrant",
             image: "qdrant/qdrant:latest",
@@ -80,7 +86,8 @@ pub mod containers {
         }
     }
 
-    pub fn meilisearch() -> ContainerSpec {
+    #[must_use]
+    pub const fn meilisearch() -> ContainerSpec {
         ContainerSpec {
             name: "meilisearch",
             image: "getmeili/meilisearch:latest",
@@ -88,7 +95,8 @@ pub mod containers {
         }
     }
 
-    pub fn minio() -> ContainerSpec {
+    #[must_use]
+    pub const fn minio() -> ContainerSpec {
         ContainerSpec {
             name: "minio",
             image: "minio/minio:latest",
@@ -96,7 +104,8 @@ pub mod containers {
         }
     }
 
-    pub fn redis() -> ContainerSpec {
+    #[must_use]
+    pub const fn redis() -> ContainerSpec {
         ContainerSpec {
             name: "redis",
             image: "redis:7-alpine",

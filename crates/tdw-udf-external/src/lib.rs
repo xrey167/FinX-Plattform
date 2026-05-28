@@ -20,6 +20,9 @@ pub enum ExternalUdfError {
     InvalidTimeout,
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_command(command: &ExternalUdfCommand) -> Result<(), ExternalUdfError> {
     if command.name.trim().is_empty() {
         return Err(ExternalUdfError::EmptyName);

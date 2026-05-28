@@ -20,6 +20,9 @@ impl DirectedGraph {
         self.edges.entry(from.into()).or_default().insert(to.into());
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn try_add_edge(&mut self, from: &str, to: &str) -> Result<(), GraphError> {
         if !is_node_id(from) || !is_node_id(to) {
             return Err(GraphError::InvalidNodeId);
@@ -31,6 +34,7 @@ impl DirectedGraph {
         Ok(())
     }
 
+    #[must_use]
     pub fn traverse(&self, start: &str) -> Vec<String> {
         let mut seen = BTreeSet::new();
         let mut queue = VecDeque::from([start.to_string()]);
@@ -47,6 +51,7 @@ impl DirectedGraph {
         ordered
     }
 
+    #[must_use]
     pub fn has_cycle(&self) -> bool {
         self.edges.keys().any(|node| {
             self.edges.get(node).is_some_and(|targets| {

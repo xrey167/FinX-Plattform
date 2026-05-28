@@ -37,6 +37,9 @@ pub enum UdfError {
     Unknown(String),
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn evaluate(definition: &UdfDefinition, input: &str) -> Result<String, UdfError> {
     validate_definition(definition)?;
     if input.len() > MAX_UDF_INPUT_BYTES {
@@ -46,6 +49,9 @@ pub fn evaluate(definition: &UdfDefinition, input: &str) -> Result<String, UdfEr
     dispatch_builtin(definition, input)
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_definition(definition: &UdfDefinition) -> Result<(), UdfError> {
     if !is_udf_name(&definition.name) {
         return Err(UdfError::InvalidDefinition("name"));

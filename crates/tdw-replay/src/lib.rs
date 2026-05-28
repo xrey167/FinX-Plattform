@@ -20,6 +20,7 @@ pub struct ProtocolReplayPlan {
 pub struct ReplayEngine;
 
 impl ReplayEngine {
+    #[must_use]
     pub fn dry_run(records: &[CdcRecord]) -> ReplayPlan {
         ReplayPlan {
             dry_run: true,
@@ -31,6 +32,7 @@ impl ReplayEngine {
         }
     }
 
+    #[must_use]
     pub fn from_rollout(records: &[RolloutRecord]) -> ProtocolReplayPlan {
         ProtocolReplayPlan {
             sequences: records.iter().map(|record| record.frame.sequence).collect(),
@@ -42,7 +44,7 @@ impl ReplayEngine {
     }
 }
 
-fn event_type_name(event: &tdw_protocol::EventMsg) -> &'static str {
+const fn event_type_name(event: &tdw_protocol::EventMsg) -> &'static str {
     match event {
         tdw_protocol::EventMsg::Started { .. } => "started",
         tdw_protocol::EventMsg::Progress { .. } => "progress",

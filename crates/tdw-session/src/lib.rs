@@ -68,6 +68,9 @@ pub struct SqliteSessionStore {
 }
 
 impl SqliteSessionStore {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn connect(database_url: &str) -> Result<Self> {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -78,10 +81,14 @@ impl SqliteSessionStore {
         Ok(store)
     }
 
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    #[must_use]
+    pub const fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn migrate(&self) -> Result<()> {
         for statement in SQLITE_MIGRATION
             .split(';')
@@ -93,15 +100,18 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn upsert_session(&self, record: &SessionRecord) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             insert into sessions (session_id, status, created_at, updated_at)
             values (?1, ?2, ?3, ?4)
             on conflict(session_id) do update set
                 status = excluded.status,
                 updated_at = excluded.updated_at
-            "#,
+            ",
         )
         .bind(&record.session_id)
         .bind(format!("{:?}", record.status))
@@ -112,6 +122,9 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn get_session(&self, session_id: &SessionId) -> Result<Option<SessionRecord>> {
         let row = sqlx::query(
             "select session_id, status, created_at, updated_at from sessions where session_id = ?1",
@@ -122,6 +135,9 @@ impl SqliteSessionStore {
         row.map(row_to_session).transpose()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn save_permission_rules(
         &self,
         session_id: &SessionId,
@@ -129,11 +145,11 @@ impl SqliteSessionStore {
     ) -> Result<()> {
         let rules_json = serde_json::to_string(rules)?;
         sqlx::query(
-            r#"
+            r"
             insert into permission_state (session_id, rules_json)
             values (?1, ?2)
             on conflict(session_id) do update set rules_json = excluded.rules_json
-            "#,
+            ",
         )
         .bind(session_id.as_str())
         .bind(rules_json)
@@ -142,6 +158,9 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn load_permission_rules(
         &self,
         session_id: &SessionId,
@@ -155,6 +174,9 @@ impl SqliteSessionStore {
             .map_err(Into::into)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn request_approval(
         &self,
         session_id: &SessionId,
@@ -163,10 +185,10 @@ impl SqliteSessionStore {
         pattern: &str,
     ) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             insert into pending_approvals (permission_id, session_id, action, pattern, decision)
             values (?1, ?2, ?3, ?4, null)
-            "#,
+            ",
         )
         .bind(permission_id.as_str())
         .bind(session_id.as_str())
@@ -177,6 +199,9 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn resolve_approval(
         &self,
         permission_id: &PermissionId,
@@ -191,6 +216,9 @@ impl SqliteSessionStore {
         self.pending_approval(permission_id).await
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn pending_approval(
         &self,
         permission_id: &PermissionId,
@@ -204,13 +232,16 @@ impl SqliteSessionStore {
         row.map(row_to_pending_approval).transpose()
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             insert into cost_ledger
                 (session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend)
             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            "#,
+            ",
         )
         .bind(&entry.session_id)
         .bind(&entry.operation_id)
@@ -224,14 +255,17 @@ impl SqliteSessionStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn cost_entries(&self, session_id: &SessionId) -> Result<Vec<CostLedgerEntry>> {
         let rows = sqlx::query(
-            r#"
+            r"
             select session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend
             from cost_ledger
             where session_id = ?1
             order by id asc
-            "#,
+            ",
         )
         .bind(session_id.as_str())
         .fetch_all(&self.pool)
@@ -241,7 +275,7 @@ impl SqliteSessionStore {
     }
 }
 
-pub const SQLITE_MIGRATION: &str = r#"
+pub const SQLITE_MIGRATION: &str = r"
 create table if not exists sessions (
     session_id text primary key,
     status text not null,
@@ -269,7 +303,7 @@ create table if not exists cost_ledger (
     rows_written integer not null,
     backend text not null
 );
-"#;
+";
 
 fn row_to_session(row: sqlx::sqlite::SqliteRow) -> Result<SessionRecord> {
     let status_text = row.get::<String, _>("status");

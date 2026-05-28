@@ -44,6 +44,9 @@ pub enum TableManifestError {
 }
 
 impl TableManifest {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn validate(&self) -> Result<()> {
         if self.table.trim().is_empty() {
             return Err(TableManifestError::EmptyTable);
@@ -70,6 +73,7 @@ impl TableManifest {
         Ok(())
     }
 
+    #[must_use]
     pub fn verify_checksums(&self) -> bool {
         self.validate().is_ok()
     }

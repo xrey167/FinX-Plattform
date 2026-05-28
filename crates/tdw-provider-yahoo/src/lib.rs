@@ -17,7 +17,8 @@ use tdw_provider_fileset::EquityHistoricalQuery;
 pub struct YahooEquityHistoricalFetcher;
 
 impl YahooEquityHistoricalFetcher {
-    pub fn registry_entry() -> RegistryEntry {
+    #[must_use]
+    pub const fn registry_entry() -> RegistryEntry {
         RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
     }
 }

@@ -21,6 +21,10 @@ use tokio_util::sync::CancellationToken;
 ///   writes each serialised `EventMsg` back as a length-delimited frame.
 ///
 /// Cancellation: returns when `cancel.cancelled()`.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub async fn serve_tcp(
     listener: TcpListener,
     handle: crate::SubmissionHandle,
@@ -36,7 +40,7 @@ pub async fn serve_tcp(
         loop {
             tokio::select! {
                 biased;
-                _ = cancel_for_pump.cancelled() => break,
+                () = cancel_for_pump.cancelled() => break,
                 maybe = events.recv() => match maybe {
                     Some(event) => {
                         if let Ok(json) = serde_json::to_string(&event) {
@@ -52,7 +56,7 @@ pub async fn serve_tcp(
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => break,
+            () = cancel.cancelled() => break,
             accept = listener.accept() => {
                 let (stream, _peer) = accept?;
                 let conn_handle = handle.clone();
@@ -80,7 +84,7 @@ async fn handle_tcp_conn(
         loop {
             tokio::select! {
                 biased;
-                _ = cancel_reader.cancelled() => return,
+                () = cancel_reader.cancelled() => return,
                 res = read_frame(&mut read_half) => match res {
                     Ok(Some(bytes)) => {
                         if let Ok(env) = serde_json::from_slice::<tdw_protocol::OpEnvelope>(&bytes) {
@@ -98,7 +102,7 @@ async fn handle_tcp_conn(
         loop {
             tokio::select! {
                 biased;
-                _ = cancel_writer.cancelled() => return,
+                () = cancel_writer.cancelled() => return,
                 res = subscriber.recv() => match res {
                     Ok(line) => {
                         let len = (line.len() as u32).to_be_bytes();

@@ -9,6 +9,7 @@ pub fn event_lines(events: &[EventMsg]) -> Vec<Line<'static>> {
     events.iter().map(event_line).collect()
 }
 
+#[must_use]
 pub fn event_line(event: &EventMsg) -> Line<'static> {
     match event {
         EventMsg::Started { .. } => Line::from("started"),
@@ -47,6 +48,7 @@ pub fn event_line(event: &EventMsg) -> Line<'static> {
     }
 }
 
+#[must_use]
 pub fn sanitize_event_text(value: &str) -> String {
     let mut sanitized = String::new();
     for ch in value.chars().take(MAX_EVENT_TEXT_LEN) {

@@ -64,6 +64,9 @@ pub struct KnowledgeIndex {
 }
 
 impl KnowledgeIndex {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn index_document(&mut self, document: KnowledgeDocument) -> Result<()> {
         validate_document(&document)?;
         let embedding = self
@@ -111,6 +114,9 @@ impl KnowledgeIndex {
             .map_err(|error| KnowledgeError::Storage(error.to_string()))
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn search(&self, query: &str, top_k: usize) -> Result<Vec<KnowledgeHit>> {
         validate_query(query, top_k)?;
         let embedding = self
@@ -153,6 +159,9 @@ impl KnowledgeIndex {
     }
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_document(document: &KnowledgeDocument) -> Result<()> {
     if !is_identifier(&document.id) {
         return Err(KnowledgeError::InvalidDocumentField("id"));
@@ -168,6 +177,9 @@ pub fn validate_document(document: &KnowledgeDocument) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
 pub fn validate_query(query: &str, top_k: usize) -> Result<()> {
     if query.trim().is_empty() {
         return Err(KnowledgeError::InvalidQuery("query"));
@@ -215,6 +227,7 @@ fn is_tag_id(value: &str) -> bool {
         })
 }
 
+#[must_use]
 pub fn summarize_syntax(input: &str) -> SyntaxSummary {
     let symbols = input
         .lines()
@@ -342,10 +355,10 @@ mod tests {
     #[test]
     fn summarizes_schema_and_code_symbols() {
         let summary = summarize_syntax(
-            r#"
+            r"
 create table raw.market_data_bar (symbol text);
 fn build_context() {}
-"#,
+",
         );
 
         assert_eq!(summary.symbols[0].kind, "table");

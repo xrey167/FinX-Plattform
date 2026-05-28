@@ -47,12 +47,14 @@ impl SnapshotStore {
         snapshot
     }
 
+    #[must_use]
     pub fn as_of_version(&self, table: &str, version: u64) -> Option<&Snapshot> {
         self.snapshots
             .iter()
             .find(|snapshot| snapshot.table == table && snapshot.version == version)
     }
 
+    #[must_use]
     pub fn latest(&self, table: &str) -> Option<&Snapshot> {
         self.snapshots
             .iter()

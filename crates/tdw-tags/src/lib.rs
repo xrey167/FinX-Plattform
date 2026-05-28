@@ -42,6 +42,9 @@ pub struct TagStore {
 }
 
 impl TagStore {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn define(&mut self, definition: TagDefinition) -> Result<(), TagError> {
         validate_tag_id(&definition.tag_id)?;
         if let Some(parent) = &definition.parent {
@@ -62,6 +65,9 @@ impl TagStore {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn assign(&mut self, assignment: TagAssignment) -> Result<(), TagError> {
         validate_assignment(&assignment)?;
         if !self.definitions.contains_key(&assignment.tag_id) {
@@ -71,6 +77,7 @@ impl TagStore {
         Ok(())
     }
 
+    #[must_use]
     pub fn active_tags(&self, entity_id: &str, as_of: &str) -> Vec<String> {
         self.assignments
             .iter()
@@ -86,6 +93,7 @@ impl TagStore {
             .collect()
     }
 
+    #[must_use]
     pub fn taxonomy_stats(&self) -> BTreeMap<String, usize> {
         let mut stats = BTreeMap::new();
         for assignment in &self.assignments {
@@ -94,6 +102,7 @@ impl TagStore {
         stats
     }
 
+    #[must_use]
     pub fn assignments(&self) -> &[TagAssignment] {
         &self.assignments
     }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tdw_event::EventEnvelope;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusEntry {
     pub sequence: u64,
     pub envelope: EventEnvelope<Value>,
@@ -32,6 +32,7 @@ pub struct EventBus {
 }
 
 impl EventBus {
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
@@ -50,6 +51,7 @@ impl EventBus {
         sequence
     }
 
+    #[must_use]
     pub fn read_from(&self, sequence: u64) -> Vec<BusEntry> {
         self.events
             .iter()
@@ -58,6 +60,7 @@ impl EventBus {
             .collect()
     }
 
+    #[must_use]
     pub fn retention_window(&self) -> Option<RetentionWindow> {
         Some(RetentionWindow {
             oldest_sequence: self.events.front()?.sequence,
@@ -65,12 +68,14 @@ impl EventBus {
         })
     }
 
+    #[must_use]
     pub fn has_retention_gap(&self, requested_sequence: u64) -> bool {
         self.retention_window()
             .is_some_and(|window| requested_sequence < window.oldest_sequence)
     }
 
-    pub fn lag_since(&self, last_seen_sequence: u64) -> u64 {
+    #[must_use]
+    pub const fn lag_since(&self, last_seen_sequence: u64) -> u64 {
         self.next_sequence
             .saturating_sub(1)
             .saturating_sub(last_seen_sequence)

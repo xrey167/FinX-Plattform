@@ -60,7 +60,7 @@ impl TraceContext {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct EventEnvelope<P> {
     #[validate(length(min = 1))]
     pub event_id: String,
@@ -131,6 +131,7 @@ pub struct EventSchemaRef {
     pub schema_version: String,
 }
 
+#[must_use]
 pub fn event_schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
         ("actor", schema_json::<Actor>()),
@@ -141,6 +142,7 @@ pub fn event_schema_bundle() -> BTreeMap<&'static str, Value> {
     ])
 }
 
+#[must_use]
 pub fn sample_actor_context(entrypoint: &str) -> (Actor, Origin, TraceContext) {
     (
         Actor {
@@ -161,6 +163,7 @@ pub fn sample_actor_context(entrypoint: &str) -> (Actor, Origin, TraceContext) {
     )
 }
 
+#[must_use]
 pub fn sample_event(entrypoint: &str) -> EventEnvelope<Value> {
     let (actor, origin, trace) = sample_actor_context(entrypoint);
     EventEnvelope::new(

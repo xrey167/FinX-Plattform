@@ -13,6 +13,9 @@ pub struct ExecutionPlan {
 pub struct WorkflowEngine;
 
 impl WorkflowEngine {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn compile(workflow: &WorkflowDefinition) -> Result<ExecutionPlan, AgentContractError> {
         Ok(ExecutionPlan {
             workflow_id: workflow.workflow_id.clone(),
