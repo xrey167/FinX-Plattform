@@ -1,0 +1,25 @@
+[package]
+name = "tdw-bootstrap"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "UNLICENSED"
+
+[[bin]]
+name = "tdw-bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+bytes = { workspace = true }
+serde_json = { workspace = true }
+tdw-bus = { path = "../tdw-bus", features = ["postgres"] }
+tdw-core = { workspace = true }
+tdw-outbox = { path = "../tdw-outbox", features = ["postgres"] }
+tdw-session = { path = "../tdw-session", features = ["postgres"] }
+tdw-snapshot = { path = "../tdw-snapshot", features = ["postgres"] }
+tdw-storage-postgres = { path = "../tdw-storage-postgres", features = ["postgres"] }
+tdw-storage-s3 = { path = "../tdw-storage-s3", features = ["s3"] }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

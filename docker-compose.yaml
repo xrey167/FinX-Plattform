@@ -3,7 +3,7 @@ name: finx-plattform
 services:
   postgres:
     image: postgres:17-alpine
-    profiles: ["minimal", "full"]
+    profiles: ["minimal", "full", "live"]
     environment:
       POSTGRES_USER: tdw
       POSTGRES_PASSWORD: tdw
@@ -53,7 +53,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    profiles: ["full"]
+    profiles: ["full", "live"]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio
@@ -69,6 +69,52 @@ services:
     profiles: ["full"]
     ports:
       - "6379:6379"
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: ["live"]
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        attempt=1
+        while [ "$attempt" -le 30 ]; do
+          if mc alias set local http://minio:9000 minio minio123; then
+            break
+          fi
+          if [ "$attempt" -eq 30 ]; then
+            echo "minio-init: minio did not become reachable" >&2
+            exit 1
+          fi
+          attempt=$((attempt + 1))
+          sleep 2
+        done
+        mc mb --ignore-existing local/tdw-default
+        echo "minio-init: bucket tdw-default ready"
+    restart: "no"
+
+  tdw-bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile.bootstrap
+    profiles: ["live"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      TDW_POSTGRES_URL: postgres://tdw:tdw@postgres:5432/tdw
+      TDW_S3_ENDPOINT: http://minio:9000
+      TDW_S3_BUCKET: tdw-default
+      TDW_S3_ACCESS_KEY: minio
+      TDW_S3_SECRET_KEY: minio123
+      TDW_S3_REGION: us-east-1
+    restart: "no"
 
   tdw-service:
     image: finx-plattform/tdw-service:local
