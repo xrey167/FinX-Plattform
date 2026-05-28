@@ -3228,6 +3228,8 @@ name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tdw-config",
+ "tdw-protocol",
  "tdw-service-api",
  "tdw-test-utils",
  "tokio",
@@ -3686,9 +3688,15 @@ name = "tdw-service"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tdw-app-server",
+ "tdw-auth-oidc",
+ "tdw-config",
+ "tdw-protocol",
  "tdw-service-api",
  "tdw-test-utils",
  "tokio",
+ "tokio-util",
+ "toml",
 ]
 
 [[package]]

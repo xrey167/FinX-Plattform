@@ -5,11 +5,27 @@ edition = "2024"
 publish = false
 license = "UNLICENSED"
 
+[features]
+default = []
+transport-http = ["tdw-app-server/transport-http"]
+transport-uds = ["tdw-app-server/transport-uds"]
+
 [dependencies]
 serde_json = { workspace = true }
+tdw-app-server = { workspace = true }
+tdw-config = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 tdw-test-utils = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = { workspace = true }
+tdw-protocol = { workspace = true }
+
+[dev-dependencies]
+tdw-auth-oidc = { path = "../tdw-auth-oidc" }
+tdw-app-server = { workspace = true }
+tdw-service-api = { path = "../tdw-service-api" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [lints]
 workspace = true
