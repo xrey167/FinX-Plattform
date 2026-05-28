@@ -147,6 +147,8 @@ Quality Gates:
 - Script dry-run: PASS for a patch-equivalent squash-merged branch
 - Safety refusals: PASS for primary checkout and dirty G014 live worktree
 - Diff hygiene: PASS via `git diff --check`
+- Follow-up branch deletion fix: PASS by keeping `git branch -d` for ancestor
+  branches and using `git branch -D` only after patch-equivalence is proven.
 
 Remaining Risks:
 - Local stale worktrees should be removed only after this helper lands on

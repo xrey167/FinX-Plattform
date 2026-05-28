@@ -67,6 +67,7 @@ $branch = $branchResult.Output[0]
 
 $ancestor = Invoke-Git -Args @("merge-base", "--is-ancestor", $branch, $Base) -AllowFailure
 $verifiedBy = $null
+$deleteBranchMode = "-d"
 if ($ancestor.ExitCode -eq 0) {
     $verifiedBy = "ancestor of $Base"
 } else {
@@ -77,11 +78,15 @@ if ($ancestor.ExitCode -eq 0) {
         throw "Refusing to remove $branch; commits are not merged or patch-equivalent to $Base`n$details"
     }
     $verifiedBy = "patch-equivalent to $Base via git cherry"
+    $deleteBranchMode = "-D"
 }
 
 Write-Host "Verified $worktreeRoot on ${branch}: clean and $verifiedBy"
 
 if ($DryRun) {
+    if ($RemoveBranch) {
+        Write-Host "Dry run branch deletion: git branch $deleteBranchMode $branch"
+    }
     Write-Host "Dry run only; no worktree or branch was removed."
     return
 }
@@ -90,8 +95,8 @@ Invoke-Git -Args @("worktree", "remove", $worktreeRoot) | Out-Null
 Write-Host "Removed worktree $worktreeRoot"
 
 if ($RemoveBranch) {
-    Invoke-Git -Args @("branch", "-d", $branch) | Out-Null
-    Write-Host "Deleted local branch $branch"
+    Invoke-Git -Args @("branch", $deleteBranchMode, $branch) | Out-Null
+    Write-Host "Deleted local branch $branch with git branch $deleteBranchMode"
 }
 
 Invoke-Git -Args @("fetch", "--prune") | Out-Null
