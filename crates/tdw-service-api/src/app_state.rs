@@ -97,6 +97,31 @@ impl AppState {
         self
     }
 
+    /// Replace the relational engine with a real [`PgEngine`] connected to
+    /// `database_url`.
+    ///
+    /// Only available when the `real-postgres` feature is enabled (which
+    /// activates `tdw-storage-postgres/postgres`). The method is deliberately
+    /// absent on default builds so CI without Docker still compiles cleanly.
+    ///
+    /// Typical test usage:
+    /// ```ignore
+    /// let state = AppState::in_memory_for_tests()
+    ///     .await
+    ///     .with_policy(analyst_policy())
+    ///     .with_real_postgres(&url)
+    ///     .await
+    ///     .expect("pg connect");
+    /// ```
+    #[cfg(feature = "real-postgres")]
+    pub async fn with_real_postgres(mut self, database_url: &str) -> tdw_core::Result<Self> {
+        let engine = tdw_storage_postgres::PgEngine::connect(database_url)
+            .await
+            .map_err(|e| tdw_core::Error::Storage(format!("pg connect: {e}")))?;
+        self.relational = std::sync::Arc::new(engine);
+        Ok(self)
+    }
+
     /// Build an `AppState` backed by an in-memory SQLite database and a unique
     /// temporary JSONL rollout file. Suitable for unit tests.
     pub async fn in_memory_for_tests() -> Self {

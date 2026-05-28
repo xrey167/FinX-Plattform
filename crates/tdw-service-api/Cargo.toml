@@ -15,6 +15,11 @@ storage-fs = ["dep:tdw-storage-fs"]
 ## sandbox crate so the feature tree is consistent.
 udf-wasm = ["tdw-sandbox/udf-wasm"]
 
+## Swap the relational engine in `AppState` for the real `PgEngine`
+## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
+## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
+real-postgres = ["tdw-storage-postgres/postgres"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }

@@ -24,7 +24,7 @@ tdw-protocol = { workspace = true }
 [dev-dependencies]
 tdw-auth-oidc = { path = "../tdw-auth-oidc" }
 tdw-app-server = { workspace = true }
-tdw-service-api = { path = "../tdw-service-api" }
+tdw-service-api = { path = "../tdw-service-api", features = ["real-postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [lints]
