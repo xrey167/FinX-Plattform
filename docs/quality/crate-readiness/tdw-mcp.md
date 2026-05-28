@@ -11,7 +11,7 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - Dev dependencies: none
 - Reverse local dependencies: none
 - Feature flags: none
-- Test attributes detected: 11
+- Test attributes detected: 20
 - tests/ directory: no
 - README: no
 - Examples directory: no
@@ -35,6 +35,13 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - `--stdio-json-rpc` now runs a stateful MCP 2025-06-18 stdio protocol handler
   with initialization, notification semantics, tools, resources, prompts,
   cancellation tracking, and progress notifications.
+- `--streamable-http [bind]` exposes the same protocol handler over a
+  Streamable HTTP `/mcp` endpoint with localhost default binding,
+  loopback-only Origin validation, optional `TDW_MCP_HTTP_TOKEN` bearer auth,
+  protocol-version checks, bounded HTTP input, JSON responses, SSE responses,
+  and `202 Accepted` notification semantics.
+- `--streamable-http-smoke` provides deterministic non-listening HTTP transport
+  evidence for CI and container smoke tests.
 - `tools/call` delegates deterministic read-only tool execution to
   `tdw-service-api` for provider discovery, equity historical fixtures,
   progress samples, agent evidence, extensibility evidence, event-spine
@@ -48,11 +55,12 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Verification
 
-- Focused MCP command passed: `cargo test -p tdw-mcp` using an isolated
-  `%TEMP%` target directory.
+- Focused MCP command passed:
+  `CARGO_TARGET_DIR=target cargo test -p tdw-mcp`.
+- Focused HTTP smoke passed:
+  `CARGO_TARGET_DIR=target cargo run -p tdw-mcp -- --streamable-http-smoke`.
 
 ## Verdict
 
-Ready with follow-ups. The stdio MCP server is now a real protocol handler;
-Streamable HTTP transport and daemon-backed tool execution remain follow-up
-product work.
+Ready with follow-ups. The MCP server now has stdio and local Streamable HTTP
+transports; daemon-backed tool execution remains follow-up product work.

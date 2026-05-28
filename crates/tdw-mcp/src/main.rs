@@ -1,8 +1,29 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    if std::env::args().any(|arg| arg == "--stdio-json-rpc") {
-        std::process::exit(tdw_mcp::run_stdio_json_rpc());
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--stdio-json-rpc") => {
+            std::process::exit(tdw_mcp::run_stdio_json_rpc());
+        }
+        Some("--streamable-http") | Some("--http") => {
+            let bind = args
+                .next()
+                .unwrap_or_else(|| tdw_mcp::default_streamable_http_bind().to_string());
+            if args.next().is_some() {
+                eprintln!("tdw-mcp Streamable HTTP accepts at most one bind address");
+                std::process::exit(2);
+            }
+            std::process::exit(tdw_mcp::run_streamable_http(&bind));
+        }
+        Some("--streamable-http-smoke") | Some("--http-smoke") => {
+            std::process::exit(tdw_mcp::run_streamable_http_smoke());
+        }
+        Some(flag) if flag.starts_with("--") => {
+            eprintln!("unknown tdw-mcp flag: {flag}");
+            std::process::exit(2);
+        }
+        _ => {}
     }
 
     match tdw_service_api::mcp_progress_sample("AAPL") {
