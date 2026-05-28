@@ -1,5 +1,68 @@
 # AI Slop Cleanup Report
 
+## G001 MCP Daemon Tool Execution Cleanup
+
+Scope: changed files for `G001-implement-mcp-daemon-backed-tool-exe`:
+`.omx/ultragoal/*`, `Cargo.lock`, `crates/tdw-app-client`,
+`crates/tdw-mcp`, `docs/agent-runtime.md`,
+`docs/quality/mcp-worker-product-boundaries.md`,
+`docs/quality/daemon-hardening-test-taxonomy.md`, and the touched
+crate-readiness worksheets.
+
+Behavior Lock: `cargo test -p tdw-app-client -p tdw-mcp`,
+`cargo clippy -p tdw-app-client -p tdw-mcp --all-targets -- -D warnings`,
+`cargo fmt --all -- --check`, `cargo check --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace`, `cargo run -p xtask -- clean-room-audit`,
+`cargo run -p tdw-mcp -- --streamable-http-smoke`, and `git diff --check`
+passed with `CARGO_TARGET_DIR` set to a temp directory because the default
+`E:\cargo-target` build-script path is access-denied on this workstation.
+
+Cleanup Plan: keep the pass bounded to the changed files; classify
+fallback-like language and fail-closed paths; avoid broad daemon transport
+refactors; preserve stdio and Streamable HTTP behavior; rerun the targeted
+MCP/app-client tests plus workspace gates after the cleanup review.
+
+Fallback Findings:
+- `tdw-app-client::DaemonClient` fail-closed paths for unavailable daemons,
+  unsupported transports, oversized frames, timeouts, and missing terminal
+  events are grounded fail-safe behavior, not masking fallback slop. They
+  preserve error evidence and are covered by MCP unavailable-daemon and
+  in-process TCP daemon tests.
+- Readiness worksheet references to "fallback scan signals" are historical
+  audit labels, not runtime alternate execution paths.
+
+UI/Design Findings: N/A; no frontend visual files were changed.
+
+Passes Completed:
+- Fallback-like code resolution gate: no masking fallback slop found in the
+  changed files.
+1. Pass 1: Dead code deletion: no dead code introduced or found in the scoped
+   pass.
+2. Pass 2: Duplicate removal: daemon TCP framing is centralized in
+   `tdw-app-client`; MCP only builds protocol operations and formats tool
+   output.
+3. Pass 3: Naming/error handling cleanup: daemon config names are explicit
+   (`TDW_MCP_DAEMON_*`), and daemon errors include endpoint evidence.
+4. Pass 4: Test reinforcement: added focused config, fail-closed, and
+   in-process TCP daemon roundtrip tests.
+
+Quality Gates:
+- Regression tests: PASS via `cargo test -p tdw-app-client -p tdw-mcp`
+- Lint: PASS via focused and workspace clippy
+- Typecheck: PASS via `cargo check --workspace`
+- Tests: PASS via `cargo test --workspace`
+- Static/security scan: PASS via `cargo run -p xtask -- clean-room-audit`
+- Diff hygiene: PASS via `git diff --check`
+
+Remaining Risks:
+- MCP daemon submission is intentionally TCP-only in this slice; UDS and
+  HTTP/SSE daemon client transports remain explicit follow-up product work.
+
+---
+
+## G016 Release Evidence Cleanup
+
 Scope: G016 final evidence files and the release workflow publish fix: `.github/workflows/release.yml`, `docs/quality/release-readiness-summary.md`, `docs/quality/final-quality-gate.json`, `docs/quality/final-code-review.json`, `docs/quality/ai-slop-cleanup-report.md`, `.omx/ultragoal/goals.json`, and `.omx/ultragoal/ledger.jsonl`.
 
 Behavior Lock: PR #45 checks passed before merge, main CI and CodeQL passed on `af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe`, and release workflow run `26543606204` published `v0.1.1` successfully with 24 assets. The final branch verification set is recorded in `docs/quality/final-quality-gate.json`.

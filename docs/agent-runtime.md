@@ -20,5 +20,6 @@ Runtime ownership:
 
 The Postgres migration `20260521_0004_agent_runtime.sql` maps agent runtime
 entities into the `agents` and `evals` schemas. The MCP surface is intentionally
-thin: it reports available tool names and delegates behavior to the shared
-service/runtime crates.
+thin: deterministic fixture tools delegate to shared service/runtime crates, and
+daemon-backed tools submit `OpEnvelope` work through `tdw-app-client` instead of
+copying daemon business logic into MCP.

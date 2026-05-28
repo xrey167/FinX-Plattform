@@ -1,28 +1,22 @@
 {
-  "version": 2,
-  "scope": "G009-G016 production-functional final gate",
+  "version": 3,
+  "scope": "G001 MCP daemon-backed tool execution final gate",
   "filesReviewed": [
-    ".github/workflows/ci.yml",
-    ".github/workflows/release.yml",
-    "Dockerfile.tdw-*",
-    "docker-compose.yaml",
-    "crates/tdw-storage-*",
-    "crates/tdw-provider-*",
-    "crates/tdw-llm-*",
-    "crates/tdw-embed-*",
-    "crates/tdw-outbox",
-    "crates/tdw-bus",
-    "crates/tdw-session",
-    "crates/tdw-snapshot",
-    "crates/tdw-rollout",
-    "crates/tdw-hooks",
-    "crates/tdw-auth",
-    "crates/tdw-auth-oidc",
-    "crates/tdw-sandbox",
-    "crates/tdw-mask",
-    "crates/tdw-service-api",
-    "docs/quality",
-    ".omx/ultragoal"
+    ".omx/ultragoal/brief.md",
+    ".omx/ultragoal/goals.json",
+    ".omx/ultragoal/ledger.jsonl",
+    "Cargo.lock",
+    "crates/tdw-app-client/Cargo.toml",
+    "crates/tdw-app-client/src/lib.rs",
+    "crates/tdw-mcp/Cargo.toml",
+    "crates/tdw-mcp/src/lib.rs",
+    "docs/agent-runtime.md",
+    "docs/quality/ai-slop-cleanup-report.md",
+    "docs/quality/crate-readiness/tdw-app-client.md",
+    "docs/quality/crate-readiness/tdw-mcp.md",
+    "docs/quality/daemon-hardening-test-taxonomy.md",
+    "docs/quality/final-quality-gate.json",
+    "docs/quality/mcp-worker-product-boundaries.md"
   ],
   "totalUnresolvedIssues": 0,
   "architecturalStatus": "CLEAR",
@@ -34,57 +28,39 @@
     "medium": [],
     "low": []
   },
-  "resolvedDuringReview": [
-    {
-      "severity": "high",
-      "files": [
-        ".github/workflows/release.yml"
-      ],
-      "issue": "The first tag publish attempt built all artifacts but failed in the release publish job because gh could not infer the repository from an artifact-only workspace.",
-      "resolution": "PR #45 set GH_REPO from github.repository; v0.1.1 then published successfully with 24 release assets."
-    },
-    {
-      "severity": "low",
-      "files": [
-        ".github/workflows/release.yml",
-        ".github/workflows/ci.yml"
-      ],
-      "issue": "GitHub Actions emitted Node.js 20 deprecation annotations for artifact actions and windows-latest redirection notices.",
-      "resolution": "Recorded as a residual follow-up because the workflows completed successfully and the annotations do not invalidate the release gate."
-    }
-  ],
+  "resolvedDuringReview": [],
   "checksReviewed": [
-    "cargo +stable fmt --all -- --check",
-    "cargo +stable check --workspace",
-    "cargo +stable clippy --workspace --all-targets -- -D warnings",
-    "cargo +stable test --workspace",
-    "cargo +stable run -p xtask -- clean-room-audit",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo test -p tdw-app-client -p tdw-mcp",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo clippy -p tdw-app-client -p tdw-mcp --all-targets -- -D warnings",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo fmt --all -- --check",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo check --workspace",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo clippy --workspace --all-targets -- -D warnings",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo test --workspace",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p xtask -- clean-room-audit",
     "git diff --check",
+    "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p tdw-mcp -- --streamable-http-smoke",
     ".omx/ultragoal/goals.json JSON parse",
     ".omx/ultragoal/ledger.jsonl JSONL parse",
-    "GitHub CI run 26543584954",
-    "GitHub CodeQL run 26543584951",
-    "GitHub Release run 26543606204",
-    "GitHub release v0.1.1 asset verification"
+    "docs/quality/final-code-review.json JSON parse",
+    "docs/quality/final-quality-gate.json JSON parse"
   ],
   "securityReview": {
-    "hardcodedSecrets": "none found in the final changed evidence files; secret-bearing live transports are env-gated",
-    "unsafeCode": "workspace verification passed under the existing crate safety posture",
+    "hardcodedSecrets": "none found in the changed runtime or evidence files",
+    "unsafeCode": "tdw-app-client and tdw-mcp keep their existing forbid-unsafe posture; no unsafe blocks were introduced",
+    "daemonBoundary": "daemon-backed tools fail closed on invalid endpoints, unsupported transports, connection failures, malformed frames, oversized frames, timeout, or missing terminal events",
     "cleanRoom": "clean-room audit passed; no finx-* crate/dependency, copied FinX-XR code, or tdw-provider-openbb dependency was introduced",
-    "releaseSupplyChain": "release workflow produced SHA-256 checksum files and build-provenance attestations for release archives"
+    "toolRisk": "tdw.daemon.query.submit intentionally submits caller SQL as a non-read-only MCP tool through the daemon/service-api policy path; input is bounded and control-character checked"
   },
   "architectureReview": {
     "status": "CLEAR",
-    "rationale": "The production-functional push preserves the clean-room TDW architecture: real transports are feature/env gated behind existing provider/storage/model traits, durable backends remain bounded by persistence crates, policy enforcement is bound at service-api request paths, and release/compose packaging is kept in CI and deployment surfaces rather than mixed into business logic.",
+    "rationale": "The daemon framing and submit-and-wait behavior live in tdw-app-client, while tdw-mcp remains an MCP surface that builds narrow protocol operations and formats terminal event evidence. Deterministic fixture tools stay offline, and daemon-backed tools use the existing tdw-app-server length-delimited protocol with an in-process TCP integration test.",
     "watchItems": [
-      "Upgrade or replace artifact actions before GitHub removes Node.js 20 runner support.",
-      "Run local docker-compose smoke when Docker is available on the workstation; current dockerized evidence is GitHub CI-backed."
+      "UDS and HTTP-SSE daemon client support remain a documented follow-up; this gate intentionally ships the local TCP default and explicit unsupported-transport fail-closed behavior."
     ]
   },
-  "releaseReview": {
-    "status": "CLEAR",
-    "v0_1_0": "Tag exists but release publish failed; no GitHub Release exists for this tag.",
-    "v0_1_1": "Published successfully as latest with 24 assets at https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.1",
-    "mainCommit": "af6f5e4e243e6fc1fdd9c574f47f7f3564a494fe"
+  "transportReview": {
+    "stdio": "existing stdio serving path preserved",
+    "streamableHttp": "streamable HTTP smoke passed after the daemon-backed tool changes",
+    "daemonTcp": "new daemon-backed MCP tools roundtrip against an in-process TCP daemon without Docker"
   }
 }

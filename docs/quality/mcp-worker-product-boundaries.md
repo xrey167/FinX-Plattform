@@ -18,6 +18,16 @@ cycle does not silently claim a broader product surface than it ships.
   evidence, extensibility evidence, event-spine evidence, KG/tag evidence, and
   client-event evidence. Calls return MCP content plus `structuredContent`;
   business failures return tool results with `isError: true`.
+- `tools/call` also exposes a narrow daemon-backed path for live daemon state:
+  `tdw.daemon.triage` and `tdw.daemon.query.submit` build `OpEnvelope`
+  `RunQuery` operations, submit them through `tdw-app-client` to the configured
+  TCP daemon endpoint, wait for the terminal `EventMsg`, and return the daemon
+  event evidence as structured MCP output. The default daemon target is
+  `127.0.0.1:7878`; `TDW_CONFIG`, `TDW_CONFIG_CONTENT`,
+  `TDW_MCP_DAEMON_TRANSPORT`, `TDW_MCP_DAEMON_ADDR`, and
+  `TDW_MCP_DAEMON_TIMEOUT_MS` can override it. If the daemon is unavailable or
+  the configured transport is unsupported, these tools fail closed with
+  `isError: true`; deterministic fixture tools continue to run offline.
 - `tdw.progress.sample` emits `notifications/progress` before the final tool
   response when clients supply `_meta.progressToken`.
 - MCP resources expose safe TDW status/config/readiness documents; prompts
@@ -48,18 +58,17 @@ cycle does not silently claim a broader product surface than it ships.
 - Worker scheduling is durable for the local/embedded SQLite backend. A
   RiverQueue/Postgres-backed distributed scheduler is still a follow-up for
   deployments that need multi-process lease recovery across machines.
-- The MCP and worker processes do not yet call the daemon transport as real
-  clients. MCP `tools/call` currently routes through deterministic service-api
-  functions; daemon-backed MCP calls should happen after the daemon TCP/auth
-  surface is stable.
+- The MCP daemon-backed surface is intentionally TCP-only in this slice. UDS
+  and HTTP/SSE daemon client transports still need explicit client support
+  before they can be enabled through MCP configuration.
 - The MCP HTTP transport is intentionally local-first. Remote deployment still
   needs a deployment-level TLS/reverse-proxy/OAuth story; direct non-loopback
   binding is refused unless `TDW_MCP_HTTP_TOKEN` is set.
 
 ## Follow-up implementation path
 
-1. Route MCP `tools/call` through the daemon client boundary where the tool
-   semantics require live daemon state.
+1. Extend the daemon client beyond TCP when deployments need UDS or HTTP/SSE
+   submission from MCP.
 2. Add a Postgres/RiverQueue worker backend that mirrors the SQLite scheduler
    contract for distributed deployments.
 3. Add always-on protocol tests for framing and env-gated integration tests for
