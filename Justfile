@@ -52,6 +52,12 @@ mutation crate:
 mutation-core:
     cargo mutants -p tdw-core --features inventory-registration
 
+mutation-changed:
+    cargo run -p xtask -- mutation changed
+
+mutation-report out-dir="mutants.out":
+    cargo run -p xtask -- mutation report {{out-dir}}
+
 schema-sync:
     cargo run -p xtask -- schema-sync
 
