@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod app_state;
+
+pub use app_state::AppState;
+
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;

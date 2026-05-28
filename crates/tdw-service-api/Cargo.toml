@@ -51,7 +51,9 @@ tdw-sandbox = { workspace = true }
 tdw-snapshot = { path = "../tdw-snapshot" }
 tdw-spatial = { path = "../tdw-spatial" }
 tdw-stage = { path = "../tdw-stage" }
+tdw-storage-clickhouse = { path = "../tdw-storage-clickhouse" }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-postgres = { path = "../tdw-storage-postgres" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 tdw-storage-s3 = { path = "../tdw-storage-s3" }
 tdw-table-format = { path = "../tdw-table-format" }
