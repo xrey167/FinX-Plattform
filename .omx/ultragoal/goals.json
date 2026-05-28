@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-28T15:19:38.343Z",
-  "updatedAt": "2026-05-28T15:22:43.996Z",
+  "updatedAt": "2026-05-28T16:01:43.730Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -11,13 +11,14 @@
       "id": "G001-implement-mcp-daemon-backed-tool-exe",
       "title": "Implement MCP daemon-backed tool execution end to end: add tdw-mcp da...",
       "objective": "Implement MCP daemon-backed tool execution end to end: add tdw-mcp daemon client configuration with localhost TCP default, env/config override, and fail-closed behavior when daemon-backed tools are requested while the daemon is unavailable; route a narrow first set of MCP tools through tdw-app-client and the daemon boundary, led by tdw.daemon.triage and a query/op submission style tool if the existing protocol supports it; keep deterministic fixture tools offline and fast; add focused unit tests plus an in-process daemon integration test without live Docker; update MCP boundary/readiness docs; preserve stdio and Streamable HTTP transports, clean-room constraints, repo worktree/PR workflow, and final verification/review gates.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 1,
       "createdAt": "2026-05-28T15:19:38.343Z",
-      "updatedAt": "2026-05-28T15:22:43.996Z",
-      "startedAt": "2026-05-28T15:19:46.294Z"
+      "updatedAt": "2026-05-28T16:01:43.730Z",
+      "startedAt": "2026-05-28T15:19:46.294Z",
+      "evidence": "Implemented tdw-app-client TCP daemon client and tdw-mcp daemon-backed triage/query tools; deterministic fixture tools remain offline; local gates passed after rebase; PR #65 is open, rebased onto main, mergeState CLEAN, and GitHub CI/CodeQL checks passed for 37a756809b26a315fdbded15ffdb051e7efc9958.",
+      "completedAt": "2026-05-28T16:01:43.730Z"
     }
   ],
-  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-implement-mcp-daemon-backed-tool-exe Implement MCP daemon-backed tool execution end to end: add tdw-mcp da...",
-  "activeGoalId": "G001-implement-mcp-daemon-backed-tool-exe"
+  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-implement-mcp-daemon-backed-tool-exe Implement MCP daemon-backed tool execution end to end: add tdw-mcp da..."
 }

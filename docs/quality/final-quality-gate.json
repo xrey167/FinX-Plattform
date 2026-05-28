@@ -15,6 +15,18 @@
   },
   "verification": {
     "status": "passed",
+    "evidence": "Local gates passed after rebase: fmt, check, clippy, workspace tests, clean-room audit, streamable HTTP smoke, diff check, and JSON/JSONL parse. PR #65 is open, mergeState CLEAN, and GitHub CI plus CodeQL checks passed for commit 37a756809b26a315fdbded15ffdb051e7efc9958.",
+    "commands": [
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo fmt --all -- --check",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo check --workspace",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo clippy --workspace --all-targets -- -D warnings",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo test --workspace",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p xtask -- clean-room-audit",
+      "git diff --check",
+      "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo run -p tdw-mcp -- --streamable-http-smoke",
+      ".omx JSON and JSONL parse",
+      "final evidence JSON parse"
+    ],
     "localCommands": [
       "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo fmt --all -- --check",
       "CARGO_TARGET_DIR=$env:TEMP/finx-plattform-target-mcp-daemon cargo check --workspace",
