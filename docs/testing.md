@@ -23,6 +23,11 @@ MSVC release profile and is required before a release checkpoint. The generated
 quality-gate contract lives at `docs/quality/phase-exit-gates.json`; refresh it
 with `just quality-gate` after changing the gate list.
 
+Heavy test policy decisions that are not yet phase-exit gates live in
+`docs/adr/0014-test-policy-backlog.md` and
+`docs/quality/test-policy-backlog.md`. Do not imply mutation, loom, or fuzz
+coverage is enforced until those tasks are wired through `xtask` and CI.
+
 ## Test Tiers
 
 - Unit tests live beside implementation code in `mod tests`.
@@ -30,6 +35,12 @@ with `just quality-gate` after changing the gate list.
 - Property tests belong under `tests/property/`.
 - End-to-end tests belong under `tests/e2e/` and should avoid billed APIs by default.
 - Benchmarks belong under `benches/` or `xtask`.
+- Mutation testing is a nightly/release-candidate signal for v0.1, not a PR
+  phase-exit gate.
+- Loom coverage starts with bounded concurrency models only; it is not a broad
+  async-crate requirement.
+- Fuzzing starts at parser and wire-format boundaries and must stay out of
+  default `cargo test`.
 - Adversarial checks must stay in `just test-adversarial` and cover injection,
   masking, authorization, and OIDC claim-rejection paths without billed APIs.
 

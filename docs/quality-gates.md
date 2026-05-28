@@ -17,6 +17,11 @@ just coverage
 just windows-release
 ```
 
+Deferred heavy-test gates are tracked in
+`docs/quality/test-policy-backlog.md`. Mutation score floors, broader loom
+models, and fuzz target enforcement are policy tasks until their commands are
+implemented and the generated gate contract is refreshed.
+
 CI also asserts generated schema drift after `schema-sync` and
 `event-schema-check` with `git diff --exit-code -- docs/schemas/agent` and
 `git diff --exit-code -- docs/schemas/event`.

@@ -1,0 +1,37 @@
+{
+  "scope": "G007 release decision and aggregate gate for work/post-merge-followups",
+  "date": "2026-05-28",
+  "filesReviewed": 24,
+  "recommendation": "APPROVE",
+  "architectStatus": "CLEAR",
+  "findings": [],
+  "reviewedAreas": [
+    "tdw-app-client daemon TCP, UDS, and HTTP/SSE client framing",
+    "tdw-mcp daemon-backed tool execution and env-gated integration coverage",
+    "tdw-worker Postgres distributed scheduler backend, migration, and live test gate",
+    "tdw-config worker backend configuration",
+    "daemon and worker quality documentation",
+    "test-policy ADR and backlog decisions",
+    "release-decision artifact and final cleanup report",
+    "GitHub CI worker Postgres integration step"
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo check --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "cargo run -p xtask -- clean-room-audit",
+    "cargo run -p xtask -- quality-gate check",
+    "cargo run -p tdw-mcp -- --streamable-http-smoke",
+    "git diff --check"
+  ],
+  "releaseDecision": {
+    "cutReleaseNow": false,
+    "reason": "work/post-merge-followups is unmerged and one commit behind origin/main; release must wait for rebase or patch-equivalence, PR, green CI, merge, and refreshed release evidence",
+    "evidence": "docs/quality/post-merge-followups-release-decision.md"
+  },
+  "residualRisks": [
+    "live daemon MCP and Postgres worker integration paths are env-gated and compile/skip by default without service URLs",
+    "branch must be rebased onto current main or proven patch-equivalent before opening or merging the PR"
+  ]
+}
