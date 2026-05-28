@@ -23,8 +23,9 @@
   - `chore/<topic>` — tooling, CI, dependency bump, gitignore, etc.
   - `review/<topic>` — read-only review or audit branch; do not push WIP commits
     onto a `review/` branch.
-- Do not reuse branch names. Once merged or abandoned, the local branch and its
-  worktree are deleted in the same change (see Worktrees).
+- Do not reuse branch names. Once merged or abandoned, delete the local branch
+  and worktree through `scripts/git/remove-worktree.ps1` after the branch is
+  clean and merged or patch-equivalent to `main`.
 - Rebase onto `main` rather than merging `main` back into a feature branch. Resolve
   conflicts locally; never force-push to `main` or to anyone else's branch.
 
@@ -46,8 +47,10 @@
   1. Create with `new-worktree.ps1`.
   2. Develop, commit, push (`git push -u origin work/<topic>`).
   3. Open PR, merge.
-  4. Tear down: `git worktree remove <path>` then `git branch -d work/<topic>`,
-     then `git fetch --prune` to drop the remote tracking ref.
+  4. Tear down with the guarded helper:
+     `.\scripts\git\remove-worktree.ps1 -Path <path> -RemoveBranch`.
+     It refuses dirty worktrees and branches that are neither merged into
+     `main` nor patch-equivalent by `git cherry main <branch>`.
 - Background agents may also create `.claude/worktrees/<name>` worktrees for
   isolation. Those are session-scoped and removed by `ExitWorktree`; do not push
   them as long-lived branches.

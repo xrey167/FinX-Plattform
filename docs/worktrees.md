@@ -1,6 +1,6 @@
 # Worktrees
 
-Use sibling worktrees for phase work:
+Use sibling worktrees for feature, cleanup, and phase work:
 
 ```powershell
 .\scripts\git\new-worktree.ps1 -Name phase-01-core
@@ -25,3 +25,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p xtask -- clean-room-audit
 ```
+
+After a PR is merged, remove the sibling worktree through the guarded helper:
+
+```powershell
+.\scripts\git\remove-worktree.ps1 -Path ..\FinX-Plattform-phase-01-core -RemoveBranch
+```
+
+The helper refuses to remove a worktree unless:
+
+- the worktree is clean,
+- it is not the primary checkout,
+- the branch is already an ancestor of `main`, or every branch commit is
+  patch-equivalent to `main` according to `git cherry main <branch>`.
+
+Use `-DryRun` first when auditing many stale worktrees.

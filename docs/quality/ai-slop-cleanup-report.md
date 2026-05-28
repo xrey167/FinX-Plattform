@@ -104,3 +104,56 @@ Remaining Risks:
 - `docker compose --profile live config` and a real
   `docker compose --profile live up -d --build` smoke still need a
   Docker-capable host or CI runner.
+
+## Governance And Worktree Hygiene Cleanup
+
+Scope: repo-local agent guidance and sibling worktree lifecycle:
+`AGENTS.md`, nested `AGENTS.md` files, `docs/worktrees.md`,
+`scripts/AGENTS.md`, and `scripts/git/remove-worktree.ps1`.
+
+Behavior Lock: this is a docs/tooling cleanup. The new teardown helper was
+dry-run against `..\FinX-Plattform-cleanup-g014-live-salvage` and verified
+that a squash-merged branch is safe to remove when `git cherry main <branch>`
+shows patch-equivalence. It also refused the primary checkout and the dirty
+`..\FinX-Plattform-g014-live` worktree.
+
+Cleanup Plan: track the previously untracked agent guidance files; remove
+stale "compile-ready stubs" guidance from `crates/AGENTS.md`; replace raw
+worktree teardown docs with the guarded helper; inventory stale sibling
+worktrees without deleting anything in the PR branch.
+
+Fallback Findings:
+- `crates/AGENTS.md`: "stubs are intentional" was stale after G001-G016
+  completion and could preserve placeholder code by habit. Classification:
+  stale governance fallback. Resolution: require concrete contracts, tests,
+  docs/worksheet coverage, and a caller for new crates.
+- Worktree teardown docs: raw `git worktree remove` + `git branch -d` gave no
+  clean-state or squash-merge proof. Classification: unsafe manual path.
+  Resolution: add `remove-worktree.ps1`, which refuses dirty worktrees and
+  branches that are neither merged nor patch-equivalent.
+
+Passes Completed:
+- Fallback-like code resolution gate: stale placeholder guidance replaced with
+  implementation-complete ownership guidance.
+1. Pass 1: Dead code deletion: no source deletion in this PR.
+2. Pass 2: Duplicate removal: nested agent guidance is tracked at ownership
+   boundaries rather than repeated in root docs.
+3. Pass 3: Naming/error handling cleanup: worktree teardown now reports the
+   exact refusal reason and unmatched commits.
+4. Pass 4: Test reinforcement: helper dry-run covers patch-equivalent,
+   primary-checkout, and dirty-worktree branches.
+
+Quality Gates:
+- Script dry-run: PASS for a patch-equivalent squash-merged branch
+- Safety refusals: PASS for primary checkout and dirty G014 live worktree
+- Diff hygiene: PASS via `git diff --check`
+
+Remaining Risks:
+- Local stale worktrees should be removed only after this helper lands on
+  `main`.
+- Dry-run refused `work/g010-ci-containers`, `work/g014-release-packaging`, and
+  `salvage/ultraqa-recover` because they still contain commits that are not
+  patch-equivalent to `main`.
+- `work/g014-data-backend-live` still has dirty local state; PR #47 salvaged
+  the useful product payload, but the old worktree should not be deleted by
+  the guarded helper until cleaned or explicitly discarded.
