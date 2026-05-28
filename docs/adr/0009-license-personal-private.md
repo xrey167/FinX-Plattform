@@ -1,5 +1,12 @@
 # ADR-0009: License And Publication Boundary
 
+## Status
+
+Superseded by [ADR-0014](0014-license-dual-mit-apache.md) on 2026-05-28.
+Workspace crates now use `license = "MIT OR Apache-2.0"`; `publish = false`
+is still retained per crate. The text below records the original decision
+as historical context.
+
 ## Decision
 
 FinX-Plattform is a private personal codebase. Workspace crates are marked

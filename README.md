@@ -105,12 +105,19 @@ External contributions are welcome — bug reports, fixes, providers, storage ad
 4. Run the four verification commands before opening a PR. Squash-and-merge only.
 5. Keep the clean-room boundary intact: no `finx-*` imports, nothing copied from FinX-XR, no `tdw-provider-openbb`.
 
-By submitting a contribution you agree it may be incorporated under the project's license terms below.
+See the License section below for how contributions are licensed.
 
 ## License
 
-**Source-available, all rights reserved.**
+Licensed under either of:
 
-The repository is public so the design, code, and history can be read, studied, and discussed. No license to use, copy, modify, or redistribute the code is granted. If you want to use any part of this codebase outside of reading it, contact the author.
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-This is reflected in `Cargo.toml` (`license = "UNLICENSED"`, `publish = false`) — none of these crates are or will be published to crates.io under this license.
+at your option.
+
+`Cargo.toml` still keeps `publish = false` on every crate — the `tdw-*` crates are not on crates.io yet. The dual license applies to the source as it lives in this repository.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
