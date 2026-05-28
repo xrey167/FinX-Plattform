@@ -19,6 +19,10 @@ Until the platform reaches `v1.0.0`:
 The GitHub release workflow only packages tag pushes matching
 `vMAJOR.MINOR.PATCH`.
 
+User-visible changes per tag are recorded in the top-level
+[`CHANGELOG.md`](../CHANGELOG.md), which follows Keep a Changelog. Each release
+cut adds a dated section there before the tag is pushed.
+
 ## Release Artifacts
 
 `.github/workflows/release.yml` builds these binaries:
@@ -93,16 +97,20 @@ composition can be extended by G015/G016 without changing the service graph.
 
 1. Ensure `main` is green on CI and CodeQL.
 2. Choose the next SemVer tag using the policy above.
-3. Create and push the tag:
+3. Reconcile the changelog: run `git log <previous-tag>..HEAD --oneline`,
+   confirm every user-visible change is captured under the new version section
+   in [`CHANGELOG.md`](../CHANGELOG.md), and date that section. The `MINOR` vs
+   `PATCH` choice must match the change set per the policy above.
+4. Create and push the tag:
 
    ```powershell
    git tag v0.MINOR.PATCH
    git push origin v0.MINOR.PATCH
    ```
 
-4. Wait for the Release workflow to publish all 12 archives, checksum files,
+5. Wait for the Release workflow to publish all 12 archives, checksum files,
    and attestations.
-5. Confirm the CI image job pushed fresh GHCR `sha-<git-sha>` images from the
+6. Confirm the CI image job pushed fresh GHCR `sha-<git-sha>` images from the
    same commit.
 
 ## Remaining Follow-up
