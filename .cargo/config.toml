@@ -6,4 +6,10 @@ color = "auto"
 
 [alias]
 xtask = "run -p xtask --"
-audit-clean-room = "run -p xtask -- clean-room-audit"
+# Pin `--target-dir target` so the clean-room-audit gate runs against the
+# workspace's in-tree `target/` directory. Without it the build inherits any
+# user-side `CARGO_TARGET_DIR`, which can land in a path the host's
+# code-integrity policy (WDAC / SmartScreen / EDR minifilter) refuses to spawn
+# from — producing `os error 5 (Zugriff verweigert / Access denied)` on build
+# scripts. See CONTRIBUTING.md "Local Toolchain Gotchas".
+audit-clean-room = "run -p xtask --target-dir target -- clean-room-audit"
