@@ -96,10 +96,11 @@
   originally drafted as private; visibility was flipped to public to unlock free
   GitHub Actions minutes and branch-protection rulesets, both of which are
   Pro-gated on private repos.
-- The remote is created with `scripts/github/create-private-repo.ps1` (name is
-  historical; pass `-Visibility public`). Changing **owner**, **repository
-  name**, or **visibility** of an existing remote requires a new explicit
-  approval — do not move the repo silently.
+- Changing the remote **owner**, **repository name**, or **visibility**
+  requires a new explicit approval — do not move the repo silently. The
+  initial bootstrap is one-off and complete; a fork that needs to recreate
+  the remote runs `gh repo create <owner>/FinX-Plattform --public --source .
+  --remote origin` directly (no wrapper script is kept in-tree).
 - `origin/main` is protected by a branch ruleset: require PR, require the CI
   status checks listed in `ci.yml`, block force-push, block deletion. Allow
   squash-and-merge only.
