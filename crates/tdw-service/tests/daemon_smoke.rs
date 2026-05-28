@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, service_channel, serve_tcp, spawn_inmemory_relay};
+use tdw_app_server::{CancellationToken, serve_tcp, service_channel, spawn_inmemory_relay};
 use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_protocol::{ActorKind, ActorRef, EventMsg, Op, OpEnvelope, SessionId};
 use tdw_service_api::{AppState, IngressAuthContext, PolicyEnforcementConfig};
@@ -92,8 +92,7 @@ async fn daemon_smoke_run_query_receives_started_and_completed() {
             .with_policy(analyst_policy());
 
         // Wire up the service channel.
-        let (handle, events_rx, service_loop) =
-            service_channel(state.clone(), state.clone());
+        let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
 
         let cancel = CancellationToken::new();
 
@@ -135,7 +134,9 @@ async fn daemon_smoke_run_query_receives_started_and_completed() {
         let envelope = make_run_query_envelope();
         let submitted_op_id = envelope.op_id.clone();
 
-        write_frame(&mut client, &envelope).await.expect("write frame");
+        write_frame(&mut client, &envelope)
+            .await
+            .expect("write frame");
 
         // Read events until we have both Started and Completed for our op.
         let mut got_started = false;
@@ -166,7 +167,10 @@ async fn daemon_smoke_run_query_receives_started_and_completed() {
         cancel.cancel();
 
         assert!(got_started, "expected Started event for the submitted op");
-        assert!(got_completed, "expected Completed event for the submitted op");
+        assert!(
+            got_completed,
+            "expected Completed event for the submitted op"
+        );
     })
     .await;
 

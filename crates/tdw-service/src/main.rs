@@ -3,7 +3,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, SubmissionHandle, service_channel, serve, spawn_inmemory_relay};
+use tdw_app_server::{
+    CancellationToken, SubmissionHandle, serve, service_channel, spawn_inmemory_relay,
+};
 use tdw_config::{DaemonTransport, TdwConfig};
 use tdw_protocol::EventMsg;
 use tdw_service_api::AppState;
@@ -28,8 +30,7 @@ async fn main() -> Result<(), ServiceError> {
             .map_err(|e| format!("smoke error: {e}"))?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&report)
-                .map_err(|e| format!("serialize error: {e}"))?
+            serde_json::to_string_pretty(&report).map_err(|e| format!("serialize error: {e}"))?
         );
         let _ = std::fs::remove_dir_all(&root);
         return Ok(());
@@ -47,8 +48,7 @@ async fn main() -> Result<(), ServiceError> {
         "tdw-service: daemon starting (no policy attached; dispatches will return Failed until P7)"
     );
 
-    let (handle, events_rx, service_loop) =
-        service_channel(state.clone(), state.clone());
+    let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
 
     let cancel = CancellationToken::new();
 
@@ -60,8 +60,7 @@ async fn main() -> Result<(), ServiceError> {
     );
 
     let transport_addr = effective_transport_addr(&config);
-    let transport_task =
-        spawn_transport(&config, handle, events_rx, cancel.clone()).await?;
+    let transport_task = spawn_transport(&config, handle, events_rx, cancel.clone()).await?;
 
     println!(
         "tdw-service: daemon up. transport={:?} addr={}. ctrl-c to exit.",
@@ -86,8 +85,8 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
             &contents,
         )
         .map_err(|e| format!("TDW_CONFIG parse error: {e}"))?;
-        let mut config = tdw_config::merge_layers(&[layer])
-            .map_err(|e| format!("config merge error: {e}"))?;
+        let mut config =
+            tdw_config::merge_layers(&[layer]).map_err(|e| format!("config merge error: {e}"))?;
         // Override volatile paths to safe in-memory defaults for daemon boot.
         config.session.sqlite_path = "sqlite::memory:".to_string();
         let rollout = std::env::temp_dir()
@@ -160,20 +159,18 @@ async fn spawn_transport(
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .map_err(|e| format!("TCP bind failed ({addr}): {e}"))?;
-            let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
+            let bound = listener
+                .local_addr()
+                .map_err(|e| format!("local_addr: {e}"))?;
             eprintln!("tdw-service: TCP listener bound on {bound}");
             Ok(tokio::spawn(async move {
                 tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await
             }))
         }
 
-        DaemonTransport::Uds => {
-            spawn_uds_or_fallback(config, handle, events_rx, cancel).await
-        }
+        DaemonTransport::Uds => spawn_uds_or_fallback(config, handle, events_rx, cancel).await,
 
-        DaemonTransport::HttpSse => {
-            spawn_http_or_fallback(config, handle, events_rx, cancel).await
-        }
+        DaemonTransport::HttpSse => spawn_http_or_fallback(config, handle, events_rx, cancel).await,
     }
 }
 
@@ -228,7 +225,9 @@ async fn spawn_http_or_fallback(
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("HTTP bind failed ({addr}): {e}"))?;
-    let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|e| format!("local_addr: {e}"))?;
     eprintln!("tdw-service: HTTP/SSE listener bound on {bound}");
     Ok(tokio::spawn(async move {
         tdw_app_server::serve_http(listener, handle, events_rx, cancel).await
@@ -260,7 +259,9 @@ async fn tcp_fallback(
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("TCP fallback bind failed ({addr}): {e}"))?;
-    let bound = listener.local_addr().map_err(|e| format!("local_addr: {e}"))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|e| format!("local_addr: {e}"))?;
     eprintln!("tdw-service: TCP fallback listener bound on {bound}");
     Ok(tokio::spawn(async move {
         tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await

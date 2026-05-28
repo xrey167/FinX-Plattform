@@ -40,7 +40,7 @@
 
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, service_channel, serve_tcp, spawn_inmemory_relay};
+use tdw_app_server::{CancellationToken, serve_tcp, service_channel, spawn_inmemory_relay};
 use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_protocol::{ActorKind, ActorRef, EventMsg, Op, OpEnvelope, SessionId};
 use tdw_service_api::{AppState, IngressAuthContext, PolicyEnforcementConfig};
@@ -154,8 +154,7 @@ async fn run_e2e(url: String) {
         .await
         .expect("PgEngine connect failed — check TDW_POSTGRES_TEST_URL");
 
-    let session_id =
-        SessionId::new("session-e2e-pg").expect("session id");
+    let session_id = SessionId::new("session-e2e-pg").expect("session id");
 
     // Wire up the service channel, relay, and TCP listener.
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
@@ -213,8 +212,7 @@ async fn run_e2e(url: String) {
     for _ in 0..20 {
         match read_frame(&mut client).await.expect("read frame") {
             Some(bytes) => {
-                let event: EventMsg =
-                    serde_json::from_slice(&bytes).expect("deserialize EventMsg");
+                let event: EventMsg = serde_json::from_slice(&bytes).expect("deserialize EventMsg");
                 match &event {
                     EventMsg::Started { op_id } if op_id == &query_op_id => {
                         got_started = true;
@@ -248,8 +246,7 @@ async fn run_e2e(url: String) {
 
     // Verify the evidence endpoint matches the dispatcher path.
     assert_eq!(
-        result["evidence"]["endpoint"],
-        "tdw.query.run",
+        result["evidence"]["endpoint"], "tdw.query.run",
         "evidence.endpoint must be tdw.query.run; got: {}",
         result["evidence"]["endpoint"]
     );
@@ -269,21 +266,13 @@ async fn run_e2e(url: String) {
     // that the relay has not yet reaped — the relay tick is 50 ms and we may
     // have cancelled before it ran. Accept >= 1 here since the relay may have
     // consumed some by the time we check.
-    let outbox_records = state
-        .outbox
-        .lock()
-        .expect("outbox lock")
-        .pending_after(0);
+    let outbox_records = state.outbox.lock().expect("outbox lock").pending_after(0);
     // The relay may have dispatched entries already; just assert the outbox
     // was exercised (at least one record exists in the full records, which we
     // confirm by checking the bus below).
 
     // Bus / relay: check the bus received at least one event from the relay.
-    let bus_lag = state
-        .bus
-        .lock()
-        .expect("bus lock")
-        .lag_since(0);
+    let bus_lag = state.bus.lock().expect("bus lock").lag_since(0);
     assert!(
         bus_lag > 0 || !outbox_records.is_empty(),
         "either the bus must have received events or the outbox must still hold pending records"
@@ -291,10 +280,7 @@ async fn run_e2e(url: String) {
 
     // Rollout archive: the service loop appends frames during dispatch. At
     // least the RunQuery cycle (Started + Completed) should be there.
-    let rollout_records = state
-        .rollout
-        .read_all()
-        .expect("rollout read_all");
+    let rollout_records = state.rollout.read_all().expect("rollout read_all");
     assert!(
         rollout_records.len() >= 2,
         "rollout archive must contain at least 2 frames (Started + Completed for RunQuery); got {}",

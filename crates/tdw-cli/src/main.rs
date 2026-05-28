@@ -81,17 +81,13 @@ async fn main() -> Result<(), CliError> {
 /// Connect to `addr`, submit `op` as a length-delimited JSON frame, then read
 /// `EventMsg` frames until the connection closes or a 5-second timeout elapses.
 pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, CliError> {
-    let mut stream = tokio::time::timeout(
-        Duration::from_secs(5),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| "connect timeout")?
-    .map_err(|e| format!("connect failed ({addr}): {e}"))?;
+    let mut stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
+        .await
+        .map_err(|_| "connect timeout")?
+        .map_err(|e| format!("connect failed ({addr}): {e}"))?;
 
     // Build envelope.
-    let session_id =
-        SessionId::generated();
+    let session_id = SessionId::generated();
     let envelope = OpEnvelope::new(
         session_id,
         1,
@@ -141,10 +137,7 @@ async fn write_frame(stream: &mut TcpStream, envelope: &OpEnvelope) -> Result<()
         .write_all(&json)
         .await
         .map_err(|e| format!("write body: {e}"))?;
-    stream
-        .flush()
-        .await
-        .map_err(|e| format!("flush: {e}"))?;
+    stream.flush().await.map_err(|e| format!("flush: {e}"))?;
     Ok(())
 }
 
