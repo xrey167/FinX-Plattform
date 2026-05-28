@@ -90,8 +90,10 @@ mod tests {
 
     #[test]
     fn carries_layered_config_profile_into_app_state() {
-        let mut config = TdwConfig::default();
-        config.profile = "service".to_string();
+        let config = TdwConfig {
+            profile: "service".to_string(),
+            ..Default::default()
+        };
         let state = AppState::from_config(config)
             .unwrap_or_else(|error| panic!("AppState should build: {error}"));
         assert_eq!(state.config.profile, "service");
