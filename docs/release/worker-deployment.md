@@ -25,9 +25,16 @@ Source of truth: `crates/tdw-worker/src/lib.rs` and `crates/tdw-worker/src/main.
 | `LoggingAckHandler` - offline ack (no execution) | shipped (library, the default) |
 | Metrics endpoint / alerting | **not shipped** - requirements below |
 
-`tdw-worker --serve` runs the lease loop over a `SqliteWorkerQueue` (file path
-from `TDW_WORKER_DB`, default `sqlite://tdw-worker.sqlite`) and drains in-flight
-work on Ctrl-C. It picks one of two handlers:
+`tdw-worker --serve` runs the lease loop over a durable queue and drains
+in-flight work on Ctrl-C. The backend is selected from the environment:
+
+- **Postgres** (built `--features postgres`) when `TDW_WORKER_PG_URL` (or
+  `DATABASE_URL`) is set — `PgWorkerQueue::connect(url)`. This is the
+  recommended production backend.
+- **SQLite** otherwise — `TDW_WORKER_DB` (default `sqlite://tdw-worker.sqlite`).
+
+The backend is logged at startup (`backend=postgres` / `backend=sqlite …`).
+Independent of the backend, it picks one of two handlers:
 
 - **`DaemonJobHandler` (real execution)** - selected when daemon dispatch is
   configured (`TDW_WORKER_DISPATCH=daemon`, or any of
@@ -162,9 +169,6 @@ table. Suggested signals:
 - Result forwarding. `DaemonJobHandler` maps the daemon's terminal event to
   job success/failure but does not persist or forward the daemon `result`
   payload beyond that.
-- A Postgres-backed `--serve` mode. The lease loop is generic over `ServeQueue`
-  (both backends implement it), but the CLI currently serves the SQLite backend;
-  selecting `PgWorkerQueue` from the CLI is a small follow-up.
 - Cross-region or multi-cluster job routing.
 - Exactly-once side effects in `run()`. The queue guarantees at-least-once
   delivery with idempotent completion; effect idempotency is the job's job.

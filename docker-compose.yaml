@@ -128,21 +128,68 @@ services:
     restart: "no"
 
   tdw-worker-serve:
-    image: finx-plattform/tdw-worker:local
+    # Postgres-backed worker: built with --features postgres so PgWorkerQueue
+    # is available; self-migrates `system.worker_jobs` on connect.
+    image: finx-plattform/tdw-worker:local-pg
     build:
       context: .
       dockerfile: docker/tdw-worker.Dockerfile
+      args:
+        FEATURES: postgres
     profiles: ["live"]
     command: ["--serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      tdw-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      TDW_PROFILE: docker
+      TDW_WORKER_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
+      TDW_WORKER_ID: tdw-worker-live
+    restart: unless-stopped
+
+  tdw-service-daemon:
+    # Long-running daemon (no --smoke). Binds 0.0.0.0 so sibling services reach
+    # it over the compose network DNS (`tdw-service-daemon:7878`). NOT published
+    # to the host: the daemon transport is unauthenticated + plaintext, so it
+    # stays internal-only. (To reach it from the host for debugging, attach to
+    # the compose network or add a temporary `ports:` override locally.)
+    image: finx-plattform/tdw-service:local
+    build:
+      context: .
+      dockerfile: docker/tdw-service.Dockerfile
+    profiles: ["live"]
     depends_on:
       tdw-bootstrap:
         condition: service_completed_successfully
     environment:
       TDW_PROFILE: docker
-      TDW_WORKER_DB: sqlite:///data/tdw-worker.sqlite
-      TDW_WORKER_ID: tdw-worker-live
-    volumes:
-      - worker-data:/data
+      TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
+    restart: unless-stopped
+
+  tdw-mcp-serve:
+    # Long-running MCP Streamable HTTP server, daemon-backed tools routed to the
+    # tdw-service daemon. Non-loopback bind requires TDW_MCP_HTTP_TOKEN.
+    image: finx-plattform/tdw-mcp:local
+    build:
+      context: .
+      dockerfile: docker/tdw-mcp.Dockerfile
+    profiles: ["live"]
+    command: ["--streamable-http", "0.0.0.0:8788"]
+    depends_on:
+      tdw-service-daemon:
+        condition: service_started
+    environment:
+      TDW_PROFILE: docker
+      # Required (no default): a non-loopback MCP bind on a host-published port
+      # must be authenticated. `docker compose --profile live up` fails fast if
+      # this is unset. Set a strong value in `.env`; front with TLS/OAuth per
+      # docs/release/mcp-remote-deployment.md for any non-local exposure.
+      TDW_MCP_HTTP_TOKEN: ${TDW_MCP_HTTP_TOKEN:?set TDW_MCP_HTTP_TOKEN (e.g. in .env) before exposing tdw-mcp-serve}
+      TDW_MCP_DAEMON_ADDR: tdw-service-daemon:7878
+    ports:
+      - "8788:8788"
     restart: unless-stopped
 
   tdw-service:
@@ -219,4 +266,3 @@ volumes:
   qdrant-data:
   meili-data:
   minio-data:
-  worker-data:

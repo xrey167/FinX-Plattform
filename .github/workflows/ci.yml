@@ -127,6 +127,13 @@ jobs:
   integration:
     name: Integration, Property, and E2E Subset
     runs-on: ubuntu-latest
+    env:
+      # `docker compose config` interpolates every service regardless of
+      # --profile, and the `live`-profile tdw-mcp-serve requires
+      # TDW_MCP_HTTP_TOKEN (no default, by design). This job never starts
+      # tdw-mcp-serve or publishes its port, so an ephemeral value here just
+      # satisfies interpolation. Operators set a real token via .env.
+      TDW_MCP_HTTP_TOKEN: ci-compose-interpolation-only
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.95.0

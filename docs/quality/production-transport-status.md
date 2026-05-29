@@ -125,7 +125,9 @@ lease loop.
 | `minio` | `minio/minio:latest`, `live` profile | ✅ live profile |
 | `minio-init` | `minio/mc:latest`, creates `tdw-default` | ✅ added |
 | `tdw-bootstrap` | `Dockerfile.bootstrap`, `crates/tdw-bootstrap` | ✅ PG+S3+CH+Qdrant+Meili |
-| `tdw-worker-serve` | `docker/tdw-worker.Dockerfile`, `--serve` | ✅ long-running |
+| `tdw-worker-serve` | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`), `--serve` | ✅ Postgres-backed, long-running |
+| `tdw-service-daemon` | `docker/tdw-service.Dockerfile`, daemon | ✅ long-running (`0.0.0.0:7878`) |
+| `tdw-mcp-serve` | `docker/tdw-mcp.Dockerfile`, `--streamable-http` | ✅ long-running (`:8788`, daemon-routed) |
 | Runbook | `docs/release/data-backend-runbook.md` | ✅ updated |
 
 ## Follow-up scope
@@ -133,10 +135,12 @@ lease loop.
 The baseline schemas created here (ClickHouse `tdw` DB + marker table,
 Qdrant `tdw-default` collection, Meilisearch `tdw-default` index) prove the
 backends are reachable and writable; richer domain schemas are still created
-on first domain write. Remaining: long-running `tdw-service`/`tdw-mcp` modes
-in the `live` profile, and a Postgres-backed `tdw-worker --serve` (the live
-worker currently uses the SQLite durable queue). End-to-end run-through of the
-`live` profile requires a Docker daemon.
+on first domain write. The `live` profile now runs the full long-running
+surface: a Postgres-backed worker, the `tdw-service` daemon (binds
+`0.0.0.0:7878`), and the `tdw-mcp` Streamable HTTP server (daemon-routed).
+Remaining: attach a daemon policy (dispatches return `Failed` until then) and
+Postgres-back the daemon's own session/rollout stores. End-to-end run-through
+of the `live` profile requires a Docker daemon.
 
 ## Companions
 
