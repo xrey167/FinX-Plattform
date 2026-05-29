@@ -292,6 +292,17 @@ fn schema_json<T: JsonSchema>() -> Value {
         .unwrap_or_else(|error| panic!("protocol schema should serialize: {error}"))
 }
 
+/// Fuzz shim: attempt to decode arbitrary bytes as each public wire type.
+///
+/// Must never panic on adversarial input; deserialization failures are the
+/// expected graceful outcome. Shared with the nightly cargo-fuzz target.
+#[doc(hidden)]
+pub fn __fuzz_protocol_json(data: &[u8]) {
+    let _ = serde_json::from_slice::<OpEnvelope>(data);
+    let _ = serde_json::from_slice::<EventMsg>(data);
+    let _ = serde_json::from_slice::<ReplayFrame>(data);
+}
+
 fn non_empty(value: String, field: &'static str) -> Result<String> {
     if value.trim().is_empty() {
         Err(ProtocolError::EmptyField { field })

@@ -74,6 +74,20 @@ pub fn validate_op(op: &Op) -> Result<()> {
     }
 }
 
+/// Fuzz shim: run the SQL guard over arbitrary bytes as a query string.
+///
+/// Must never panic on adversarial input; rejected SQL must surface as an
+/// error rather than a panic. Shared with the nightly cargo-fuzz target.
+#[doc(hidden)]
+pub fn __fuzz_sql_guard(data: &[u8]) {
+    let sql = String::from_utf8_lossy(data).into_owned();
+    let _ = validate_op(&Op::RunQuery {
+        sql,
+        plan_id: None,
+        cost_hint: None,
+    });
+}
+
 fn validate_read_only_sql(sql: &str) -> Result<()> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {

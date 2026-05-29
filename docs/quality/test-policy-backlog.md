@@ -106,6 +106,30 @@ Status: implemented.
 
 ### TEST-POLICY-004: Add Initial Fuzz Harnesses
 
+Status: stable half implemented (corpus-replay harnesses run in default `cargo
+test`); nightly cargo-fuzz half is a follow-up PR.
+
+- Stable implementation (this PR): each scoped crate exposes a
+  `#[doc(hidden)] pub fn __fuzz_<name>(&[u8])` shim that runs the real parse and
+  discards the `Result`, asserting graceful error handling instead of panics.
+  A per-crate `tests/fuzz_replay.rs` loads every committed seed under
+  `tests/corpus/<name>/` and replays it through the shim, asserting no panic.
+  Seed corpora include valid, malformed, empty, boundary/oversized, and
+  non-UTF8 inputs. The six surfaces and shims are:
+  - `tdw-protocol::__fuzz_protocol_json` (`protocol_json` corpus) — `OpEnvelope`,
+    `EventMsg`, `ReplayFrame` JSON.
+  - `tdw-config::__fuzz_config_toml` (`config_toml` corpus) — `ConfigLayer::from_toml`.
+  - `tdw-mcp::__fuzz_mcp_jsonrpc` (`mcp_jsonrpc` corpus) — `handle_json_rpc_line`.
+  - `tdw-mcp::__fuzz_mcp_http` (`mcp_http` corpus) — Streamable HTTP request body.
+  - `tdw-app-client::__fuzz_daemon_frame` (`daemon_frame` corpus) — length-delimited
+    daemon event frame reader.
+  - `tdw-exec::__fuzz_sql_guard` (`sql_guard` corpus) — read-only SQL guard.
+  The shims are designed so a future nightly cargo-fuzz target (the follow-up
+  half of this task) can call the same entry points.
+- Deferred (follow-up PR): the nightly `fuzz/` cargo-fuzz layout that reuses
+  these `__fuzz_*` shims under `cargo +nightly fuzz`, plus crash-reproducer
+  artifact capture.
+
 - Scope:
   - `protocol_op_event_json` for `tdw-protocol` `OpEnvelope`, `EventMsg`, and
     replay frame JSON.

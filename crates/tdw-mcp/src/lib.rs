@@ -383,6 +383,33 @@ pub fn handle_json_rpc_line(line: &str) -> Vec<String> {
     handle_json_rpc_lines([line])
 }
 
+/// Fuzz shim: feed arbitrary bytes through the JSON-RPC line handler.
+///
+/// Must never panic on adversarial input; malformed lines must produce error
+/// responses rather than panics. Shared with the nightly cargo-fuzz target.
+#[doc(hidden)]
+pub fn __fuzz_mcp_jsonrpc(data: &[u8]) {
+    let line = String::from_utf8_lossy(data);
+    let _ = handle_json_rpc_line(&line);
+}
+
+/// Fuzz shim: feed arbitrary bytes as the body of a Streamable HTTP request.
+///
+/// Must never panic on adversarial input; malformed requests must yield an
+/// error response rather than a panic. Shared with the nightly cargo-fuzz
+/// target.
+#[doc(hidden)]
+pub fn __fuzz_mcp_http(data: &[u8]) {
+    let mut server = McpServer::new();
+    let request =
+        StreamableHttpRequest::new("POST", STREAMABLE_HTTP_PATH, Vec::new(), data.to_vec());
+    let _ = handle_streamable_http_request_with_config(
+        &mut server,
+        request,
+        &StreamableHttpConfig::new(),
+    );
+}
+
 #[must_use]
 pub fn mcp_tool_catalog() -> Vec<String> {
     tool_descriptors()
