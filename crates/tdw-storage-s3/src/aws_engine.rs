@@ -17,7 +17,9 @@ use tdw_core::{BlobEngine, Error, Result};
 
 use crate::validate_key;
 
-/// Production S3 backend. Construct via [`S3Engine::from_env`] for AWS
+/// Production S3 backend.
+///
+/// Construct via [`S3Engine::from_env`] for AWS
 /// production credentials (taken from the standard AWS env vars /
 /// credentials file), or [`S3Engine::from_endpoint`] for `MinIO` /
 /// other S3-compatible services with explicit endpoint + credentials.
