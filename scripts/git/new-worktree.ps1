@@ -19,4 +19,10 @@ if (Test-Path -LiteralPath $worktreePath) {
 
 git fetch --all --prune
 git worktree add -b $branchName $worktreePath $Base
+
+# Wire the multi-session pre-push guardrail (see docs/multi-session.md). This is
+# repo-local config shared across all worktrees of the clone, so setting it once
+# is enough; re-running is idempotent.
+git config core.hooksPath .githooks
+
 Write-Host "Created $worktreePath on branch $branchName"

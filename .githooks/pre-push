@@ -1,0 +1,42 @@
+#!/bin/sh
+# FinX-Plattform pre-push guardrail — multi-session safety.
+#
+# Enforces the house rules in docs/multi-session.md locally, before a push
+# leaves the machine (the server-side "Protect main" ruleset is the real gate;
+# this is the fast, friendly fail before CI):
+#   1. Hard-block direct pushes to the protected branch (main) — land via PR.
+#   2. Warn (non-fatal) when the branch is behind origin/main, so you rebase
+#      before merge instead of discovering it at the merge gate.
+#
+# Wire it once per clone (new-worktree.ps1 does this for you):
+#   git config core.hooksPath .githooks
+#
+# pre-push receives "<local_ref> <local_sha> <remote_ref> <remote_sha>" lines on
+# stdin and the remote name/url as $1/$2.
+
+protected="main"
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+	case "$remote_ref" in
+	refs/heads/"$protected")
+		echo "✖ pre-push: direct pushes to '$protected' are blocked — open a PR (squash-merge only)." >&2
+		status=1
+		;;
+	esac
+done
+
+# Non-fatal staleness warning: a branch behind origin/main cannot merge under the
+# ruleset's "require branches up to date" policy until it is rebased.
+current="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+if [ "$current" != "$protected" ] && [ "$current" != "HEAD" ]; then
+	git fetch -q origin "$protected" 2>/dev/null || true
+	if git rev-parse --verify -q "origin/$protected" >/dev/null; then
+		if ! git merge-base --is-ancestor "origin/$protected" HEAD 2>/dev/null; then
+			echo "⚠ pre-push: '$current' is behind origin/$protected — rebase before it can merge:" >&2
+			echo "    git fetch origin && git rebase origin/$protected" >&2
+		fi
+	fi
+fi
+
+exit $status
