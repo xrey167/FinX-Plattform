@@ -1,6 +1,6 @@
-//! Idempotent DDL emission for the always-fresh "FlowField" analytics surfaces.
+//! Idempotent DDL emission for the always-fresh "`FlowField`" analytics surfaces.
 //!
-//! These helpers emit ClickHouse DDL strings (idempotent `create ... if not
+//! These helpers emit `ClickHouse` DDL strings (idempotent `create ... if not
 //! exists`) for the multi-granularity OHLC stack: for each granularity an
 //! `AggregatingMergeTree` target, an incremental materialized view that folds
 //! `raw.tick` into partial aggregate states, and a reader view that merges
@@ -11,7 +11,7 @@
 //! the same DDL can be generated/asserted in Rust and is the offline-testable
 //! counterpart to the integration-deferred SQL migrations.
 
-/// A candle granularity: its object-name suffix and the matching ClickHouse
+/// A candle granularity: its object-name suffix and the matching `ClickHouse`
 /// `INTERVAL` unit used by `toStartOfInterval`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Granularity {

@@ -1,6 +1,6 @@
-//! Pure (offline) parser for OpenFIGI mapping responses.
+//! Pure (offline) parser for `OpenFIGI` mapping responses.
 //!
-//! The OpenFIGI `POST /v3/mapping` endpoint answers a batch request with a JSON
+//! The `OpenFIGI` `POST /v3/mapping` endpoint answers a batch request with a JSON
 //! array, one element per mapping job. Each successful element is an object with
 //! a `data` array of instrument records; a failed element carries a `warning` or
 //! `error` string instead. We only model the fields the seeder needs (FIGI,
@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// One instrument row extracted from an OpenFIGI mapping `data` entry.
+/// One instrument row extracted from an `OpenFIGI` mapping `data` entry.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenFigiMapping {
     pub figi: String,
@@ -21,7 +21,7 @@ pub struct OpenFigiMapping {
     pub exch_code: Option<String>,
 }
 
-/// Error returned when an OpenFIGI mapping response cannot be parsed.
+/// Error returned when an `OpenFIGI` mapping response cannot be parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenFigiParseError {
     /// The body was not valid JSON.
@@ -43,7 +43,7 @@ impl core::fmt::Display for OpenFigiParseError {
 
 impl std::error::Error for OpenFigiParseError {}
 
-/// Parse an OpenFIGI mapping response body into the instrument rows it contains.
+/// Parse an `OpenFIGI` mapping response body into the instrument rows it contains.
 ///
 /// Job elements that carry a `warning`/`error` (no `data`) are skipped. Within a
 /// job's `data` array, entries missing a `figi` are skipped (a FIGI is the
