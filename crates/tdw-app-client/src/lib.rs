@@ -309,15 +309,13 @@ fn parse_http_sse_endpoint(
     };
     let events_path = format!("/{}", path.trim_start_matches('/'));
     let submit_path = events_path
-        .strip_suffix("/events")
-        .map(|prefix| {
+        .strip_suffix("/events").map_or_else(|| "/op".to_string(), |prefix| {
             if prefix.is_empty() {
                 "/op".to_string()
             } else {
                 format!("{prefix}/op")
             }
-        })
-        .unwrap_or_else(|| "/op".to_string());
+        });
 
     Ok(HttpSseEndpoint {
         authority: authority.to_string(),

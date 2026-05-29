@@ -36,9 +36,7 @@ fn integration_timeout() -> Duration {
     std::env::var("TDW_MCP_DAEMON_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|millis| *millis > 0)
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_secs(3))
+        .filter(|millis| *millis > 0).map_or_else(|| Duration::from_secs(3), Duration::from_millis)
 }
 
 fn decode(message: &str) -> Value {

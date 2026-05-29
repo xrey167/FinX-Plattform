@@ -117,7 +117,7 @@ mod tests {
                 audience: "tdw".to_string(),
             },
             hooks: Vec::new(),
-            hook_execution: Default::default(),
+            hook_execution: tdw_hooks::HookExecutionPolicy::default(),
             mask_rules: Vec::new(),
         }
     }

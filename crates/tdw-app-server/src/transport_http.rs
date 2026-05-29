@@ -35,7 +35,7 @@ pub async fn serve_http(
         loop {
             tokio::select! {
                 biased;
-                _ = cancel_for_pump.cancelled() => break,
+                () = cancel_for_pump.cancelled() => break,
                 maybe = events.recv() => match maybe {
                     Some(event) => {
                         if let Ok(json) = serde_json::to_string(&event) {
@@ -51,7 +51,7 @@ pub async fn serve_http(
     loop {
         tokio::select! {
             biased;
-            _ = cancel.cancelled() => break,
+            () = cancel.cancelled() => break,
             accept = listener.accept() => {
                 let (stream, _peer) = accept?;
                 let conn_handle = handle.clone();
@@ -100,20 +100,16 @@ async fn handle_http_conn(
     let body_already_read = &header_buf[header_end + 4..filled];
 
     // Parse request line.
-    let header_str = match std::str::from_utf8(header_section) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = stream
-                .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-                .await;
-            return;
-        }
+    let Ok(header_str) = std::str::from_utf8(header_section) else {
+        let _ = stream
+            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            .await;
+        return;
     };
 
     let mut lines = header_str.lines();
-    let request_line = match lines.next() {
-        Some(l) => l,
-        None => return,
+    let Some(request_line) = lines.next() else {
+        return;
     };
 
     let mut parts = request_line.split_ascii_whitespace();
@@ -168,7 +164,7 @@ async fn handle_http_conn(
             loop {
                 tokio::select! {
                     biased;
-                    _ = cancel.cancelled() => return,
+                    () = cancel.cancelled() => return,
                     res = subscriber.recv() => match res {
                         Ok(json) => {
                             let line = format!("data: {json}\n\n");

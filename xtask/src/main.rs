@@ -452,8 +452,7 @@ fn cargo_mutants_available() -> bool {
     std::process::Command::new("cargo")
         .args(["mutants", "--version"])
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 /// TEST-POLICY-002: print (and optionally run) a scoped `cargo mutants` plan for
@@ -659,7 +658,7 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
 
     let runtime_secs = parsed
         .get("elapsed_secs")
-        .and_then(|value| value.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
 
     serde_json::json!({

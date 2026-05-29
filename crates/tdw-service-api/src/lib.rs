@@ -7,6 +7,7 @@ mod policy;
 
 pub use app_state::AppState;
 pub use dispatcher::dispatch_op;
+pub use tdw_hooks::HookExecutionPolicy;
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
     ServiceEndpoint, enforce_request_path_with_backend, mask_json_response,

@@ -255,9 +255,8 @@ mod tests {
         config.daemon.transport = DaemonTransport::HttpSse;
 
         let result = spawn_transport(&config, handle, events_rx, CancellationToken::new()).await;
-        let error = match result {
-            Ok(_) => panic!("HTTP/SSE should fail when transport-http is not compiled"),
-            Err(error) => error,
+        let Err(error) = result else {
+            panic!("HTTP/SSE should fail when transport-http is not compiled")
         };
 
         assert!(error.to_string().contains("transport-http"));
@@ -272,9 +271,8 @@ mod tests {
         config.daemon.transport = DaemonTransport::Uds;
 
         let result = spawn_transport(&config, handle, events_rx, CancellationToken::new()).await;
-        let error = match result {
-            Ok(_) => panic!("UDS should fail when transport-uds is not compiled for Unix"),
-            Err(error) => error,
+        let Err(error) = result else {
+            panic!("UDS should fail when transport-uds is not compiled for Unix")
         };
 
         assert!(error.to_string().contains("transport-uds"));

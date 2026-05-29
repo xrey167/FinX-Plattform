@@ -207,7 +207,7 @@ fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
             audience: LOCAL_POLICY_AUDIENCE.to_string(),
         },
         hooks: Vec::new(),
-        hook_execution: Default::default(),
+        hook_execution: tdw_hooks::HookExecutionPolicy::default(),
         mask_rules: Vec::new(),
     })
 }
