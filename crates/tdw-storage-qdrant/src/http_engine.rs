@@ -51,6 +51,10 @@ impl QdrantHttpEngine {
     /// supply it for managed Qdrant deployments that require it.
     /// `distance` defaults to `Cosine`; pass `with_distance` to
     /// override (e.g. `"Euclid"` or `"Dot"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, api_key: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("qdrant endpoint: {error}")))?;
@@ -94,6 +98,10 @@ impl QdrantHttpEngine {
     /// Public so deployment bootstrap (`tdw-bootstrap`) can pre-create a
     /// baseline collection instead of relying on lazy creation at first
     /// upsert.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_collection(&self, name: &str, vector_size: usize) -> Result<()> {
         if let Ok(seen) = self.ensured.lock()
             && seen.contains(name)

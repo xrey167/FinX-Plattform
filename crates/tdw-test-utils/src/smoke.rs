@@ -90,6 +90,7 @@ pub async fn run_end_to_end_smoke(symbol: &str, storage_root: PathBuf) -> Result
 }
 
 /// Allocate a unique per-process scratch directory under the OS temp dir.
+///
 /// Suitable for invocations of [`run_end_to_end_smoke`] that want to
 /// manage their own storage root without colliding with parallel runs.
 pub fn allocate_storage_root(prefix: &str) -> PathBuf {

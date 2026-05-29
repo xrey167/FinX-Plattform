@@ -50,6 +50,10 @@ impl MeilisearchHttpEngine {
     /// (e.g. `http://127.0.0.1:7700`). `api_key` is optional; supply
     /// it for managed deployments or self-hosted instances with a
     /// configured master key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, api_key: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("meilisearch endpoint: {error}")))?;

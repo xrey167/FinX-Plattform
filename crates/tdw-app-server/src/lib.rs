@@ -341,7 +341,9 @@ pub const fn transport_label(t: DaemonTransport) -> &'static str {
     }
 }
 
-/// Spawn the in-memory outbox→bus relay. The task polls the outbox for
+/// Spawn the in-memory outbox→bus relay.
+///
+/// The task polls the outbox for
 /// pending records every `tick`, publishes each on the bus, and marks it
 /// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
 ///

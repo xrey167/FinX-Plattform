@@ -36,6 +36,10 @@ impl ClickHouseHttpEngine {
     /// (e.g. `http://127.0.0.1:8123`). `user` / `password` are
     /// optional; pass `None` for the default `default` user on a
     /// locally-running `ClickHouse` with no auth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, user: Option<String>, password: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("clickhouse endpoint: {error}")))?;
