@@ -83,6 +83,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
@@ -91,10 +93,13 @@ jobs:
           tool: cargo-fuzz
       - name: Smoke-run fuzz targets
         working-directory: fuzz
+        # Force the gnu target: cargo-fuzz needs ASan, which is incompatible
+        # with the statically linked musl libc ("sanitizer is incompatible with
+        # statically linked libc"). gnu uses a dynamic libc, so ASan links.
         run: |
           for target in protocol_json config_toml mcp_jsonrpc mcp_http daemon_frame sql_guard; do
             echo "::group::fuzz $target"
-            cargo +nightly fuzz run "$target" -- -runs=10000 -max_total_time=30
+            cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -runs=10000 -max_total_time=30
             echo "::endgroup::"
           done
       - name: Upload crash artifacts
