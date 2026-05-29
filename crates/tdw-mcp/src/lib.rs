@@ -491,10 +491,8 @@ fn daemon_client_config_from_sources(
         Some(value) => parse_daemon_transport(&value)?,
         None => config.daemon.transport,
     };
-    let address = match address_override {
-        Some(value) => value,
-        None => daemon_endpoint_address_from_config(config, transport),
-    };
+    let address =
+        address_override.unwrap_or_else(|| daemon_endpoint_address_from_config(config, transport));
     let timeout = timeout_ms
         .as_deref()
         .map(parse_timeout_ms)
@@ -863,19 +861,23 @@ fn handle_streamable_http_connection(
     server: &Arc<Mutex<McpServer>>,
     config: &StreamableHttpConfig,
 ) -> std::io::Result<()> {
-    let response = match read_streamable_http_request(&mut stream) {
-        Ok(request) => match server.lock() {
-            Ok(mut server) => {
-                handle_streamable_http_request_with_config(&mut server, &request, config)
-            }
-            Err(_) => text_response(
-                500,
-                "Internal Server Error",
-                "MCP server state lock poisoned",
-            ),
+    let response = read_streamable_http_request(&mut stream).map_or_else(
+        |response| response,
+        |request| {
+            server.lock().map_or_else(
+                |_| {
+                    text_response(
+                        500,
+                        "Internal Server Error",
+                        "MCP server state lock poisoned",
+                    )
+                },
+                |mut server| {
+                    handle_streamable_http_request_with_config(&mut server, &request, config)
+                },
+            )
         },
-        Err(response) => response,
-    };
+    );
     write_streamable_http_response(&mut stream, &response)
 }
 

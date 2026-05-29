@@ -109,8 +109,7 @@ impl MeilisearchHttpEngine {
                         "meilisearch task {task_uid} {}: {}",
                         task.status,
                         task.error
-                            .map(|error| error.message)
-                            .unwrap_or_else(|| "no error message".to_string())
+                            .map_or_else(|| "no error message".to_string(), |error| error.message)
                     )));
                 }
                 _ => {
@@ -283,8 +282,7 @@ impl LexicalEngine for MeilisearchHttpEngine {
                 let score = hit
                     .get("_rankingScore")
                     .and_then(Value::as_f64)
-                    .map(|value| value as f32)
-                    .unwrap_or(1.0);
+                    .map_or(1.0, |value| value as f32);
                 // Strip Meilisearch's reserved fields before returning
                 // the document to the caller.
                 if let Value::Object(map) = &mut hit {

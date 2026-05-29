@@ -67,10 +67,9 @@ pub fn emit_ohlc_granularity(g: Granularity) -> String {
     let unit = g.interval_unit;
     // Optional, tunable retention TTL on window_start. None (e.g. 1d) retains
     // indefinitely, so the target table closes directly after `order by`.
-    let ttl_clause = match g.ttl {
-        Some(ttl) => format!("\nttl window_start + {ttl}"),
-        None => String::new(),
-    };
+    let ttl_clause = g
+        .ttl
+        .map_or_else(String::new, |ttl| format!("\nttl window_start + {ttl}"));
     // non_replicated_deduplication_window lets a retried ingest batch carrying the
     // same insert_deduplication_token (with deduplicate_blocks_in_dependent_
     // materialized_views=1 on the INSERT) dedup THROUGH this MV target, preventing

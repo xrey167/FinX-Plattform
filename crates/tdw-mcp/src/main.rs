@@ -6,7 +6,7 @@ fn main() {
         Some("--stdio-json-rpc") => {
             std::process::exit(tdw_mcp::run_stdio_json_rpc());
         }
-        Some("--streamable-http") | Some("--http") => {
+        Some("--streamable-http" | "--http") => {
             let bind = args
                 .next()
                 .unwrap_or_else(|| tdw_mcp::default_streamable_http_bind().to_string());
@@ -16,7 +16,7 @@ fn main() {
             }
             std::process::exit(tdw_mcp::run_streamable_http(&bind));
         }
-        Some("--streamable-http-smoke") | Some("--http-smoke") => {
+        Some("--streamable-http-smoke" | "--http-smoke") => {
             std::process::exit(tdw_mcp::run_streamable_http_smoke());
         }
         Some(flag) if flag.starts_with("--") => {
