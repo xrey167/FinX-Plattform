@@ -506,16 +506,16 @@ fn daemon_endpoint_address_from_config(config: &TdwConfig, transport: DaemonTran
             .clone()
             .unwrap_or_else(|| DEFAULT_DAEMON_TCP_ADDR.to_string()),
         DaemonTransport::Uds => config.daemon.uds_path.clone(),
-        DaemonTransport::HttpSse => config
-            .daemon
-            .http_bind
-            .as_deref().map_or_else(|| "http://127.0.0.1:7879/events".to_string(), |bind| {
+        DaemonTransport::HttpSse => config.daemon.http_bind.as_deref().map_or_else(
+            || "http://127.0.0.1:7879/events".to_string(),
+            |bind| {
                 if bind.starts_with("http://") || bind.starts_with("https://") {
                     bind.to_string()
                 } else {
                     format!("http://{bind}/events")
                 }
-            }),
+            },
+        ),
     }
 }
 

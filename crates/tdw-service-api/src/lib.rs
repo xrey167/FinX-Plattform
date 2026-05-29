@@ -7,7 +7,6 @@ mod policy;
 
 pub use app_state::AppState;
 pub use dispatcher::dispatch_op;
-pub use tdw_hooks::HookExecutionPolicy;
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
     ServiceEndpoint, enforce_request_path_with_backend, mask_json_response,
@@ -15,6 +14,7 @@ pub use policy::{
     secure_endpoint_response_with_backend, secure_udf_run, secure_udf_run_with_backend,
     service_hook_policy,
 };
+pub use tdw_hooks::HookExecutionPolicy;
 
 use std::collections::BTreeMap;
 use std::future::Future;
