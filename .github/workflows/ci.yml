@@ -33,6 +33,15 @@ jobs:
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Opt-in UDF runtime features are not in the default matrix; lint + test
+      # them here so a dependency or code change cannot silently break the
+      # wasmi-backed UDF path (see closed PR #95: a wasmi major bump went green
+      # because nothing built these features).
+      - run: cargo clippy -p tdw-udf-wasm --features wasmi --all-targets -- -D warnings
+      - run: cargo clippy -p tdw-sandbox --features udf-wasm --all-targets -- -D warnings
+      - run: cargo clippy -p tdw-service-api --features udf-wasm --all-targets -- -D warnings
+      - run: cargo test -p tdw-udf-wasm --features wasmi
+      - run: cargo test -p tdw-sandbox --features udf-wasm
       - run: cargo deny check
       - run: cargo run -p xtask -- schema-sync
       - run: git diff --exit-code -- docs/schemas/agent
@@ -81,7 +90,7 @@ jobs:
         binary: [tdw-service, tdw-cli, tdw-mcp, tdw-worker]
     steps:
       - uses: actions/checkout@v6
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build image for scan
         uses: docker/build-push-action@v6
         with:
@@ -99,7 +108,7 @@ jobs:
           severity: CRITICAL,HIGH
       - name: Login to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
