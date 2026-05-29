@@ -12,6 +12,47 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.6.0] - 2026-05-29
+
+Live streaming ingest plus the full long-running deployment surface. The 5
+commits in `v0.5.0..HEAD` are user-visible runtime/protocol/deployment work, so
+per the pre-1.0 policy this is a `MINOR` release.
+
+### Added
+
+- **Postgres-backed worker `--serve`** (#101). `tdw-worker --serve` selects its
+  durable backend from the environment: `PgWorkerQueue` when built
+  `--features postgres` with `TDW_WORKER_PG_URL`/`DATABASE_URL`, otherwise the
+  SQLite default. `run_serve` is now generic over `ServeQueue`.
+- **Long-running services in the `live` compose profile** (#102). A long-running
+  `tdw-service` daemon (`TDW_DAEMON_TCP_BIND` lets it bind `0.0.0.0:7878` for
+  cross-container reach), a `tdw-mcp --streamable-http` server (daemon-routed),
+  and a Postgres-backed `tdw-worker --serve` (worker image `FEATURES` build-arg).
+- **End-to-end streaming ingest** (#100). `run_ws_ingest` + `spawn_stream_ingest`
+  make a `Streamer` reachable as a cancellable background ingest task draining
+  into the OLAP engine; restart-safe via the content-addressed dedup token
+  (at-least-once, no materialized-view double-count).
+- **Live Binance trade feed + indicators** (#104). `tdw-provider-binance`
+  `BinanceTradeStreamer` (live `wss://stream.binance.com` behind a `ws` feature;
+  deterministic offline `decode_trade_frame` seam), `Op::StreamStart`/`StreamStop`
+  protocol ops with `tdw-acp` validation and dispatcher routing, plus fixed-N
+  volatility and an exact Wilder RSI UDF.
+
+### Fixed / Security
+
+- **Hardened `live` MCP/daemon exposure** (#103). `TDW_MCP_HTTP_TOKEN` is now
+  required (no weak default) so a host-published, non-loopback MCP bind is always
+  authenticated; the `tdw-service` daemon is internal-only (host port publication
+  dropped) since its transport is unauthenticated plaintext.
+
+### Notes
+
+- The `live` profile end-to-end run requires a Docker daemon. `tdw-service`
+  boots with no policy attached, so dispatched operations return `Failed` until a
+  policy is wired.
+- `Cargo.toml` keeps `publish = false`; the workspace `version` field is not
+  bumped per release (releases are tag-driven).
+
 ## [0.5.0] - 2026-05-29
 
 Adds a streaming market-data warehouse on ClickHouse. The 9 commits in
@@ -222,7 +263,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.2.0...v0.3.0
