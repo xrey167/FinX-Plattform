@@ -27,16 +27,22 @@ docker compose --profile live up -d --build
 
 This starts:
 
-| Service           | Image                          | Notes                                                      |
-|-------------------|--------------------------------|------------------------------------------------------------|
-| `postgres`        | `postgres:17-alpine`           | Healthcheck via `pg_isready`                               |
-| `minio`           | `minio/minio:latest`           | Healthcheck via `/minio/health/live`                       |
-| `minio-init`      | `minio/mc:latest`              | Creates the `tdw-default` bucket once, then exits          |
-| `tdw-bootstrap`   | built from `Dockerfile.bootstrap` | Applies all G013 Postgres schemas and writes the S3 marker, then exits |
+| Service             | Image                              | Notes                                                                       |
+|---------------------|------------------------------------|-----------------------------------------------------------------------------|
+| `postgres`          | `postgres:17-alpine`               | Healthcheck via `pg_isready`                                                |
+| `clickhouse`        | `clickhouse/clickhouse-server:25.5`| OLAP backend                                                                |
+| `qdrant`            | `qdrant/qdrant:latest`             | Vector backend                                                              |
+| `meilisearch`       | `getmeili/meilisearch:latest`      | Lexical backend                                                             |
+| `minio`             | `minio/minio:latest`               | Healthcheck via `/minio/health/live`                                        |
+| `minio-init`        | `minio/mc:latest`                  | Creates the `tdw-default` bucket once, then exits                           |
+| `tdw-bootstrap`     | built from `Dockerfile.bootstrap`  | Applies G013 Postgres schemas, writes the S3 marker, and creates the ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection, and Meilisearch `tdw-default` index, then exits |
+| `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile`     | Long-running `tdw-worker --serve` lease loop (SQLite-backed); starts after bootstrap succeeds |
 
-`tdw-bootstrap` will only run after `postgres` is healthy and
-`minio-init` has finished. It emits one structured JSON line per
-step on stdout.
+`tdw-bootstrap` runs after `postgres` is healthy, `minio-init` has finished,
+and ClickHouse/Qdrant/Meilisearch have started. It emits one structured JSON
+line per step on stdout, and is idempotent (all creates use
+`IF NOT EXISTS`/exists-checks). `tdw-worker-serve` then starts as the first
+long-running application service and stays up (`restart: unless-stopped`).
 
 ## Verify the bootstrap
 
@@ -76,6 +82,19 @@ docker compose exec minio sh -c "mc alias set local http://localhost:9000 minio 
 
 You should see `_tdw_bootstrap_marker`.
 
+Check the ClickHouse baseline:
+
+```powershell
+docker compose exec clickhouse clickhouse-client -u tdw --password tdw --query "exists table tdw._tdw_bootstrap_marker"
+```
+
+Returns `1`. Check the Qdrant collection and Meilisearch index:
+
+```powershell
+curl -s http://localhost:6333/collections/tdw-default | findstr status
+curl -s http://localhost:7700/indexes/tdw-default | findstr uid
+```
+
 ## Re-running bootstrap
 
 Bootstrap is idempotent (all `CREATE TABLE` statements use
@@ -108,19 +127,26 @@ docker compose --profile live down -v
 | `tdw-bootstrap` exits 3                                | Cannot reach Postgres. Wait for `postgres` healthcheck, then re-run bootstrap.                     |
 | `tdw-bootstrap` exits 4                                | Postgres reachable but DDL failed. `docker compose logs tdw-bootstrap` shows the failing schema.   |
 | `tdw-bootstrap` exits 5                                | MinIO bucket missing. `minio-init` failed; re-run with `docker compose up minio-init`.             |
+| `tdw-bootstrap` exits 7                                | ClickHouse unreachable or DDL failed. Check the `clickhouse` service and the logged statement.     |
+| `tdw-bootstrap` exits 8                                | Qdrant unreachable or collection create failed. Check the `qdrant` service.                        |
+| `tdw-bootstrap` exits 9                                | Meilisearch unreachable or index create task failed. Check the `meilisearch` service.              |
 | `port is already allocated`                            | Another process is using `5432`, `9001`, or `9002`. Stop it or change the port mapping in compose. |
 | `permission denied while connecting to the Docker daemon` | Run with `sudo` on Linux, or add your user to the `docker` group.                                  |
 
 ## What this does NOT do
 
-- Start any application services (`tdw-service`, `tdw-worker`,
-  `tdw-mcp`). Those are separate slices in a future PR.
-- Bootstrap ClickHouse / Qdrant / Meilisearch schemas. They are
-  brought up by the `full` compose profile but their schemas are
-  application-defined when the first write arrives. Re-run
-  bootstrap once those use cases land.
-- Configure TLS, secrets management, or non-root containers.
-  That is a hardening pass tracked in G014's follow-up slices.
+- Start the full application surface. The `live` profile now starts one
+  long-running service (`tdw-worker-serve`); `tdw-service` and `tdw-mcp`
+  long-running modes remain follow-ups.
+- Back the live worker with Postgres. `tdw-worker --serve` currently uses the
+  SQLite durable queue (on the `worker-data` volume); a Postgres-backed
+  `--serve` is a tracked follow-up.
+- Define rich domain schemas. The ClickHouse table, Qdrant collection, and
+  Meilisearch index created here are baseline markers proving the backends are
+  reachable and writable; application tables/collections are still created on
+  first domain write.
+- Configure TLS, secrets management, or non-root containers. That is a
+  hardening pass tracked in G014's follow-up slices.
 
 ## See also
 

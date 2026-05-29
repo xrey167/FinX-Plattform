@@ -2,8 +2,10 @@
 //!
 //! Reads connection details from environment variables, applies all
 //! Postgres schemas needed by the G013 durable-persistence crates,
-//! and writes a marker object to the configured S3/MinIO bucket so
-//! downstream services can confirm the bucket is reachable.
+//! writes a marker object to the configured S3/MinIO bucket, and -
+//! when their endpoints are configured - creates a baseline schema in
+//! ClickHouse, Qdrant, and Meilisearch so the full search/OLAP/vector
+//! backend is reachable before any application service starts.
 //!
 //! Emits one structured JSON line per step on stdout, suitable for
 //! `docker compose logs tdw-bootstrap` and CI grep.
@@ -17,8 +19,16 @@
 //!
 //! Optional:
 //!   - `TDW_S3_REGION`        default `us-east-1`
+//!   - `TDW_CLICKHOUSE_URL`   e.g. `http://clickhouse:8123` (+ `_USER`/`_PASSWORD`)
+//!   - `TDW_QDRANT_URL`       e.g. `http://qdrant:6333` (+ `_API_KEY`, `_VECTOR_SIZE`)
+//!   - `TDW_MEILI_URL`        e.g. `http://meilisearch:7700` (+ `_API_KEY`)
 //!
-//! Exits 0 on full success, non-zero on the first failed step.
+//! Each optional backend is skipped unless its `*_URL` is set, so the
+//! minimal Postgres + S3 bootstrap keeps working unchanged.
+//!
+//! Exits 0 on full success, non-zero on the first failed step. Exit codes:
+//! 2 env, 3 postgres-connect, 4 postgres-schema, 5 s3-marker, 6 s3-roundtrip,
+//! 7 clickhouse, 8 qdrant, 9 meilisearch.
 
 #![forbid(unsafe_code)]
 
@@ -28,15 +38,22 @@ use std::process::ExitCode;
 use bytes::Bytes;
 use serde_json::json;
 use tdw_bus::PgEventBus;
-use tdw_core::BlobEngine;
+use tdw_core::{BlobEngine, OlapEngine};
 use tdw_outbox::PgOutboxStore;
 use tdw_session::PgSessionStore;
 use tdw_snapshot::PgSnapshotStore;
+use tdw_storage_clickhouse::ClickHouseHttpEngine;
+use tdw_storage_meilisearch::MeilisearchHttpEngine;
 use tdw_storage_postgres::PgEngine;
+use tdw_storage_qdrant::QdrantHttpEngine;
 use tdw_storage_s3::S3Engine;
 
 const MARKER_KEY: &str = "_tdw_bootstrap_marker";
 const MARKER_BODY: &[u8] = b"tdw-bootstrap ok\n";
+const CLICKHOUSE_DB: &str = "tdw";
+const QDRANT_COLLECTION: &str = "tdw-default";
+const MEILI_INDEX: &str = "tdw-default";
+const DEFAULT_QDRANT_VECTOR_SIZE: usize = 1536;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -166,6 +183,83 @@ async fn main() -> ExitCode {
             log_step("s3-roundtrip", "failed", Some(&error.to_string()));
             return ExitCode::from(6);
         }
+    }
+
+    // Optional search/OLAP/vector schema bootstrap. Each backend is skipped
+    // unless its endpoint env var is set, so the minimal Postgres + S3 live
+    // profile keeps working unchanged.
+    if let Ok(clickhouse_url) = env::var("TDW_CLICKHOUSE_URL") {
+        let user = env::var("TDW_CLICKHOUSE_USER").ok();
+        let password = env::var("TDW_CLICKHOUSE_PASSWORD").ok();
+        let engine = match ClickHouseHttpEngine::new(&clickhouse_url, user, password) {
+            Ok(engine) => engine,
+            Err(error) => {
+                log_step("clickhouse-connect", "failed", Some(&error.to_string()));
+                return ExitCode::from(7);
+            }
+        };
+        let statements = [
+            format!("create database if not exists {CLICKHOUSE_DB}"),
+            format!(
+                "create table if not exists {CLICKHOUSE_DB}._tdw_bootstrap_marker \
+                 (key String, created_at DateTime default now()) \
+                 engine = MergeTree order by key"
+            ),
+        ];
+        for statement in &statements {
+            if let Err(error) = engine.execute(statement).await {
+                log_step("clickhouse-schema", "failed", Some(&error.to_string()));
+                return ExitCode::from(7);
+            }
+        }
+        log_step(
+            "clickhouse-schema",
+            "ok",
+            Some("database tdw + _tdw_bootstrap_marker"),
+        );
+    }
+
+    if let Ok(qdrant_url) = env::var("TDW_QDRANT_URL") {
+        let api_key = env::var("TDW_QDRANT_API_KEY").ok();
+        let vector_size = env::var("TDW_QDRANT_VECTOR_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_QDRANT_VECTOR_SIZE);
+        let engine = match QdrantHttpEngine::new(&qdrant_url, api_key) {
+            Ok(engine) => engine,
+            Err(error) => {
+                log_step("qdrant-connect", "failed", Some(&error.to_string()));
+                return ExitCode::from(8);
+            }
+        };
+        if let Err(error) = engine
+            .ensure_collection(QDRANT_COLLECTION, vector_size)
+            .await
+        {
+            log_step("qdrant-collection", "failed", Some(&error.to_string()));
+            return ExitCode::from(8);
+        }
+        log_step(
+            "qdrant-collection",
+            "ok",
+            Some(&format!("{QDRANT_COLLECTION} (size {vector_size})")),
+        );
+    }
+
+    if let Ok(meili_url) = env::var("TDW_MEILI_URL") {
+        let api_key = env::var("TDW_MEILI_API_KEY").ok();
+        let engine = match MeilisearchHttpEngine::new(&meili_url, api_key) {
+            Ok(engine) => engine,
+            Err(error) => {
+                log_step("meili-connect", "failed", Some(&error.to_string()));
+                return ExitCode::from(9);
+            }
+        };
+        if let Err(error) = engine.ensure_index(MEILI_INDEX, "id").await {
+            log_step("meili-index", "failed", Some(&error.to_string()));
+            return ExitCode::from(9);
+        }
+        log_step("meili-index", "ok", Some(MEILI_INDEX));
     }
 
     log_step("done", "ok", Some("data backend live"));

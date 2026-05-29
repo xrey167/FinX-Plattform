@@ -109,25 +109,34 @@ backend bootstrap on top of the shipped Postgres and S3 transports.
 
 ## G014 data backend live
 
-The `live` compose profile brings up Postgres and MinIO, creates the
-`tdw-default` bucket, runs the `tdw-bootstrap` one-shot binary, applies
-the G013 Postgres schemas, and writes then reads back an S3 marker
-object.
+The `live` compose profile brings up Postgres, ClickHouse, Qdrant,
+Meilisearch, and MinIO, creates the `tdw-default` bucket, runs the
+`tdw-bootstrap` one-shot binary (G013 Postgres schemas + S3 marker
+round-trip + baseline ClickHouse DB/marker table, Qdrant collection, and
+Meilisearch index), then starts the long-running `tdw-worker --serve`
+lease loop.
 
 | Component | Runtime path | Status |
 |---|---|---|
 | `postgres` | `postgres:17-alpine`, `live` profile | ✅ live profile |
+| `clickhouse` | `clickhouse-server:25.5`, `live` profile | ✅ live profile |
+| `qdrant` | `qdrant/qdrant:latest`, `live` profile | ✅ live profile |
+| `meilisearch` | `getmeili/meilisearch:latest`, `live` profile | ✅ live profile |
 | `minio` | `minio/minio:latest`, `live` profile | ✅ live profile |
 | `minio-init` | `minio/mc:latest`, creates `tdw-default` | ✅ added |
-| `tdw-bootstrap` | `Dockerfile.bootstrap`, `crates/tdw-bootstrap` | ✅ added |
-| Runbook | `docs/release/data-backend-runbook.md` | ✅ added |
+| `tdw-bootstrap` | `Dockerfile.bootstrap`, `crates/tdw-bootstrap` | ✅ PG+S3+CH+Qdrant+Meili |
+| `tdw-worker-serve` | `docker/tdw-worker.Dockerfile`, `--serve` | ✅ long-running |
+| Runbook | `docs/release/data-backend-runbook.md` | ✅ updated |
 
 ## Follow-up scope
 
-This live backend slice does not start long-running application
-services or bootstrap ClickHouse, Qdrant, and Meilisearch schemas.
-Those services remain covered by the `full` profile and their existing
-integration tests.
+The baseline schemas created here (ClickHouse `tdw` DB + marker table,
+Qdrant `tdw-default` collection, Meilisearch `tdw-default` index) prove the
+backends are reachable and writable; richer domain schemas are still created
+on first domain write. Remaining: long-running `tdw-service`/`tdw-mcp` modes
+in the `live` profile, and a Postgres-backed `tdw-worker --serve` (the live
+worker currently uses the SQLite durable queue). End-to-end run-through of the
+`live` profile requires a Docker daemon.
 
 ## Companions
 
