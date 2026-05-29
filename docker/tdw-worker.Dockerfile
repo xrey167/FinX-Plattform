@@ -11,10 +11,13 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+# Optional cargo features for the build, e.g. `postgres` for a PG-backed
+# `tdw-worker --serve`. Empty by default so the release image is unchanged.
+ARG FEATURES=""
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --bin tdw-worker
+RUN cargo build --release --bin tdw-worker ${FEATURES:+--features "$FEATURES"}
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
