@@ -10,14 +10,19 @@ license = "MIT OR Apache-2.0"
 ## variant falls back to the `tdw-udf` built-in dispatcher (which handles
 ## "upper" and "identity" without actual WASM execution). With this feature
 ## enabled, `LocalUdfSandbox` routes `UdfRuntime::Wasm` requests through
-## `WasmUdfRuntime` in `tdw-udf-wasm`.
-udf-wasm = ["dep:tdw-udf-wasm"]
+## `WasmUdfRuntime` in `tdw-udf-wasm`. The wasm module bytes are carried as
+## base64 in `UdfRequest.source`; non-wasm source falls back to the fixture.
+udf-wasm = ["dep:tdw-udf-wasm", "tdw-udf-wasm/wasmi", "dep:base64"]
 
 [dependencies]
+base64 = { workspace = true, optional = true }
 serde = { workspace = true }
 tdw-udf = { path = "../tdw-udf" }
 tdw-udf-wasm = { path = "../tdw-udf-wasm", optional = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+wat = "1"
 
 [lints]
 workspace = true

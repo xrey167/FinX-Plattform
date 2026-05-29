@@ -36,9 +36,8 @@ the local sandbox. It does not claim full language-runtime isolation.
   or cgroup. The `wasmi` backend is an in-process, resource-metered interpreter,
   not an OS-level isolation boundary.
 - A module cache is not implemented (each call re-compiles).
-- The sandbox/daemon path does not yet route to the `wasmi` runtime by profile
-  (see follow-up #5): `tdw-sandbox` still runs the deterministic fixture, and
-  `UdfRequest` has no channel for binary wasm bytes (`source` is a `String`).
+- Per-request `WasmLimits` overrides are not exposed; the sandbox routing uses
+  `WasmLimits::default()`.
 
 ## Follow-up path
 
@@ -49,11 +48,17 @@ the local sandbox. It does not claim full language-runtime isolation.
 4. ✅ Fuel-exhaustion, memory-limit, malformed-module, disallowed-import,
    missing-export, bad-signature, and string-ABI (echo / distinct-output /
    out-of-bounds / non-UTF-8) tests (`wasmi_tests`, gated on the feature).
-5. ✅ String/bytes ABI over linear memory (`execute_wasm_string`). **Remaining:**
-   profile-driven routing in `tdw-sandbox`/`tdw-service-api` to call the wasm
-   runtime instead of the fixture. This first needs a channel for binary wasm
-   bytes into `UdfRequest` (today `source` is a `String`; options: a
-   `wasm_bytes` field or base64-decode `source` when `runtime == Wasm`).
+5. ✅ String/bytes ABI over linear memory (`execute_wasm_string`) **and** routing:
+   with `tdw-sandbox`'s `udf-wasm` feature (which now enables
+   `tdw-udf-wasm/wasmi`), `LocalUdfSandbox` runs a `UdfRuntime::Wasm` request
+   through `execute_wasm_string` when `UdfRequest.source` base64-decodes to a
+   real wasm module (magic `\0asm`); otherwise it falls back to the
+   deterministic fixture. Default `cargo test --workspace` (no feature) keeps the
+   `tdw-udf` built-in dispatcher. **Step #5 is complete.**
+
+UDF runtime hardening (this scope) is now fully delivered. Remaining
+enhancements are out of scope: per-request `WasmLimits`, a module cache, and a
+`wasm_bytes` struct field (base64-in-`source` was chosen instead).
 
 ## Verification
 

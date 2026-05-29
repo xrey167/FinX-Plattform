@@ -20,6 +20,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
+base64 = "0.22"
 bytes = "1.11.0"
 futures-core = "0.3.31"
 schemars = "1.2.1"

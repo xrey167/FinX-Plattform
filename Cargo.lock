@@ -3774,10 +3774,12 @@ dependencies = [
 name = "tdw-sandbox"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "serde",
  "tdw-udf",
  "tdw-udf-wasm",
  "thiserror 2.0.18",
+ "wat",
 ]
 
 [[package]]
