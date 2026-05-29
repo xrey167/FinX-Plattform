@@ -15,7 +15,7 @@ pub use policy::{
     secure_endpoint_response_with_backend, secure_udf_run, secure_udf_run_with_backend,
     service_hook_policy,
 };
-pub use stream_ingest::run_stream_ingest;
+pub use stream_ingest::{run_stream_ingest, run_ws_ingest};
 pub use tdw_hooks::HookExecutionPolicy;
 
 use std::collections::BTreeMap;

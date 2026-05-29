@@ -226,6 +226,41 @@ jobs:
           TDW_CLICKHOUSE_TEST_PASSWORD: tdw
         run: cargo test -p tdw-storage-clickhouse --features clickhouse --test http_engine -- --nocapture
 
+      # Apply the full tdw migration catalog to the live backends, then exercise
+      # the ingest path end-to-end. This catches migration / materialized-view /
+      # dictionary regressions that the offline catalog test (which only checks
+      # each migration begins with `create`) cannot. The dictionary source
+      # placeholders are pointed at the `postgres` compose service (ClickHouse
+      # connects to it over the compose network).
+      - name: Apply migrations to live postgres + clickhouse
+        env:
+          PGPASSWORD: tdw
+        run: |
+          set -euo pipefail
+          for f in $(ls migrations/postgres/*.sql | sort); do
+            echo "pg: $f"
+            docker compose exec -T postgres psql -U tdw -d tdw -v ON_ERROR_STOP=1 -q < "$f"
+          done
+          docker compose exec -T postgres psql -U tdw -d tdw -q < migrations/postgres/seeds/reference_seed.sql
+          for f in $(ls migrations/clickhouse/*.sql | sort); do
+            echo "ch: $f"
+            sed -e 's/PLACEHOLDER_PG_HOST/postgres/g' \
+                -e 's/PLACEHOLDER_PG_DB/tdw/g' \
+                -e 's/PLACEHOLDER_PG_USER/tdw/g' \
+                -e 's/PLACEHOLDER_PG_PASSWORD/tdw/g' "$f" \
+              | docker compose exec -T clickhouse clickhouse-client --user tdw --password tdw --multiquery
+          done
+
+      # Drives Op::IngestBatch through the dispatcher against the live ClickHouse
+      # (real-clickhouse feature) and asserts the row lands in raw.equity_historical
+      # — also exercising the silver-normalization MV + dict_instrument_ref enrichment.
+      - name: Run ingest e2e against live ClickHouse (migrations applied)
+        env:
+          TDW_CLICKHOUSE_TEST_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASSWORD: tdw
+        run: cargo test -p tdw-service-api --features real-clickhouse --test clickhouse_ingest_e2e -- --nocapture
+
       - name: Wait for Qdrant
         run: |
           for i in $(seq 1 30); do

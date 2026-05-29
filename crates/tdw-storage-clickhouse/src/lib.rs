@@ -77,25 +77,24 @@ fn validate_sql(sql: &str) -> Result<()> {
 /// batch of rows.
 ///
 /// The statement carries per-query `SETTINGS`:
-/// - `async_insert=1` — server-side buffering so many small ingests do not each
-///   create a part (documented flush thresholds: 100 MiB / 200 ms / 450 inserts
-///   when async dedup is on, whichever trips first).
-/// - `wait_for_async_insert=1` — durable ack: the call returns only after the
-///   buffered block is flushed to disk, so insert errors surface to the caller.
 /// - `deduplicate_blocks_in_dependent_materialized_views=1` — propagates the
 ///   dedup decision to the target tables of dependent materialized views, so a
 ///   retried batch that is dropped at the source is ALSO dropped at each MV
 ///   target instead of being folded in a second time (which double-counts
-///   aggregates such as OHLC volume). This is only effective when each MV target
-///   table ALSO has a dedup window enabled — `ReplicatedMergeTree` (on by
-///   default) or a non-replicated `*MergeTree` with
-///   `non_replicated_deduplication_window` set.
-/// - `insert_deduplication_token='…'` — makes a retried, byte-identical batch a
-///   no-op even when rows carry non-idempotent server defaults (e.g. a
-///   `DEFAULT now()` ingest timestamp), which would otherwise defeat the
-///   content-hash dedup. Requires a `*MergeTree` target with deduplication
-///   enabled — `ReplicatedMergeTree` (on by default) or a non-replicated table
-///   with `non_replicated_deduplication_window` set.
+///   aggregates such as OHLC volume). Only effective when each MV target table
+///   ALSO has a dedup window enabled — `ReplicatedMergeTree` (on by default) or a
+///   non-replicated `*MergeTree` with `non_replicated_deduplication_window` set.
+/// - `insert_deduplication_token='…'` — makes a retried batch a no-op even when
+///   rows carry non-idempotent server defaults (e.g. a `DEFAULT now()` ingest
+///   timestamp) that would otherwise defeat the content-hash dedup.
+///
+/// Inserts are SYNCHRONOUS — deliberately NOT `async_insert`. ClickHouse 25.x
+/// rejects `async_insert` combined with
+/// `deduplicate_blocks_in_dependent_materialized_views` (Code 344,
+/// SUPPORT_IS_DISABLED), and the dependent-MV dedup correctness takes priority
+/// over server-side buffering. The ingest path already batches client-side
+/// (whole `OBBject`s), which is the documented-preferred strategy anyway, so
+/// async buffering buys little here.
 ///
 /// # Errors
 ///
@@ -116,7 +115,7 @@ pub fn build_insert_jsoneachrow<T: DataModel>(
         )));
     }
     let mut sql = format!(
-        "INSERT INTO {table} SETTINGS async_insert=1, wait_for_async_insert=1, \
+        "INSERT INTO {table} SETTINGS \
 deduplicate_blocks_in_dependent_materialized_views=1, \
 insert_deduplication_token='{token}' FORMAT JSONEachRow\n",
         token = escape_ch_string(dedup_token),
@@ -299,8 +298,10 @@ mod tests {
         .unwrap_or_else(|error| panic!("insert should build: {error}"));
 
         assert!(sql.starts_with("INSERT INTO raw.equity_historical SETTINGS "));
-        assert!(sql.contains("async_insert=1"));
-        assert!(sql.contains("wait_for_async_insert=1"));
+        // Synchronous insert: async_insert is intentionally absent — it is
+        // rejected together with deduplicate_blocks_in_dependent_materialized_views
+        // on ClickHouse 25.x (Code 344).
+        assert!(!sql.contains("async_insert"));
         assert!(sql.contains("deduplicate_blocks_in_dependent_materialized_views=1"));
         assert!(sql.contains("insert_deduplication_token='sess-1:7:raw.equity_historical'"));
         assert!(sql.contains("FORMAT JSONEachRow"));
