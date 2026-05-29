@@ -1,0 +1,12 @@
+# cargo-fuzz build/runtime outputs (committed seed corpora under corpus/<name>/
+# are force-added explicitly; everything else here is generated and ignored).
+/target/
+/artifacts/
+/coverage/
+
+# Inputs discovered by libFuzzer during a run. Seed corpora are committed but
+# the mutated/expanded corpus generated at runtime is not.
+/corpus/*/crash-*
+/corpus/*/leak-*
+/corpus/*/timeout-*
+/corpus/*/oom-*

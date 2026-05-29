@@ -1,0 +1,63 @@
+[package]
+name = "tdw-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+tdw-protocol = { path = "../crates/tdw-protocol" }
+tdw-config = { path = "../crates/tdw-config" }
+tdw-mcp = { path = "../crates/tdw-mcp" }
+tdw-app-client = { path = "../crates/tdw-app-client" }
+tdw-exec = { path = "../crates/tdw-exec" }
+
+# Prevent this benchmark/test harness crate from being picked up by the parent
+# workspace; it is intentionally excluded (see root Cargo.toml `[workspace] exclude`).
+[workspace]
+
+[[bin]]
+name = "protocol_json"
+path = "fuzz_targets/protocol_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_jsonrpc"
+path = "fuzz_targets/mcp_jsonrpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mcp_http"
+path = "fuzz_targets/mcp_http.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "daemon_frame"
+path = "fuzz_targets/daemon_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_guard"
+path = "fuzz_targets/sql_guard.rs"
+test = false
+doc = false
+bench = false
