@@ -224,25 +224,19 @@ impl McpServer {
     }
 
     fn call_tool(&self, id: Value, params: Value) -> Vec<Value> {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return vec![error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "tools/call params must be an object",
-                ))];
-            }
+        let Some(params_object) = params.as_object() else {
+            return vec![error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "tools/call params must be an object",
+            ))];
         };
-        let name = match string_field(params_object, "name") {
-            Some(name) => name,
-            None => {
-                return vec![error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "tools/call requires string field: name",
-                ))];
-            }
+        let Some(name) = string_field(params_object, "name") else {
+            return vec![error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "tools/call requires string field: name",
+            ))];
         };
         let arguments = params_object
             .get("arguments")
@@ -277,25 +271,19 @@ impl McpServer {
     }
 
     fn read_resource(&self, id: Value, params: Value) -> Value {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "resources/read params must be an object",
-                ));
-            }
+        let Some(params_object) = params.as_object() else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "resources/read params must be an object",
+            ));
         };
-        let uri = match string_field(params_object, "uri") {
-            Some(uri) => uri,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "resources/read requires string field: uri",
-                ));
-            }
+        let Some(uri) = string_field(params_object, "uri") else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "resources/read requires string field: uri",
+            ));
         };
 
         match resource_content(uri) {
@@ -305,25 +293,19 @@ impl McpServer {
     }
 
     fn get_prompt(&self, id: Value, params: Value) -> Value {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "prompts/get params must be an object",
-                ));
-            }
+        let Some(params_object) = params.as_object() else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "prompts/get params must be an object",
+            ));
         };
-        let name = match string_field(params_object, "name") {
-            Some(name) => name,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "prompts/get requires string field: name",
-                ));
-            }
+        let Some(name) = string_field(params_object, "name") else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "prompts/get requires string field: name",
+            ));
         };
         let arguments = params_object
             .get("arguments")
@@ -524,18 +506,16 @@ fn daemon_endpoint_address_from_config(config: &TdwConfig, transport: DaemonTran
             .clone()
             .unwrap_or_else(|| DEFAULT_DAEMON_TCP_ADDR.to_string()),
         DaemonTransport::Uds => config.daemon.uds_path.clone(),
-        DaemonTransport::HttpSse => config
-            .daemon
-            .http_bind
-            .as_deref()
-            .map(|bind| {
+        DaemonTransport::HttpSse => config.daemon.http_bind.as_deref().map_or_else(
+            || "http://127.0.0.1:7879/events".to_string(),
+            |bind| {
                 if bind.starts_with("http://") || bind.starts_with("https://") {
                     bind.to_string()
                 } else {
                     format!("http://{bind}/events")
                 }
-            })
-            .unwrap_or_else(|| "http://127.0.0.1:7879/events".to_string()),
+            },
+        ),
     }
 }
 
@@ -835,9 +815,8 @@ fn handle_streamable_http_post(
     {
         return text_response(415, "Unsupported Media Type", "expected application/json");
     }
-    let body = match std::str::from_utf8(&request.body) {
-        Ok(body) => body,
-        Err(_) => return text_response(400, "Bad Request", "request body must be UTF-8 JSON"),
+    let Ok(body) = std::str::from_utf8(&request.body) else {
+        return text_response(400, "Bad Request", "request body must be UTF-8 JSON");
     };
 
     let messages = server.handle_json_rpc_line(body);
@@ -2304,7 +2283,7 @@ mod tests {
             loop {
                 tokio::select! {
                     biased;
-                    _ = loop_cancel.cancelled() => break,
+                    () = loop_cancel.cancelled() => break,
                     maybe = service_loop.run_once() => {
                         if maybe.is_none() {
                             break;
@@ -2370,7 +2349,7 @@ mod tests {
             loop {
                 tokio::select! {
                     biased;
-                    _ = loop_cancel.cancelled() => break,
+                    () = loop_cancel.cancelled() => break,
                     maybe = service_loop.run_once() => {
                         if maybe.is_none() {
                             break;

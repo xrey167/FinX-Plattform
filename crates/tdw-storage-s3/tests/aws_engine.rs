@@ -4,15 +4,15 @@
 //!   - Compiled only with `--features s3` (no aws-sdk-s3 dep otherwise).
 //!   - Runs only when `TDW_S3_TEST_BUCKET` and `TDW_S3_TEST_ENDPOINT`
 //!     are both set in the environment. CI workflows that bring up a
-//!     MinIO docker container should set these; default
+//!     `MinIO` docker container should set these; default
 //!     `cargo test --workspace` leaves them unset and the test silently
 //!     skips.
 //!
 //! Required env vars:
 //!   - `TDW_S3_TEST_BUCKET`   — bucket name (must already exist)
-//!   - `TDW_S3_TEST_ENDPOINT` — base URL (e.g. http://127.0.0.1:9000)
+//!   - `TDW_S3_TEST_ENDPOINT` — base URL (e.g. <http://127.0.0.1:9000>)
 //!
-//! Optional env vars (default to MinIO's standard root credentials):
+//! Optional env vars (default to `MinIO`'s standard root credentials):
 //!   - `TDW_S3_TEST_ACCESS_KEY` (default `minioadmin`)
 //!   - `TDW_S3_TEST_SECRET_KEY` (default `minioadmin`)
 //!   - `TDW_S3_TEST_REGION`     (default `us-east-1`)

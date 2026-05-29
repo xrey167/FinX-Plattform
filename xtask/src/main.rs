@@ -452,8 +452,7 @@ fn cargo_mutants_available() -> bool {
     std::process::Command::new("cargo")
         .args(["mutants", "--version"])
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 /// TEST-POLICY-002: print (and optionally run) a scoped `cargo mutants` plan for
@@ -631,7 +630,7 @@ fn outcomes_crate_label(root: &Path, path: &Path) -> String {
 /// Extract the per-crate counts cargo-mutants records in `outcomes.json`.
 ///
 /// cargo-mutants writes a top-level `outcomes` array where each entry has a
-/// `summary` string ("CaughtMutant", "MissedMutant", "Timeout", ...) and a
+/// `summary` string ("`CaughtMutant`", "`MissedMutant`", "Timeout", ...) and a
 /// `total_phases.*` / `phase_results` timing. We tolerate schema drift by
 /// counting on the `summary` field and summing any numeric `*_time` we find.
 fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Value {
@@ -659,7 +658,7 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
 
     let runtime_secs = parsed
         .get("elapsed_secs")
-        .and_then(|value| value.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
 
     serde_json::json!({

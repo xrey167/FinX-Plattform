@@ -66,6 +66,7 @@ impl Default for DaemonClientConfig {
 }
 
 impl DaemonClientConfig {
+    #[must_use]
     pub fn tcp(address: impl Into<String>) -> Self {
         Self {
             endpoint: DaemonEndpoint {
@@ -76,6 +77,7 @@ impl DaemonClientConfig {
         }
     }
 
+    #[must_use]
     pub fn new(endpoint: DaemonEndpoint) -> Self {
         Self {
             endpoint,
@@ -83,6 +85,7 @@ impl DaemonClientConfig {
         }
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         if !timeout.is_zero() {
             self.timeout = timeout;
@@ -90,11 +93,13 @@ impl DaemonClientConfig {
         self
     }
 
-    pub fn endpoint(&self) -> &DaemonEndpoint {
+    #[must_use]
+    pub const fn endpoint(&self) -> &DaemonEndpoint {
         &self.endpoint
     }
 
-    pub fn timeout(&self) -> Duration {
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
@@ -127,11 +132,13 @@ impl Default for DaemonClient {
 }
 
 impl DaemonClient {
+    #[must_use]
     pub fn new(config: DaemonClientConfig) -> Self {
         Self { config }
     }
 
-    pub fn config(&self) -> &DaemonClientConfig {
+    #[must_use]
+    pub const fn config(&self) -> &DaemonClientConfig {
         &self.config
     }
 
@@ -308,16 +315,16 @@ fn parse_http_sse_endpoint(
         path
     };
     let events_path = format!("/{}", path.trim_start_matches('/'));
-    let submit_path = events_path
-        .strip_suffix("/events")
-        .map(|prefix| {
+    let submit_path = events_path.strip_suffix("/events").map_or_else(
+        || "/op".to_string(),
+        |prefix| {
             if prefix.is_empty() {
                 "/op".to_string()
             } else {
                 format!("{prefix}/op")
             }
-        })
-        .unwrap_or_else(|| "/op".to_string());
+        },
+    );
 
     Ok(HttpSseEndpoint {
         authority: authority.to_string(),
