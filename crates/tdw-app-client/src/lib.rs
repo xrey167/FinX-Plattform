@@ -151,17 +151,17 @@ impl DaemonClient {
     ///
     /// Returns a `DaemonClientError` if config validation fails or the
     /// underlying transport request fails.
-    pub fn submit_and_wait(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    pub fn submit_and_wait(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         self.config.validate()?;
         match self.config.endpoint.transport {
-            DaemonTransport::Tcp => self.submit_tcp(&envelope),
+            DaemonTransport::Tcp => self.submit_tcp(envelope),
             #[cfg(unix)]
             DaemonTransport::Uds => self.submit_uds(envelope),
             #[cfg(not(unix))]
             DaemonTransport::Uds => Err(DaemonClientError::UnsupportedTransport(
                 DaemonTransport::Uds,
             )),
-            DaemonTransport::HttpSse => self.submit_http_sse(&envelope),
+            DaemonTransport::HttpSse => self.submit_http_sse(envelope),
         }
     }
 
@@ -193,7 +193,7 @@ impl DaemonClient {
     }
 
     #[cfg(unix)]
-    fn submit_uds(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_uds(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let address = self.config.endpoint.address.trim().to_string();
         let mut stream =
@@ -961,7 +961,7 @@ mod tests {
         );
 
         match client
-            .submit_and_wait(shutdown_envelope())
+            .submit_and_wait(&shutdown_envelope())
             .expect_err("closed daemon port should not accept submissions")
         {
             DaemonClientError::Connect { address, .. } => {
@@ -982,7 +982,7 @@ mod tests {
         }));
 
         assert!(matches!(
-            client.submit_and_wait(shutdown_envelope()),
+            client.submit_and_wait(&shutdown_envelope()),
             Err(DaemonClientError::UnsupportedEndpoint {
                 transport: DaemonTransport::HttpSse,
                 ..
