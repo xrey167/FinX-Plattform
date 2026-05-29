@@ -413,7 +413,7 @@ impl DaemonToolRuntime {
         }
     }
 
-    fn configured(config: DaemonClientConfig) -> Self {
+    const fn configured(config: DaemonClientConfig) -> Self {
         Self { config: Ok(config) }
     }
 
@@ -557,6 +557,7 @@ impl StreamableHttpConfig {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         let token = token.into();
         if !token.is_empty() {
@@ -1590,7 +1591,7 @@ fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: Val
     })
 }
 
-fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
+const fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
     match transport {
         DaemonTransport::Tcp => "tcp",
         DaemonTransport::Uds => "uds",

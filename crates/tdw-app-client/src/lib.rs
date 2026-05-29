@@ -78,7 +78,7 @@ impl DaemonClientConfig {
     }
 
     #[must_use]
-    pub fn new(endpoint: DaemonEndpoint) -> Self {
+    pub const fn new(endpoint: DaemonEndpoint) -> Self {
         Self {
             endpoint,
             timeout: DEFAULT_DAEMON_TIMEOUT,
@@ -86,7 +86,7 @@ impl DaemonClientConfig {
     }
 
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         if !timeout.is_zero() {
             self.timeout = timeout;
         }
@@ -133,7 +133,7 @@ impl Default for DaemonClient {
 
 impl DaemonClient {
     #[must_use]
-    pub fn new(config: DaemonClientConfig) -> Self {
+    pub const fn new(config: DaemonClientConfig) -> Self {
         Self { config }
     }
 
@@ -514,7 +514,7 @@ struct HttpSseEventReader {
 }
 
 impl HttpSseEventReader {
-    fn new(stream: TcpStream) -> Self {
+    const fn new(stream: TcpStream) -> Self {
         Self { stream }
     }
 }
@@ -766,7 +766,7 @@ pub fn __fuzz_daemon_frame(data: &[u8]) {
     let _ = read_length_delimited_event_frame(&mut cursor);
 }
 
-fn event_op_id(event: &EventMsg) -> Option<&OpId> {
+const fn event_op_id(event: &EventMsg) -> Option<&OpId> {
     match event {
         EventMsg::Started { op_id }
         | EventMsg::Progress { op_id, .. }
@@ -781,7 +781,7 @@ fn event_op_id(event: &EventMsg) -> Option<&OpId> {
     }
 }
 
-fn event_is_terminal(event: &EventMsg) -> bool {
+const fn event_is_terminal(event: &EventMsg) -> bool {
     matches!(
         event,
         EventMsg::Completed { .. } | EventMsg::Failed { .. } | EventMsg::Cancelled { .. }

@@ -766,7 +766,7 @@ fn run_check(command: &mut std::process::Command) -> bool {
     }
 }
 
-fn pass_label(ok: bool) -> &'static str {
+const fn pass_label(ok: bool) -> &'static str {
     if ok { "PASS" } else { "FAIL" }
 }
 

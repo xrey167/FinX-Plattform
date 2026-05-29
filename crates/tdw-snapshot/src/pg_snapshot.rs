@@ -49,6 +49,7 @@ impl PgSnapshotStore {
     }
 
     /// Override the table name. Useful for multi-tenant deployments.
+    #[must_use]
     pub fn with_table(mut self, table: impl Into<String>) -> Self {
         self.table = table.into();
         self

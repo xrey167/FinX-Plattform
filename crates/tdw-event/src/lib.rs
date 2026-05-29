@@ -51,6 +51,7 @@ pub struct TraceContext {
 }
 
 impl TraceContext {
+    #[must_use]
     pub fn child(&self, span_id: impl Into<String>) -> Self {
         Self {
             trace_id: self.trace_id.clone(),

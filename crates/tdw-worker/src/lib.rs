@@ -1453,7 +1453,7 @@ where
     H: JobHandler,
 {
     #[must_use]
-    pub fn new(queue: Q, handler: H, config: ServeConfig) -> Self {
+    pub const fn new(queue: Q, handler: H, config: ServeConfig) -> Self {
         Self {
             queue,
             handler,

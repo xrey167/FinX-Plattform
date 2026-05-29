@@ -232,6 +232,7 @@ impl SystemHookHandlerBackend {
         self
     }
 
+    #[must_use]
     pub fn with_http_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.http_bearer_token = Some(token.into());
         self
