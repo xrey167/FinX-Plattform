@@ -35,6 +35,7 @@ fn main() {
             _ => help(),
         },
         "clean-room-audit" => clean_room_audit(),
+        "prerelease-check" => prerelease_check(),
         _ => help(),
     };
 
@@ -46,7 +47,7 @@ fn main() {
 
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check"
     );
     Ok(())
 }
@@ -698,6 +699,76 @@ fn clean_room_audit() -> Result<(), String> {
             offenders.join("\n")
         ))
     }
+}
+
+/// TEST-POLICY-005: run the stable pre-release fuzz-smoke + loom evidence in one
+/// command. This is a manual release-candidate step, not a phase-exit gate.
+///
+/// It shells out to two stable suites (deterministic, stable toolchain):
+///   1. the corpus-replay fuzz harnesses (`tests/fuzz_replay.rs`) across the six
+///      parser/wire-format surfaces, run as a normal `cargo test`;
+///   2. the `tdw-app-server` loom relay model, run with `RUSTFLAGS=--cfg loom`
+///      scoped to that single child process only (never set globally).
+///
+/// Deep, coverage-guided fuzzing stays the nightly `fuzz-smoke` CI job and the
+/// manual `cargo +nightly fuzz run <target>` path; this command only proves the
+/// stable smoke evidence is green before a release cut. Returns `Err` if either
+/// suite fails so release readiness cannot claim fuzz/loom evidence without it.
+fn prerelease_check() -> Result<(), String> {
+    println!("prerelease-check: running stable fuzz-smoke + loom evidence");
+
+    println!("prerelease-check: [1/2] stable fuzz corpus-replay harnesses");
+    let fuzz_ok = run_check(std::process::Command::new("cargo").args([
+        "test",
+        "-p",
+        "tdw-protocol",
+        "-p",
+        "tdw-config",
+        "-p",
+        "tdw-mcp",
+        "-p",
+        "tdw-app-client",
+        "-p",
+        "tdw-exec",
+        "--test",
+        "fuzz_replay",
+    ]));
+
+    println!("prerelease-check: [2/2] stable loom relay model (RUSTFLAGS=--cfg loom)");
+    let loom_ok = run_check(
+        std::process::Command::new("cargo")
+            .args(["test", "-p", "tdw-app-server", "--test", "loom_relay"])
+            .env("RUSTFLAGS", "--cfg loom"),
+    );
+
+    println!("prerelease-check: summary");
+    println!("  fuzz-smoke (corpus replay): {}", pass_label(fuzz_ok));
+    println!("  loom relay model:           {}", pass_label(loom_ok));
+    println!(
+        "  deep fuzzing: nightly `fuzz-smoke` job / `cargo +nightly fuzz run <target>` (not run here)"
+    );
+
+    if fuzz_ok && loom_ok {
+        println!("prerelease-check: PASS");
+        Ok(())
+    } else {
+        Err("prerelease-check: FAIL (see suite output above)".to_string())
+    }
+}
+
+/// Run a child command inheriting stdio and report whether it exited `0`.
+fn run_check(command: &mut std::process::Command) -> bool {
+    match command.status() {
+        Ok(status) => status.success(),
+        Err(error) => {
+            eprintln!("prerelease-check: failed to spawn command: {error}");
+            false
+        }
+    }
+}
+
+fn pass_label(ok: bool) -> &'static str {
+    if ok { "PASS" } else { "FAIL" }
 }
 
 fn source_files() -> Result<Vec<PathBuf>, String> {

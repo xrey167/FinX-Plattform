@@ -159,9 +159,25 @@ nightly CI job) reuses the same shims under `cargo +nightly fuzz`.
 
 ### TEST-POLICY-005: Add Pre-Release Fuzz And Loom Recipe
 
+Status: implemented.
+
 - Scope: release candidates only.
-- Implementation: add a documented pre-release command that runs the fuzz
-  smoke targets and any stable loom models; keep long-duration fuzzing as a
-  scheduled or manually triggered CI workflow.
-- Acceptance: `docs/release.md` names the command and the expected artifacts;
-  release readiness cannot claim fuzz/loom evidence without the command output.
+- Command: `cargo run -p xtask -- prerelease-check` (also `just
+  prerelease-check`). The `prerelease_check` handler in `xtask/src/main.rs`
+  shells out (via `std::process::Command`, dependency-light) to two stable
+  suites: the corpus-replay fuzz harnesses
+  (`cargo test -p tdw-protocol -p tdw-config -p tdw-mcp -p tdw-app-client -p tdw-exec --test fuzz_replay`)
+  and the loom relay model
+  (`cargo test -p tdw-app-server --test loom_relay`, with `RUSTFLAGS=--cfg loom`
+  scoped to that single child process only). It prints a per-suite PASS/FAIL
+  summary and returns a non-zero exit if either suite fails. It is a manual
+  release-candidate step, not a phase-exit quality gate, so it is intentionally
+  absent from `phase-exit-gates.json`.
+- Implementation: documented in `docs/release.md` under "Pre-release Fuzz & Loom
+  Check", with a checklist step in the release cut steps. Long-duration,
+  coverage-guided fuzzing stays the nightly `fuzz-smoke` CI job
+  (`.github/workflows/nightly.yml`) and the manual `cargo +nightly fuzz run
+  <target>` path, referenced from the same docs section.
+- Acceptance: met. `docs/release.md` names the command and its expected
+  output/artifacts; release readiness cannot claim fuzz/loom evidence without
+  the green command output.
