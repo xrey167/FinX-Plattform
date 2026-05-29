@@ -797,7 +797,6 @@ pub fn handle_streamable_http_request_with_config(
             attach_cors_origin(&mut response, &request);
             response
         }
-        "GET" => method_not_allowed(),
         "POST" => handle_streamable_http_post(server, request),
         _ => method_not_allowed(),
     }
@@ -1192,8 +1191,7 @@ fn parse_inbound(line: &str) -> Result<JsonRpcInbound, JsonRpcProblem> {
     let id = object.get("id").cloned();
     let id_for_error = match id.as_ref() {
         Some(value) if is_valid_id(value) => value.clone(),
-        Some(_) => Value::Null,
-        None => Value::Null,
+        Some(_) | None => Value::Null,
     };
     if id.as_ref().is_some_and(|value| !is_valid_id(value)) {
         return Err(JsonRpcProblem::new(

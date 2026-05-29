@@ -303,10 +303,9 @@ const fn quality_gates() -> &'static [QualityGate] {
 
 fn ddl_export(target: Option<String>) -> Result<(), String> {
     let target = match target.as_deref() {
-        Some("postgres") => tdw_sql_codegen::SqlTarget::Postgres,
+        Some("postgres") | None => tdw_sql_codegen::SqlTarget::Postgres,
         Some("clickhouse") => tdw_sql_codegen::SqlTarget::ClickHouse,
         Some(other) => return Err(format!("unknown ddl target: {other}")),
-        None => tdw_sql_codegen::SqlTarget::Postgres,
     };
     print!("{}", tdw_sql_codegen::export_domain_ddl(target));
     Ok(())

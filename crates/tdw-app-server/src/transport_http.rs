@@ -86,9 +86,8 @@ async fn handle_http_conn(
             return;
         }
         let n = match stream.read(&mut header_buf[filled..]).await {
-            Ok(0) => return, // EOF
+            Ok(0) | Err(_) => return, // EOF or error
             Ok(n) => n,
-            Err(_) => return,
         };
         filled += n;
         if let Some(pos) = find_header_end(&header_buf[..filled]) {
