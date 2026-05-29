@@ -45,7 +45,7 @@ jobs:
         run: cargo run -p xtask -- mutation report mutants.out
       - name: Upload mutation summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-summary
           path: |
@@ -104,7 +104,7 @@ jobs:
           done
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts/**
