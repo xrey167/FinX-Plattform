@@ -4,6 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # wasmi 0.31 -> 1.0+ is a breaking API rewrite (fuel/StoreLimits/Trap/
+      # typed-func surface) that breaks tdw-udf-wasm's wasmi backend. A major
+      # bump must be a deliberate, tested migration, not an auto-PR. Allow
+      # minor/patch on the 0.31 line. See closed PR #95.
+      - dependency-name: "wasmi"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
