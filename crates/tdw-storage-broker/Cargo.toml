@@ -1,0 +1,34 @@
+[package]
+name = "tdw-storage-broker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+# Enables the real Kafka producer backend (rskafka). Off by default so the
+# workspace test set stays offline and pulls NO Kafka dependency; the
+# always-available InMemoryBrokerSink covers offline recording tests. Mirrors
+# how tdw-storage-clickhouse gates its `clickhouse` feature and tdw-provider-ws
+# gates `ws`.
+#
+# rskafka is a pure-Rust Kafka client (no librdkafka / C / CMake), so it builds
+# on a Windows host with no native build toolchain. We use default-features =
+# false to drop the compression backends (lz4/zstd/snap pull in C *-sys crates)
+# and enable only rustls transport.
+ingest-broker = ["dep:rskafka", "dep:tokio"]
+
+[dependencies]
+async-trait = { workspace = true }
+rskafka = { workspace = true, optional = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

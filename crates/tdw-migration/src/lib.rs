@@ -100,6 +100,24 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "worker_queue",
             sql: include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260528_0001",
+            name: "reference_master",
+            sql: include_str!("../../../migrations/postgres/20260528_0001_reference_master.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260528_0002",
+            name: "symbol_history",
+            sql: include_str!("../../../migrations/postgres/20260528_0002_symbol_history.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260528_0003",
+            name: "trading_calendar",
+            sql: include_str!("../../../migrations/postgres/20260528_0003_trading_calendar.sql"),
+        },
     ]
 }
 
@@ -118,6 +136,122 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
             name: "bronze_ohlcv",
             sql: include_str!("../../../migrations/clickhouse/20260521_0002_bronze_ohlcv.sql"),
         },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0001",
+            name: "raw_equity_historical",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0001_raw_equity_historical.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0002",
+            name: "raw_tick_trade",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0002_raw_tick_trade.sql"),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0003",
+            name: "analytics_ohlc_mv",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0003_analytics_ohlc_mv.sql"),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0004",
+            name: "analytics_stats_mv",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0004_analytics_stats_mv.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0005",
+            name: "reference_dictionaries",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0005_reference_dictionaries.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0006",
+            name: "kafka_ingest",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0006_kafka_ingest.sql"),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0007",
+            name: "silver_market_data_bar_mv",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0007_silver_market_data_bar_mv.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0008",
+            name: "reference_symbol_info",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0008_reference_symbol_info.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0009",
+            name: "symbol_dictionaries",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0009_symbol_dictionaries.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0010",
+            name: "raw_book",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0010_raw_book.sql"),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0011",
+            name: "trading_calendar_dict",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0011_trading_calendar_dict.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0012",
+            name: "analytics_book_stats_mv",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0012_analytics_book_stats_mv.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0013",
+            name: "raw_fundamentals_news",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0013_raw_fundamentals_news.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0014",
+            name: "corporate_actions",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0014_corporate_actions.sql"),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0015",
+            name: "analytics_indicators",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0015_analytics_indicators.sql"
+            ),
+        },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0016",
+            name: "fx_rates",
+            sql: include_str!("../../../migrations/clickhouse/20260528_0016_fx_rates.sql"),
+        },
     ]
 }
 
@@ -127,6 +261,21 @@ pub fn all_migrations() -> Vec<Migration> {
         .into_iter()
         .chain(clickhouse_migrations())
         .collect()
+}
+
+/// Return `sql` with any leading whitespace and `--` line comments removed, so
+/// the first real statement can be inspected. Migrations are allowed to open
+/// with an explanatory comment block; this lets the catalog validator still
+/// confirm the first statement is a `create`.
+fn strip_leading_sql_comments(sql: &str) -> &str {
+    let mut rest = sql.trim_start();
+    while let Some(after) = rest.strip_prefix("--") {
+        match after.find('\n') {
+            Some(idx) => rest = after[idx + 1..].trim_start(),
+            None => return "",
+        }
+    }
+    rest
 }
 
 /// # Errors
@@ -153,7 +302,7 @@ pub fn validate_migration_catalog(migrations: &[Migration]) -> Result<()> {
                 version: migration.version,
             });
         }
-        if !sql.starts_with("create ") {
+        if !strip_leading_sql_comments(sql).starts_with("create ") {
             return Err(MigrationCatalogError::NonCreateSql {
                 target: migration.target,
                 version: migration.version,

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod analytics;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SqlTarget {
     Postgres,

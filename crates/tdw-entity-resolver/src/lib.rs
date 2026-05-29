@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod openfigi;
+
 use serde::{Deserialize, Serialize};
 use tdw_kg::{Entity, EntityKind};
 
@@ -22,6 +24,17 @@ pub struct MergeDecision {
 pub enum ResolveError {
     InvalidSymbol,
     InvalidMergeEndpoint,
+    InvalidIdentifier,
+}
+
+/// A standardized-identifier crosswalk row mirroring `ref.identifier_xref`
+/// (FIGI/ISIN/CUSIP/SEDOL/ticker -> instrument). Held in memory so identifier
+/// resolution needs no database round-trip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentifierRecord {
+    pub scheme: String,
+    pub value: String,
+    pub instrument_id: String,
 }
 
 #[must_use]
@@ -54,6 +67,45 @@ pub fn try_resolve_symbol(
             entity_id: entity.entity_id.clone(),
             score: 100,
             reason: "exact symbol or alias match".to_string(),
+        })
+        .collect())
+}
+
+/// Resolve an instrument by a standardized identifier (e.g. FIGI or ISIN)
+/// against an in-memory crosswalk, mirroring the alias path of
+/// [`resolve_symbol`]. The scheme match is case-insensitive; the value match is
+/// exact after trimming. Returns the matching candidates (normally one).
+#[must_use]
+pub fn resolve_by_identifier(
+    scheme: &str,
+    value: &str,
+    records: &[IdentifierRecord],
+) -> Vec<ResolveCandidate> {
+    try_resolve_by_identifier(scheme, value, records).unwrap_or_default()
+}
+
+/// # Errors
+///
+/// Returns [`ResolveError::InvalidIdentifier`] if the scheme or value is empty
+/// or the value contains characters outside the allowed identifier set.
+pub fn try_resolve_by_identifier(
+    scheme: &str,
+    value: &str,
+    records: &[IdentifierRecord],
+) -> Result<Vec<ResolveCandidate>, ResolveError> {
+    if !is_identifier_scheme(scheme) || !is_identifier_value(value) {
+        return Err(ResolveError::InvalidIdentifier);
+    }
+    let value = value.trim();
+    Ok(records
+        .iter()
+        .filter(|record| {
+            record.scheme.eq_ignore_ascii_case(scheme) && record.value.eq_ignore_ascii_case(value)
+        })
+        .map(|record| ResolveCandidate {
+            entity_id: record.instrument_id.clone(),
+            score: 100,
+            reason: format!("exact {} identifier match", scheme.to_ascii_uppercase()),
         })
         .collect())
 }
@@ -98,6 +150,22 @@ fn is_entity_id(value: &str) -> bool {
         })
 }
 
+fn is_identifier_scheme(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+fn is_identifier_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '-'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +187,44 @@ mod tests {
                 approved: true,
                 audited: true,
             }
+        );
+    }
+
+    #[test]
+    fn resolves_instrument_by_standardized_identifier() {
+        let records = vec![
+            IdentifierRecord {
+                scheme: "FIGI".to_string(),
+                value: "BBG000B9XRY4".to_string(),
+                instrument_id: "INST-AAPL-XNAS".to_string(),
+            },
+            IdentifierRecord {
+                scheme: "ISIN".to_string(),
+                value: "US0378331005".to_string(),
+                instrument_id: "INST-AAPL-XNAS".to_string(),
+            },
+        ];
+
+        let by_figi = resolve_by_identifier("figi", "BBG000B9XRY4", &records);
+        assert_eq!(by_figi.len(), 1);
+        assert_eq!(by_figi[0].entity_id, "INST-AAPL-XNAS");
+        assert_eq!(by_figi[0].score, 100);
+
+        let by_isin = resolve_by_identifier("ISIN", "US0378331005", &records);
+        assert_eq!(by_isin[0].entity_id, "INST-AAPL-XNAS");
+
+        assert!(resolve_by_identifier("FIGI", "NOPE00000000", &records).is_empty());
+    }
+
+    #[test]
+    fn identifier_resolution_rejects_unsafe_inputs() {
+        assert_eq!(
+            try_resolve_by_identifier("FIGI", "../../secret", &[]),
+            Err(ResolveError::InvalidIdentifier)
+        );
+        assert_eq!(
+            try_resolve_by_identifier("", "BBG000B9XRY4", &[]),
+            Err(ResolveError::InvalidIdentifier)
         );
     }
 

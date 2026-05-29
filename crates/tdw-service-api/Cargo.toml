@@ -20,11 +20,21 @@ udf-wasm = ["tdw-sandbox/udf-wasm"]
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
 real-postgres = ["tdw-storage-postgres/postgres"]
 
+## Swap the OLAP engine in `AppState` for the real `ClickHouseHttpEngine`
+## (reqwest over the ClickHouse HTTP interface). Activates
+## `tdw-storage-clickhouse/clickhouse`. When enabled, `from_config` reads
+## `TDW_CLICKHOUSE_URL` (+ optional `TDW_CLICKHOUSE_USER` / `_PASSWORD`) to point
+## the ingest/query path at a live ClickHouse; `with_real_clickhouse` does the
+## same explicitly for integration tests gated by `TDW_CLICKHOUSE_TEST_URL`.
+real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
+futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tdw-acp = { workspace = true }
 tdw-actor = { path = "../tdw-actor" }
 tdw-agent = { path = "../tdw-agent" }
@@ -57,6 +67,7 @@ tdw-mask = { path = "../tdw-mask" }
 tdw-outbox = { path = "../tdw-outbox" }
 tdw-pipe = { path = "../tdw-pipe" }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
+tdw-provider-ws = { path = "../tdw-provider-ws" }
 tdw-provider-ws-mock = { path = "../tdw-provider-ws-mock" }
 tdw-provider-yahoo = { path = "../tdw-provider-yahoo" }
 tdw-protocol = { workspace = true }
@@ -83,7 +94,7 @@ tdw-udf = { path = "../tdw-udf" }
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
 [lints]
 workspace = true

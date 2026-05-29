@@ -135,6 +135,7 @@ fn op_ingest_batch_round_trips_with_time_range() {
     let op = Op::IngestBatch {
         provider: "yahoo".to_string(),
         endpoint: "equity_historical".to_string(),
+        symbols: vec!["AAPL".to_string(), "MSFT".to_string()],
         range: Some(TimeRange {
             start: "2026-01-01".to_string(),
             end: "2026-05-22".to_string(),
