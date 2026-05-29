@@ -748,6 +748,17 @@ fn read_length_delimited_event_frame(
     Ok(bytes)
 }
 
+/// Fuzz shim: feed arbitrary bytes through the daemon frame reader.
+///
+/// Must never panic on adversarial input; truncated, oversized, or empty
+/// frames must surface as errors rather than panics. Shared with the nightly
+/// cargo-fuzz target. Lives in-crate to reach the `pub(crate)` reader.
+#[doc(hidden)]
+pub fn __fuzz_daemon_frame(data: &[u8]) {
+    let mut cursor = std::io::Cursor::new(data);
+    let _ = read_length_delimited_event_frame(&mut cursor);
+}
+
 fn event_op_id(event: &EventMsg) -> Option<&OpId> {
     match event {
         EventMsg::Started { op_id }

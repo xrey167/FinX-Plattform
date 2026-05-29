@@ -270,6 +270,16 @@ pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     ])
 }
 
+/// Fuzz shim: attempt to parse arbitrary bytes as a TOML config layer.
+///
+/// Must never panic on adversarial input; parse failures are the expected
+/// graceful outcome. Shared with the nightly cargo-fuzz target.
+#[doc(hidden)]
+pub fn __fuzz_config_toml(data: &[u8]) {
+    let input = String::from_utf8_lossy(data);
+    let _ = ConfigLayer::from_toml(ConfigLayerKind::ProjectConfig, "fuzz", &input);
+}
+
 fn deep_merge(base: &mut Value, overlay: Value) {
     match (base, overlay) {
         (Value::Object(base), Value::Object(overlay)) => merge_object(base, overlay),
