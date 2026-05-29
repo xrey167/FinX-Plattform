@@ -22,6 +22,7 @@ tdw-udf-wasm = { path = "../tdw-udf-wasm", optional = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 wat = "1"
 
 [lints]
