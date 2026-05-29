@@ -421,11 +421,11 @@ impl DaemonToolRuntime {
         let config = self.config.as_ref().map_err(Clone::clone)?;
         DaemonClient::new(config.clone())
             .submit_and_wait(envelope)
-            .map_err(|error| daemon_client_error_message(config, error))
+            .map_err(|error| daemon_client_error_message(config, &error))
     }
 }
 
-fn daemon_client_error_message(config: &DaemonClientConfig, error: DaemonClientError) -> String {
+fn daemon_client_error_message(config: &DaemonClientConfig, error: &DaemonClientError) -> String {
     format!(
         "{error}; endpoint={}://{}",
         daemon_transport_label(config.endpoint().transport),

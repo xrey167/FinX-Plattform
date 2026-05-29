@@ -145,18 +145,18 @@ impl DaemonClient {
     pub fn submit_and_wait(&self, envelope: OpEnvelope) -> DaemonClientResult {
         self.config.validate()?;
         match self.config.endpoint.transport {
-            DaemonTransport::Tcp => self.submit_tcp(envelope),
+            DaemonTransport::Tcp => self.submit_tcp(&envelope),
             #[cfg(unix)]
             DaemonTransport::Uds => self.submit_uds(envelope),
             #[cfg(not(unix))]
             DaemonTransport::Uds => Err(DaemonClientError::UnsupportedTransport(
                 DaemonTransport::Uds,
             )),
-            DaemonTransport::HttpSse => self.submit_http_sse(envelope),
+            DaemonTransport::HttpSse => self.submit_http_sse(&envelope),
         }
     }
 
-    fn submit_tcp(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_tcp(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let address = self.config.endpoint.address.trim().to_string();
         let socket_addr = parse_tcp_socket_addr(&address)?;
@@ -174,7 +174,7 @@ impl DaemonClient {
                 source,
             })?;
 
-        write_envelope_frame(&mut stream, &envelope)?;
+        write_envelope_frame(&mut stream, envelope)?;
         let events = read_terminal_events(&mut stream, &op_id)?;
         Ok(DaemonSubmission {
             endpoint: self.config.endpoint.clone(),
@@ -214,7 +214,7 @@ impl DaemonClient {
         })
     }
 
-    fn submit_http_sse(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_http_sse(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let endpoint = parse_http_sse_endpoint(self.config.endpoint.address.trim())?;
 
@@ -250,7 +250,7 @@ impl DaemonClient {
             "connect http/sse submit",
         )?;
         set_tcp_timeouts(&submit_stream, self.config.timeout, "http/sse submit")?;
-        let body = serde_json::to_vec(&envelope).map_err(DaemonClientError::Serialize)?;
+        let body = serde_json::to_vec(envelope).map_err(DaemonClientError::Serialize)?;
         let submit_request = format!(
             "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             endpoint.submit_path,

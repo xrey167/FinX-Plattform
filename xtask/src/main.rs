@@ -8,8 +8,8 @@ fn main() {
     let result = match command.as_str() {
         "bench" => bench(),
         "bench-compare" => bench_compare(args.next()),
-        "quality-gate" => quality_gate(args.next()),
-        "ddl-export" => ddl_export(args.next()),
+        "quality-gate" => quality_gate(args.next().as_deref()),
+        "ddl-export" => ddl_export(args.next().as_deref()),
         "migrate" => match args.next().as_deref() {
             Some("up") => migrate_up(),
             Some("down") => migrate_down(),
@@ -30,7 +30,7 @@ fn main() {
             _ => help(),
         },
         "mutation" => match args.next().as_deref() {
-            Some("changed") => mutation_changed(args.next()),
+            Some("changed") => mutation_changed(args.next().as_deref()),
             Some("report") => mutation_report(args.next()),
             _ => help(),
         },
@@ -71,8 +71,8 @@ fn bench_compare(baseline: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn quality_gate(mode: Option<String>) -> Result<(), String> {
-    match mode.as_deref().unwrap_or("write") {
+fn quality_gate(mode: Option<&str>) -> Result<(), String> {
+    match mode.unwrap_or("write") {
         "write" => write_quality_gate(),
         "check" => check_quality_gate(),
         other => Err(format!("unknown quality-gate mode: {other}")),
@@ -301,8 +301,8 @@ const fn quality_gates() -> &'static [QualityGate] {
     ]
 }
 
-fn ddl_export(target: Option<String>) -> Result<(), String> {
-    let target = match target.as_deref() {
+fn ddl_export(target: Option<&str>) -> Result<(), String> {
+    let target = match target {
         Some("postgres") | None => tdw_sql_codegen::SqlTarget::Postgres,
         Some("clickhouse") => tdw_sql_codegen::SqlTarget::ClickHouse,
         Some(other) => return Err(format!("unknown ddl target: {other}")),
@@ -465,8 +465,8 @@ fn cargo_mutants_available() -> bool {
 /// `cargo-mutants` itself via in-source `// cargo-mutants: skip` /
 /// `mutants::skip` markers, so no extra flags are needed here. This stays
 /// outside phase-exit gates.
-fn mutation_changed(flag: Option<String>) -> Result<(), String> {
-    let run = matches!(flag.as_deref(), Some("--run" | "run"));
+fn mutation_changed(flag: Option<&str>) -> Result<(), String> {
+    let run = matches!(flag, Some("--run" | "run"));
     let changed = changed_crates_vs_main();
     match &changed {
         Some(list) if list.is_empty() => {
