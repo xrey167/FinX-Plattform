@@ -48,6 +48,7 @@ impl PgEventBus {
     }
 
     /// Override the table name. Useful for multi-tenant deployments.
+    #[must_use]
     pub fn with_table(mut self, table: impl Into<String>) -> Self {
         self.table = table.into();
         self
@@ -143,9 +144,8 @@ impl PgEventBus {
             self.table
         );
         let rows = self.engine.fetch_json(&sql, Value::Null).await?;
-        let row = match rows.first() {
-            Some(row) => row,
-            None => return Ok(None),
+        let Some(row) = rows.first() else {
+            return Ok(None);
         };
         let oldest = row.get("oldest").and_then(Value::as_i64);
         let newest = row.get("newest").and_then(Value::as_i64);

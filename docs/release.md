@@ -93,6 +93,39 @@ default `tdw-worker` run keeps the fast worker evidence path, and
 The `full` profile also declares the production storage services so the same
 composition can be extended by G015/G016 without changing the service graph.
 
+## Pre-release Fuzz & Loom Check
+
+Before cutting a release candidate, run the stable fuzz-smoke and loom evidence
+in one command (TEST-POLICY-005):
+
+```powershell
+cargo run -p xtask -- prerelease-check
+# or, if you prefer just:
+just prerelease-check
+```
+
+This single entry point runs two stable suites on the stable toolchain:
+
+1. The corpus-replay fuzz harnesses (`tests/fuzz_replay.rs`) across the six
+   parser/wire-format surfaces — `tdw-protocol`, `tdw-config`, `tdw-mcp`,
+   `tdw-app-client`, and `tdw-exec` — via
+   `cargo test -p tdw-protocol -p tdw-config -p tdw-mcp -p tdw-app-client -p tdw-exec --test fuzz_replay`.
+2. The `tdw-app-server` loom relay model via
+   `cargo test -p tdw-app-server --test loom_relay`, with `RUSTFLAGS=--cfg loom`
+   scoped to that one child process only (never set globally).
+
+Expected output/artifacts: both suites pass under default `cargo test` output
+(no crash reproducers written, no loom interleaving violation), and the command
+prints a `fuzz-smoke (corpus replay): PASS` / `loom relay model: PASS` summary
+followed by `prerelease-check: PASS`. It exits non-zero if either suite fails,
+so release readiness cannot claim fuzz/loom evidence without green output.
+
+Deep, coverage-guided fuzzing is **not** part of this command: that remains the
+nightly `fuzz-smoke` CI job (`.github/workflows/nightly.yml`) and the manual
+`cargo +nightly fuzz run <target>` path (targets `protocol_json`, `config_toml`,
+`mcp_jsonrpc`, `mcp_http`, `daemon_frame`, `sql_guard`). Crash reproducers from
+those deep runs are uploaded as CI artifacts on failure.
+
 ## Release Cut Checklist
 
 1. Ensure `main` is green on CI and CodeQL.
@@ -101,16 +134,18 @@ composition can be extended by G015/G016 without changing the service graph.
    confirm every user-visible change is captured under the new version section
    in [`CHANGELOG.md`](../CHANGELOG.md), and date that section. The `MINOR` vs
    `PATCH` choice must match the change set per the policy above.
-4. Create and push the tag:
+4. Run `cargo run -p xtask -- prerelease-check`; confirm the loom relay model
+   and fuzz-smoke corpus replay are green (`prerelease-check: PASS`).
+5. Create and push the tag:
 
    ```powershell
    git tag v0.MINOR.PATCH
    git push origin v0.MINOR.PATCH
    ```
 
-5. Wait for the Release workflow to publish all 12 archives, checksum files,
+6. Wait for the Release workflow to publish all 12 archives, checksum files,
    and attestations.
-6. Confirm the CI image job pushed fresh GHCR `sha-<git-sha>` images from the
+7. Confirm the CI image job pushed fresh GHCR `sha-<git-sha>` images from the
    same commit.
 
 ## Remaining Follow-up

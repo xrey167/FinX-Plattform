@@ -318,8 +318,9 @@ fn mask_json_value(value: &mut Value, rule: &MaskRule) {
 fn masked_leaf(value: &Value, mode: MaskMode) -> Value {
     match mode {
         MaskMode::Redact => Value::String("***".to_string()),
-        MaskMode::Last4 => match value.as_str() {
-            Some(text) => {
+        MaskMode::Last4 => value.as_str().map_or_else(
+            || Value::String("***".to_string()),
+            |text| {
                 let suffix = text
                     .chars()
                     .rev()
@@ -329,8 +330,7 @@ fn masked_leaf(value: &Value, mode: MaskMode) -> Value {
                     .rev()
                     .collect::<String>();
                 Value::String(format!("***{suffix}"))
-            }
-            None => Value::String("***".to_string()),
-        },
+            },
+        ),
     }
 }

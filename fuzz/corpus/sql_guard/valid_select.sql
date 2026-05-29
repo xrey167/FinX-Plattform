@@ -1,0 +1,1 @@
+select * from raw.market_data_bar

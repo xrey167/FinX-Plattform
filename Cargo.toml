@@ -4,6 +4,11 @@ members = [
     "crates/*",
     "xtask",
 ]
+# `fuzz/` is a standalone cargo-fuzz crate (nightly-only, libfuzzer-sys) and is
+# intentionally excluded so the stable workspace build and default `cargo test`
+# never pull in a nightly toolchain (TEST-POLICY-004). Build it with
+# `cargo +nightly fuzz run <target>` from the `fuzz/` directory.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +20,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
+base64 = "0.22"
 bytes = "1.11.0"
 futures-core = "0.3.31"
 schemars = "1.2.1"
@@ -35,6 +41,7 @@ toml = "1.1.2"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.1", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
+wasmi = "0.31"
 
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
@@ -64,6 +71,10 @@ tdw-service-api = { path = "crates/tdw-service-api" }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "allow"
+# `--cfg loom` is set manually via RUSTFLAGS for TEST-POLICY-003 loom models
+# (see crates/tdw-app-server/tests/loom_relay.rs). Declare it here so the
+# `unexpected_cfgs` lint does not warn in the normal (loom-off) build.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

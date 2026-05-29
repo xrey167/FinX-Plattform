@@ -66,6 +66,7 @@ impl Default for DaemonClientConfig {
 }
 
 impl DaemonClientConfig {
+    #[must_use]
     pub fn tcp(address: impl Into<String>) -> Self {
         Self {
             endpoint: DaemonEndpoint {
@@ -76,28 +77,37 @@ impl DaemonClientConfig {
         }
     }
 
-    pub fn new(endpoint: DaemonEndpoint) -> Self {
+    #[must_use]
+    pub const fn new(endpoint: DaemonEndpoint) -> Self {
         Self {
             endpoint,
             timeout: DEFAULT_DAEMON_TIMEOUT,
         }
     }
 
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    #[must_use]
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         if !timeout.is_zero() {
             self.timeout = timeout;
         }
         self
     }
 
-    pub fn endpoint(&self) -> &DaemonEndpoint {
+    #[must_use]
+    pub const fn endpoint(&self) -> &DaemonEndpoint {
         &self.endpoint
     }
 
-    pub fn timeout(&self) -> Duration {
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
+    /// # Errors
+    ///
+    /// Returns `DaemonClientError::InvalidEndpoint` if the endpoint fails
+    /// validation, or `DaemonClientError::UnsupportedTransport` if a Unix
+    /// domain socket transport is requested on a non-Unix platform.
     pub fn validate(&self) -> std::result::Result<(), DaemonClientError> {
         self.endpoint
             .validate()
@@ -127,29 +137,35 @@ impl Default for DaemonClient {
 }
 
 impl DaemonClient {
-    pub fn new(config: DaemonClientConfig) -> Self {
+    #[must_use]
+    pub const fn new(config: DaemonClientConfig) -> Self {
         Self { config }
     }
 
-    pub fn config(&self) -> &DaemonClientConfig {
+    #[must_use]
+    pub const fn config(&self) -> &DaemonClientConfig {
         &self.config
     }
 
+    /// # Errors
+    ///
+    /// Returns a `DaemonClientError` if config validation fails or the
+    /// underlying transport request fails.
     pub fn submit_and_wait(&self, envelope: OpEnvelope) -> DaemonClientResult {
         self.config.validate()?;
         match self.config.endpoint.transport {
-            DaemonTransport::Tcp => self.submit_tcp(envelope),
+            DaemonTransport::Tcp => self.submit_tcp(&envelope),
             #[cfg(unix)]
             DaemonTransport::Uds => self.submit_uds(envelope),
             #[cfg(not(unix))]
             DaemonTransport::Uds => Err(DaemonClientError::UnsupportedTransport(
                 DaemonTransport::Uds,
             )),
-            DaemonTransport::HttpSse => self.submit_http_sse(envelope),
+            DaemonTransport::HttpSse => self.submit_http_sse(&envelope),
         }
     }
 
-    fn submit_tcp(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_tcp(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let address = self.config.endpoint.address.trim().to_string();
         let socket_addr = parse_tcp_socket_addr(&address)?;
@@ -167,7 +183,7 @@ impl DaemonClient {
                 source,
             })?;
 
-        write_envelope_frame(&mut stream, &envelope)?;
+        write_envelope_frame(&mut stream, envelope)?;
         let events = read_terminal_events(&mut stream, &op_id)?;
         Ok(DaemonSubmission {
             endpoint: self.config.endpoint.clone(),
@@ -207,7 +223,7 @@ impl DaemonClient {
         })
     }
 
-    fn submit_http_sse(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_http_sse(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let endpoint = parse_http_sse_endpoint(self.config.endpoint.address.trim())?;
 
@@ -243,7 +259,7 @@ impl DaemonClient {
             "connect http/sse submit",
         )?;
         set_tcp_timeouts(&submit_stream, self.config.timeout, "http/sse submit")?;
-        let body = serde_json::to_vec(&envelope).map_err(DaemonClientError::Serialize)?;
+        let body = serde_json::to_vec(envelope).map_err(DaemonClientError::Serialize)?;
         let submit_request = format!(
             "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             endpoint.submit_path,
@@ -308,16 +324,16 @@ fn parse_http_sse_endpoint(
         path
     };
     let events_path = format!("/{}", path.trim_start_matches('/'));
-    let submit_path = events_path
-        .strip_suffix("/events")
-        .map(|prefix| {
+    let submit_path = events_path.strip_suffix("/events").map_or_else(
+        || "/op".to_string(),
+        |prefix| {
             if prefix.is_empty() {
                 "/op".to_string()
             } else {
                 format!("{prefix}/op")
             }
-        })
-        .unwrap_or_else(|| "/op".to_string());
+        },
+    );
 
     Ok(HttpSseEndpoint {
         authority: authority.to_string(),
@@ -507,7 +523,7 @@ struct HttpSseEventReader {
 }
 
 impl HttpSseEventReader {
-    fn new(stream: TcpStream) -> Self {
+    const fn new(stream: TcpStream) -> Self {
         Self { stream }
     }
 }
@@ -748,7 +764,18 @@ fn read_length_delimited_event_frame(
     Ok(bytes)
 }
 
-fn event_op_id(event: &EventMsg) -> Option<&OpId> {
+/// Fuzz shim: feed arbitrary bytes through the daemon frame reader.
+///
+/// Must never panic on adversarial input; truncated, oversized, or empty
+/// frames must surface as errors rather than panics. Shared with the nightly
+/// cargo-fuzz target. Lives in-crate to reach the `pub(crate)` reader.
+#[doc(hidden)]
+pub fn __fuzz_daemon_frame(data: &[u8]) {
+    let mut cursor = std::io::Cursor::new(data);
+    let _ = read_length_delimited_event_frame(&mut cursor);
+}
+
+const fn event_op_id(event: &EventMsg) -> Option<&OpId> {
     match event {
         EventMsg::Started { op_id }
         | EventMsg::Progress { op_id, .. }
@@ -763,7 +790,7 @@ fn event_op_id(event: &EventMsg) -> Option<&OpId> {
     }
 }
 
-fn event_is_terminal(event: &EventMsg) -> bool {
+const fn event_is_terminal(event: &EventMsg) -> bool {
     matches!(
         event,
         EventMsg::Completed { .. } | EventMsg::Failed { .. } | EventMsg::Cancelled { .. }

@@ -1,0 +1,1 @@
+{"op_id":"00000000-0000-7000-8000-000000000000","session_id":"session-1","sequence":1,"submitted_by":{"actor_id":"a","kind":"User","tenant_id":null},"op":{"type":"run_query","sql":"select 1","plan_id":null,"cost_hint":null}}

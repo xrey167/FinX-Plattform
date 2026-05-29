@@ -47,6 +47,47 @@ Enforcement is intentionally deferred to the task ledger in
 `docs/quality/phase-exit-gates.json`; add or promote gates through
 `xtask/src/main.rs` and regenerate the JSON.
 
+## Amendment (2026-05-29): First loom target pivots from `tdw-bus` to `tdw-app-server` relay
+
+The Decision named `tdw-bus` as the first loom target. Implementation of
+`TEST-POLICY-003` showed that this would be near-tautological: the in-memory
+`tdw_bus::EventBus` is single-threaded by construction. Every mutator takes
+`&mut self`, there is no interior mutability, no atomics, and no `Arc<Mutex<_>>`
+wrapping inside the type itself, so loom (which only instruments shared-memory
+concurrency primitives) would have no interleavings to explore. A model there
+would assert ordering that the compiler's `&mut` exclusivity already guarantees.
+
+The first loom model therefore targets the genuinely concurrent in-process
+component with the most non-trivial lock interaction: the in-memory outbox to
+bus relay in `tdw_app_server::spawn_inmemory_relay`. The relay performs a
+check-then-act across three separate lock acquisitions per record (read pending
+under the outbox lock, publish under the bus lock, mark dispatched under the
+outbox lock), with the outbox lock released between the read and the mark. A
+concurrent producer that appends to the outbox can interleave at those release
+points, which is exactly the interleaving sensitivity loom exists to verify.
+
+The bounded model (`crates/tdw-app-server/tests/loom_relay.rs`, two threads, one
+relay drain cycle racing one producer append) proves: every record the relay
+observes as pending is published to the bus exactly once (no double-publish) and
+marked `Dispatched` (no lost update where a record stays `Pending` after being
+shipped), and the dispatched count stays equal to the bus entry count (outbox
+and bus remain consistent). The model was falsifiability-checked: deliberately
+skipping a `mark_dispatched` makes loom find the violating interleaving and fail.
+
+Run command (loom is gated behind `--cfg loom` and never enters the default
+build or `cargo test`):
+
+```powershell
+$env:RUSTFLAGS = "--cfg loom"
+cargo test -p tdw-app-server --test loom_relay
+Remove-Item Env:\RUSTFLAGS
+```
+
+The order in the original Decision (`tdw-bus` first, then outbox/relay and
+daemon cancellation) is superseded: outbox/relay is the first model; `tdw-bus`
+is dropped from the loom queue as a non-candidate; daemon cancellation remains a
+deferred follow-on if a bounded model design emerges. Status remains Accepted.
+
 ## Consequences
 
 Default local and PR testing stays offline and deterministic. Heavy mutation,

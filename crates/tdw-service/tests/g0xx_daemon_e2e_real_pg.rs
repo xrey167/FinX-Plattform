@@ -43,7 +43,7 @@ use std::time::Duration;
 use tdw_app_server::{CancellationToken, serve_tcp, service_channel, spawn_inmemory_relay};
 use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_protocol::{ActorKind, ActorRef, EventMsg, Op, OpEnvelope, SessionId};
-use tdw_service_api::{AppState, IngressAuthContext, PolicyEnforcementConfig};
+use tdw_service_api::{AppState, HookExecutionPolicy, IngressAuthContext, PolicyEnforcementConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -71,7 +71,7 @@ fn analyst_policy() -> PolicyEnforcementConfig {
             audience: "tdw".to_string(),
         },
         hooks: Vec::new(),
-        hook_execution: Default::default(),
+        hook_execution: HookExecutionPolicy::default(),
         mask_rules: Vec::new(),
     }
 }

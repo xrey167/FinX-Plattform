@@ -1,0 +1,4 @@
+[worker]
+backend = "Postgres"
+sqlite_path = ".tdw/worker.sqlite"
+postgres_url_env = "X"

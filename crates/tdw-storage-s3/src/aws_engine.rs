@@ -2,7 +2,7 @@
 //!
 //! Gated by the `s3` feature. Wraps [`aws_sdk_s3::Client`] and dispatches
 //! `put_object` / `get_object` to S3 (or any S3-compatible endpoint
-//! including MinIO, R2, Backblaze B2, etc. via `S3Engine::from_endpoint`).
+//! including `MinIO`, R2, Backblaze B2, etc. via `S3Engine::from_endpoint`).
 //!
 //! The same key-validation rules as [`crate::InMemoryS3BlobEngine`]
 //! apply: keys must be non-empty, must not contain `\\`, and must be
@@ -19,7 +19,7 @@ use crate::validate_key;
 
 /// Production S3 backend. Construct via [`S3Engine::from_env`] for AWS
 /// production credentials (taken from the standard AWS env vars /
-/// credentials file), or [`S3Engine::from_endpoint`] for MinIO /
+/// credentials file), or [`S3Engine::from_endpoint`] for `MinIO` /
 /// other S3-compatible services with explicit endpoint + credentials.
 #[derive(Clone, Debug)]
 pub struct S3Engine {
@@ -43,9 +43,9 @@ impl S3Engine {
         })
     }
 
-    /// Construct against an explicit endpoint (typical for MinIO / R2 /
+    /// Construct against an explicit endpoint (typical for `MinIO` / R2 /
     /// any S3-compatible service). Uses path-style addressing because
-    /// MinIO and most non-AWS services need it.
+    /// `MinIO` and most non-AWS services need it.
     pub fn from_endpoint(
         endpoint_url: impl Into<String>,
         region: impl Into<String>,

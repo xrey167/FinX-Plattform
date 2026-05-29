@@ -20,7 +20,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5
-    profiles: ["minimal", "full"]
+    profiles: ["minimal", "full", "live"]
     environment:
       CLICKHOUSE_USER: tdw
       CLICKHOUSE_PASSWORD: tdw
@@ -33,7 +33,7 @@ services:
 
   qdrant:
     image: qdrant/qdrant:latest
-    profiles: ["full"]
+    profiles: ["full", "live"]
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -42,7 +42,7 @@ services:
 
   meilisearch:
     image: getmeili/meilisearch:latest
-    profiles: ["full"]
+    profiles: ["full", "live"]
     environment:
       MEILI_ENV: development
       MEILI_NO_ANALYTICS: "true"
@@ -107,6 +107,12 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      clickhouse:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      meilisearch:
+        condition: service_started
     environment:
       TDW_POSTGRES_URL: postgres://tdw:tdw@postgres:5432/tdw
       TDW_S3_ENDPOINT: http://minio:9000
@@ -114,7 +120,30 @@ services:
       TDW_S3_ACCESS_KEY: minio
       TDW_S3_SECRET_KEY: minio123
       TDW_S3_REGION: us-east-1
+      TDW_CLICKHOUSE_URL: http://clickhouse:8123
+      TDW_CLICKHOUSE_USER: tdw
+      TDW_CLICKHOUSE_PASSWORD: tdw
+      TDW_QDRANT_URL: http://qdrant:6333
+      TDW_MEILI_URL: http://meilisearch:7700
     restart: "no"
+
+  tdw-worker-serve:
+    image: finx-plattform/tdw-worker:local
+    build:
+      context: .
+      dockerfile: docker/tdw-worker.Dockerfile
+    profiles: ["live"]
+    command: ["--serve"]
+    depends_on:
+      tdw-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      TDW_PROFILE: docker
+      TDW_WORKER_DB: sqlite:///data/tdw-worker.sqlite
+      TDW_WORKER_ID: tdw-worker-live
+    volumes:
+      - worker-data:/data
+    restart: unless-stopped
 
   tdw-service:
     image: finx-plattform/tdw-service:local
@@ -190,3 +219,4 @@ volumes:
   qdrant-data:
   meili-data:
   minio-data:
+  worker-data:

@@ -162,8 +162,13 @@ impl AppState {
         Ok(self)
     }
 
-    /// Build an `AppState` backed by an in-memory SQLite database and a unique
+    /// Build an `AppState` backed by an in-memory `SQLite` database and a unique
     /// temporary JSONL rollout file. Suitable for unit tests.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system clock is before the Unix epoch, or if building the
+    /// in-memory `AppState` fails.
     pub async fn in_memory_for_tests() -> Self {
         let mut config = TdwConfig::default();
         config.session.sqlite_path = "sqlite::memory:".to_string();
@@ -257,7 +262,7 @@ fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
             audience: LOCAL_POLICY_AUDIENCE.to_string(),
         },
         hooks: Vec::new(),
-        hook_execution: Default::default(),
+        hook_execution: tdw_hooks::HookExecutionPolicy::default(),
         mask_rules: Vec::new(),
     })
 }

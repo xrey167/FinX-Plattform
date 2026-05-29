@@ -1,4 +1,4 @@
-//! Live integration test for the OpenAI Embeddings HTTP client.
+//! Live integration test for the `OpenAI` Embeddings HTTP client.
 //!
 //! Doubly gated:
 //!   - Compiled only with `--features http` (no reqwest dep otherwise).

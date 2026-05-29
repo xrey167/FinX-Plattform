@@ -79,6 +79,14 @@ quality-gate-check:
 audit:
     cargo run -p xtask -- clean-room-audit
 
+# TEST-POLICY-005: manual pre-release fuzz-smoke + loom evidence (release
+# candidates only). Runs the stable corpus-replay fuzz harnesses and the
+# tdw-app-server loom relay model; the loom invocation scopes RUSTFLAGS=--cfg
+# loom to that one cargo call. Deep coverage-guided fuzzing stays the nightly
+# `fuzz-smoke` job / `cargo +nightly fuzz run <target>`.
+prerelease-check:
+    cargo run -p xtask -- prerelease-check
+
 ci-local:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings

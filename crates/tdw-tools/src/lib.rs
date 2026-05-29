@@ -141,6 +141,11 @@ impl ToolOrchestrator {
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the generated deferred-permission id fails validation
+    /// (should be unreachable in practice).
     pub fn run(
         &self,
         call_id: ToolCallId,

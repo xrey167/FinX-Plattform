@@ -56,6 +56,7 @@ impl PgSessionStore {
 
     /// Override the base table name. Companion tables follow the
     /// `<base>_<suffix>` convention.
+    #[must_use]
     pub fn with_table(mut self, table: impl Into<String>) -> Self {
         self.table = table.into();
         self

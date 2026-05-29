@@ -8,8 +8,8 @@ fn main() {
     let result = match command.as_str() {
         "bench" => bench(),
         "bench-compare" => bench_compare(args.next()),
-        "quality-gate" => quality_gate(args.next()),
-        "ddl-export" => ddl_export(args.next()),
+        "quality-gate" => quality_gate(args.next().as_deref()),
+        "ddl-export" => ddl_export(args.next().as_deref()),
         "migrate" => match args.next().as_deref() {
             Some("up") => migrate_up(),
             Some("down") => migrate_down(),
@@ -30,11 +30,12 @@ fn main() {
             _ => help(),
         },
         "mutation" => match args.next().as_deref() {
-            Some("changed") => mutation_changed(args.next()),
+            Some("changed") => mutation_changed(args.next().as_deref()),
             Some("report") => mutation_report(args.next()),
             _ => help(),
         },
         "clean-room-audit" => clean_room_audit(),
+        "prerelease-check" => prerelease_check(),
         _ => help(),
     };
 
@@ -46,7 +47,7 @@ fn main() {
 
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check"
     );
     Ok(())
 }
@@ -70,8 +71,8 @@ fn bench_compare(baseline: Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn quality_gate(mode: Option<String>) -> Result<(), String> {
-    match mode.as_deref().unwrap_or("write") {
+fn quality_gate(mode: Option<&str>) -> Result<(), String> {
+    match mode.unwrap_or("write") {
         "write" => write_quality_gate(),
         "check" => check_quality_gate(),
         other => Err(format!("unknown quality-gate mode: {other}")),
@@ -300,12 +301,11 @@ const fn quality_gates() -> &'static [QualityGate] {
     ]
 }
 
-fn ddl_export(target: Option<String>) -> Result<(), String> {
-    let target = match target.as_deref() {
-        Some("postgres") => tdw_sql_codegen::SqlTarget::Postgres,
+fn ddl_export(target: Option<&str>) -> Result<(), String> {
+    let target = match target {
+        Some("postgres") | None => tdw_sql_codegen::SqlTarget::Postgres,
         Some("clickhouse") => tdw_sql_codegen::SqlTarget::ClickHouse,
         Some(other) => return Err(format!("unknown ddl target: {other}")),
-        None => tdw_sql_codegen::SqlTarget::Postgres,
     };
     print!("{}", tdw_sql_codegen::export_domain_ddl(target));
     Ok(())
@@ -451,8 +451,7 @@ fn cargo_mutants_available() -> bool {
     std::process::Command::new("cargo")
         .args(["mutants", "--version"])
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 /// TEST-POLICY-002: print (and optionally run) a scoped `cargo mutants` plan for
@@ -466,8 +465,8 @@ fn cargo_mutants_available() -> bool {
 /// `cargo-mutants` itself via in-source `// cargo-mutants: skip` /
 /// `mutants::skip` markers, so no extra flags are needed here. This stays
 /// outside phase-exit gates.
-fn mutation_changed(flag: Option<String>) -> Result<(), String> {
-    let run = matches!(flag.as_deref(), Some("--run" | "run"));
+fn mutation_changed(flag: Option<&str>) -> Result<(), String> {
+    let run = matches!(flag, Some("--run" | "run"));
     let changed = changed_crates_vs_main();
     match &changed {
         Some(list) if list.is_empty() => {
@@ -630,7 +629,7 @@ fn outcomes_crate_label(root: &Path, path: &Path) -> String {
 /// Extract the per-crate counts cargo-mutants records in `outcomes.json`.
 ///
 /// cargo-mutants writes a top-level `outcomes` array where each entry has a
-/// `summary` string ("CaughtMutant", "MissedMutant", "Timeout", ...) and a
+/// `summary` string ("`CaughtMutant`", "`MissedMutant`", "Timeout", ...) and a
 /// `total_phases.*` / `phase_results` timing. We tolerate schema drift by
 /// counting on the `summary` field and summing any numeric `*_time` we find.
 fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Value {
@@ -658,7 +657,7 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
 
     let runtime_secs = parsed
         .get("elapsed_secs")
-        .and_then(|value| value.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .unwrap_or(0.0);
 
     serde_json::json!({
@@ -698,6 +697,76 @@ fn clean_room_audit() -> Result<(), String> {
             offenders.join("\n")
         ))
     }
+}
+
+/// TEST-POLICY-005: run the stable pre-release fuzz-smoke + loom evidence in one
+/// command. This is a manual release-candidate step, not a phase-exit gate.
+///
+/// It shells out to two stable suites (deterministic, stable toolchain):
+///   1. the corpus-replay fuzz harnesses (`tests/fuzz_replay.rs`) across the six
+///      parser/wire-format surfaces, run as a normal `cargo test`;
+///   2. the `tdw-app-server` loom relay model, run with `RUSTFLAGS=--cfg loom`
+///      scoped to that single child process only (never set globally).
+///
+/// Deep, coverage-guided fuzzing stays the nightly `fuzz-smoke` CI job and the
+/// manual `cargo +nightly fuzz run <target>` path; this command only proves the
+/// stable smoke evidence is green before a release cut. Returns `Err` if either
+/// suite fails so release readiness cannot claim fuzz/loom evidence without it.
+fn prerelease_check() -> Result<(), String> {
+    println!("prerelease-check: running stable fuzz-smoke + loom evidence");
+
+    println!("prerelease-check: [1/2] stable fuzz corpus-replay harnesses");
+    let fuzz_ok = run_check(std::process::Command::new("cargo").args([
+        "test",
+        "-p",
+        "tdw-protocol",
+        "-p",
+        "tdw-config",
+        "-p",
+        "tdw-mcp",
+        "-p",
+        "tdw-app-client",
+        "-p",
+        "tdw-exec",
+        "--test",
+        "fuzz_replay",
+    ]));
+
+    println!("prerelease-check: [2/2] stable loom relay model (RUSTFLAGS=--cfg loom)");
+    let loom_ok = run_check(
+        std::process::Command::new("cargo")
+            .args(["test", "-p", "tdw-app-server", "--test", "loom_relay"])
+            .env("RUSTFLAGS", "--cfg loom"),
+    );
+
+    println!("prerelease-check: summary");
+    println!("  fuzz-smoke (corpus replay): {}", pass_label(fuzz_ok));
+    println!("  loom relay model:           {}", pass_label(loom_ok));
+    println!(
+        "  deep fuzzing: nightly `fuzz-smoke` job / `cargo +nightly fuzz run <target>` (not run here)"
+    );
+
+    if fuzz_ok && loom_ok {
+        println!("prerelease-check: PASS");
+        Ok(())
+    } else {
+        Err("prerelease-check: FAIL (see suite output above)".to_string())
+    }
+}
+
+/// Run a child command inheriting stdio and report whether it exited `0`.
+fn run_check(command: &mut std::process::Command) -> bool {
+    match command.status() {
+        Ok(status) => status.success(),
+        Err(error) => {
+            eprintln!("prerelease-check: failed to spawn command: {error}");
+            false
+        }
+    }
+}
+
+const fn pass_label(ok: bool) -> &'static str {
+    if ok { "PASS" } else { "FAIL" }
 }
 
 fn source_files() -> Result<Vec<PathBuf>, String> {

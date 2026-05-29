@@ -16,27 +16,54 @@ the local sandbox. It does not claim full language-runtime isolation.
   built-in deterministic dispatcher.
 - `tdw-udf-wasm` validates module magic bytes, export names, module byte limits,
   and unknown exports before fixture dispatch.
+- `tdw-udf-wasm` ships a real, resource-bounded `wasmi` backend behind the
+  `wasmi` feature (`WasmUdfRuntime::execute_wasm_i64`): fuel metering bounds CPU
+  (runaway guests trap as `FuelExhausted`), `WasmLimits` caps linear memory
+  (over-allocation fails as `MemoryLimitExceeded`), and an empty `Linker` denies
+  all host imports by default (modules importing any symbol are rejected before
+  instantiation). The deterministic fixture path remains the default for offline
+  tests.
+- `WasmUdfRuntime::execute_wasm_string` adds a string-in/string-out linear-memory
+  ABI under the same fuel/memory/deny-imports guarantees: the guest exports
+  `memory` + `alloc(i32)->i32` + `<func>(in_ptr,in_len)->i64` (returning packed
+  `(out_ptr,out_len)`). All guest memory access uses wasmi's checked
+  `Memory::read`/`write`, so a bad pointer/length or non-UTF-8 output yields
+  `BadAbi` rather than a host panic (`#![forbid(unsafe_code)]` is preserved).
 
 ## Not claimed
 
 - `LocalUdfSandbox` is not an OS process sandbox, VM boundary, seccomp profile,
-  cgroup, or resource-metered Wasm engine.
-- `tdw-udf-wasm` is still a deterministic fixture runtime. It is suitable for
-  dispatcher proof and repeatable tests, but it is not yet real wasmi execution.
-- CPU time, memory pages, fuel metering, host-call allowlists, and module cache
-  eviction are open runtime-hardening work.
+  or cgroup. The `wasmi` backend is an in-process, resource-metered interpreter,
+  not an OS-level isolation boundary.
+- A module cache is not implemented (each call re-compiles).
+- Per-request `WasmLimits` overrides are not exposed; the sandbox routing uses
+  `WasmLimits::default()`.
 
 ## Follow-up path
 
-1. Add a real `wasmi` backend behind a feature flag.
-2. Introduce explicit fuel and memory limits in the public runtime contract.
-3. Add host-call allowlisting and deny-by-default imports.
-4. Add timeout/fuel exhaustion tests and malformed-module corpus tests.
-5. Route daemon UDF calls to the hardened runtime only when the profile enables
-   it; keep the deterministic fixture path for offline tests.
+1. ✅ Real `wasmi` backend behind the `wasmi` feature flag.
+2. ✅ Explicit fuel and memory limits in the public runtime contract
+   (`WasmLimits`, part of the stable contract even with the feature off).
+3. ✅ Deny-by-default host imports (empty `Linker`).
+4. ✅ Fuel-exhaustion, memory-limit, malformed-module, disallowed-import,
+   missing-export, bad-signature, and string-ABI (echo / distinct-output /
+   out-of-bounds / non-UTF-8) tests (`wasmi_tests`, gated on the feature).
+5. ✅ String/bytes ABI over linear memory (`execute_wasm_string`) **and** routing:
+   with `tdw-sandbox`'s `udf-wasm` feature (which now enables
+   `tdw-udf-wasm/wasmi`), `LocalUdfSandbox` runs a `UdfRuntime::Wasm` request
+   through `execute_wasm_string` when `UdfRequest.source` base64-decodes to a
+   real wasm module (magic `\0asm`); otherwise it falls back to the
+   deterministic fixture. Default `cargo test --workspace` (no feature) keeps the
+   `tdw-udf` built-in dispatcher. **Step #5 is complete.**
+
+UDF runtime hardening (this scope) is now fully delivered. Remaining
+enhancements are out of scope: per-request `WasmLimits`, a module cache, and a
+`wasm_bytes` struct field (base64-in-`source` was chosen instead).
 
 ## Verification
 
 - `cargo +stable test -p tdw-sandbox -p tdw-udf -p tdw-udf-wasm`
+- `cargo +stable test -p tdw-udf-wasm --features wasmi`
+- `cargo +stable clippy -p tdw-udf-wasm --features wasmi --all-targets -- -D warnings`
 - `cargo +stable test -p tdw-sandbox --features udf-wasm`
 - `cargo +stable check -p tdw-service-api --features udf-wasm`

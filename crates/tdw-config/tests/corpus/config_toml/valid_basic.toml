@@ -1,0 +1,4 @@
+profile = "dev"
+
+[session]
+sqlite_path = ".tdw/session.sqlite"

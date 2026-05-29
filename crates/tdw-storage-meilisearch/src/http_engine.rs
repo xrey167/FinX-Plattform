@@ -120,6 +120,47 @@ impl MeilisearchHttpEngine {
             TASK_POLL_INTERVAL_MS
         )))
     }
+
+    /// Idempotently create the index with the given primary key if it does
+    /// not already exist.
+    ///
+    /// Public so deployment bootstrap (`tdw-bootstrap`) can pre-create a
+    /// baseline index instead of relying on lazy creation at first write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the existence check, the create request, or the
+    /// resulting Meilisearch task fails.
+    pub async fn ensure_index(&self, index: &str, primary_key: &str) -> Result<()> {
+        let exists = self
+            .request(reqwest::Method::GET, &format!("/indexes/{index}"))?
+            .send()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch index exists: {error}")))?;
+        if exists.status().is_success() {
+            return Ok(());
+        }
+
+        let body = json!({ "uid": index, "primaryKey": primary_key });
+        let response = self
+            .request(reqwest::Method::POST, "/indexes")?
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch create index: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(Error::Storage(format!(
+                "meilisearch create index returned {status}: {text}"
+            )));
+        }
+        let enqueued: EnqueueResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch create index body: {error}")))?;
+        self.wait_for_task(enqueued.task_uid).await
+    }
 }
 
 #[derive(Deserialize)]

@@ -8,7 +8,8 @@ use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+use tdw_app_client::{DaemonClient, DaemonClientConfig, DaemonSubmission};
+use tdw_protocol::{ActorKind, ActorRef, EventMsg, Op, OpEnvelope, SessionId};
 use thiserror::Error;
 
 const DEFAULT_LEASE_TTL_MS: u64 = 30_000;
@@ -1412,6 +1413,65 @@ impl JobHandler for LoggingAckHandler {
     }
 }
 
+/// Production handler that executes each job by submitting its `OpEnvelope` to
+/// the configured TDW daemon and waiting for the terminal event.
+///
+/// The daemon's terminal event is mapped onto the worker contract so the
+/// existing retry/dead-letter wiring applies: `Completed` -> `Ok`, while
+/// `Failed`, `Cancelled`, a non-terminal final event, or any transport error
+/// -> `Err` (which the runner retries until `max_attempts`, then dead-letters).
+#[derive(Clone, Debug)]
+pub struct DaemonJobHandler {
+    client: DaemonClient,
+}
+
+impl DaemonJobHandler {
+    #[must_use]
+    pub const fn new(config: DaemonClientConfig) -> Self {
+        Self {
+            client: DaemonClient::new(config),
+        }
+    }
+
+    #[must_use]
+    pub const fn client(&self) -> &DaemonClient {
+        &self.client
+    }
+}
+
+#[async_trait::async_trait]
+impl JobHandler for DaemonJobHandler {
+    async fn handle(&self, job: &WorkerJob) -> std::result::Result<(), String> {
+        let client = self.client.clone();
+        let envelope = job.envelope.clone();
+        // `submit_and_wait` is blocking std-TCP I/O; keep it off the async
+        // runtime so the worker loop's timers/signals stay responsive.
+        let result = tokio::task::spawn_blocking(move || client.submit_and_wait(envelope))
+            .await
+            .map_err(|error| format!("daemon dispatch task join error: {error}"))?;
+        match result {
+            Ok(submission) => terminal_outcome(&submission),
+            Err(error) => Err(format!("daemon submit failed: {error:?}")),
+        }
+    }
+}
+
+/// Map a daemon submission's terminal event onto the job success/failure
+/// contract. Only `Completed` is success.
+fn terminal_outcome(submission: &DaemonSubmission) -> std::result::Result<(), String> {
+    match submission.events.last() {
+        Some(EventMsg::Completed { .. }) => Ok(()),
+        Some(EventMsg::Failed { error, .. }) => Err(error.clone()),
+        Some(EventMsg::Cancelled { reason, .. }) => Err(reason
+            .clone()
+            .unwrap_or_else(|| "daemon cancelled the operation".to_string())),
+        Some(other) => Err(format!(
+            "daemon returned a non-terminal final event: {other:?}"
+        )),
+        None => Err("daemon returned no terminal event".to_string()),
+    }
+}
+
 /// Tunables for [`WorkerRunner`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServeConfig {
@@ -1453,7 +1513,7 @@ where
     H: JobHandler,
 {
     #[must_use]
-    pub fn new(queue: Q, handler: H, config: ServeConfig) -> Self {
+    pub const fn new(queue: Q, handler: H, config: ServeConfig) -> Self {
         Self {
             queue,
             handler,
@@ -1540,6 +1600,79 @@ where
             }
         }
         Ok(report)
+    }
+}
+
+#[cfg(test)]
+mod daemon_handler_tests {
+    use super::*;
+    use tdw_app_server::{DaemonEndpoint, DaemonTransport};
+    use tdw_protocol::OpId;
+
+    fn submission_with(events: Vec<EventMsg>) -> DaemonSubmission {
+        DaemonSubmission {
+            endpoint: DaemonEndpoint {
+                transport: DaemonTransport::Tcp,
+                address: "127.0.0.1:7878".to_string(),
+            },
+            op_id: "op-test".to_string(),
+            events,
+        }
+    }
+
+    #[test]
+    fn terminal_outcome_maps_events_to_job_result() {
+        assert_eq!(
+            terminal_outcome(&submission_with(vec![EventMsg::Completed {
+                op_id: OpId::generated(),
+                summary: None,
+                result: None,
+            }])),
+            Ok(())
+        );
+        assert_eq!(
+            terminal_outcome(&submission_with(vec![EventMsg::Failed {
+                op_id: OpId::generated(),
+                error: "boom".to_string(),
+            }])),
+            Err("boom".to_string())
+        );
+        assert_eq!(
+            terminal_outcome(&submission_with(vec![EventMsg::Cancelled {
+                op_id: OpId::generated(),
+                reason: Some("stopped".to_string()),
+            }])),
+            Err("stopped".to_string())
+        );
+        // No terminal event is itself a failure (the job did not complete).
+        assert!(terminal_outcome(&submission_with(vec![])).is_err());
+    }
+
+    #[tokio::test]
+    async fn unreachable_daemon_dead_letters_job() {
+        // Bind then immediately drop to obtain a definitely-closed local port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe port");
+        let addr = listener.local_addr().expect("probe addr");
+        drop(listener);
+
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let mut job = sample_shutdown_job("job-daemon").expect("sample job builds");
+        job.max_attempts = 1;
+        queue.enqueue(job).await.expect("enqueue");
+
+        let handler = DaemonJobHandler::new(
+            DaemonClientConfig::tcp(addr.to_string())
+                .with_timeout(std::time::Duration::from_millis(200)),
+        );
+        let runner = WorkerRunner::new(queue, handler, ServeConfig::default());
+        let report = runner.run_until_idle().await.expect("run");
+
+        assert_eq!(report.processed, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(report.dead_lettered, 1);
+        assert_eq!(report.completed, 0);
     }
 }
 

@@ -66,6 +66,7 @@ impl<T: DataModel> OBBject<T> {
         }
     }
 
+    #[must_use]
     pub fn with_metadata(mut self, key: impl Into<String>, value: Value) -> Self {
         self.metadata.insert(key.into(), value);
         self

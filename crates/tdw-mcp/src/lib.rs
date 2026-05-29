@@ -224,25 +224,19 @@ impl McpServer {
     }
 
     fn call_tool(&self, id: Value, params: Value) -> Vec<Value> {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return vec![error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "tools/call params must be an object",
-                ))];
-            }
+        let Some(params_object) = params.as_object() else {
+            return vec![error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "tools/call params must be an object",
+            ))];
         };
-        let name = match string_field(params_object, "name") {
-            Some(name) => name,
-            None => {
-                return vec![error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "tools/call requires string field: name",
-                ))];
-            }
+        let Some(name) = string_field(params_object, "name") else {
+            return vec![error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "tools/call requires string field: name",
+            ))];
         };
         let arguments = params_object
             .get("arguments")
@@ -277,25 +271,19 @@ impl McpServer {
     }
 
     fn read_resource(&self, id: Value, params: Value) -> Value {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "resources/read params must be an object",
-                ));
-            }
+        let Some(params_object) = params.as_object() else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "resources/read params must be an object",
+            ));
         };
-        let uri = match string_field(params_object, "uri") {
-            Some(uri) => uri,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "resources/read requires string field: uri",
-                ));
-            }
+        let Some(uri) = string_field(params_object, "uri") else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "resources/read requires string field: uri",
+            ));
         };
 
         match resource_content(uri) {
@@ -305,25 +293,19 @@ impl McpServer {
     }
 
     fn get_prompt(&self, id: Value, params: Value) -> Value {
-        let params_object = match params.as_object() {
-            Some(params_object) => params_object,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "prompts/get params must be an object",
-                ));
-            }
+        let Some(params_object) = params.as_object() else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "prompts/get params must be an object",
+            ));
         };
-        let name = match string_field(params_object, "name") {
-            Some(name) => name,
-            None => {
-                return error_message(JsonRpcProblem::new(
-                    id,
-                    -32602,
-                    "prompts/get requires string field: name",
-                ));
-            }
+        let Some(name) = string_field(params_object, "name") else {
+            return error_message(JsonRpcProblem::new(
+                id,
+                -32602,
+                "prompts/get requires string field: name",
+            ));
         };
         let arguments = params_object
             .get("arguments")
@@ -383,6 +365,33 @@ pub fn handle_json_rpc_line(line: &str) -> Vec<String> {
     handle_json_rpc_lines([line])
 }
 
+/// Fuzz shim: feed arbitrary bytes through the JSON-RPC line handler.
+///
+/// Must never panic on adversarial input; malformed lines must produce error
+/// responses rather than panics. Shared with the nightly cargo-fuzz target.
+#[doc(hidden)]
+pub fn __fuzz_mcp_jsonrpc(data: &[u8]) {
+    let line = String::from_utf8_lossy(data);
+    let _ = handle_json_rpc_line(&line);
+}
+
+/// Fuzz shim: feed arbitrary bytes as the body of a Streamable HTTP request.
+///
+/// Must never panic on adversarial input; malformed requests must yield an
+/// error response rather than a panic. Shared with the nightly cargo-fuzz
+/// target.
+#[doc(hidden)]
+pub fn __fuzz_mcp_http(data: &[u8]) {
+    let mut server = McpServer::new();
+    let request =
+        StreamableHttpRequest::new("POST", STREAMABLE_HTTP_PATH, Vec::new(), data.to_vec());
+    let _ = handle_streamable_http_request_with_config(
+        &mut server,
+        request,
+        &StreamableHttpConfig::new(),
+    );
+}
+
 #[must_use]
 pub fn mcp_tool_catalog() -> Vec<String> {
     tool_descriptors()
@@ -404,7 +413,7 @@ impl DaemonToolRuntime {
         }
     }
 
-    fn configured(config: DaemonClientConfig) -> Self {
+    const fn configured(config: DaemonClientConfig) -> Self {
         Self { config: Ok(config) }
     }
 
@@ -412,11 +421,11 @@ impl DaemonToolRuntime {
         let config = self.config.as_ref().map_err(Clone::clone)?;
         DaemonClient::new(config.clone())
             .submit_and_wait(envelope)
-            .map_err(|error| daemon_client_error_message(config, error))
+            .map_err(|error| daemon_client_error_message(config, &error))
     }
 }
 
-fn daemon_client_error_message(config: &DaemonClientConfig, error: DaemonClientError) -> String {
+fn daemon_client_error_message(config: &DaemonClientConfig, error: &DaemonClientError) -> String {
     format!(
         "{error}; endpoint={}://{}",
         daemon_transport_label(config.endpoint().transport),
@@ -497,18 +506,16 @@ fn daemon_endpoint_address_from_config(config: &TdwConfig, transport: DaemonTran
             .clone()
             .unwrap_or_else(|| DEFAULT_DAEMON_TCP_ADDR.to_string()),
         DaemonTransport::Uds => config.daemon.uds_path.clone(),
-        DaemonTransport::HttpSse => config
-            .daemon
-            .http_bind
-            .as_deref()
-            .map(|bind| {
+        DaemonTransport::HttpSse => config.daemon.http_bind.as_deref().map_or_else(
+            || "http://127.0.0.1:7879/events".to_string(),
+            |bind| {
                 if bind.starts_with("http://") || bind.starts_with("https://") {
                     bind.to_string()
                 } else {
                     format!("http://{bind}/events")
                 }
-            })
-            .unwrap_or_else(|| "http://127.0.0.1:7879/events".to_string()),
+            },
+        ),
     }
 }
 
@@ -550,6 +557,7 @@ impl StreamableHttpConfig {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         let token = token.into();
         if !token.is_empty() {
@@ -789,7 +797,6 @@ pub fn handle_streamable_http_request_with_config(
             attach_cors_origin(&mut response, &request);
             response
         }
-        "GET" => method_not_allowed(),
         "POST" => handle_streamable_http_post(server, request),
         _ => method_not_allowed(),
     }
@@ -808,9 +815,8 @@ fn handle_streamable_http_post(
     {
         return text_response(415, "Unsupported Media Type", "expected application/json");
     }
-    let body = match std::str::from_utf8(&request.body) {
-        Ok(body) => body,
-        Err(_) => return text_response(400, "Bad Request", "request body must be UTF-8 JSON"),
+    let Ok(body) = std::str::from_utf8(&request.body) else {
+        return text_response(400, "Bad Request", "request body must be UTF-8 JSON");
     };
 
     let messages = server.handle_json_rpc_line(body);
@@ -1001,10 +1007,10 @@ fn parse_http_header_section(header_text: &str) -> Result<ParsedHttpHead, Stream
 }
 
 fn streamable_http_config_from_env() -> StreamableHttpConfig {
-    match std::env::var("TDW_MCP_HTTP_TOKEN") {
-        Ok(token) => StreamableHttpConfig::new().with_auth_token(token),
-        Err(_) => StreamableHttpConfig::new(),
-    }
+    std::env::var("TDW_MCP_HTTP_TOKEN").map_or_else(
+        |_| StreamableHttpConfig::new(),
+        |token| StreamableHttpConfig::new().with_auth_token(token),
+    )
 }
 
 fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHttpConfig) -> bool {
@@ -1041,11 +1047,10 @@ fn origin_is_allowed(origin: &str) -> bool {
         return false;
     };
     let authority = rest.split('/').next().unwrap_or("");
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
+    let host = authority.strip_prefix('[').map_or_else(
+        || authority.split(':').next().unwrap_or(""),
+        |rest| rest.split(']').next().unwrap_or(""),
+    );
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
@@ -1185,8 +1190,7 @@ fn parse_inbound(line: &str) -> Result<JsonRpcInbound, JsonRpcProblem> {
     let id = object.get("id").cloned();
     let id_for_error = match id.as_ref() {
         Some(value) if is_valid_id(value) => value.clone(),
-        Some(_) => Value::Null,
-        None => Value::Null,
+        Some(_) | None => Value::Null,
     };
     if id.as_ref().is_some_and(|value| !is_valid_id(value)) {
         return Err(JsonRpcProblem::new(
@@ -1584,7 +1588,7 @@ fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: Val
     })
 }
 
-fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
+const fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
     match transport {
         DaemonTransport::Tcp => "tcp",
         DaemonTransport::Uds => "uds",
@@ -2277,7 +2281,7 @@ mod tests {
             loop {
                 tokio::select! {
                     biased;
-                    _ = loop_cancel.cancelled() => break,
+                    () = loop_cancel.cancelled() => break,
                     maybe = service_loop.run_once() => {
                         if maybe.is_none() {
                             break;
@@ -2343,7 +2347,7 @@ mod tests {
             loop {
                 tokio::select! {
                     biased;
-                    _ = loop_cancel.cancelled() => break,
+                    () = loop_cancel.cancelled() => break,
                     maybe = service_loop.run_once() => {
                         if maybe.is_none() {
                             break;

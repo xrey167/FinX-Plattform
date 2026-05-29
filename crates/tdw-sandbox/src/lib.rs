@@ -86,18 +86,22 @@ impl SandboxRuntime for LocalUdfSandbox {
     }
 }
 
-/// Route a `UdfRuntime::Wasm` request through the WASM fixture runtime.
+/// Route a `UdfRuntime::Wasm` request to the WASM runtime.
 ///
-/// The `name` field of the request is used as the exported function name
-/// (e.g. `"upper"`), keeping the existing sandbox contract stable: callers
-/// set `name` to the UDF identifier and `source` to the UDF body / metadata.
-/// A minimal valid WASM module header is synthesised so that magic-byte
-/// validation inside `WasmUdfRuntime::execute` passes.
-/// Network and filesystem capabilities are still denied — the sandbox contract
+/// `name` is the exported function name. A real module is carried as **base64
+/// in `source`**: if `source` base64-decodes to bytes beginning with the wasm
+/// magic (`\0asm`), it is executed through the hardened `wasmi` string ABI
+/// (`execute_wasm_string`) under default [`WasmLimits`] (fuel, memory caps,
+/// deny-by-default imports). Otherwise the request falls back to the
+/// deterministic fixture interpreter (`name` as the export), preserving the
+/// prior contract for non-wasm source.
+///
+/// Network and filesystem capabilities are denied first — the sandbox contract
 /// is unchanged.
 #[cfg(feature = "udf-wasm")]
 fn run_wasm(request: &UdfRequest) -> Result<UdfResponse> {
-    use tdw_udf_wasm::{WasmUdfError, WasmUdfRuntime};
+    use base64::Engine as _;
+    use tdw_udf_wasm::{WasmLimits, WasmUdfError, WasmUdfRuntime};
 
     if request.allow_network {
         return Err(SandboxError::CapabilityDenied("network"));
@@ -106,13 +110,27 @@ fn run_wasm(request: &UdfRequest) -> Result<UdfResponse> {
         return Err(SandboxError::CapabilityDenied("filesystem"));
     }
 
-    // Minimal valid WASM binary: magic + version.
-    let wasm_stub: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-    // Use `name` as the exported function name — it's a validated identifier
-    // (alphanumeric + `_` / `-`) so it always passes `is_export_name`.
+    // `name` is a validated identifier (alphanumeric + `_` / `-`), so it always
+    // passes `is_export_name`.
     let func = request.name.as_str();
     let rt = WasmUdfRuntime::new();
 
+    // Real module path: base64 in `source`, gated on the wasm magic so plain
+    // (non-wasm) source stays on the fixture path below.
+    if let Ok(module) = base64::engine::general_purpose::STANDARD.decode(request.source.as_bytes())
+        && module.starts_with(&[0x00, 0x61, 0x73, 0x6d])
+    {
+        return rt
+            .execute_wasm_string(&module, func, &request.input, WasmLimits::default())
+            .map(|output| UdfResponse {
+                runtime: UdfRuntime::Wasm,
+                output,
+            })
+            .map_err(|error| SandboxError::Udf(error.to_string()));
+    }
+
+    // Fixture fallback: minimal valid WASM header (magic + version).
+    let wasm_stub: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
     rt.execute(wasm_stub, func, &request.input)
         .map(|output| UdfResponse {
             runtime: UdfRuntime::Wasm,
@@ -150,6 +168,85 @@ fn is_udf_name(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+#[cfg(all(test, feature = "udf-wasm"))]
+mod wasm_routing_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    const ECHO: &str = r#"(module
+        (memory (export "memory") 1)
+        (global $bump (mut i32) (i32.const 1024))
+        (func (export "alloc") (param $len i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $bump))
+            (global.set $bump (i32.add (global.get $bump) (local.get $len)))
+            (local.get $ptr))
+        (func (export "echo") (param $ptr i32) (param $len i32) (result i64)
+            (i64.or
+                (i64.shl (i64.extend_i32_u (local.get $ptr)) (i64.const 32))
+                (i64.extend_i32_u (local.get $len)))))"#;
+
+    fn b64_wasm(wat_text: &str) -> String {
+        let module =
+            wat::parse_str(wat_text).unwrap_or_else(|error| panic!("wat compiles: {error}"));
+        base64::engine::general_purpose::STANDARD.encode(module)
+    }
+
+    fn wasm_request(name: &str, source: String, input: &str) -> UdfRequest {
+        UdfRequest {
+            name: name.to_string(),
+            runtime: UdfRuntime::Wasm,
+            source,
+            input: input.to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        }
+    }
+
+    #[test]
+    fn routes_base64_wasm_module_through_string_abi() {
+        let response = LocalUdfSandbox
+            .run(wasm_request("echo", b64_wasm(ECHO), "hello world"))
+            .unwrap_or_else(|error| panic!("wasm echo should run: {error}"));
+        assert_eq!(response.runtime, UdfRuntime::Wasm);
+        assert_eq!(response.output, "hello world");
+    }
+
+    #[test]
+    fn non_wasm_source_falls_back_to_fixture() {
+        // `source` is not base64-wasm, so the fixture handles it via `name`.
+        let response = LocalUdfSandbox
+            .run(wasm_request(
+                "upper",
+                "plain udf source".to_string(),
+                "aapl",
+            ))
+            .unwrap_or_else(|error| panic!("fixture should run: {error}"));
+        assert_eq!(response.output, "AAPL");
+    }
+
+    #[test]
+    fn fuel_exhaustion_maps_to_udf_error() {
+        let spin = r#"(module
+            (memory (export "memory") 1)
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 0))
+            (func (export "spin") (param $ptr i32) (param $len i32) (result i64)
+                (loop (br 0)) (i64.const 0)))"#;
+        let result = LocalUdfSandbox.run(wasm_request("spin", b64_wasm(spin), "x"));
+        assert!(matches!(result, Err(SandboxError::Udf(_))));
+    }
+
+    #[test]
+    fn network_capability_denied_before_wasm() {
+        let mut request = wasm_request("echo", b64_wasm(ECHO), "x");
+        request.allow_network = true;
+        assert_eq!(
+            LocalUdfSandbox.run(request),
+            Err(SandboxError::CapabilityDenied("network"))
+        );
+    }
 }
 
 #[cfg(test)]

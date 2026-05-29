@@ -16,6 +16,7 @@ pub use policy::{
     service_hook_policy,
 };
 pub use stream_ingest::run_stream_ingest;
+pub use tdw_hooks::HookExecutionPolicy;
 
 use std::collections::BTreeMap;
 use std::future::Future;
