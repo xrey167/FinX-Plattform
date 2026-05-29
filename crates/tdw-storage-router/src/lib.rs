@@ -109,6 +109,7 @@ impl<T: DataModel> WriteSink<T> for RecordingSink {
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?;
         *writes += batch.rows.len();
+        drop(writes);
         Ok(WriteReceipt {
             sink: self.name,
             rows_written: batch.rows.len(),
