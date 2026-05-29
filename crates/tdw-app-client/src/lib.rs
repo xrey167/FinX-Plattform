@@ -214,7 +214,7 @@ impl DaemonClient {
                 source,
             })?;
 
-        write_envelope_frame(&mut stream, &envelope)?;
+        write_envelope_frame(&mut stream, envelope)?;
         let events = read_terminal_events(&mut stream, &op_id)?;
         Ok(DaemonSubmission {
             endpoint: self.config.endpoint.clone(),
