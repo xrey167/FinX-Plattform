@@ -12,6 +12,53 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.3.0] - 2026-05-29
+
+Runtime, sandbox, and live-backend hardening on top of `v0.2.0`. The 12 commits
+in `v0.2.0..HEAD` add a supervised worker process, a real sandboxed UDF engine,
+and a fully-bootstrapped live data backend - user-visible runtime and storage
+work, so per the pre-1.0 policy this is a `MINOR` release.
+
+### Added
+
+- **Supervised worker process.** `tdw-worker --serve` / `--serve-once` run a
+  `WorkerRunner` lease loop over the durable queue: lease (with payload) →
+  run a `JobHandler` → complete, or fail with retry/dead-letter at
+  `max_attempts`. In-flight jobs always finish on shutdown (the stop signal is
+  observed only between jobs). Tunables via `TDW_WORKER_DB` / `TDW_WORKER_ID` /
+  `TDW_WORKER_LEASE_TTL_MS` / `TDW_WORKER_POLL_MS`. (#72)
+- **Real `wasmi` UDF runtime.** `tdw-udf-wasm` gains a `wasmi`-backed engine
+  behind the opt-in `wasmi` feature (`execute_wasm_i64`): fuel metering
+  (`FuelExhausted`), `WasmLimits` memory caps (`MemoryLimitExceeded`), and
+  deny-by-default host imports (empty `Linker`). The deterministic fixture path
+  stays the default. (#79)
+- **Live backend expansion.** The `live` compose profile now brings up
+  ClickHouse, Qdrant, and Meilisearch; `tdw-bootstrap` creates baseline schemas
+  in each (ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection,
+  Meilisearch `tdw-default` index) alongside the Postgres/S3 bootstrap; and a
+  long-running `tdw-worker --serve` service starts after bootstrap succeeds.
+  `QdrantHttpEngine::ensure_collection` is now public and
+  `MeilisearchHttpEngine::ensure_index` was added. (#81)
+- **Test-policy hardening.** Mutation tooling (#71), the first loom concurrency
+  model on `tdw-app-server` (#73), stable corpus-replay fuzz harnesses for six
+  parser surfaces (#74), nightly `cargo-fuzz` targets with a CI smoke job
+  (#75, #78), and an `xtask` pre-release fuzz+loom check recipe (#76) - closing
+  TEST-POLICY-001 through 005.
+
+### Changed
+
+- Reduced clippy pedantic/nursery warnings across the workspace (#80, #83).
+
+### Docs
+
+- Added the full deployed-stack runbook (#77) and updated the data-backend
+  runbook + transport-status matrix for the expanded `live` profile.
+
+### Notes
+
+- `Cargo.toml` keeps `publish = false`; the workspace `version` field is not
+  bumped per release (releases are tag-driven).
+
 ## [0.2.0] - 2026-05-29
 
 First substantial release after the early `v0.1.0`/`v0.1.1` packaging tags
@@ -101,7 +148,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/xrey167/FinX-Plattform/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/xrey167/FinX-Plattform/releases/tag/v0.1.0
