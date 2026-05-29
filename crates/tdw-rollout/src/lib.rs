@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "postgres")]
+pub mod pg_rollout;
+
+#[cfg(feature = "postgres")]
+pub use pg_rollout::PgRollout;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

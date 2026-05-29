@@ -20,6 +20,17 @@ udf-wasm = ["tdw-sandbox/udf-wasm"]
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
 real-postgres = ["tdw-storage-postgres/postgres"]
 
+## Postgres-back the daemon's OWN session + rollout stores (`SessionBackend::Pg`
+## / `RolloutBackend::Pg`), selected at runtime when `TDW_DAEMON_PG_URL` (or
+## `DATABASE_URL`) is set. Builds on `real-postgres` for `PgEngine` and pulls in
+## the Postgres stores from `tdw-session` / `tdw-rollout`. Used by the `live`
+## compose stack so daemon state survives container restarts.
+daemon-postgres = [
+    "real-postgres",
+    "tdw-session/postgres",
+    "tdw-rollout/postgres",
+]
+
 ## Swap the OLAP engine in `AppState` for the real `ClickHouseHttpEngine`
 ## (reqwest over the ClickHouse HTTP interface). Activates
 ## `tdw-storage-clickhouse/clickhouse`. When enabled, `from_config` reads
