@@ -205,7 +205,7 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
     ) -> Result<Option<WorkerLease>> {
         validate_worker_id(worker_id)?;
         let now_ms = unix_epoch_millis()?;
-        self.reap_expired_leases_at(now_ms)?;
+        self.reap_expired_leases_at(now_ms);
 
         let Some(index) = self
             .records
@@ -271,7 +271,7 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
 
     fn reap_expired_leases(&mut self) -> Result<u64> {
         let now_ms = unix_epoch_millis()?;
-        self.reap_expired_leases_at(now_ms)
+        Ok(self.reap_expired_leases_at(now_ms))
     }
 
     fn dead_letters(&self) -> Vec<DeadLetterRecord> {
@@ -312,7 +312,7 @@ impl InMemoryWorkerQueue {
             .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()))
     }
 
-    fn reap_expired_leases_at(&mut self, now_ms: u64) -> Result<u64> {
+    fn reap_expired_leases_at(&mut self, now_ms: u64) -> u64 {
         let mut reaped = 0;
         for record in &mut self.records {
             if record.status != WorkerJobStatus::Leased {
@@ -338,7 +338,7 @@ impl InMemoryWorkerQueue {
                 record.status = WorkerJobStatus::Pending;
             }
         }
-        Ok(reaped)
+        reaped
     }
 }
 
