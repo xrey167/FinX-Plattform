@@ -676,7 +676,7 @@ impl SqliteWorkerQueue {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(row_to_dead_letter).collect()
+        rows.iter().map(row_to_dead_letter).collect()
     }
 
     /// # Errors
@@ -1259,9 +1259,9 @@ fn row_to_job(row: &SqliteRow) -> Result<WorkerJob> {
     })
 }
 
-fn row_to_dead_letter(row: SqliteRow) -> Result<DeadLetterRecord> {
+fn row_to_dead_letter(row: &SqliteRow) -> Result<DeadLetterRecord> {
     Ok(DeadLetterRecord {
-        job: row_to_job(&row)?,
+        job: row_to_job(row)?,
         attempts: i64_to_u32(row.get("attempts"), "attempts")?,
         last_error: row.get("last_error"),
         dead_lettered_at_ms: i64_to_u64(row.get("dead_lettered_at_ms"), "dead_lettered_at_ms")?,
@@ -1446,7 +1446,7 @@ impl JobHandler for DaemonJobHandler {
         let envelope = job.envelope.clone();
         // `submit_and_wait` is blocking std-TCP I/O; keep it off the async
         // runtime so the worker loop's timers/signals stay responsive.
-        let result = tokio::task::spawn_blocking(move || client.submit_and_wait(envelope))
+        let result = tokio::task::spawn_blocking(move || client.submit_and_wait(&envelope))
             .await
             .map_err(|error| format!("daemon dispatch task join error: {error}"))?;
         match result {

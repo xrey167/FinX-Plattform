@@ -767,6 +767,8 @@ mod tests {
         policy
     }
 
+    // Signature is fixed by the `McpHookHandler = fn(Value) -> ...` type alias.
+    #[allow(clippy::needless_pass_by_value)]
     fn mcp_echo(payload: Value) -> std::result::Result<Value, String> {
         Ok(json!({ "hook": payload["hook"]["name"].clone() }))
     }
