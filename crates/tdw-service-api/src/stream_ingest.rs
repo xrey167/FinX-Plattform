@@ -53,19 +53,16 @@ pub async fn run_stream_ingest<T: DataModel>(
             }
         };
 
-        match next {
-            Some(item) => {
-                buffer.push(item?);
-                if buffer.len() >= max_rows {
-                    flush(olap, session_id, table, &mut buffer, &mut total).await?;
-                }
+        if let Some(item) = next {
+            buffer.push(item?);
+            if buffer.len() >= max_rows {
+                flush(olap, session_id, table, &mut buffer, &mut total).await?;
             }
-            None => {
-                if !buffer.is_empty() {
-                    flush(olap, session_id, table, &mut buffer, &mut total).await?;
-                }
-                break;
+        } else {
+            if !buffer.is_empty() {
+                flush(olap, session_id, table, &mut buffer, &mut total).await?;
             }
+            break;
         }
     }
 

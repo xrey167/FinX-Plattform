@@ -109,15 +109,9 @@ pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, 
     let mut events = Vec::new();
     let deadline = Duration::from_secs(5);
     let result = tokio::time::timeout(deadline, async {
-        loop {
-            match read_frame(&mut stream).await {
-                Ok(Some(bytes)) => {
-                    if let Ok(event) = serde_json::from_slice::<EventMsg>(&bytes) {
-                        events.push(event);
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => break,
+        while let Ok(Some(bytes)) = read_frame(&mut stream).await {
+            if let Ok(event) = serde_json::from_slice::<EventMsg>(&bytes) {
+                events.push(event);
             }
         }
     })
