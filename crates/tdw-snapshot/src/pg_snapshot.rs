@@ -49,6 +49,7 @@ impl PgSnapshotStore {
     }
 
     /// Override the table name. Useful for multi-tenant deployments.
+    #[must_use]
     pub fn with_table(mut self, table: impl Into<String>) -> Self {
         self.table = table.into();
         self
@@ -130,10 +131,8 @@ impl PgSnapshotStore {
             .engine
             .fetch_json(&sql, json!([table, version as i64]))
             .await?;
-        match rows.first() {
-            Some(row) => Snapshot::try_from_row(row).map(Some),
-            None => Ok(None),
-        }
+        rows.first()
+            .map_or(Ok(None), |row| Snapshot::try_from_row(row).map(Some))
     }
 
     /// Look up the latest version of `table`. Returns `None` if no
@@ -149,10 +148,8 @@ impl PgSnapshotStore {
             self.table
         );
         let rows = self.engine.fetch_json(&sql, json!([table])).await?;
-        match rows.first() {
-            Some(row) => Snapshot::try_from_row(row).map(Some),
-            None => Ok(None),
-        }
+        rows.first()
+            .map_or(Ok(None), |row| Snapshot::try_from_row(row).map(Some))
     }
 }
 

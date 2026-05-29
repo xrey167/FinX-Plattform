@@ -413,7 +413,7 @@ impl DaemonToolRuntime {
         }
     }
 
-    fn configured(config: DaemonClientConfig) -> Self {
+    const fn configured(config: DaemonClientConfig) -> Self {
         Self { config: Ok(config) }
     }
 
@@ -421,11 +421,11 @@ impl DaemonToolRuntime {
         let config = self.config.as_ref().map_err(Clone::clone)?;
         DaemonClient::new(config.clone())
             .submit_and_wait(envelope)
-            .map_err(|error| daemon_client_error_message(config, error))
+            .map_err(|error| daemon_client_error_message(config, &error))
     }
 }
 
-fn daemon_client_error_message(config: &DaemonClientConfig, error: DaemonClientError) -> String {
+fn daemon_client_error_message(config: &DaemonClientConfig, error: &DaemonClientError) -> String {
     format!(
         "{error}; endpoint={}://{}",
         daemon_transport_label(config.endpoint().transport),
@@ -557,6 +557,7 @@ impl StreamableHttpConfig {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         let token = token.into();
         if !token.is_empty() {
@@ -796,7 +797,6 @@ pub fn handle_streamable_http_request_with_config(
             attach_cors_origin(&mut response, &request);
             response
         }
-        "GET" => method_not_allowed(),
         "POST" => handle_streamable_http_post(server, request),
         _ => method_not_allowed(),
     }
@@ -1007,10 +1007,10 @@ fn parse_http_header_section(header_text: &str) -> Result<ParsedHttpHead, Stream
 }
 
 fn streamable_http_config_from_env() -> StreamableHttpConfig {
-    match std::env::var("TDW_MCP_HTTP_TOKEN") {
-        Ok(token) => StreamableHttpConfig::new().with_auth_token(token),
-        Err(_) => StreamableHttpConfig::new(),
-    }
+    std::env::var("TDW_MCP_HTTP_TOKEN").map_or_else(
+        |_| StreamableHttpConfig::new(),
+        |token| StreamableHttpConfig::new().with_auth_token(token),
+    )
 }
 
 fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHttpConfig) -> bool {
@@ -1047,11 +1047,10 @@ fn origin_is_allowed(origin: &str) -> bool {
         return false;
     };
     let authority = rest.split('/').next().unwrap_or("");
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
+    let host = authority.strip_prefix('[').map_or_else(
+        || authority.split(':').next().unwrap_or(""),
+        |rest| rest.split(']').next().unwrap_or(""),
+    );
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
@@ -1191,8 +1190,7 @@ fn parse_inbound(line: &str) -> Result<JsonRpcInbound, JsonRpcProblem> {
     let id = object.get("id").cloned();
     let id_for_error = match id.as_ref() {
         Some(value) if is_valid_id(value) => value.clone(),
-        Some(_) => Value::Null,
-        None => Value::Null,
+        Some(_) | None => Value::Null,
     };
     if id.as_ref().is_some_and(|value| !is_valid_id(value)) {
         return Err(JsonRpcProblem::new(
@@ -1590,7 +1588,7 @@ fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: Val
     })
 }
 
-fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
+const fn daemon_transport_label(transport: DaemonTransport) -> &'static str {
     match transport {
         DaemonTransport::Tcp => "tcp",
         DaemonTransport::Uds => "uds",

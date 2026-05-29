@@ -232,6 +232,7 @@ impl SystemHookHandlerBackend {
         self
     }
 
+    #[must_use]
     pub fn with_http_bearer_token(mut self, token: impl Into<String>) -> Self {
         self.http_bearer_token = Some(token.into());
         self
@@ -561,6 +562,10 @@ pub struct DeferredApprovals {
 }
 
 impl DeferredApprovals {
+    /// # Panics
+    ///
+    /// Panics if the internally generated permission id fails validation
+    /// (should be unreachable in practice).
     pub fn request(
         &mut self,
         action: impl Into<String>,

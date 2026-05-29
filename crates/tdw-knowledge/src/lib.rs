@@ -233,22 +233,25 @@ pub fn summarize_syntax(input: &str) -> SyntaxSummary {
         .lines()
         .filter_map(|line| {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("create table ") {
-                Some(SymbolRef {
-                    kind: "table".to_string(),
-                    name: rest
-                        .split([' ', '('])
-                        .next()
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string(),
-                })
-            } else {
-                trimmed.strip_prefix("fn ").map(|rest| SymbolRef {
-                    kind: "function".to_string(),
-                    name: rest.split('(').next().unwrap_or_default().to_string(),
-                })
-            }
+            trimmed.strip_prefix("create table ").map_or_else(
+                || {
+                    trimmed.strip_prefix("fn ").map(|rest| SymbolRef {
+                        kind: "function".to_string(),
+                        name: rest.split('(').next().unwrap_or_default().to_string(),
+                    })
+                },
+                |rest| {
+                    Some(SymbolRef {
+                        kind: "table".to_string(),
+                        name: rest
+                            .split([' ', '('])
+                            .next()
+                            .unwrap_or_default()
+                            .trim_matches('"')
+                            .to_string(),
+                    })
+                },
+            )
         })
         .filter(|symbol| !symbol.name.is_empty())
         .collect();

@@ -21,6 +21,11 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 /// - anything else  → 404.
 ///
 /// Cancellation: returns when `cancel.cancelled()`.
+///
+/// # Errors
+///
+/// Returns an `io::Error` if accepting a connection or reading/writing a
+/// socket fails.
 pub async fn serve_http(
     listener: TcpListener,
     handle: crate::SubmissionHandle,
@@ -86,9 +91,8 @@ async fn handle_http_conn(
             return;
         }
         let n = match stream.read(&mut header_buf[filled..]).await {
-            Ok(0) => return, // EOF
+            Ok(0) | Err(_) => return, // EOF or error
             Ok(n) => n,
-            Err(_) => return,
         };
         filled += n;
         if let Some(pos) = find_header_end(&header_buf[..filled]) {
