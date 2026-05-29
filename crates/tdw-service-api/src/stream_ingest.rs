@@ -189,7 +189,7 @@ mod tests {
             "raw.tick",
             stream,
             2,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )
         .await
         .unwrap_or_else(|error| panic!("stream ingest should succeed: {error}"));
@@ -254,7 +254,7 @@ mod tests {
             "raw.tick",
             stream,
             4,
-            Duration::from_secs(60),
+            Duration::from_mins(1),
         )
         .await
         .unwrap_or_else(|error| panic!("empty ingest should succeed: {error}"));

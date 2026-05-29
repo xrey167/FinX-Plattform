@@ -69,7 +69,7 @@ impl WorkerJobStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerJob {
     pub job_id: String,
     pub queue: String,
@@ -89,7 +89,7 @@ pub struct WorkerLease {
 
 /// A leased job paired with its full payload, so a worker process can execute
 /// the `OpEnvelope` without a second round trip to the queue.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeasedJob {
     pub lease: WorkerLease,
     pub job: WorkerJob,
@@ -101,7 +101,7 @@ pub struct EnqueueOutcome {
     pub inserted: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeadLetterRecord {
     pub job: WorkerJob,
     pub attempts: u32,

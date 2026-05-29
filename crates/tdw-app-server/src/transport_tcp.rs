@@ -125,7 +125,7 @@ async fn handle_tcp_conn(
 
 /// Read one length-delimited frame from `r`.
 /// Returns `Ok(None)` on clean EOF; `Ok(Some(bytes))` on success; `Err` on IO error.
-pub(crate) async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
+pub async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
     r: &mut R,
 ) -> std::io::Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];

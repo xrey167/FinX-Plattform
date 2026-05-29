@@ -56,7 +56,7 @@ mod tests {
     struct ConstantProvider;
 
     impl EmbeddingProvider for ConstantProvider {
-        fn model_id(&self) -> &str {
+        fn model_id(&self) -> &'static str {
             "constant"
         }
 

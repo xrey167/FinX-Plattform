@@ -160,10 +160,10 @@ fn decode_one(value: Value) -> Result<Binding> {
     }
 }
 
-fn bind_one<'q>(
-    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+fn bind_one(
+    query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
     binding: Binding,
-) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
     match binding {
         Binding::Null => query.bind(Option::<String>::None),
         Binding::Bool(boolean) => query.bind(boolean),

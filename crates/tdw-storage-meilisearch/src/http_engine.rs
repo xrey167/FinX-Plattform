@@ -119,8 +119,7 @@ impl MeilisearchHttpEngine {
         }
         Err(Error::Storage(format!(
             "meilisearch task {task_uid} did not reach terminal state within \
-             {TASK_POLL_MAX_ATTEMPTS} attempts ({}ms each)",
-            TASK_POLL_INTERVAL_MS
+             {TASK_POLL_MAX_ATTEMPTS} attempts ({TASK_POLL_INTERVAL_MS}ms each)"
         )))
     }
 
