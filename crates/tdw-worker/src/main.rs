@@ -50,33 +50,42 @@ async fn run() -> Result<(), String> {
 
 async fn serve() -> std::result::Result<(), String> {
     let once = std::env::args().any(|arg| arg == "--serve-once");
-    let db_url =
-        std::env::var("TDW_WORKER_DB").unwrap_or_else(|_| "sqlite://tdw-worker.sqlite".to_string());
-    let queue = tdw_worker::SqliteWorkerQueue::connect(&db_url)
-        .await
-        .map_err(|error| error.to_string())?;
     let config = serve_config_from_env();
+    let daemon = daemon_dispatch_config()?;
     let mode = if once {
         "serve-once draining"
     } else {
         "serving"
     };
+    let handler_label = match &daemon {
+        Some((_, endpoint)) => format!("daemon dispatch -> {endpoint}"),
+        None => "ack handler".to_string(),
+    };
 
-    // Daemon dispatch when configured; otherwise the offline ack handler.
-    let report = match daemon_dispatch_config()? {
-        Some((daemon_config, endpoint)) => {
+    // Select the durable queue backend: Postgres when built with the `postgres`
+    // feature and a PG URL is set, otherwise the SQLite default. The handler
+    // (daemon dispatch vs offline ack) is orthogonal and applies to both.
+    let report = match worker_backend_from_env() {
+        #[cfg(feature = "postgres")]
+        WorkerBackend::Postgres(url) => {
             eprintln!(
-                "tdw-worker {mode} {db_url} (worker_id={}, daemon dispatch -> {endpoint})",
+                "tdw-worker {mode} (backend=postgres, worker_id={}, {handler_label})",
                 config.worker_id
             );
-            run_serve(queue, tdw_worker::DaemonJobHandler::new(daemon_config), config, once).await
+            let queue = tdw_worker::PgWorkerQueue::connect(&url)
+                .await
+                .map_err(|error| error.to_string())?;
+            run_serve_dispatch(queue, daemon, config, once).await
         }
-        None => {
+        WorkerBackend::Sqlite(db_url) => {
             eprintln!(
-                "tdw-worker {mode} {db_url} (worker_id={}, ack handler - set TDW_WORKER_DAEMON_ADDR for daemon dispatch)",
+                "tdw-worker {mode} (backend=sqlite {db_url}, worker_id={}, {handler_label})",
                 config.worker_id
             );
-            run_serve(queue, tdw_worker::LoggingAckHandler, config, once).await
+            let queue = tdw_worker::SqliteWorkerQueue::connect(&db_url)
+                .await
+                .map_err(|error| error.to_string())?;
+            run_serve_dispatch(queue, daemon, config, once).await
         }
     }
     .map_err(|error| error.to_string())?;
@@ -88,8 +97,50 @@ async fn serve() -> std::result::Result<(), String> {
     Ok(())
 }
 
-async fn run_serve<H: tdw_worker::JobHandler>(
-    queue: tdw_worker::SqliteWorkerQueue,
+/// Which durable backend `--serve` runs against.
+enum WorkerBackend {
+    #[cfg(feature = "postgres")]
+    Postgres(String),
+    Sqlite(String),
+}
+
+/// Postgres when `--features postgres` is built and `TDW_WORKER_PG_URL`
+/// (or `DATABASE_URL`) is set; otherwise SQLite (`TDW_WORKER_DB`, default
+/// `sqlite://tdw-worker.sqlite`).
+fn worker_backend_from_env() -> WorkerBackend {
+    #[cfg(feature = "postgres")]
+    if let Some(url) = non_empty_env("TDW_WORKER_PG_URL").or_else(|| non_empty_env("DATABASE_URL"))
+    {
+        return WorkerBackend::Postgres(url);
+    }
+    let db_url =
+        std::env::var("TDW_WORKER_DB").unwrap_or_else(|_| "sqlite://tdw-worker.sqlite".to_string());
+    WorkerBackend::Sqlite(db_url)
+}
+
+/// Run the lease loop with the configured handler over any `ServeQueue` backend.
+async fn run_serve_dispatch<Q: tdw_worker::ServeQueue>(
+    queue: Q,
+    daemon: Option<(DaemonClientConfig, String)>,
+    config: tdw_worker::ServeConfig,
+    once: bool,
+) -> tdw_worker::Result<tdw_worker::ServeReport> {
+    match daemon {
+        Some((daemon_config, _)) => {
+            run_serve(
+                queue,
+                tdw_worker::DaemonJobHandler::new(daemon_config),
+                config,
+                once,
+            )
+            .await
+        }
+        None => run_serve(queue, tdw_worker::LoggingAckHandler, config, once).await,
+    }
+}
+
+async fn run_serve<Q: tdw_worker::ServeQueue, H: tdw_worker::JobHandler>(
+    queue: Q,
     handler: H,
     config: tdw_worker::ServeConfig,
     once: bool,
