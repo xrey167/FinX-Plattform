@@ -88,6 +88,7 @@ async fn e2e_real_clickhouse_ingest_persists() {
         Op::IngestBatch {
             provider: "yahoo".to_string(),
             endpoint: "equity_historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
             range: None,
         },
     );

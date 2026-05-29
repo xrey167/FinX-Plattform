@@ -126,10 +126,14 @@ fn validate_op(op: &Op) -> Result<()> {
         Op::IngestBatch {
             provider,
             endpoint,
+            symbols,
             range,
         } => {
             validate_token("provider", provider)?;
             validate_token("endpoint", endpoint)?;
+            for symbol in symbols {
+                validate_display_text("symbol", symbol)?;
+            }
             if let Some(range) = range {
                 validate_display_text("range.start", &range.start)?;
                 validate_display_text("range.end", &range.end)?;

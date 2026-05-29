@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use tdw_core::{DataModel, DataStream, OlapEngine, Result};
-use tdw_storage_clickhouse::{build_insert_jsoneachrow, ingest_dedup_token};
+use tdw_storage_clickhouse::{batch_dedup_token, build_insert_jsoneachrow};
 
 /// Provider label stamped on every streamed ingest batch envelope.
 const STREAM_PROVIDER: &str = "stream";
@@ -14,10 +14,12 @@ const STREAM_ENDPOINT: &str = "stream_ingest";
 /// last flush, whichever trips first.
 ///
 /// Each flush is written as an idempotent `INSERT … FORMAT JSONEachRow`
-/// statement carrying a per-batch `insert_deduplication_token` keyed by
-/// `(session_id, batch_seq, table)`. `batch_seq` increments per flush so a
-/// retried run reuses stable, distinct tokens and ClickHouse drops duplicate
-/// blocks rather than double-writing them.
+/// statement carrying a CONTENT-ADDRESSED `insert_deduplication_token` from
+/// [`batch_dedup_token`] (a hash of the batch's rows). A streaming loop has no
+/// per-batch protocol sequence, so a monotonic counter would restart at 0 on
+/// process restart and reuse tokens for *different* batches — silently dropping
+/// new data. Hashing the content instead makes a retried identical batch dedup
+/// and two distinct batches both persist.
 ///
 /// Returns the total number of rows written across all flushes.
 ///
@@ -34,7 +36,6 @@ pub async fn run_stream_ingest<T: DataModel>(
     max_wait: Duration,
 ) -> Result<usize> {
     let mut buffer: Vec<T> = Vec::new();
-    let mut batch_seq: u64 = 0;
     let mut total: usize = 0;
 
     loop {
@@ -46,15 +47,7 @@ pub async fn run_stream_ingest<T: DataModel>(
             match tokio::time::timeout(max_wait, stream.next()).await {
                 Ok(item) => item,
                 Err(_elapsed) => {
-                    flush(
-                        olap,
-                        session_id,
-                        table,
-                        &mut buffer,
-                        &mut batch_seq,
-                        &mut total,
-                    )
-                    .await?;
+                    flush(olap, session_id, table, &mut buffer, &mut total).await?;
                     continue;
                 }
             }
@@ -64,28 +57,12 @@ pub async fn run_stream_ingest<T: DataModel>(
             Some(item) => {
                 buffer.push(item?);
                 if buffer.len() >= max_rows {
-                    flush(
-                        olap,
-                        session_id,
-                        table,
-                        &mut buffer,
-                        &mut batch_seq,
-                        &mut total,
-                    )
-                    .await?;
+                    flush(olap, session_id, table, &mut buffer, &mut total).await?;
                 }
             }
             None => {
                 if !buffer.is_empty() {
-                    flush(
-                        olap,
-                        session_id,
-                        table,
-                        &mut buffer,
-                        &mut batch_seq,
-                        &mut total,
-                    )
-                    .await?;
+                    flush(olap, session_id, table, &mut buffer, &mut total).await?;
                 }
                 break;
             }
@@ -100,7 +77,6 @@ async fn flush<T: DataModel>(
     session_id: &str,
     table: &str,
     buffer: &mut Vec<T>,
-    batch_seq: &mut u64,
     total: &mut usize,
 ) -> Result<()> {
     if buffer.is_empty() {
@@ -109,10 +85,9 @@ async fn flush<T: DataModel>(
     let rows = std::mem::take(buffer);
     let count = rows.len();
     let batch = tdw_core::OBBject::new(rows, STREAM_PROVIDER, STREAM_ENDPOINT);
-    let token = ingest_dedup_token(session_id, *batch_seq, table);
+    let token = batch_dedup_token(session_id, table, &batch)?;
     let sql = build_insert_jsoneachrow(table, &batch, &token)?;
     olap.execute(&sql).await?;
-    *batch_seq += 1;
     *total += count;
     Ok(())
 }
@@ -196,10 +171,14 @@ mod tests {
         for statement in &statements {
             assert!(statement.contains("FORMAT JSONEachRow"));
             assert!(statement.starts_with("INSERT INTO raw.tick SETTINGS "));
+            // Content-addressed token, scoped to (session, table).
+            assert!(statement.contains("insert_deduplication_token='sess-stream-1:raw.tick:"));
         }
-        assert!(statements[0].contains("insert_deduplication_token='sess-stream-1:0:raw.tick'"));
-        assert!(statements[1].contains("insert_deduplication_token='sess-stream-1:1:raw.tick'"));
-        assert!(statements[2].contains("insert_deduplication_token='sess-stream-1:2:raw.tick'"));
+        // Distinct batch content -> distinct tokens (and statements), so no batch
+        // is silently deduped against another.
+        assert_ne!(statements[0], statements[1]);
+        assert_ne!(statements[1], statements[2]);
+        assert_ne!(statements[0], statements[2]);
     }
 
     #[tokio::test]

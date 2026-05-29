@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tdw_app_server::Dispatcher;
 use tdw_core::{Error, Result};
 use tdw_hooks::SystemHookHandlerBackend;
-use tdw_protocol::{EventMsg, Op, OpEnvelope};
+use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
@@ -59,8 +59,22 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
     match &env.op {
         Op::RunQuery { sql, .. } => dispatch_run_query(state, policy, sql).await,
         Op::IngestBatch {
-            provider, endpoint, ..
-        } => dispatch_ingest(state, policy, env, provider, endpoint).await,
+            provider,
+            endpoint,
+            symbols,
+            range,
+        } => {
+            dispatch_ingest(
+                state,
+                policy,
+                env,
+                provider,
+                endpoint,
+                symbols,
+                range.as_ref(),
+            )
+            .await
+        }
         Op::ToolCall {
             tool_name,
             arguments,
@@ -98,78 +112,87 @@ async fn dispatch_ingest(
     env: &OpEnvelope,
     provider: &str,
     endpoint: &str,
+    symbols: &[String],
+    range: Option<&TimeRange>,
 ) -> Result<Value> {
     let mut backend = SystemHookHandlerBackend::default();
     let evidence =
         enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
-    let runner = CommandRunner::new((*state.registry).clone());
-    let params = json!({ "symbol": "AAPL" });
-    // Persist into a bronze landing table keyed by (provider, endpoint). The
-    // provider row shape is written verbatim via JSONEachRow; normalization to
-    // `raw.market_data_bar` is a downstream (silver) concern. Previously this
-    // path fetched the batch and discarded it — the write below closes that gap.
-    let written = match (provider, endpoint) {
-        ("fileset", "equity_historical") => {
-            let object = runner.run(&FilesetEquityHistoricalFetcher, params).await?;
-            persist_batch(state, env, "raw.equity_historical", &object).await?
-        }
-        ("yahoo", "equity_historical") => {
-            let object = runner.run(&YahooEquityHistoricalFetcher, params).await?;
-            persist_batch(state, env, "raw.equity_historical", &object).await?
-        }
+
+    if symbols.is_empty() {
+        return Err(Error::Provider(
+            "ingest requires at least one symbol".to_string(),
+        ));
+    }
+
+    // Bronze landing table keyed by (provider, endpoint). Provider rows are
+    // written verbatim via JSONEachRow; normalization to `raw.market_data_bar`
+    // is a downstream (silver) concern.
+    let table = match (provider, endpoint) {
+        ("fileset" | "yahoo", "equity_historical") => "raw.equity_historical",
         (provider, endpoint) => {
             return Err(Error::Provider(format!(
                 "unsupported ingest provider/endpoint: {provider}/{endpoint}"
             )));
         }
     };
+
+    let runner = CommandRunner::new((*state.registry).clone());
+    let mut per_symbol = Vec::with_capacity(symbols.len());
+    let mut total_rows = 0usize;
+
+    for symbol in symbols {
+        let mut params = json!({ "symbol": symbol });
+        if let Some(range) = range {
+            params["range"] = json!({ "start": range.start, "end": range.end });
+        }
+        let object = match provider {
+            "fileset" => runner.run(&FilesetEquityHistoricalFetcher, params).await?,
+            "yahoo" => runner.run(&YahooEquityHistoricalFetcher, params).await?,
+            _ => unreachable!("provider/endpoint validated above"),
+        };
+        // Per-(op, symbol) dedup token: stable across retries of the same op
+        // (same session_id + sequence) yet distinct per symbol, so a multi-symbol
+        // op does not dedup later symbols' blocks against the first.
+        let token = tdw_storage_clickhouse::ingest_dedup_token(
+            env.session_id.as_str(),
+            env.sequence,
+            &format!("{table}:{symbol}"),
+        );
+        let rows = persist_batch(state, table, &token, &object).await?;
+        total_rows += rows;
+        per_symbol.push(json!({ "symbol": symbol, "rows": rows, "dedup_token": token }));
+    }
+
     Ok(mask_json_response(
         json!({
             "evidence": evidence,
-            "provider": written.provider,
-            "endpoint": written.endpoint,
-            "table": written.table,
-            "rows": written.rows_written,
-            "dedup_token": written.dedup_token,
+            "provider": provider,
+            "endpoint": endpoint,
+            "table": table,
+            "rows": total_rows,
+            "symbols": per_symbol,
         }),
         &policy.mask_rules,
     ))
 }
 
-/// Outcome of persisting a fetched batch to the OLAP engine.
-struct WriteSummary {
-    provider: String,
-    endpoint: String,
-    table: String,
-    rows_written: usize,
-    dedup_token: String,
-}
-
-/// Persist a fetched batch as an idempotent `INSERT … FORMAT JSONEachRow`.
-///
-/// The deduplication token is derived from the protocol idempotency coordinates
-/// `(session_id, sequence)` so a client retry of the same op is dropped by
-/// ClickHouse instead of being double-written (and double-counted through any
-/// dependent materialized views). Routes through `state.olap` so the offline
-/// recording engine captures the statement in unit tests and the real
-/// `ClickHouseHttpEngine` issues it over HTTP in integration.
+/// Persist a fetched batch as an idempotent `INSERT … FORMAT JSONEachRow` and
+/// return the row count. The caller supplies the deduplication token (so a
+/// client retry of the same op is dropped by ClickHouse rather than
+/// double-written, and double-counted through dependent materialized views).
+/// Routes through `state.olap` so the offline recording engine captures the
+/// statement in unit tests and the real `ClickHouseHttpEngine` issues it over
+/// HTTP in integration.
 async fn persist_batch<T: tdw_core::DataModel>(
     state: &AppState,
-    env: &OpEnvelope,
     table: &str,
+    token: &str,
     object: &tdw_core::OBBject<T>,
-) -> Result<WriteSummary> {
-    let token =
-        tdw_storage_clickhouse::ingest_dedup_token(env.session_id.as_str(), env.sequence, table);
-    let insert = tdw_storage_clickhouse::build_insert_jsoneachrow(table, object, &token)?;
+) -> Result<usize> {
+    let insert = tdw_storage_clickhouse::build_insert_jsoneachrow(table, object, token)?;
     state.olap.execute(&insert).await?;
-    Ok(WriteSummary {
-        provider: object.provider.clone(),
-        endpoint: object.endpoint.clone(),
-        table: table.to_string(),
-        rows_written: object.rows.len(),
-        dedup_token: token,
-    })
+    Ok(object.rows.len())
 }
 
 async fn dispatch_tool(
@@ -376,6 +399,7 @@ mod tests {
         let env = make_envelope(Op::IngestBatch {
             provider: "yahoo".to_string(),
             endpoint: "equity_historical".to_string(),
+            symbols: vec!["AAPL".to_string(), "MSFT".to_string()],
             range: None,
         });
         let events = dispatch_op(&state, env).await;
@@ -390,12 +414,25 @@ mod tests {
                 assert_eq!(value["endpoint"], "equity_historical");
                 assert_eq!(value["table"], "raw.equity_historical");
                 assert!(
-                    value["rows"].as_u64().expect("rows count") >= 1,
-                    "expected at least one persisted row, got {value}"
+                    value["rows"].as_u64().expect("rows count") >= 2,
+                    "expected at least one persisted row per symbol, got {value}"
                 );
-                // Token is keyed by (session_id, sequence, table) so a retry is
-                // de-duplicated by ClickHouse rather than double-written.
-                assert_eq!(value["dedup_token"], "session-test:1:raw.equity_historical");
+                // Per-symbol results, each with a token keyed by
+                // (session_id, sequence, table:symbol) — stable on retry, distinct
+                // per symbol so the second symbol is not deduped against the first.
+                let per = value["symbols"].as_array().expect("symbols array");
+                assert_eq!(per.len(), 2);
+                assert_eq!(per[0]["symbol"], "AAPL");
+                assert_eq!(
+                    per[0]["dedup_token"],
+                    "session-test:1:raw.equity_historical:AAPL"
+                );
+                assert_eq!(per[1]["symbol"], "MSFT");
+                assert_eq!(
+                    per[1]["dedup_token"],
+                    "session-test:1:raw.equity_historical:MSFT"
+                );
+                assert_ne!(per[0]["dedup_token"], per[1]["dedup_token"]);
             }
             other => panic!("expected Completed, got {other:?}"),
         }
@@ -409,6 +446,7 @@ mod tests {
         let env = make_envelope(Op::IngestBatch {
             provider: "nope".to_string(),
             endpoint: "equity_historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
             range: None,
         });
         let events = dispatch_op(&state, env).await;
@@ -417,6 +455,30 @@ mod tests {
             EventMsg::Failed { error, .. } => {
                 assert!(
                     error.contains("unsupported ingest provider/endpoint"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_without_symbols_fails() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "yahoo".to_string(),
+            endpoint: "equity_historical".to_string(),
+            symbols: Vec::new(),
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("ingest requires at least one symbol"),
                     "got: {error}"
                 );
             }

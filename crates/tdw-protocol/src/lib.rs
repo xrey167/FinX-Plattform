@@ -187,6 +187,11 @@ pub enum Op {
     IngestBatch {
         provider: String,
         endpoint: String,
+        /// Symbols to ingest in this batch. Each is fetched and persisted
+        /// independently (with its own deduplication token), so a single op can
+        /// fan out across a watchlist. Must be non-empty.
+        #[serde(default)]
+        symbols: Vec<String>,
         range: Option<TimeRange>,
     },
     ToolCall {
