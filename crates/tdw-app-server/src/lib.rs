@@ -11,19 +11,22 @@ use tokio::sync::mpsc;
 // P4: Feature-gated transport modules
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "transport-tcp")]
+// The transport modules use `tokio::net`, which tokio gates out under
+// `--cfg loom`. They are excluded from the loom build (test-only config; the
+// production binary never sets `--cfg loom`). See tests/loom_relay.rs.
+#[cfg(all(feature = "transport-tcp", not(loom)))]
 mod transport_tcp;
-#[cfg(feature = "transport-tcp")]
+#[cfg(all(feature = "transport-tcp", not(loom)))]
 pub use transport_tcp::serve_tcp;
 
-#[cfg(all(unix, feature = "transport-uds"))]
+#[cfg(all(unix, feature = "transport-uds", not(loom)))]
 mod transport_uds;
-#[cfg(all(unix, feature = "transport-uds"))]
+#[cfg(all(unix, feature = "transport-uds", not(loom)))]
 pub use transport_uds::serve_uds;
 
-#[cfg(feature = "transport-http")]
+#[cfg(all(feature = "transport-http", not(loom)))]
 mod transport_http;
-#[cfg(feature = "transport-http")]
+#[cfg(all(feature = "transport-http", not(loom)))]
 pub use transport_http::serve_http;
 
 pub use tdw_config::DaemonTransport;
@@ -398,7 +401,12 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     relay: tokio::task::JoinHandle<()>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> std::result::Result<(), SinkError> {
+    // `tokio::signal` is gated out by tokio under `--cfg loom`; the ctrl_c
+    // watcher is only wired in the normal (non-loom) build. The loom model
+    // exercises the relay locking logic, not signal handling.
+    #[cfg(not(loom))]
     let shutdown_for_signal = shutdown.clone();
+    #[cfg(not(loom))]
     let signal_task: tokio::task::JoinHandle<()> = tokio::spawn(async move {
         // Ignore signal install errors on platforms that don't support ctrl_c.
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -428,6 +436,7 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     // Drain: ensure relay task observes cancellation, then await both.
     shutdown.cancel();
     let _ = relay.await;
+    #[cfg(not(loom))]
     signal_task.abort();
     Ok(())
 }
@@ -643,7 +652,7 @@ mod tests {
     // P4 transport tests
     // -----------------------------------------------------------------------
 
-    #[cfg(feature = "transport-tcp")]
+    #[cfg(all(feature = "transport-tcp", not(loom)))]
     mod tcp_transport_tests {
         use super::*;
         use std::time::Duration;

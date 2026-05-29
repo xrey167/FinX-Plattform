@@ -15,7 +15,7 @@ here is not a phase-exit blocker until it is wired into `xtask/src/main.rs`,
 | Backlog item | Decision | Current enforcement | Deferred task |
 | --- | --- | --- | --- |
 | O24 mutation cadence | Do not require mutation testing on every PR for v0.1. Keep nightly canary coverage and run scoped changed-crate mutation before risky merges or release candidates. | `.github/workflows/nightly.yml` `mutation-smoke` runs `cargo mutants` over `tdw-core`, `tdw-protocol`, `tdw-app-client`, `tdw-mcp`, and `tdw-worker`, aggregates `cargo run -p xtask -- mutation report` into a `mutation-summary` artifact, and exposes `cargo run -p xtask -- mutation changed`; `phase-exit-gates.json` lists `mutation-smoke` and `mutation-summary` as nightly, not phase-exit. Score floors remain unenforced. | `TEST-POLICY-001`, `TEST-POLICY-002` (report-only; score-floor enforcement deferred) |
-| O25 loom expansion | Do not add broad loom coverage for v0.1. Start with a bounded `tdw-bus` model, then expand only where a compact state machine exists. | No loom gate yet. | `TEST-POLICY-003` |
+| O25 loom expansion | Do not add broad loom coverage for v0.1. The first bounded model is the `tdw-app-server` outbox->bus relay (pivoted from `tdw-bus`, which is single-threaded by construction; see ADR 0014 amendment 2026-05-29). Expand only where a compact state machine exists. | First model committed in `tdw-app-server` (`--cfg loom`, not a PR gate yet). | `TEST-POLICY-003` (implemented) |
 | O26 fuzz target list | Start with parser and wire-format boundaries: protocol JSON, daemon frames/SSE, MCP JSON-RPC/HTTP, config TOML, and SQL guard parsing. | No fuzz gate yet. | `TEST-POLICY-004`, `TEST-POLICY-005` |
 
 ## Deferred Tasks
@@ -67,12 +67,42 @@ Status: command implemented (still outside PR phase-exit gates per ADR 0014).
 
 ### TEST-POLICY-003: Add First Loom Model
 
-- Scope: `tdw-bus` first; outbox relay and daemon cancellation only after the
-  first model lands without state-space blowups.
-- Implementation: add loom as a dev-only dependency in the modeled crate and
-  gate model tests behind an explicit feature or test target.
-- Acceptance: the first model proves ordering or cancellation invariants with a
-  bounded permutation budget and is documented in the crate readiness worksheet.
+Status: implemented.
+
+- Component: the in-memory outbox->bus relay in
+  `tdw_app_server::spawn_inmemory_relay`. This pivots from the `tdw-bus`
+  candidate named in ADR 0014: `tdw_bus::EventBus` is single-threaded by
+  construction (all mutators take `&mut self`, no interior mutability, no
+  atomics), so a loom model there would be tautological. See the ADR 0014
+  amendment dated 2026-05-29 for the rationale. The relay is genuinely
+  concurrent: it performs a check-then-act across three separate lock
+  acquisitions per record (outbox read, bus publish, outbox mark-dispatched),
+  with the outbox lock released between read and mark.
+- Invariant proven: with a relay drain cycle racing a concurrent producer
+  append, every record the relay observes as pending is published to the bus
+  exactly once (no double-publish) and marked `Dispatched` (no lost update where
+  a shipped record stays `Pending`); the dispatched count equals the bus entry
+  count (outbox/bus stay consistent). Falsifiability-checked: removing a
+  `mark_dispatched` makes loom find the violating interleaving and fail.
+- Implementation: `loom = "0.7"` is a `[target.'cfg(loom)'.dependencies]`
+  dev-only dependency in `crates/tdw-app-server/Cargo.toml`, so it never enters
+  the default build, default `cargo test`, or the release profile. The model
+  lives in `crates/tdw-app-server/tests/loom_relay.rs` behind `#![cfg(loom)]`
+  (two threads, one drain cycle racing one append, bounded permutation budget).
+  The `unexpected_cfgs` workspace lint declares `check-cfg = ['cfg(loom)']`.
+- Run command (from repo root):
+
+  ```powershell
+  $env:RUSTFLAGS = "--cfg loom"
+  cargo test -p tdw-app-server --test loom_relay
+  Remove-Item Env:\RUSTFLAGS
+  ```
+
+  If loom reports a too-large branch count, set `$env:LOOM_MAX_PREEMPTIONS = "2"`.
+- Acceptance: met. The model proves the no-lost-update / no-double-publish
+  invariant with a bounded permutation budget and is documented in
+  `docs/quality/crate-readiness/tdw-app-server.md`. PR gating remains deferred
+  per ADR 0014 until the first model is stable across nightly budgets.
 
 ### TEST-POLICY-004: Add Initial Fuzz Harnesses
 
