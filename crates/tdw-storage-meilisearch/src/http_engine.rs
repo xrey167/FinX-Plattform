@@ -273,6 +273,9 @@ impl LexicalEngine for MeilisearchHttpEngine {
             .into_iter()
             .map(|mut hit| {
                 let id = hit.get("id").map(hit_id_to_string).unwrap_or_default();
+                // Meilisearch ranking scores are in [0.0, 1.0]; narrowing the
+                // f64 to the ScoredDoc f32 score loses no meaningful precision.
+                #[allow(clippy::cast_possible_truncation)]
                 let score = hit
                     .get("_rankingScore")
                     .and_then(Value::as_f64)

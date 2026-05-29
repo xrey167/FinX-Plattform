@@ -94,7 +94,8 @@ impl PgEventBus {
             .ok_or_else(|| {
                 Error::Storage("bus publish: missing sequence in INSERT RETURNING".to_string())
             })?;
-        Ok(sequence as u64)
+        u64::try_from(sequence)
+            .map_err(|_| Error::Storage("bus publish: negative sequence".to_string()))
     }
 
     /// Read all bus entries with sequence >= `sequence`, ordered.
@@ -108,9 +109,11 @@ impl PgEventBus {
              FROM {} WHERE sequence >= $1 ORDER BY sequence ASC",
             self.table
         );
+        let sequence_param = i64::try_from(sequence)
+            .map_err(|_| Error::Storage("bus read_from: sequence exceeds i64".to_string()))?;
         let rows = self
             .engine
-            .fetch_json(&sql, json!([sequence as i64]))
+            .fetch_json(&sql, json!([sequence_param]))
             .await?;
         let mut entries = Vec::with_capacity(rows.len());
         for row in rows {
@@ -125,7 +128,8 @@ impl PgEventBus {
             let envelope: EventEnvelope<Value> = serde_json::from_str(envelope_text)
                 .map_err(|error| Error::Storage(format!("bus decode envelope: {error}")))?;
             entries.push(BusEntry {
-                sequence: seq as u64,
+                sequence: u64::try_from(seq)
+                    .map_err(|_| Error::Storage("bus row: negative sequence".to_string()))?,
                 envelope,
             });
         }
@@ -150,10 +154,16 @@ impl PgEventBus {
         let oldest = row.get("oldest").and_then(Value::as_i64);
         let newest = row.get("newest").and_then(Value::as_i64);
         match (oldest, newest) {
-            (Some(o), Some(n)) => Ok(Some(RetentionWindow {
-                oldest_sequence: o as u64,
-                newest_sequence: n as u64,
-            })),
+            (Some(o), Some(n)) => {
+                let oldest_sequence = u64::try_from(o)
+                    .map_err(|_| Error::Storage("bus retention: negative oldest".to_string()))?;
+                let newest_sequence = u64::try_from(n)
+                    .map_err(|_| Error::Storage("bus retention: negative newest".to_string()))?;
+                Ok(Some(RetentionWindow {
+                    oldest_sequence,
+                    newest_sequence,
+                }))
+            }
             _ => Ok(None),
         }
     }

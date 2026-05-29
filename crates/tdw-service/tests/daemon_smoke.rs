@@ -61,7 +61,9 @@ fn make_run_query_envelope() -> OpEnvelope {
 
 async fn write_frame(stream: &mut TcpStream, envelope: &OpEnvelope) -> std::io::Result<()> {
     let json = serde_json::to_vec(envelope).expect("serialize envelope");
-    let len = (json.len() as u32).to_be_bytes();
+    let len = u32::try_from(json.len())
+        .expect("envelope length fits u32")
+        .to_be_bytes();
     stream.write_all(&len).await?;
     stream.write_all(&json).await?;
     stream.flush().await

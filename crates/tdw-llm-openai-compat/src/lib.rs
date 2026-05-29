@@ -49,8 +49,8 @@ impl LanguageModel for OpenAiCompatibleModel {
                 content: format!("openai-compatible:{}:{prompt}", self.model_id),
             },
             usage: Usage {
-                input_tokens: request.messages.len() as u32,
-                output_tokens: prompt.split_whitespace().count() as u32,
+                input_tokens: u32::try_from(request.messages.len()).unwrap_or(u32::MAX),
+                output_tokens: u32::try_from(prompt.split_whitespace().count()).unwrap_or(u32::MAX),
             },
         })
     }

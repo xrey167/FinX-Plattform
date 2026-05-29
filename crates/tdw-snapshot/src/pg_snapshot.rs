@@ -127,9 +127,12 @@ impl PgSnapshotStore {
              FROM {} WHERE table_name = $1 AND version = $2 LIMIT 1",
             self.table
         );
+        let version_param = i64::try_from(version).map_err(|_| {
+            Error::Storage("snapshot as_of_version: version exceeds i64".to_string())
+        })?;
         let rows = self
             .engine
-            .fetch_json(&sql, json!([table, version as i64]))
+            .fetch_json(&sql, json!([table, version_param]))
             .await?;
         rows.first()
             .map_or(Ok(None), |row| Snapshot::try_from_row(row).map(Some))
@@ -160,11 +163,12 @@ impl Snapshot {
             .and_then(Value::as_str)
             .ok_or_else(|| Error::Storage("snapshot row: missing table_name".to_string()))?
             .to_string();
-        let version = row
+        let version_i64 = row
             .get("version")
             .and_then(Value::as_i64)
-            .ok_or_else(|| Error::Storage("snapshot row: missing version".to_string()))?
-            as u64;
+            .ok_or_else(|| Error::Storage("snapshot row: missing version".to_string()))?;
+        let version = u64::try_from(version_i64)
+            .map_err(|_| Error::Storage("snapshot row: negative version".to_string()))?;
         let created_at = row
             .get("created_at")
             .and_then(Value::as_str)

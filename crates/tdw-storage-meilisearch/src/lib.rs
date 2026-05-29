@@ -54,6 +54,8 @@ impl LexicalEngine for InMemoryLexicalEngine {
             .iter()
             .map(|doc| {
                 let body = doc.body.to_ascii_lowercase();
+                // Match count -> f32 relevance score; match counts are tiny.
+                #[allow(clippy::cast_precision_loss)]
                 let score = body.matches(&needle).count() as f32;
                 ScoredDoc {
                     id: doc.id.clone(),

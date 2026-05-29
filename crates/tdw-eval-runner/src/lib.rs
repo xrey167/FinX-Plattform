@@ -21,6 +21,9 @@ pub struct EvalRunner;
 
 impl EvalRunner {
     pub fn run(request: EvalRunRequest, store: &mut AgentStore) -> EvalRunOutcome {
+        // Case count is reported as an f64 metric value; realistic case
+        // counts are far within f64's exact-integer range.
+        #[allow(clippy::cast_precision_loss)]
         let case_count = request.cases.len() as f64;
         let has_agent_card = store.agent(&request.agent_id).is_some();
         let coverage = if case_count > 0.0 && has_agent_card {

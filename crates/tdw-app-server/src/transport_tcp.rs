@@ -105,7 +105,11 @@ async fn handle_tcp_conn(
                 () = cancel_writer.cancelled() => return,
                 res = subscriber.recv() => match res {
                     Ok(line) => {
-                        let len = (line.len() as u32).to_be_bytes();
+                        // Frame length is a u32 prefix; a line larger than u32::MAX
+                        // (4 GiB) cannot be framed, so close the writer rather than
+                        // emit a truncated length. Broadcast lines are far smaller.
+                        let Ok(len_u32) = u32::try_from(line.len()) else { return; };
+                        let len = len_u32.to_be_bytes();
                         if write_half.write_all(&len).await.is_err() { return; }
                         if write_half.write_all(line.as_bytes()).await.is_err() { return; }
                         let _ = write_half.flush().await;
