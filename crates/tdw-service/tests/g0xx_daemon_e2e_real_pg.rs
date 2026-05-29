@@ -1,9 +1,9 @@
 //! P7 end-to-end integration test: real Postgres backend.
 //!
 //! Exercises the full daemon chain:
-//!   AppState (Pg-backed relational engine)
+//!   `AppState` (Pg-backed relational engine)
 //!   → serve TCP
-//!   → AppClient submits Ops
+//!   → `AppClient` submits Ops
 //!   → daemon dispatch
 //!   → relational query against real Postgres (`select 1`)
 //!   → outbox persisted

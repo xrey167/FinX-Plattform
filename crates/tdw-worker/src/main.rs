@@ -105,7 +105,7 @@ enum WorkerBackend {
 }
 
 /// Postgres when `--features postgres` is built and `TDW_WORKER_PG_URL`
-/// (or `DATABASE_URL`) is set; otherwise SQLite (`TDW_WORKER_DB`, default
+/// (or `DATABASE_URL`) is set; otherwise `SQLite` (`TDW_WORKER_DB`, default
 /// `sqlite://tdw-worker.sqlite`).
 fn worker_backend_from_env() -> WorkerBackend {
     #[cfg(feature = "postgres")]

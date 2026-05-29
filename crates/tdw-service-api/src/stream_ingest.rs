@@ -9,7 +9,7 @@ const STREAM_PROVIDER: &str = "stream";
 /// Endpoint label stamped on every streamed ingest batch envelope.
 const STREAM_ENDPOINT: &str = "stream_ingest";
 
-/// Drain a streaming source into a ClickHouse `OlapEngine`, flushing batches
+/// Drain a streaming source into a `ClickHouse` `OlapEngine`, flushing batches
 /// whenever the buffer reaches `max_rows` rows or `max_wait` elapses since the
 /// last flush, whichever trips first.
 ///
@@ -26,7 +26,7 @@ const STREAM_ENDPOINT: &str = "stream_ingest";
 /// # Errors
 ///
 /// Returns an error if the stream yields an error item, if a batch fails to
-/// serialize into a JSONEachRow statement, or if the engine rejects an INSERT.
+/// serialize into a `JSONEachRow` statement, or if the engine rejects an INSERT.
 pub async fn run_stream_ingest<T: DataModel>(
     olap: &dyn OlapEngine,
     session_id: &str,
@@ -72,7 +72,7 @@ pub async fn run_stream_ingest<T: DataModel>(
     Ok(total)
 }
 
-/// Subscribe to a [`Streamer`] and drain its [`DataStream`] into ClickHouse via
+/// Subscribe to a [`Streamer`] and drain its [`DataStream`] into `ClickHouse` via
 /// [`run_stream_ingest`].
 ///
 /// This is the end-to-end driver that wires a provider subscription to the
