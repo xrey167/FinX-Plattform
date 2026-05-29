@@ -86,7 +86,7 @@ impl AppState {
 
         Ok(Self {
             config,
-            olap: Arc::new(ClickHouseRecordingEngine::default()),
+            olap: select_olap_engine()?,
             relational: Arc::new(PostgresRecordingEngine::default()),
             blob,
             vector: Arc::new(InMemoryVectorEngine::default()),
@@ -136,6 +136,32 @@ impl AppState {
         Ok(self)
     }
 
+    /// Replace the OLAP engine with a real [`ClickHouseHttpEngine`] talking to
+    /// `endpoint` (e.g. `http://127.0.0.1:8123`) over the ClickHouse HTTP
+    /// interface. This is what makes the ingest path (`dispatch_ingest` /
+    /// `run_stream_ingest`, which call `olap.execute(INSERT … FORMAT JSONEachRow)`)
+    /// and the query path land on a live ClickHouse instead of the offline
+    /// recording engine.
+    ///
+    /// Only available when the `real-clickhouse` feature is enabled (which
+    /// activates `tdw-storage-clickhouse/clickhouse`); the method is absent on
+    /// default builds so the offline workspace test set still compiles cleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the endpoint URL cannot be parsed.
+    #[cfg(feature = "real-clickhouse")]
+    pub fn with_real_clickhouse(
+        mut self,
+        endpoint: &str,
+        user: Option<String>,
+        password: Option<String>,
+    ) -> Result<Self> {
+        let engine = tdw_storage_clickhouse::ClickHouseHttpEngine::new(endpoint, user, password)?;
+        self.olap = std::sync::Arc::new(engine);
+        Ok(self)
+    }
+
     /// Build an `AppState` backed by an in-memory SQLite database and a unique
     /// temporary JSONL rollout file. Suitable for unit tests.
     pub async fn in_memory_for_tests() -> Self {
@@ -170,6 +196,30 @@ fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
     // Suppress unused-variable warning on the non-feature path.
     let _ = config;
     Arc::new(InMemoryS3BlobEngine::default())
+}
+
+/// Select the OLAP engine. With the `real-clickhouse` feature enabled and
+/// `TDW_CLICKHOUSE_URL` set, the daemon talks to a live ClickHouse over HTTP
+/// (so the ingest/query path persists for real); otherwise the offline
+/// `ClickHouseRecordingEngine` is used. `TDW_CLICKHOUSE_USER` /
+/// `TDW_CLICKHOUSE_PASSWORD` are optional (default user, no password).
+///
+/// # Errors
+///
+/// Returns an error if `TDW_CLICKHOUSE_URL` is set but cannot be parsed.
+fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
+    #[cfg(feature = "real-clickhouse")]
+    {
+        if let Ok(url) = std::env::var("TDW_CLICKHOUSE_URL")
+            && !url.trim().is_empty()
+        {
+            let user = std::env::var("TDW_CLICKHOUSE_USER").ok();
+            let password = std::env::var("TDW_CLICKHOUSE_PASSWORD").ok();
+            let engine = tdw_storage_clickhouse::ClickHouseHttpEngine::new(&url, user, password)?;
+            return Ok(Arc::new(engine));
+        }
+    }
+    Ok(Arc::new(ClickHouseRecordingEngine::default()))
 }
 
 /// Build the daemon policy from config.

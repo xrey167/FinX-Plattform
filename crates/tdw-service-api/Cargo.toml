@@ -20,6 +20,14 @@ udf-wasm = ["tdw-sandbox/udf-wasm"]
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
 real-postgres = ["tdw-storage-postgres/postgres"]
 
+## Swap the OLAP engine in `AppState` for the real `ClickHouseHttpEngine`
+## (reqwest over the ClickHouse HTTP interface). Activates
+## `tdw-storage-clickhouse/clickhouse`. When enabled, `from_config` reads
+## `TDW_CLICKHOUSE_URL` (+ optional `TDW_CLICKHOUSE_USER` / `_PASSWORD`) to point
+## the ingest/query path at a live ClickHouse; `with_real_clickhouse` does the
+## same explicitly for integration tests gated by `TDW_CLICKHOUSE_TEST_URL`.
+real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
