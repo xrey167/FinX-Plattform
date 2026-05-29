@@ -99,7 +99,7 @@ jobs:
           $hash = Get-FileHash -Algorithm SHA256 $asset
           $assetName = Split-Path $asset -Leaf
           "$($hash.Hash.ToLowerInvariant())  $assetName" | Set-Content "$asset.sha256" -NoNewline
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.tar.gz
