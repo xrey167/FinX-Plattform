@@ -36,13 +36,21 @@ This starts:
 | `minio`             | `minio/minio:latest`               | Healthcheck via `/minio/health/live`                                        |
 | `minio-init`        | `minio/mc:latest`                  | Creates the `tdw-default` bucket once, then exits                           |
 | `tdw-bootstrap`     | built from `Dockerfile.bootstrap`  | Applies G013 Postgres schemas, writes the S3 marker, and creates the ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection, and Meilisearch `tdw-default` index, then exits |
-| `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile`     | Long-running `tdw-worker --serve` lease loop (SQLite-backed); starts after bootstrap succeeds |
+| `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`) | Long-running `tdw-worker --serve` over **Postgres** (`PgWorkerQueue`, self-migrates `system.worker_jobs`); starts after bootstrap |
+| `tdw-service-daemon`| `docker/tdw-service.Dockerfile`    | Long-running daemon, binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); host `7878` |
+| `tdw-mcp-serve`     | `docker/tdw-mcp.Dockerfile`        | Long-running MCP Streamable HTTP at `0.0.0.0:8788` (host `8788`); daemon tools routed to `tdw-service-daemon:7878`; needs `TDW_MCP_HTTP_TOKEN` |
 
 `tdw-bootstrap` runs after `postgres` is healthy, `minio-init` has finished,
 and ClickHouse/Qdrant/Meilisearch have started. It emits one structured JSON
 line per step on stdout, and is idempotent (all creates use
-`IF NOT EXISTS`/exists-checks). `tdw-worker-serve` then starts as the first
-long-running application service and stays up (`restart: unless-stopped`).
+`IF NOT EXISTS`/exists-checks). The long-running application services then start
+and stay up (`restart: unless-stopped`): the Postgres-backed worker, the daemon
+(`tdw-service-daemon`), and the MCP HTTP server (`tdw-mcp-serve`).
+
+Set `TDW_MCP_HTTP_TOKEN` to a strong secret before exposing `tdw-mcp-serve`
+(it defaults to `local-dev-token` for local use; a non-loopback bind is refused
+without a token). Front it with a TLS/OAuth reverse proxy per
+[`mcp-remote-deployment.md`](mcp-remote-deployment.md) for any non-local use.
 
 ## Verify the bootstrap
 
@@ -135,12 +143,13 @@ docker compose --profile live down -v
 
 ## What this does NOT do
 
-- Start the full application surface. The `live` profile now starts one
-  long-running service (`tdw-worker-serve`); `tdw-service` and `tdw-mcp`
-  long-running modes remain follow-ups.
-- Back the live worker with Postgres. `tdw-worker --serve` currently uses the
-  SQLite durable queue (on the `worker-data` volume); a Postgres-backed
-  `--serve` is a tracked follow-up.
+- Attach a daemon policy. `tdw-service-daemon` boots with no policy attached, so
+  dispatched operations return `Failed` until a policy is wired; daemon-backed
+  MCP tool calls reach the daemon but get that `Failed` result. Deterministic
+  offline MCP tools work regardless.
+- Back the daemon's own stores with Postgres. `tdw-service-daemon` uses in-memory
+  session/rollout defaults for boot; wiring its stores to the live Postgres is a
+  further enhancement (the worker IS Postgres-backed).
 - Define rich domain schemas. The ClickHouse table, Qdrant collection, and
   Meilisearch index created here are baseline markers proving the backends are
   reachable and writable; application tables/collections are still created on

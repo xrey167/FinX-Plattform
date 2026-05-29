@@ -103,9 +103,12 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
         .join("tdw-rollout.jsonl")
         .to_string_lossy()
         .into_owned();
-    // Use a fixed local TCP port so the daemon is reachable on all platforms.
+    // Local TCP by default; `TDW_DAEMON_TCP_BIND` overrides the bind address so
+    // the daemon can be reached across a container network (e.g. `0.0.0.0:7878`
+    // in the compose `live` profile). Unset = `127.0.0.1:7878` (unchanged).
     config.daemon.transport = DaemonTransport::Tcp;
-    config.daemon.tcp_bind = Some("127.0.0.1:7878".to_string());
+    config.daemon.tcp_bind =
+        Some(std::env::var("TDW_DAEMON_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:7878".to_string()));
     Ok(config)
 }
 
