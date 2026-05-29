@@ -156,6 +156,19 @@ fn validate_op(op: &Op) -> Result<()> {
                 Ok(())
             }
         }
+        Op::StreamStart {
+            provider,
+            symbol,
+            table,
+        } => {
+            validate_token("provider", provider)?;
+            validate_token("symbol", symbol)?;
+            if let Some(table) = table {
+                validate_token("table", table)?;
+            }
+            Ok(())
+        }
+        Op::StreamStop { stream_id } => validate_token("stream_id", stream_id),
         Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }

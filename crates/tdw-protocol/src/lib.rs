@@ -211,6 +211,19 @@ pub enum Op {
     Cancel {
         op_id: OpId,
     },
+    /// Start a live streaming-ingest task for `provider`/`symbol`, draining the
+    /// provider's websocket subscription into the (optional) `table` (defaulting
+    /// to the provider's bronze landing table). Serializes as `stream_start`.
+    StreamStart {
+        provider: String,
+        symbol: String,
+        table: Option<String>,
+    },
+    /// Stop a previously started streaming-ingest task identified by
+    /// `stream_id`. Serializes as `stream_stop`.
+    StreamStop {
+        stream_id: String,
+    },
     Shutdown,
 }
 
