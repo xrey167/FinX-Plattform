@@ -260,6 +260,14 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
                 "../../../migrations/clickhouse/20260528_0017_analytics_rsi_wilder.sql"
             ),
         },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0018",
+            name: "analytics_total_return",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0018_analytics_total_return.sql"
+            ),
+        },
     ]
 }
 
