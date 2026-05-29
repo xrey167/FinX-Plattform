@@ -11,6 +11,9 @@ postgres = ["sqlx/postgres"]
 
 [dependencies]
 async-trait = { workspace = true }
+# `alloc` enables `futures_util::stream::FuturesUnordered`, used by the serve
+# loop to drive up to `max_concurrent` in-flight jobs without spawning tasks.
+futures-util = { workspace = true, features = ["alloc"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

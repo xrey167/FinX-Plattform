@@ -243,6 +243,13 @@ fn serve_config_from_env() -> tdw_worker::ServeConfig {
     {
         config.poll_interval_ms = poll;
     }
+    if let Some(concurrency) = std::env::var("TDW_WORKER_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        // Clamp to at least 1 so `0`/garbage never stalls the serve loop.
+        config.max_concurrent = concurrency.max(1);
+    }
     config
 }
 
