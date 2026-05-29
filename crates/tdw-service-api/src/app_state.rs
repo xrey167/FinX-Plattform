@@ -18,14 +18,16 @@
 //! 3. **Register** in `AppState::from_config` (engines) or via
 //!    `default_registry` / sandbox routing (providers + UDF runtimes).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tdw_app_server::CancellationToken;
 use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_bus::EventBus;
 use tdw_config::{PermissionAction, TdwConfig};
 use tdw_core::{
-    BlobEngine, Credentials, DataModel, LexicalEngine, OlapEngine, ProviderRegistry, QueryParams,
-    RelationalEngine, Result, Streamer, VectorEngine,
+    BlobEngine, Credentials, DataModel, Error, LexicalEngine, OlapEngine, ProviderRegistry,
+    QueryParams, RelationalEngine, Result, Streamer, VectorEngine,
 };
 use tdw_outbox::InMemoryOutbox;
 use tdw_rollout::JsonlRollout;
@@ -44,6 +46,20 @@ const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
 const LOCAL_POLICY_AUDIENCE: &str = "tdw-daemon";
 const LOCAL_POLICY_KID: &str = "local-dev";
 
+/// Handle to a running streaming-ingest task.
+///
+/// Holds the [`CancellationToken`] that stops the background `run_ws_ingest`
+/// loop and the [`JoinHandle`] resolving to the total rows written. Stored in
+/// [`AppState::streams`] keyed by `stream_id`.
+///
+/// [`JoinHandle`]: tokio::task::JoinHandle
+pub struct StreamControl {
+    /// Cancels the background ingest task when triggered.
+    pub cancel: CancellationToken,
+    /// Resolves to the total rows written (or `Ok(0)` on cancellation).
+    pub handle: tokio::task::JoinHandle<Result<usize>>,
+}
+
 /// Composition root for the daemon.
 #[derive(Clone)]
 pub struct AppState {
@@ -60,6 +76,10 @@ pub struct AppState {
     pub policy: Option<PolicyEnforcementConfig>,
     pub session: SqliteSessionStore,
     pub rollout: JsonlRollout,
+    /// Live streaming-ingest tasks keyed by `stream_id`. Shared by reference
+    /// across `AppState` clones (the daemon clones `AppState` per connection),
+    /// so a stream started on one clone is visible to `stop_stream` on another.
+    pub streams: Arc<Mutex<HashMap<String, StreamControl>>>,
 }
 
 impl AppState {
@@ -99,6 +119,7 @@ impl AppState {
             policy,
             session,
             rollout,
+            streams: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -240,6 +261,93 @@ impl AppState {
                 () = cancel.cancelled() => Ok(0),
             }
         })
+    }
+
+    /// Start a live Binance trade streaming-ingest task for `symbol`, draining
+    /// the websocket subscription into `table` (defaulting to `raw.tick`) via
+    /// [`spawn_stream_ingest`](Self::spawn_stream_ingest).
+    ///
+    /// The symbol is normalized (uppercased, validated) before use. A fresh
+    /// [`CancellationToken`] is created and the resulting [`StreamControl`] is
+    /// registered in [`streams`](Self::streams) under a stable
+    /// `stream_id` of `binance:trades:{SYMBOL}`, which is returned. With the
+    /// `ws` feature the task connects to the public Binance trade stream;
+    /// without it the deterministic offline streamer is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Provider`] if the symbol is invalid, if the internal
+    /// streams lock is poisoned, or if a stream with the same `stream_id` is
+    /// already running (not yet finished).
+    pub fn start_binance_stream(&self, symbol: &str, table: Option<String>) -> Result<String> {
+        use tdw_provider_binance::{BinanceTradeQuery, BinanceTradeStreamer};
+
+        let query = BinanceTradeQuery::new(symbol)
+            .map_err(|error| Error::Provider(format!("binance stream symbol: {error}")))?;
+        let stream_id = format!("binance:trades:{}", query.symbol);
+        let table = table.unwrap_or_else(|| "raw.tick".to_string());
+
+        {
+            let streams = self
+                .streams
+                .lock()
+                .map_err(|_| Error::Provider("streams registry lock poisoned".to_string()))?;
+            if streams
+                .get(&stream_id)
+                .is_some_and(|control| !control.handle.is_finished())
+            {
+                return Err(Error::Provider(format!(
+                    "stream already running: {stream_id}"
+                )));
+            }
+        }
+
+        let cancel = CancellationToken::new();
+        let handle = self.spawn_stream_ingest(
+            BinanceTradeStreamer,
+            query,
+            Credentials::default(),
+            table,
+            500,
+            std::time::Duration::from_millis(500),
+            cancel.clone(),
+        );
+
+        let mut streams = self
+            .streams
+            .lock()
+            .map_err(|_| Error::Provider("streams registry lock poisoned".to_string()))?;
+        streams.insert(stream_id.clone(), StreamControl { cancel, handle });
+        Ok(stream_id)
+    }
+
+    /// Stop a running streaming-ingest task identified by `stream_id`.
+    ///
+    /// Cancels the task's [`CancellationToken`] and removes its
+    /// [`StreamControl`] from [`streams`](Self::streams). The entry is taken out
+    /// of the map and the lock guard dropped before cancelling, so no `await`
+    /// or task interaction happens while holding the mutex.
+    ///
+    /// Returns `true` if a stream with that id was present, `false` otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Provider`] if the internal streams lock is poisoned.
+    pub fn stop_stream(&self, stream_id: &str) -> Result<bool> {
+        let control = {
+            let mut streams = self
+                .streams
+                .lock()
+                .map_err(|_| Error::Provider("streams registry lock poisoned".to_string()))?;
+            streams.remove(stream_id)
+        };
+        match control {
+            Some(control) => {
+                control.cancel.cancel();
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 }
 
