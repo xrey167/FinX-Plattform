@@ -150,8 +150,11 @@ services:
     restart: unless-stopped
 
   tdw-service-daemon:
-    # Long-running daemon (no --smoke). Binds 0.0.0.0 so other services on the
-    # compose network can reach it (TDW_DAEMON_TCP_BIND override).
+    # Long-running daemon (no --smoke). Binds 0.0.0.0 so sibling services reach
+    # it over the compose network DNS (`tdw-service-daemon:7878`). NOT published
+    # to the host: the daemon transport is unauthenticated + plaintext, so it
+    # stays internal-only. (To reach it from the host for debugging, attach to
+    # the compose network or add a temporary `ports:` override locally.)
     image: finx-plattform/tdw-service:local
     build:
       context: .
@@ -163,8 +166,6 @@ services:
     environment:
       TDW_PROFILE: docker
       TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
-    ports:
-      - "7878:7878"
     restart: unless-stopped
 
   tdw-mcp-serve:
@@ -181,7 +182,11 @@ services:
         condition: service_started
     environment:
       TDW_PROFILE: docker
-      TDW_MCP_HTTP_TOKEN: ${TDW_MCP_HTTP_TOKEN:-local-dev-token}
+      # Required (no default): a non-loopback MCP bind on a host-published port
+      # must be authenticated. `docker compose --profile live up` fails fast if
+      # this is unset. Set a strong value in `.env`; front with TLS/OAuth per
+      # docs/release/mcp-remote-deployment.md for any non-local exposure.
+      TDW_MCP_HTTP_TOKEN: ${TDW_MCP_HTTP_TOKEN:?set TDW_MCP_HTTP_TOKEN (e.g. in .env) before exposing tdw-mcp-serve}
       TDW_MCP_DAEMON_ADDR: tdw-service-daemon:7878
     ports:
       - "8788:8788"
