@@ -767,6 +767,10 @@ mod tests {
         policy
     }
 
+    // Signature is fixed by the `McpHookHandler = fn(Value) -> ...` type alias.
+    #[allow(clippy::needless_pass_by_value)]
+    // Return type fixed by the McpHookHandler = fn(Value) -> Result<Value, String> type alias; used as a fn pointer, so the Result cannot be unwrapped.
+    #[allow(clippy::unnecessary_wraps)]
     fn mcp_echo(payload: Value) -> std::result::Result<Value, String> {
         Ok(json!({ "hook": payload["hook"]["name"].clone() }))
     }

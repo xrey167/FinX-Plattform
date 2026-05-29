@@ -132,7 +132,7 @@ impl SqliteSessionStore {
         .bind(session_id.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(row_to_session).transpose()
+        row.as_ref().map(row_to_session).transpose()
     }
 
     /// # Errors
@@ -229,7 +229,7 @@ impl SqliteSessionStore {
         .bind(permission_id.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(row_to_pending_approval).transpose()
+        row.as_ref().map(row_to_pending_approval).transpose()
     }
 
     /// # Errors
@@ -271,7 +271,7 @@ impl SqliteSessionStore {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(row_to_cost_entry).collect())
+        Ok(rows.iter().map(row_to_cost_entry).collect())
     }
 }
 
@@ -305,7 +305,7 @@ create table if not exists cost_ledger (
 );
 ";
 
-fn row_to_session(row: sqlx::sqlite::SqliteRow) -> Result<SessionRecord> {
+fn row_to_session(row: &sqlx::sqlite::SqliteRow) -> Result<SessionRecord> {
     let status_text = row.get::<String, _>("status");
     let status = match status_text.as_str() {
         "Active" => SessionStatus::Active,
@@ -321,7 +321,7 @@ fn row_to_session(row: sqlx::sqlite::SqliteRow) -> Result<SessionRecord> {
     })
 }
 
-fn row_to_pending_approval(row: sqlx::sqlite::SqliteRow) -> Result<PendingApprovalRecord> {
+fn row_to_pending_approval(row: &sqlx::sqlite::SqliteRow) -> Result<PendingApprovalRecord> {
     let decision = match row.get::<Option<String>, _>("decision").as_deref() {
         None => None,
         Some("AllowOnce") => Some(ApprovalDecision::AllowOnce),
@@ -338,7 +338,7 @@ fn row_to_pending_approval(row: sqlx::sqlite::SqliteRow) -> Result<PendingApprov
     })
 }
 
-fn row_to_cost_entry(row: sqlx::sqlite::SqliteRow) -> CostLedgerEntry {
+fn row_to_cost_entry(row: &sqlx::sqlite::SqliteRow) -> CostLedgerEntry {
     CostLedgerEntry {
         session_id: row.get("session_id"),
         operation_id: row.get("operation_id"),

@@ -19,6 +19,8 @@ fn table_name() -> String {
 
 #[tokio::test]
 async fn pg_snapshot_commits_versions_monotonically_and_recovers_by_lookup() {
+    use tdw_core::RelationalEngine;
+
     let Some(url) = database_url() else {
         eprintln!("TDW_POSTGRES_TEST_URL not set; skipping pg_snapshot integration test");
         return;
@@ -29,7 +31,6 @@ async fn pg_snapshot_commits_versions_monotonically_and_recovers_by_lookup() {
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
     let store = PgSnapshotStore::new(engine.clone()).with_table(table_name());
 
-    use tdw_core::RelationalEngine;
     let drop_sql = format!("DROP TABLE IF EXISTS {}", table_name());
     engine
         .execute(&drop_sql, serde_json::Value::Null)

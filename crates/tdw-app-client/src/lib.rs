@@ -151,17 +151,17 @@ impl DaemonClient {
     ///
     /// Returns a `DaemonClientError` if config validation fails or the
     /// underlying transport request fails.
-    pub fn submit_and_wait(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    pub fn submit_and_wait(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         self.config.validate()?;
         match self.config.endpoint.transport {
-            DaemonTransport::Tcp => self.submit_tcp(&envelope),
+            DaemonTransport::Tcp => self.submit_tcp(envelope),
             #[cfg(unix)]
             DaemonTransport::Uds => self.submit_uds(envelope),
             #[cfg(not(unix))]
             DaemonTransport::Uds => Err(DaemonClientError::UnsupportedTransport(
                 DaemonTransport::Uds,
             )),
-            DaemonTransport::HttpSse => self.submit_http_sse(&envelope),
+            DaemonTransport::HttpSse => self.submit_http_sse(envelope),
         }
     }
 
@@ -193,7 +193,7 @@ impl DaemonClient {
     }
 
     #[cfg(unix)]
-    fn submit_uds(&self, envelope: OpEnvelope) -> DaemonClientResult {
+    fn submit_uds(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let address = self.config.endpoint.address.trim().to_string();
         let mut stream =
@@ -214,7 +214,7 @@ impl DaemonClient {
                 source,
             })?;
 
-        write_envelope_frame(&mut stream, &envelope)?;
+        write_envelope_frame(&mut stream, envelope)?;
         let events = read_terminal_events(&mut stream, &op_id)?;
         Ok(DaemonSubmission {
             endpoint: self.config.endpoint.clone(),
@@ -961,7 +961,7 @@ mod tests {
         );
 
         match client
-            .submit_and_wait(shutdown_envelope())
+            .submit_and_wait(&shutdown_envelope())
             .expect_err("closed daemon port should not accept submissions")
         {
             DaemonClientError::Connect { address, .. } => {
@@ -982,7 +982,7 @@ mod tests {
         }));
 
         assert!(matches!(
-            client.submit_and_wait(shutdown_envelope()),
+            client.submit_and_wait(&shutdown_envelope()),
             Err(DaemonClientError::UnsupportedEndpoint {
                 transport: DaemonTransport::HttpSse,
                 ..
@@ -1018,7 +1018,9 @@ mod tests {
             Err(DaemonClientError::EmptyFrame)
         ));
 
-        let oversized_len = (MAX_DAEMON_FRAME_BYTES as u32 + 1).to_be_bytes();
+        let oversized_len = u32::try_from(MAX_DAEMON_FRAME_BYTES + 1)
+            .expect("oversized test length fits u32")
+            .to_be_bytes();
         let mut oversized = Cursor::new(oversized_len);
         assert!(matches!(
             read_length_delimited_event_frame(&mut oversized),
@@ -1032,7 +1034,7 @@ mod tests {
         let envelope = shutdown_envelope();
         let other = shutdown_envelope();
         let unrelated = EventMsg::Completed {
-            op_id: other.op_id.clone(),
+            op_id: other.op_id,
             summary: Some("other op finished".to_string()),
             result: None,
         };
@@ -1059,7 +1061,11 @@ mod tests {
             trailing,
         ] {
             let json = serde_json::to_vec(&event).expect("serialize event");
-            bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(
+                &u32::try_from(json.len())
+                    .expect("event JSON length fits u32")
+                    .to_be_bytes(),
+            );
             bytes.extend_from_slice(&json);
         }
 

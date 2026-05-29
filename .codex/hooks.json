@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command \"$j = $input | ConvertFrom-Json; $p = $j.tool_input.file_path; $new = [string]$j.tool_input.new_string + ' ' + [string]$j.tool_input.content; if ($p -match '\\.rs$' -and $new -match '(\\.unwrap\\(\\)|dbg!|todo!\\(\\))') { Write-Error 'Blocked: .unwrap() / dbg! / todo!() violate workspace clippy denies. Use ? / tracing / a real implementation.'; exit 2 }\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -Command \"$j = $input | ConvertFrom-Json; $p = $j.tool_input.file_path; if ($p -and $p -match '\\.rs$' -and (Test-Path $p)) { $env:RUSTUP_TOOLCHAIN='stable'; & cargo fmt -- $p 2>&1 | Out-Null }\""
+          }
+        ]
+      }
+    ]
+  }
+}

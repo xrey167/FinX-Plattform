@@ -45,6 +45,7 @@ fn main() {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
         "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check"
@@ -63,6 +64,7 @@ fn bench() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms that genuinely return Err
 fn bench_compare(baseline: Option<String>) -> Result<(), String> {
     println!(
         "bench comparison scaffold; baseline={}",
@@ -311,6 +313,7 @@ fn ddl_export(target: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_up() -> Result<(), String> {
     println!(
         "offline migrate up plan: {}",
@@ -325,11 +328,13 @@ fn migrate_up() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_down() -> Result<(), String> {
     println!("offline migrate down plan: no destructive migration is run by xtask scaffold");
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_status() -> Result<(), String> {
     println!("{}", tdw_migration::migration_status());
     Ok(())
@@ -356,7 +361,7 @@ fn schema_sync() -> Result<(), String> {
 fn events_schema_check() -> Result<(), String> {
     let count = write_schema_bundle(
         Path::new("docs/schemas/event"),
-        tdw_event::event_schema_bundle(),
+        &tdw_event::event_schema_bundle(),
     )?;
     println!("events schema-check wrote {count} event schemas to docs/schemas/event");
     Ok(())
@@ -365,7 +370,7 @@ fn events_schema_check() -> Result<(), String> {
 fn protocol_schema_check() -> Result<(), String> {
     let count = write_schema_bundle(
         Path::new("docs/schemas/protocol"),
-        tdw_protocol::schema_bundle(),
+        &tdw_protocol::schema_bundle(),
     )?;
     println!("protocol schema-check wrote {count} protocol schemas to docs/schemas/protocol");
     Ok(())
@@ -374,7 +379,7 @@ fn protocol_schema_check() -> Result<(), String> {
 fn config_schema_check() -> Result<(), String> {
     let count = write_schema_bundle(
         Path::new("docs/schemas/config"),
-        tdw_config::schema_bundle(),
+        &tdw_config::schema_bundle(),
     )?;
     println!("config schema-check wrote {count} config schemas to docs/schemas/config");
     Ok(())
@@ -382,10 +387,10 @@ fn config_schema_check() -> Result<(), String> {
 
 fn write_schema_bundle(
     schema_dir: &Path,
-    bundle: std::collections::BTreeMap<&'static str, serde_json::Value>,
+    bundle: &std::collections::BTreeMap<&'static str, serde_json::Value>,
 ) -> Result<usize, String> {
     fs::create_dir_all(schema_dir).map_err(|error| error.to_string())?;
-    for (name, schema) in &bundle {
+    for (name, schema) in bundle {
         let content =
             serde_json::to_string_pretty(schema).map_err(|error| error.to_string())? + "\n";
         fs::write(schema_dir.join(format!("{name}.schema.json")), content)

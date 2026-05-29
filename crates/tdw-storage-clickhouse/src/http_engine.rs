@@ -1,15 +1,15 @@
-//! Real ClickHouse backend for `tdw_core::OlapEngine`.
+//! Real `ClickHouse` backend for `tdw_core::OlapEngine`.
 //!
-//! Gated by the `clickhouse` feature. Talks to ClickHouse over its
+//! Gated by the `clickhouse` feature. Talks to `ClickHouse` over its
 //! native HTTP interface (port 8123 by default), so no SDK crate is
 //! required — just `reqwest`. Works with any ClickHouse-compatible
-//! HTTP endpoint (ClickHouse Cloud, single-node, ClickHouse keeper +
+//! HTTP endpoint (`ClickHouse` Cloud, single-node, `ClickHouse` keeper +
 //! distributed table cluster, etc.).
 //!
-//! Authentication uses HTTP basic auth via the constructor; ClickHouse
+//! Authentication uses HTTP basic auth via the constructor; `ClickHouse`
 //! accepts credentials this way for the standard HTTP interface.
 //!
-//! Parameter binding is not supported in this slice. ClickHouse's HTTP
+//! Parameter binding is not supported in this slice. `ClickHouse`'s HTTP
 //! interface supports server-side params via `param_<name>` query
 //! string keys, which is a different binding shape than sqlx-style
 //! positional `$N`. Adding that surface is a follow-up; the engine
@@ -21,7 +21,7 @@ use reqwest::{Client, Url};
 use serde_json::Value;
 use tdw_core::{Error, OlapEngine, Result};
 
-/// Production ClickHouse backend. Construct via
+/// Production `ClickHouse` backend. Construct via
 /// [`ClickHouseHttpEngine::new`].
 #[derive(Clone, Debug)]
 pub struct ClickHouseHttpEngine {
@@ -32,10 +32,14 @@ pub struct ClickHouseHttpEngine {
 }
 
 impl ClickHouseHttpEngine {
-    /// Build a ClickHouse HTTP client. `endpoint` is the base URL
+    /// Build a `ClickHouse` HTTP client. `endpoint` is the base URL
     /// (e.g. `http://127.0.0.1:8123`). `user` / `password` are
     /// optional; pass `None` for the default `default` user on a
-    /// locally-running ClickHouse with no auth.
+    /// locally-running `ClickHouse` with no auth.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, user: Option<String>, password: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("clickhouse endpoint: {error}")))?;

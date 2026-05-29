@@ -5,7 +5,7 @@ pub mod smoke;
 use tdw_domain::{EquityHistoricalData, Instrument, ResearchNote};
 
 pub mod fixtures {
-    use super::*;
+    use super::{EquityHistoricalData, Instrument, ResearchNote};
 
     #[must_use]
     pub fn ohlcv(symbol: &str) -> Vec<EquityHistoricalData> {

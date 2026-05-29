@@ -1,6 +1,6 @@
-//! Idempotent DDL emission for the always-fresh "FlowField" analytics surfaces.
+//! Idempotent DDL emission for the always-fresh "`FlowField`" analytics surfaces.
 //!
-//! These helpers emit ClickHouse DDL strings (idempotent `create ... if not
+//! These helpers emit `ClickHouse` DDL strings (idempotent `create ... if not
 //! exists`) for the multi-granularity OHLC stack: for each granularity an
 //! `AggregatingMergeTree` target, an incremental materialized view that folds
 //! `raw.tick` into partial aggregate states, and a reader view that merges
@@ -11,7 +11,7 @@
 //! the same DDL can be generated/asserted in Rust and is the offline-testable
 //! counterpart to the integration-deferred SQL migrations.
 
-/// A candle granularity: its object-name suffix and the matching ClickHouse
+/// A candle granularity: its object-name suffix and the matching `ClickHouse`
 /// `INTERVAL` unit used by `toStartOfInterval`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Granularity {
@@ -29,7 +29,7 @@ pub struct Granularity {
 /// The default OHLC granularity set: 1m, 5m, 1h, 1d. TTLs are tunable retention
 /// defaults mirroring migration 0003 (1d retained indefinitely).
 #[must_use]
-pub fn default_granularities() -> &'static [Granularity] {
+pub const fn default_granularities() -> &'static [Granularity] {
     const G: &[Granularity] = &[
         Granularity {
             suffix: "1m",
@@ -67,10 +67,9 @@ pub fn emit_ohlc_granularity(g: Granularity) -> String {
     let unit = g.interval_unit;
     // Optional, tunable retention TTL on window_start. None (e.g. 1d) retains
     // indefinitely, so the target table closes directly after `order by`.
-    let ttl_clause = match g.ttl {
-        Some(ttl) => format!("\nttl window_start + {ttl}"),
-        None => String::new(),
-    };
+    let ttl_clause = g
+        .ttl
+        .map_or_else(String::new, |ttl| format!("\nttl window_start + {ttl}"));
     // non_replicated_deduplication_window lets a retried ingest batch carrying the
     // same insert_deduplication_token (with deduplicate_blocks_in_dependent_
     // materialized_views=1 on the INSERT) dedup THROUGH this MV target, preventing

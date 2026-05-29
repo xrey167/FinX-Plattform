@@ -95,7 +95,8 @@ impl McpServer {
         Self::default()
     }
 
-    pub fn with_daemon_config(config: DaemonClientConfig) -> Self {
+    #[must_use]
+    pub const fn with_daemon_config(config: DaemonClientConfig) -> Self {
         Self {
             initialized: false,
             client_info: None,
@@ -121,15 +122,15 @@ impl McpServer {
 
     pub fn handle_json_rpc_line(&mut self, line: &str) -> Vec<String> {
         let messages = match parse_inbound(line) {
-            Ok(inbound) if inbound.is_notification => self.handle_notification(inbound),
-            Ok(inbound) => self.handle_request(inbound),
+            Ok(inbound) if inbound.is_notification => self.handle_notification(&inbound),
+            Ok(inbound) => self.handle_request(&inbound),
             Err(problem) => vec![error_message(problem)],
         };
 
         messages.iter().map(encode_message).collect()
     }
 
-    fn handle_notification(&mut self, inbound: JsonRpcInbound) -> Vec<Value> {
+    fn handle_notification(&mut self, inbound: &JsonRpcInbound) -> Vec<Value> {
         match inbound.method.as_str() {
             "notifications/initialized" => {
                 self.initialized = true;
@@ -160,7 +161,7 @@ impl McpServer {
         self.cancelled_requests.push(cancelled);
     }
 
-    fn handle_request(&mut self, inbound: JsonRpcInbound) -> Vec<Value> {
+    fn handle_request(&mut self, inbound: &JsonRpcInbound) -> Vec<Value> {
         let id = inbound.id.clone().unwrap_or(Value::Null);
         if !self.initialized && !matches!(inbound.method.as_str(), "initialize" | "ping") {
             return vec![error_message(JsonRpcProblem::new(
@@ -171,22 +172,25 @@ impl McpServer {
         }
 
         match inbound.method.as_str() {
-            "initialize" => vec![self.initialize(id, inbound.params)],
-            "ping" => vec![success_message(id, json!({}))],
-            "tools/list" => vec![success_message(id, json!({ "tools": tool_descriptors() }))],
-            "tools/call" => self.call_tool(id, inbound.params),
-            "resources/list" => vec![success_message(
-                id,
-                json!({ "resources": resource_descriptors() }),
+            "initialize" => vec![self.initialize(&id, &inbound.params)],
+            "ping" => vec![success_message(&id, &json!({}))],
+            "tools/list" => vec![success_message(
+                &id,
+                &json!({ "tools": tool_descriptors() }),
             )],
-            "resources/read" => vec![self.read_resource(id, inbound.params)],
+            "tools/call" => self.call_tool(&id, &inbound.params),
+            "resources/list" => vec![success_message(
+                &id,
+                &json!({ "resources": resource_descriptors() }),
+            )],
+            "resources/read" => vec![Self::read_resource(&id, &inbound.params)],
             "prompts/list" => {
                 vec![success_message(
-                    id,
-                    json!({ "prompts": prompt_descriptors() }),
+                    &id,
+                    &json!({ "prompts": prompt_descriptors() }),
                 )]
             }
-            "prompts/get" => vec![self.get_prompt(id, inbound.params)],
+            "prompts/get" => vec![Self::get_prompt(&id, &inbound.params)],
             _ => vec![error_message(JsonRpcProblem::new(
                 id,
                 -32601,
@@ -195,7 +199,7 @@ impl McpServer {
         }
     }
 
-    fn initialize(&mut self, id: Value, params: Value) -> Value {
+    fn initialize(&mut self, id: &Value, params: &Value) -> Value {
         if let Some(client_info) = params.get("clientInfo") {
             self.client_info = Some(client_info.clone());
         }
@@ -208,7 +212,7 @@ impl McpServer {
 
         success_message(
             id,
-            json!({
+            &json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": server_capabilities(),
                 "serverInfo": {
@@ -223,17 +227,17 @@ impl McpServer {
         )
     }
 
-    fn call_tool(&self, id: Value, params: Value) -> Vec<Value> {
+    fn call_tool(&self, id: &Value, params: &Value) -> Vec<Value> {
         let Some(params_object) = params.as_object() else {
             return vec![error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "tools/call params must be an object",
             ))];
         };
         let Some(name) = string_field(params_object, "name") else {
             return vec![error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "tools/call requires string field: name",
             ))];
@@ -244,13 +248,13 @@ impl McpServer {
             .unwrap_or_else(|| json!({}));
         if !arguments.is_object() {
             return vec![error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "tools/call arguments must be an object",
             ))];
         }
 
-        let progress_token = progress_token(&params);
+        let progress_token = progress_token(params);
         let result = execute_tool(&self.daemon, name, &arguments);
         match result {
             Ok(ToolExecution {
@@ -258,51 +262,55 @@ impl McpServer {
                 progress_events,
             }) => {
                 let mut messages = progress_notifications(progress_token, &progress_events);
-                messages.push(success_message(id, tool_result(structured)));
+                messages.push(success_message(id, &tool_result(&structured)));
                 messages
             }
             Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                problem.with_id(id).with_data(json!({ "tool": name })),
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
             )],
             Err(ToolFailure::Execution(message)) => {
-                vec![success_message(id, tool_error_result(&message))]
+                vec![success_message(id, &tool_error_result(&message))]
             }
         }
     }
 
-    fn read_resource(&self, id: Value, params: Value) -> Value {
+    fn read_resource(id: &Value, params: &Value) -> Value {
         let Some(params_object) = params.as_object() else {
             return error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "resources/read params must be an object",
             ));
         };
         let Some(uri) = string_field(params_object, "uri") else {
             return error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "resources/read requires string field: uri",
             ));
         };
 
         match resource_content(uri) {
-            Ok(content) => success_message(id, json!({ "contents": [content] })),
-            Err(problem) => error_message(problem.with_id(id).with_data(json!({ "uri": uri }))),
+            Ok(content) => success_message(id, &json!({ "contents": [content] })),
+            Err(problem) => {
+                error_message(problem.with_id(id.clone()).with_data(json!({ "uri": uri })))
+            }
         }
     }
 
-    fn get_prompt(&self, id: Value, params: Value) -> Value {
+    fn get_prompt(id: &Value, params: &Value) -> Value {
         let Some(params_object) = params.as_object() else {
             return error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "prompts/get params must be an object",
             ));
         };
         let Some(name) = string_field(params_object, "name") else {
             return error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "prompts/get requires string field: name",
             ));
@@ -313,15 +321,19 @@ impl McpServer {
             .unwrap_or_else(|| json!({}));
         if !arguments.is_object() {
             return error_message(JsonRpcProblem::new(
-                id,
+                id.clone(),
                 -32602,
                 "prompts/get arguments must be an object",
             ));
         }
 
         match prompt_content(name, &arguments) {
-            Ok(content) => success_message(id, content),
-            Err(problem) => error_message(problem.with_id(id).with_data(json!({ "prompt": name }))),
+            Ok(content) => success_message(id, &content),
+            Err(problem) => error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "prompt": name })),
+            ),
         }
     }
 }
@@ -387,7 +399,7 @@ pub fn __fuzz_mcp_http(data: &[u8]) {
         StreamableHttpRequest::new("POST", STREAMABLE_HTTP_PATH, Vec::new(), data.to_vec());
     let _ = handle_streamable_http_request_with_config(
         &mut server,
-        request,
+        &request,
         &StreamableHttpConfig::new(),
     );
 }
@@ -417,7 +429,7 @@ impl DaemonToolRuntime {
         Self { config: Ok(config) }
     }
 
-    fn submit(&self, envelope: OpEnvelope) -> Result<DaemonSubmission, String> {
+    fn submit(&self, envelope: &OpEnvelope) -> Result<DaemonSubmission, String> {
         let config = self.config.as_ref().map_err(Clone::clone)?;
         DaemonClient::new(config.clone())
             .submit_and_wait(envelope)
@@ -436,10 +448,10 @@ fn daemon_client_error_message(config: &DaemonClientConfig, error: &DaemonClient
 fn daemon_client_config_from_env() -> Result<DaemonClientConfig, String> {
     let config = tdw_config_from_env()?;
     daemon_client_config_from_sources(
-        config,
+        &config,
         non_empty_env("TDW_MCP_DAEMON_TRANSPORT"),
         non_empty_env("TDW_MCP_DAEMON_ADDR").or_else(|| non_empty_env("TDW_DAEMON_TCP_BIND")),
-        non_empty_env("TDW_MCP_DAEMON_TIMEOUT_MS"),
+        non_empty_env("TDW_MCP_DAEMON_TIMEOUT_MS").as_deref(),
     )
 }
 
@@ -471,21 +483,18 @@ fn tdw_config_from_env() -> Result<TdwConfig, String> {
 }
 
 fn daemon_client_config_from_sources(
-    config: TdwConfig,
+    config: &TdwConfig,
     transport_override: Option<String>,
     address_override: Option<String>,
-    timeout_ms: Option<String>,
+    timeout_ms: Option<&str>,
 ) -> Result<DaemonClientConfig, String> {
     let transport = match transport_override {
         Some(value) => parse_daemon_transport(&value)?,
         None => config.daemon.transport,
     };
-    let address = match address_override {
-        Some(value) => value,
-        None => daemon_endpoint_address_from_config(&config, transport),
-    };
+    let address =
+        address_override.unwrap_or_else(|| daemon_endpoint_address_from_config(config, transport));
     let timeout = timeout_ms
-        .as_deref()
         .map(parse_timeout_ms)
         .transpose()?
         .unwrap_or_else(|| Duration::from_secs(2));
@@ -690,7 +699,7 @@ pub fn run_streamable_http_smoke() -> i32 {
             r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"{MCP_PROTOCOL_VERSION}","capabilities":{{}},"clientInfo":{{"name":"tdw-smoke","version":"1.0.0"}}}}}}"#
         ),
     );
-    let initialized = handle_streamable_http_request(&mut server, initialize);
+    let initialized = handle_streamable_http_request(&mut server, &initialize);
     if initialized.status != 200 {
         eprintln!(
             "tdw-mcp Streamable HTTP smoke initialize failed: {} {}",
@@ -708,7 +717,7 @@ pub fn run_streamable_http_smoke() -> i32 {
         ],
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tdw.progress.sample","arguments":{"symbol":"AAPL"},"_meta":{"progressToken":"smoke-progress"}}}"#,
     );
-    let response = handle_streamable_http_request(&mut server, tool_call);
+    let response = handle_streamable_http_request(&mut server, &tool_call);
     let body = response.body_text().unwrap_or("");
     if response.status == 200
         && response.header("content-type") == Some("text/event-stream")
@@ -730,14 +739,14 @@ pub fn run_streamable_http_smoke() -> i32 {
 
 pub fn handle_streamable_http_request(
     server: &mut McpServer,
-    request: StreamableHttpRequest,
+    request: &StreamableHttpRequest,
 ) -> StreamableHttpResponse {
     handle_streamable_http_request_with_config(server, request, &StreamableHttpConfig::new())
 }
 
 pub fn handle_streamable_http_request_with_config(
     server: &mut McpServer,
-    request: StreamableHttpRequest,
+    request: &StreamableHttpRequest,
     config: &StreamableHttpConfig,
 ) -> StreamableHttpResponse {
     if request.path != STREAMABLE_HTTP_PATH {
@@ -756,7 +765,7 @@ pub fn handle_streamable_http_request_with_config(
         return text_response(400, "Bad Request", "unsupported MCP-Protocol-Version");
     }
 
-    if !request_is_authorized(&request, config) {
+    if !request_is_authorized(request, config) {
         let mut response = text_response(401, "Unauthorized", "missing or invalid bearer token");
         response.headers.push((
             "WWW-Authenticate".to_string(),
@@ -780,10 +789,10 @@ pub fn handle_streamable_http_request_with_config(
                 "GET, POST, OPTIONS".to_string(),
             ));
             attach_protocol_headers(&mut response);
-            attach_cors_origin(&mut response, &request);
+            attach_cors_origin(&mut response, request);
             response
         }
-        "GET" if accepts_sse(&request) => {
+        "GET" if accepts_sse(request) => {
             let mut response = bytes_response(
                 200,
                 "OK",
@@ -794,7 +803,7 @@ pub fn handle_streamable_http_request_with_config(
                 .headers
                 .push(("Cache-Control".to_string(), "no-cache".to_string()));
             attach_protocol_headers(&mut response);
-            attach_cors_origin(&mut response, &request);
+            attach_cors_origin(&mut response, request);
             response
         }
         "POST" => handle_streamable_http_post(server, request),
@@ -804,7 +813,7 @@ pub fn handle_streamable_http_request_with_config(
 
 fn handle_streamable_http_post(
     server: &mut McpServer,
-    request: StreamableHttpRequest,
+    request: &StreamableHttpRequest,
 ) -> StreamableHttpResponse {
     if request.body.len() > MAX_HTTP_BODY_BYTES {
         return text_response(413, "Payload Too Large", "request body too large");
@@ -823,11 +832,11 @@ fn handle_streamable_http_post(
     if messages.is_empty() {
         let mut response = empty_response(202, "Accepted");
         attach_protocol_headers(&mut response);
-        attach_cors_origin(&mut response, &request);
+        attach_cors_origin(&mut response, request);
         return response;
     }
 
-    let mut response = if accepts_sse(&request) {
+    let mut response = if accepts_sse(request) {
         let body = encode_sse_messages(&messages);
         let mut response = bytes_response(200, "OK", "text/event-stream", body.into_bytes());
         response
@@ -843,7 +852,7 @@ fn handle_streamable_http_post(
         )
     };
     attach_protocol_headers(&mut response);
-    attach_cors_origin(&mut response, &request);
+    attach_cors_origin(&mut response, request);
     response
 }
 
@@ -852,19 +861,23 @@ fn handle_streamable_http_connection(
     server: &Arc<Mutex<McpServer>>,
     config: &StreamableHttpConfig,
 ) -> std::io::Result<()> {
-    let response = match read_streamable_http_request(&mut stream) {
-        Ok(request) => match server.lock() {
-            Ok(mut server) => {
-                handle_streamable_http_request_with_config(&mut server, request, config)
-            }
-            Err(_) => text_response(
-                500,
-                "Internal Server Error",
-                "MCP server state lock poisoned",
-            ),
+    let response = read_streamable_http_request(&mut stream).map_or_else(
+        |response| response,
+        |request| {
+            server.lock().map_or_else(
+                |_| {
+                    text_response(
+                        500,
+                        "Internal Server Error",
+                        "MCP server state lock poisoned",
+                    )
+                },
+                |mut server| {
+                    handle_streamable_http_request_with_config(&mut server, &request, config)
+                },
+            )
         },
-        Err(response) => response,
-    };
+    );
     write_streamable_http_response(&mut stream, &response)
 }
 
@@ -1095,7 +1108,8 @@ fn encode_json_messages(messages: &[String]) -> String {
     let values = messages
         .iter()
         .map(|message| {
-            serde_json::from_str::<Value>(message).unwrap_or(Value::String(message.clone()))
+            serde_json::from_str::<Value>(message)
+                .unwrap_or_else(|_| Value::String(message.clone()))
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&values).unwrap_or_else(|error| {
@@ -1219,7 +1233,7 @@ fn is_valid_id(value: &Value) -> bool {
     value.is_string() || value.is_number() || value.is_null()
 }
 
-fn success_message(id: Value, result: Value) -> Value {
+fn success_message(id: &Value, result: &Value) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -1242,7 +1256,7 @@ fn error_message(problem: JsonRpcProblem) -> Value {
     })
 }
 
-fn notification_message(method: &str, params: Value) -> Value {
+fn notification_message(method: &str, params: &Value) -> Value {
     json!({
         "jsonrpc": "2.0",
         "method": method,
@@ -1500,11 +1514,11 @@ fn execute_daemon_triage(
     let requested_op_id = optional_argument(arguments, "op_id").map(ToString::to_string);
     let sql = "select 'tdw.daemon.triage' as diagnostic_check";
     let envelope = daemon_run_query_envelope(arguments, sql)?;
-    let submission = daemon.submit(envelope).map_err(ToolFailure::Execution)?;
+    let submission = daemon.submit(&envelope).map_err(ToolFailure::Execution)?;
     Ok(structured(daemon_submission_value(
         "tdw.daemon.triage",
         &submission,
-        json!({
+        &json!({
             "requested_op_id": requested_op_id,
             "diagnostic_sql": sql,
             "checks": [
@@ -1523,11 +1537,11 @@ fn execute_daemon_query_submit(
     let sql = required_argument(arguments, "sql")?;
     validate_daemon_sql(sql)?;
     let envelope = daemon_run_query_envelope(arguments, sql)?;
-    let submission = daemon.submit(envelope).map_err(ToolFailure::Execution)?;
+    let submission = daemon.submit(&envelope).map_err(ToolFailure::Execution)?;
     Ok(structured(daemon_submission_value(
         "tdw.daemon.query.submit",
         &submission,
-        json!({
+        &json!({
             "sql": sql,
         }),
     )))
@@ -1566,7 +1580,7 @@ fn daemon_run_query_envelope(
     ))
 }
 
-fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: Value) -> Value {
+fn daemon_submission_value(tool: &str, submission: &DaemonSubmission, extra: &Value) -> Value {
     let terminal_event = submission
         .events
         .last()
@@ -1603,12 +1617,12 @@ const fn structured(structured: Value) -> ToolExecution {
     }
 }
 
-fn tool_result(structured: Value) -> Value {
+fn tool_result(structured: &Value) -> Value {
     json!({
         "content": [
             {
                 "type": "text",
-                "text": pretty_json(&structured),
+                "text": pretty_json(structured),
             }
         ],
         "structuredContent": structured,
@@ -1663,7 +1677,7 @@ fn progress_notifications(progress_token: Option<Value>, events: &[String]) -> V
                 last_stage = Some(stage.clone());
                 notifications.push(notification_message(
                     "notifications/progress",
-                    json!({
+                    &json!({
                         "progressToken": progress_token,
                         "progress": fraction,
                         "total": 1.0,
@@ -1678,7 +1692,7 @@ fn progress_notifications(progress_token: Option<Value>, events: &[String]) -> V
             last_stage = Some("complete".to_string());
             notifications.push(notification_message(
                 "notifications/progress",
-                json!({
+                &json!({
                     "progressToken": progress_token,
                     "progress": 1.0,
                     "total": 1.0,
@@ -1857,16 +1871,12 @@ fn resource(
 
 fn resource_content(uri: &str) -> Result<Value, JsonRpcProblem> {
     match uri {
-        "tdw://quality/mcp-worker-product-boundaries" => Ok(resource_text(
-            uri,
-            "text/markdown",
-            MCP_BOUNDARY_DOC.to_string(),
-        )),
-        "tdw://quality/daemon-hardening-test-taxonomy" => Ok(resource_text(
-            uri,
-            "text/markdown",
-            TEST_TAXONOMY_DOC.to_string(),
-        )),
+        "tdw://quality/mcp-worker-product-boundaries" => {
+            Ok(resource_text(uri, "text/markdown", MCP_BOUNDARY_DOC))
+        }
+        "tdw://quality/daemon-hardening-test-taxonomy" => {
+            Ok(resource_text(uri, "text/markdown", TEST_TAXONOMY_DOC))
+        }
         "tdw://service/protocol-config-sample" => {
             let sample = tdw_service_api::protocol_config_sample().map_err(|error| {
                 JsonRpcProblem::new(
@@ -1875,7 +1885,11 @@ fn resource_content(uri: &str) -> Result<Value, JsonRpcProblem> {
                     format!("protocol config resource failed: {error}"),
                 )
             })?;
-            Ok(resource_text(uri, "application/json", pretty_json(&sample)))
+            Ok(resource_text(
+                uri,
+                "application/json",
+                &pretty_json(&sample),
+            ))
         }
         "tdw://mcp/capabilities" => {
             let capabilities = json!({
@@ -1893,7 +1907,7 @@ fn resource_content(uri: &str) -> Result<Value, JsonRpcProblem> {
             Ok(resource_text(
                 uri,
                 "application/json",
-                pretty_json(&capabilities),
+                &pretty_json(&capabilities),
             ))
         }
         _ => Err(JsonRpcProblem::new(
@@ -1904,7 +1918,7 @@ fn resource_content(uri: &str) -> Result<Value, JsonRpcProblem> {
     }
 }
 
-fn resource_text(uri: &str, mime_type: &str, text: String) -> Value {
+fn resource_text(uri: &str, mime_type: &str, text: &str) -> Value {
     json!({
         "uri": uri,
         "mimeType": mime_type,
@@ -1998,7 +2012,7 @@ fn prompt_content(name: &str, arguments: &Value) -> Result<Value, JsonRpcProblem
             let horizon = optional_argument(arguments_object, "horizon").unwrap_or("1d");
             Ok(prompt_messages(
                 "TDW equity research workflow",
-                format!(
+                &format!(
                     "Use TDW MCP tools to research {symbol} with provider {provider} over horizon {horizon}. Start with tdw.providers.list, fetch tdw.equity.historical, call tdw.kg_tag.sample for context, then summarize data quality, rows observed, warehouse follow-ups, and risk notes."
                 ),
             ))
@@ -2007,7 +2021,7 @@ fn prompt_content(name: &str, arguments: &Value) -> Result<Value, JsonRpcProblem
             let op_id = optional_argument(arguments_object, "op_id").unwrap_or("the target op");
             Ok(prompt_messages(
                 "TDW daemon operation triage",
-                format!(
+                &format!(
                     "Triage {op_id} through the TDW daemon boundary. Check started/completed/failed event order, outbox relay status, session cost entries, rollout frames, and policy evidence before proposing a fix."
                 ),
             ))
@@ -2019,7 +2033,7 @@ fn prompt_content(name: &str, arguments: &Value) -> Result<Value, JsonRpcProblem
                 optional_argument(arguments_object, "endpoint").unwrap_or("equity_historical");
             Ok(prompt_messages(
                 "TDW provider ingest plan",
-                format!(
+                &format!(
                     "Plan a safe ingest for provider {provider}, endpoint {endpoint}, symbol {symbol}. Validate provider registration, policy role, idempotency, expected event-spine writes, storage target, and skipped live-network requirements."
                 ),
             ))
@@ -2045,7 +2059,7 @@ fn required_prompt_arg<'a>(
     })
 }
 
-fn prompt_messages(description: &str, text: String) -> Value {
+fn prompt_messages(description: &str, text: &str) -> Value {
     json!({
         "description": description,
         "messages": [
@@ -2209,14 +2223,13 @@ mod tests {
         let mut config = TdwConfig::default();
         config.daemon.tcp_bind = Some("127.0.0.1:9001".to_string());
 
-        let from_config =
-            daemon_client_config_from_sources(config, None, None, Some("75".to_string()))
-                .unwrap_or_else(|error| panic!("config override should resolve: {error}"));
+        let from_config = daemon_client_config_from_sources(&config, None, None, Some("75"))
+            .unwrap_or_else(|error| panic!("config override should resolve: {error}"));
         assert_eq!(from_config.endpoint().address, "127.0.0.1:9001");
         assert_eq!(from_config.timeout(), Duration::from_millis(75));
 
         let from_env_style = daemon_client_config_from_sources(
-            TdwConfig::default(),
+            &TdwConfig::default(),
             Some("tcp".to_string()),
             Some("127.0.0.1:9002".to_string()),
             None,
@@ -2539,7 +2552,7 @@ mod tests {
         let mut server = McpServer::new();
         let response = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2578,7 +2591,7 @@ mod tests {
         let mut server = McpServer::new();
         let response = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![("Content-Type".to_string(), "application/json".to_string())],
@@ -2600,7 +2613,7 @@ mod tests {
         let mut server = McpServer::new();
         let bad_origin = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2614,7 +2627,7 @@ mod tests {
 
         let bad_protocol = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2629,7 +2642,7 @@ mod tests {
         let config = StreamableHttpConfig::new().with_auth_token("secret");
         let unauthorized = handle_streamable_http_request_with_config(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![("Content-Type".to_string(), "application/json".to_string())],
@@ -2645,7 +2658,7 @@ mod tests {
 
         let authorized = handle_streamable_http_request_with_config(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2666,7 +2679,7 @@ mod tests {
 
         let response = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2695,7 +2708,7 @@ mod tests {
 
         let response = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![
@@ -2731,7 +2744,7 @@ mod tests {
 
         let sse_ready = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "GET",
                 "/mcp",
                 vec![("Accept".to_string(), "text/event-stream".to_string())],
@@ -2748,20 +2761,20 @@ mod tests {
 
         let no_sse = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new("GET", "/mcp", Vec::new(), ""),
+            &StreamableHttpRequest::new("GET", "/mcp", Vec::new(), ""),
         );
         assert_eq!(no_sse.status, 405);
         assert_eq!(no_sse.header("allow"), Some("GET, POST, OPTIONS"));
 
         let wrong_path = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new("POST", "/other", Vec::new(), ""),
+            &StreamableHttpRequest::new("POST", "/other", Vec::new(), ""),
         );
         assert_eq!(wrong_path.status, 404);
 
         let wrong_media = handle_streamable_http_request(
             &mut server,
-            StreamableHttpRequest::new(
+            &StreamableHttpRequest::new(
                 "POST",
                 "/mcp",
                 vec![("Content-Type".to_string(), "text/plain".to_string())],

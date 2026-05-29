@@ -1,9 +1,9 @@
 //! P7 end-to-end integration test: real Postgres backend.
 //!
 //! Exercises the full daemon chain:
-//!   AppState (Pg-backed relational engine)
+//!   `AppState` (Pg-backed relational engine)
 //!   → serve TCP
-//!   → AppClient submits Ops
+//!   → `AppClient` submits Ops
 //!   → daemon dispatch
 //!   → relational query against real Postgres (`select 1`)
 //!   → outbox persisted
@@ -108,7 +108,9 @@ fn shutdown_envelope(session_id: &SessionId, sequence: u64) -> OpEnvelope {
 
 async fn write_frame(stream: &mut TcpStream, envelope: &OpEnvelope) -> std::io::Result<()> {
     let json = serde_json::to_vec(envelope).expect("serialize envelope");
-    let len = (json.len() as u32).to_be_bytes();
+    let len = u32::try_from(json.len())
+        .expect("envelope length fits u32")
+        .to_be_bytes();
     stream.write_all(&len).await?;
     stream.write_all(&json).await?;
     stream.flush().await

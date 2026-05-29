@@ -73,7 +73,9 @@ pub fn try_resolve_symbol(
 
 /// Resolve an instrument by a standardized identifier (e.g. FIGI or ISIN)
 /// against an in-memory crosswalk, mirroring the alias path of
-/// [`resolve_symbol`]. The scheme match is case-insensitive; the value match is
+/// [`resolve_symbol`].
+///
+/// The scheme match is case-insensitive; the value match is
 /// exact after trimming. Returns the matching candidates (normally one).
 #[must_use]
 pub fn resolve_by_identifier(

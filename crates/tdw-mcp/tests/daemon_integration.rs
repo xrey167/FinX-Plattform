@@ -107,7 +107,7 @@ fn env_gated_daemon_query_submit_runs_through_mcp_surface() {
     assert!(
         matches!(
             terminal["type"].as_str(),
-            Some("completed") | Some("failed") | Some("cancelled")
+            Some("completed" | "failed" | "cancelled")
         ),
         "terminal event should prove daemon execution reached a terminal state: {terminal}"
     );

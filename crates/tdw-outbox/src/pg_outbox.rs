@@ -99,7 +99,8 @@ impl PgOutboxStore {
             .ok_or_else(|| {
                 Error::Storage("outbox append: missing sequence in INSERT RETURNING".to_string())
             })?;
-        Ok(sequence as u64)
+        u64::try_from(sequence)
+            .map_err(|_| Error::Storage("outbox append: negative sequence".to_string()))
     }
 
     /// Mark the given sequence as dispatched. Returns `false` if no
@@ -114,7 +115,10 @@ impl PgOutboxStore {
             "UPDATE {} SET status = 'Dispatched' WHERE sequence = $1 AND status = 'Pending'",
             self.table
         );
-        let affected = self.engine.execute(&sql, json!([sequence as i64])).await?;
+        let sequence_param = i64::try_from(sequence).map_err(|_| {
+            Error::Storage("outbox mark_dispatched: sequence exceeds i64".to_string())
+        })?;
+        let affected = self.engine.execute(&sql, json!([sequence_param])).await?;
         Ok(affected > 0)
     }
 
@@ -132,9 +136,12 @@ impl PgOutboxStore {
              ORDER BY sequence ASC",
             self.table
         );
+        let sequence_param = i64::try_from(sequence).map_err(|_| {
+            Error::Storage("outbox pending_after: sequence exceeds i64".to_string())
+        })?;
         let rows = self
             .engine
-            .fetch_json(&sql, json!([sequence as i64]))
+            .fetch_json(&sql, json!([sequence_param]))
             .await?;
         let mut records = Vec::with_capacity(rows.len());
         for row in rows {
@@ -151,7 +158,8 @@ impl PgOutboxStore {
             let envelope: EventEnvelope<Value> = serde_json::from_str(envelope_text)
                 .map_err(|error| Error::Storage(format!("outbox decode envelope: {error}")))?;
             records.push(OutboxRecord {
-                sequence: sequence as u64,
+                sequence: u64::try_from(sequence)
+                    .map_err(|_| Error::Storage("outbox pending: negative sequence".to_string()))?,
                 envelope,
                 status: OutboxStatus::Pending,
             });

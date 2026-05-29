@@ -82,6 +82,7 @@ impl<T: DataModel> WriteSink<T> for PostgresRecordingEngine {
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?;
         *rows += batch.rows.len();
+        drop(rows);
         Ok(WriteReceipt {
             sink: "postgres-recording",
             rows_written: batch.rows.len(),

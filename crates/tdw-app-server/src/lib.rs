@@ -341,7 +341,9 @@ pub const fn transport_label(t: DaemonTransport) -> &'static str {
     }
 }
 
-/// Spawn the in-memory outbox→bus relay. The task polls the outbox for
+/// Spawn the in-memory outbox→bus relay.
+///
+/// The task polls the outbox for
 /// pending records every `tick`, publishes each on the bus, and marks it
 /// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
 ///
@@ -664,7 +666,9 @@ mod tests {
         use tokio::net::{TcpListener, TcpStream};
 
         async fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
-            let len = (bytes.len() as u32).to_be_bytes();
+            let len = u32::try_from(bytes.len())
+                .expect("test frame length fits u32")
+                .to_be_bytes();
             stream.write_all(&len).await?;
             stream.write_all(bytes).await?;
             stream.flush().await

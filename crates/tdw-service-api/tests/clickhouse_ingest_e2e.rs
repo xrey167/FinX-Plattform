@@ -1,10 +1,10 @@
-//! End-to-end integration test: real ClickHouse OLAP backend.
+//! End-to-end integration test: real `ClickHouse` OLAP backend.
 //!
-//! Drives the daemon ingest path against a LIVE ClickHouse:
-//!   AppState (ClickHouseHttpEngine olap) -> Dispatcher::dispatch(IngestBatch)
-//!   -> dispatch_ingest fetches the provider batch and persists it via
-//!      olap.execute(INSERT ... FORMAT JSONEachRow) -> rows land in
-//!      raw.equity_historical on the real server -> verified by a follow-up query.
+//! Drives the daemon ingest path against a LIVE `ClickHouse`:
+//!   `AppState` (`ClickHouseHttpEngine` olap) -> `Dispatcher::dispatch(IngestBatch)`
+//!   -> `dispatch_ingest` fetches the provider batch and persists it via
+//!      olap.execute(INSERT ... FORMAT `JSONEachRow`) -> rows land in
+//!      `raw.equity_historical` on the real server -> verified by a follow-up query.
 //!
 //! # Gating
 //! - Feature gate: compiled only with `--features real-clickhouse` (activates

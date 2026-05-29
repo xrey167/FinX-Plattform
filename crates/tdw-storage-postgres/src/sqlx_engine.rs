@@ -140,17 +140,19 @@ fn decode_one(value: Value) -> Result<Binding> {
     match value {
         Value::Null => Ok(Binding::Null),
         Value::Bool(boolean) => Ok(Binding::Bool(boolean)),
-        Value::Number(number) => {
-            if let Some(int) = number.as_i64() {
-                Ok(Binding::Int(int))
-            } else if let Some(float) = number.as_f64() {
-                Ok(Binding::Float(float))
-            } else {
-                Err(Error::Storage(format!(
-                    "postgres param: unrepresentable number {number}"
-                )))
-            }
-        }
+        Value::Number(number) => number.as_i64().map_or_else(
+            || {
+                number.as_f64().map_or_else(
+                    || {
+                        Err(Error::Storage(format!(
+                            "postgres param: unrepresentable number {number}"
+                        )))
+                    },
+                    |float| Ok(Binding::Float(float)),
+                )
+            },
+            |int| Ok(Binding::Int(int)),
+        ),
         Value::String(text) => Ok(Binding::Text(text)),
         Value::Array(_) | Value::Object(_) => Err(Error::Storage(
             "postgres param: nested arrays and objects are not supported in this slice".to_string(),
@@ -158,10 +160,10 @@ fn decode_one(value: Value) -> Result<Binding> {
     }
 }
 
-fn bind_one<'q>(
-    query: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+fn bind_one(
+    query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
     binding: Binding,
-) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+) -> sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments> {
     match binding {
         Binding::Null => query.bind(Option::<String>::None),
         Binding::Bool(boolean) => query.bind(boolean),

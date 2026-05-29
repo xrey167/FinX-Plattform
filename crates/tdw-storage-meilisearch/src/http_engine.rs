@@ -41,7 +41,7 @@ impl std::fmt::Debug for MeilisearchHttpEngine {
             .debug_struct("MeilisearchHttpEngine")
             .field("base_url", &self.base_url.as_str())
             .field("api_key", &self.api_key.as_ref().map(|_| "REDACTED"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -50,6 +50,10 @@ impl MeilisearchHttpEngine {
     /// (e.g. `http://127.0.0.1:7700`). `api_key` is optional; supply
     /// it for managed deployments or self-hosted instances with a
     /// configured master key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, api_key: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("meilisearch endpoint: {error}")))?;
@@ -105,8 +109,7 @@ impl MeilisearchHttpEngine {
                         "meilisearch task {task_uid} {}: {}",
                         task.status,
                         task.error
-                            .map(|error| error.message)
-                            .unwrap_or_else(|| "no error message".to_string())
+                            .map_or_else(|| "no error message".to_string(), |error| error.message)
                     )));
                 }
                 _ => {
@@ -116,8 +119,7 @@ impl MeilisearchHttpEngine {
         }
         Err(Error::Storage(format!(
             "meilisearch task {task_uid} did not reach terminal state within \
-             {TASK_POLL_MAX_ATTEMPTS} attempts ({}ms each)",
-            TASK_POLL_INTERVAL_MS
+             {TASK_POLL_MAX_ATTEMPTS} attempts ({TASK_POLL_INTERVAL_MS}ms each)"
         )))
     }
 
@@ -273,11 +275,13 @@ impl LexicalEngine for MeilisearchHttpEngine {
             .into_iter()
             .map(|mut hit| {
                 let id = hit.get("id").map(hit_id_to_string).unwrap_or_default();
+                // Meilisearch ranking scores are in [0.0, 1.0]; narrowing the
+                // f64 to the ScoredDoc f32 score loses no meaningful precision.
+                #[allow(clippy::cast_possible_truncation)]
                 let score = hit
                     .get("_rankingScore")
                     .and_then(Value::as_f64)
-                    .map(|value| value as f32)
-                    .unwrap_or(1.0);
+                    .map_or(1.0, |value| value as f32);
                 // Strip Meilisearch's reserved fields before returning
                 // the document to the caller.
                 if let Value::Object(map) = &mut hit {

@@ -69,7 +69,7 @@ impl WorkerJobStatus {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerJob {
     pub job_id: String,
     pub queue: String,
@@ -89,7 +89,7 @@ pub struct WorkerLease {
 
 /// A leased job paired with its full payload, so a worker process can execute
 /// the `OpEnvelope` without a second round trip to the queue.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeasedJob {
     pub lease: WorkerLease,
     pub job: WorkerJob,
@@ -101,7 +101,7 @@ pub struct EnqueueOutcome {
     pub inserted: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeadLetterRecord {
     pub job: WorkerJob,
     pub attempts: u32,
@@ -205,7 +205,7 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
     ) -> Result<Option<WorkerLease>> {
         validate_worker_id(worker_id)?;
         let now_ms = unix_epoch_millis()?;
-        self.reap_expired_leases_at(now_ms)?;
+        self.reap_expired_leases_at(now_ms);
 
         let Some(index) = self
             .records
@@ -271,7 +271,7 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
 
     fn reap_expired_leases(&mut self) -> Result<u64> {
         let now_ms = unix_epoch_millis()?;
-        self.reap_expired_leases_at(now_ms)
+        Ok(self.reap_expired_leases_at(now_ms))
     }
 
     fn dead_letters(&self) -> Vec<DeadLetterRecord> {
@@ -312,7 +312,7 @@ impl InMemoryWorkerQueue {
             .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()))
     }
 
-    fn reap_expired_leases_at(&mut self, now_ms: u64) -> Result<u64> {
+    fn reap_expired_leases_at(&mut self, now_ms: u64) -> u64 {
         let mut reaped = 0;
         for record in &mut self.records {
             if record.status != WorkerJobStatus::Leased {
@@ -338,7 +338,7 @@ impl InMemoryWorkerQueue {
                 record.status = WorkerJobStatus::Pending;
             }
         }
-        Ok(reaped)
+        reaped
     }
 }
 
@@ -676,7 +676,7 @@ impl SqliteWorkerQueue {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(row_to_dead_letter).collect()
+        rows.iter().map(row_to_dead_letter).collect()
     }
 
     /// # Errors
@@ -707,9 +707,9 @@ impl SqliteWorkerQueue {
 
         let mut stats = WorkerQueueStats::default();
         for row in rows {
-            let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+            let job_status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
             let count = i64_to_u64(row.get("count"), "count")?;
-            match status {
+            match job_status {
                 WorkerJobStatus::Pending => stats.pending = count,
                 WorkerJobStatus::Leased => stats.leased = count,
                 WorkerJobStatus::Completed => stats.completed = count,
@@ -1073,9 +1073,9 @@ impl PgWorkerQueue {
 
         let mut stats = WorkerQueueStats::default();
         for row in rows {
-            let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+            let job_status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
             let count = i64_to_u64(row.get("count"), "count")?;
-            match status {
+            match job_status {
                 WorkerJobStatus::Pending => stats.pending = count,
                 WorkerJobStatus::Leased => stats.leased = count,
                 WorkerJobStatus::Completed => stats.completed = count,
@@ -1259,9 +1259,9 @@ fn row_to_job(row: &SqliteRow) -> Result<WorkerJob> {
     })
 }
 
-fn row_to_dead_letter(row: SqliteRow) -> Result<DeadLetterRecord> {
+fn row_to_dead_letter(row: &SqliteRow) -> Result<DeadLetterRecord> {
     Ok(DeadLetterRecord {
-        job: row_to_job(&row)?,
+        job: row_to_job(row)?,
         attempts: i64_to_u32(row.get("attempts"), "attempts")?,
         last_error: row.get("last_error"),
         dead_lettered_at_ms: i64_to_u64(row.get("dead_lettered_at_ms"), "dead_lettered_at_ms")?,
@@ -1446,7 +1446,7 @@ impl JobHandler for DaemonJobHandler {
         let envelope = job.envelope.clone();
         // `submit_and_wait` is blocking std-TCP I/O; keep it off the async
         // runtime so the worker loop's timers/signals stay responsive.
-        let result = tokio::task::spawn_blocking(move || client.submit_and_wait(envelope))
+        let result = tokio::task::spawn_blocking(move || client.submit_and_wait(&envelope))
             .await
             .map_err(|error| format!("daemon dispatch task join error: {error}"))?;
         match result {

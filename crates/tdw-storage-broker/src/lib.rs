@@ -4,17 +4,17 @@
 //!
 //! Mirrors the recording/real split used by `tdw-storage-clickhouse`:
 //! - [`InMemoryBrokerSink`] is ALWAYS available. It serializes each row to a
-//!   JSONEachRow line (one Kafka message per row) and records the produced
+//!   `JSONEachRow` line (one Kafka message per row) and records the produced
 //!   `(topic, payload)` messages in memory, so the offline workspace test set
 //!   can assert what would be produced without a live broker.
 //! - [`RskafkaBrokerSink`] is gated behind `ingest-broker` and produces the
-//!   same JSONEachRow messages to a real Kafka topic via the pure-Rust
+//!   same `JSONEachRow` messages to a real Kafka topic via the pure-Rust
 //!   `rskafka` client (no librdkafka / C deps).
 //!
-//! The JSONEachRow framing is deliberate: the canonical downstream consumer is
-//! a ClickHouse `Kafka` table engine reading `kafka_format = 'JSONEachRow'`
+//! The `JSONEachRow` framing is deliberate: the canonical downstream consumer is
+//! a `ClickHouse` `Kafka` table engine reading `kafka_format = 'JSONEachRow'`
 //! (see `migrations/clickhouse/20260528_0006_kafka_ingest.sql`), so one message
-//! == one ClickHouse row.
+//! == one `ClickHouse` row.
 
 use std::sync::Mutex;
 
@@ -32,7 +32,7 @@ pub struct BrokerMessage {
 /// Always-available, in-memory broker sink for offline tests.
 ///
 /// Implements [`WriteSink<T>`] for any `T: DataModel`. `write_batch` serializes
-/// each row to a JSONEachRow line and stores the produced `(topic, payload)`
+/// each row to a `JSONEachRow` line and stores the produced `(topic, payload)`
 /// messages in a `Mutex<Vec<BrokerMessage>>`. No network I/O.
 #[derive(Debug)]
 pub struct InMemoryBrokerSink {
@@ -69,7 +69,7 @@ impl InMemoryBrokerSink {
     }
 }
 
-/// Serialize a batch into one JSONEachRow payload per row.
+/// Serialize a batch into one `JSONEachRow` payload per row.
 ///
 /// # Errors
 ///
@@ -104,6 +104,7 @@ impl<T: DataModel> WriteSink<T> for InMemoryBrokerSink {
                 payload,
             });
         }
+        drop(messages);
         Ok(WriteReceipt {
             sink: "broker-recording",
             rows_written,

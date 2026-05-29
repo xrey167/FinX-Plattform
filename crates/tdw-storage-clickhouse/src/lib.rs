@@ -73,7 +73,7 @@ fn validate_sql(sql: &str) -> Result<()> {
     Ok(())
 }
 
-/// Build an idempotent ClickHouse `INSERT … FORMAT JSONEachRow` statement for a
+/// Build an idempotent `ClickHouse` `INSERT … FORMAT JSONEachRow` statement for a
 /// batch of rows.
 ///
 /// The statement carries per-query `SETTINGS`:
@@ -88,10 +88,10 @@ fn validate_sql(sql: &str) -> Result<()> {
 ///   rows carry non-idempotent server defaults (e.g. a `DEFAULT now()` ingest
 ///   timestamp) that would otherwise defeat the content-hash dedup.
 ///
-/// Inserts are SYNCHRONOUS — deliberately NOT `async_insert`. ClickHouse 25.x
+/// Inserts are SYNCHRONOUS — deliberately NOT `async_insert`. `ClickHouse` 25.x
 /// rejects `async_insert` combined with
 /// `deduplicate_blocks_in_dependent_materialized_views` (Code 344,
-/// SUPPORT_IS_DISABLED), and the dependent-MV dedup correctness takes priority
+/// `SUPPORT_IS_DISABLED`), and the dependent-MV dedup correctness takes priority
 /// over server-side buffering. The ingest path already batches client-side
 /// (whole `OBBject`s), which is the documented-preferred strategy anyway, so
 /// async buffering buys little here.
@@ -133,7 +133,7 @@ insert_deduplication_token='{token}' FORMAT JSONEachRow\n",
 ///
 /// Keyed by the protocol idempotency coordinates `(session_id, sequence)` plus
 /// the destination `table`: a client retry that reuses the same session and
-/// sequence yields the same token, so ClickHouse drops the duplicate block
+/// sequence yields the same token, so `ClickHouse` drops the duplicate block
 /// rather than double-writing it (and double-counting it through any dependent
 /// materialized views).
 #[must_use]
@@ -146,7 +146,7 @@ pub fn ingest_dedup_token(session_id: &str, sequence: u64, table: &str) -> Strin
 /// Unlike [`ingest_dedup_token`], which keys on the protocol `(session_id,
 /// sequence)` coordinates, a streaming loop has no per-batch protocol sequence:
 /// a naive monotonic counter that restarts at 0 on process restart would reuse
-/// tokens for *different* batches and cause ClickHouse to silently drop new
+/// tokens for *different* batches and cause `ClickHouse` to silently drop new
 /// data. This token is instead derived from a deterministic hash of the batch's
 /// row content (serialized client-side, so the server-side `DEFAULT now64()`
 /// ingest timestamp does not perturb it). A retried identical batch hashes the
@@ -163,9 +163,9 @@ pub fn batch_dedup_token<T: DataModel>(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     batch.rows.len().hash(&mut hasher);
     for row in &batch.rows {
-        let line = serde_json::to_string(row)
-            .map_err(|error| Error::Storage(format!("clickhouse serialize row: {error}")))?;
-        line.hash(&mut hasher);
+        serde_json::to_string(row)
+            .map_err(|error| Error::Storage(format!("clickhouse serialize row: {error}")))?
+            .hash(&mut hasher);
     }
     Ok(format!("{session_id}:{table}:{:016x}", hasher.finish()))
 }
@@ -185,7 +185,7 @@ fn is_valid_identifier(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
 }
 
-/// Escape a string for safe interpolation inside a single-quoted ClickHouse SQL
+/// Escape a string for safe interpolation inside a single-quoted `ClickHouse` SQL
 /// literal.
 fn escape_ch_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
@@ -203,6 +203,7 @@ impl<T: DataModel> WriteSink<T> for ClickHouseRecordingEngine {
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?;
         *rows += batch.rows.len();
+        drop(rows);
         Ok(WriteReceipt {
             sink: "clickhouse-recording",
             rows_written: batch.rows.len(),

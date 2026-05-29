@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinX-Plattform — Status & Roadmap</title>
+<style>
+  :root{
+    --paper:#FBF9F4; --paper-2:#F3EEE4; --card:#FFFFFF;
+    --ink:#1B1714; --ink-2:#4A433C; --ink-3:#857C70;
+    --line:#E4DCCD; --line-2:#D6CCBA;
+    --accent:#C8553D; --accent-soft:#F6E4DD;
+    --done:#1E8449; --done-soft:#E4F2E9;
+    --flight:#B9770E; --flight-soft:#FBEFD8;
+    --open:#7A6CC0; --open-soft:#EEEAFB;
+    --hi:#C0392B; --med:#B9770E; --lo:#1E8449;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px; margin:0 auto; padding:0 28px}
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--accent); font-weight:600;
+  }
+  h1{font-family:var(--serif); font-weight:600; letter-spacing:-.01em;
+     font-size:54px; line-height:1.05; margin:.28em 0 .12em}
+  h2{font-family:var(--serif); font-weight:600; font-size:32px;
+     letter-spacing:-.01em; margin:0 0 6px}
+  h3{font-family:var(--serif); font-weight:600; font-size:21px; margin:0 0 4px}
+  p{margin:0 0 14px; color:var(--ink-2)}
+  .lede{font-size:19px; color:var(--ink-2); max-width:70ch}
+  a{color:var(--accent)}
+
+  /* layout rhythm */
+  header.hero{padding:84px 0 40px}
+  section{padding:56px 0; border-top:1px solid var(--line)}
+  .sec-head{margin-bottom:30px; max-width:74ch}
+  .sec-head .eyebrow{display:block; margin-bottom:8px}
+
+  /* prompt box */
+  .prompt{
+    border:1px solid var(--line-2); background:var(--paper-2);
+    border-radius:14px; padding:18px 22px; margin:26px 0 0; max-width:80ch;
+  }
+  .prompt .label{font-family:var(--mono); font-size:11px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--ink-3); margin-bottom:6px}
+  .prompt .text{font-family:var(--serif); font-size:18px; color:var(--ink); font-style:italic}
+
+  /* meta strip */
+  .meta{display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:24px;
+    font-family:var(--mono); font-size:12.5px; color:var(--ink-3)}
+  .meta b{color:var(--ink-2); font-weight:600}
+
+  /* stat cards */
+  .stats{display:grid; grid-template-columns:repeat(5,1fr); gap:14px}
+  .stat{background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:20px 18px}
+  .stat .n{font-family:var(--serif); font-size:38px; line-height:1; font-weight:600}
+  .stat .n.accent{color:var(--accent)}
+  .stat .n.good{color:var(--done)}
+  .stat .k{font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--ink-3); margin-top:10px}
+
+  /* tranche grid */
+  .tranches{display:grid; grid-template-columns:repeat(2,1fr); gap:12px}
+  .tr{display:grid; grid-template-columns:64px 1fr auto; align-items:center;
+    gap:14px; background:var(--card); border:1px solid var(--line);
+    border-radius:12px; padding:14px 16px}
+  .tr .code{font-family:var(--mono); font-weight:700; font-size:14px; color:var(--ink)}
+  .tr .what{font-size:14.5px; color:var(--ink-2); line-height:1.4}
+  .tr .what b{color:var(--ink); font-weight:600}
+  .badge{font-family:var(--mono); font-size:10.5px; letter-spacing:.07em;
+    text-transform:uppercase; font-weight:700; padding:5px 9px; border-radius:999px;
+    white-space:nowrap}
+  .b-done{background:var(--done-soft); color:var(--done)}
+  .b-flight{background:var(--flight-soft); color:var(--flight)}
+  .b-open{background:var(--open-soft); color:var(--open)}
+
+  /* diagram frame */
+  .frame{background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:26px; overflow-x:auto}
+  .frame svg{display:block; margin:0 auto; max-width:100%; height:auto}
+  .caption{font-family:var(--mono); font-size:12px; color:var(--ink-3);
+    text-align:center; margin-top:14px}
+
+  /* timeline */
+  .tl{position:relative; margin-left:8px; padding-left:34px}
+  .tl::before{content:""; position:absolute; left:7px; top:6px; bottom:6px;
+    width:2px; background:var(--line-2)}
+  .tl .node{position:relative; padding:0 0 26px}
+  .tl .node::before{content:""; position:absolute; left:-34px; top:3px;
+    width:16px; height:16px; border-radius:50%; background:var(--done);
+    border:3px solid var(--paper); box-shadow:0 0 0 1px var(--line-2)}
+  .tl .node.now::before{background:var(--accent)}
+  .tl .ver{font-family:var(--mono); font-size:12px; font-weight:700; color:var(--accent)}
+  .tl .node h3{margin-top:2px}
+  .tl .node p{font-size:14.5px; margin-bottom:0}
+
+  /* cards grid (gaps / questions) */
+  .grid2{display:grid; grid-template-columns:repeat(2,1fr); gap:16px}
+  .gap{background:var(--card); border:1px solid var(--line); border-left-width:4px;
+    border-radius:12px; padding:18px 20px}
+  .gap.hi{border-left-color:var(--hi)}
+  .gap.med{border-left-color:var(--med)}
+  .gap.lo{border-left-color:var(--lo)}
+  .gap .tag{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; font-weight:700; margin-bottom:8px}
+  .gap.hi .tag{color:var(--hi)} .gap.med .tag{color:var(--med)} .gap.lo .tag{color:var(--lo)}
+  .gap p{font-size:14.5px; margin:0}
+  .gap .crate{font-family:var(--mono); font-size:12px; color:var(--ink-3); margin-top:8px}
+
+  /* phases (next) */
+  .phase{background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:22px 24px; margin-bottom:14px}
+  .phase .head{display:flex; align-items:baseline; gap:14px; margin-bottom:6px}
+  .phase .p-id{font-family:var(--mono); font-weight:700; color:var(--accent); font-size:13px}
+  .phase ul{margin:10px 0 0; padding-left:20px}
+  .phase li{font-size:14.5px; color:var(--ink-2); margin-bottom:5px}
+  .phase li b{color:var(--ink); font-weight:600}
+  .dep{font-family:var(--mono); font-size:11.5px; color:var(--ink-3); margin-top:10px}
+
+  /* risk table */
+  table{width:100%; border-collapse:collapse; background:var(--card);
+    border:1px solid var(--line); border-radius:12px; overflow:hidden}
+  th,td{text-align:left; padding:13px 16px; font-size:14px; border-bottom:1px solid var(--line)}
+  th{font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--ink-3); background:var(--paper-2)}
+  tr:last-child td{border-bottom:none}
+  td.sev{white-space:nowrap}
+  .pill{font-family:var(--mono); font-size:10.5px; font-weight:700; padding:4px 9px;
+    border-radius:999px; letter-spacing:.06em}
+  .pill.hi{background:#F7E0DD; color:var(--hi)}
+  .pill.med{background:var(--flight-soft); color:var(--med)}
+  .pill.lo{background:var(--done-soft); color:var(--lo)}
+
+  /* code */
+  code{font-family:var(--mono); font-size:13px; background:var(--paper-2);
+    padding:1px 6px; border-radius:6px; color:var(--ink)}
+  pre{background:#1E1B17; color:#EDE6D8; border-radius:14px; padding:20px 22px;
+    overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.6; margin:0}
+  pre .c{color:#8C8475} pre .k{color:#E0A458} pre .s{color:#9CC089} pre .t{color:#7BB0C9}
+
+  footer{padding:40px 0 70px; color:var(--ink-3); font-family:var(--mono); font-size:12px}
+  @media (max-width:820px){
+    h1{font-size:40px}
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .tranches,.grid2{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">FinX-Plattform · Project Status &amp; Roadmap</span>
+    <h1>What&rsquo;s done, what&rsquo;s open,<br>and what comes next.</h1>
+    <p class="lede">The clean-room Rust trading-data-warehouse is a working vertical slice at <b>v0.6.0</b> — bootstrap through a live streaming warehouse and a long-running deployment profile. One wiring gap stands between &ldquo;it runs&rdquo; and &ldquo;it does work.&rdquo; This is the map from here to a 1.0 production gate.</p>
+
+    <div class="prompt">
+      <div class="label">The brief</div>
+      <div class="text">&ldquo;We need to plan what&rsquo;s still open, what&rsquo;s next, and what&rsquo;s needed for this project.&rdquo;</div>
+    </div>
+
+    <div class="meta">
+      <span><b>Version</b> v0.6.0 (2026-05-29)</span>
+      <span><b>Crates</b> 83 · all &ldquo;Ready w/ follow-ups&rdquo;</span>
+      <span><b>Storage</b> 5/5 real backends</span>
+      <span><b>License</b> personal · pre-1.0</span>
+      <span><b>Constraint</b> clean-room vs FinX-XR</span>
+    </div>
+  </div>
+</header>
+
+<!-- SUMMARY STRIP -->
+<section style="border-top:none; padding-top:8px">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><div class="n">83</div><div class="k">tdw-* crates</div></div>
+      <div class="stat"><div class="n good">5/5</div><div class="k">storage backends real</div></div>
+      <div class="stat"><div class="n good">v0.6.0</div><div class="k">shipped today</div></div>
+      <div class="stat"><div class="n">1/6</div><div class="k">providers live (Binance)</div></div>
+      <div class="stat"><div class="n accent">1</div><div class="k">blocker: no policy wired</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TRANCHE STATUS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">Where each tranche stands</span>
+      <h2>Status at a glance</h2>
+      <p>Work is organized into G-numbered tranches mapped to <code>work/&lt;topic&gt;</code> worktrees. Three are done, three are in flight, and the hardening gate (G008) plus the policy layer remain open.</p>
+    </div>
+    <div class="tranches">
+      <div class="tr"><span class="code">G001</span><span class="what"><b>Crate-readiness rubric + matrix</b> — 83 crates inventoried &amp; scored</span><span class="badge b-done">Done</span></div>
+      <div class="tr"><span class="code">G010</span><span class="what"><b>Production storage transports</b> — Postgres · S3 · ClickHouse · Qdrant · Meili</span><span class="badge b-done">Done</span></div>
+      <div class="tr"><span class="code">G014</span><span class="what"><b>Live backend + release packaging</b> — compose profiles, signed artifacts</span><span class="badge b-done">Done</span></div>
+      <div class="tr"><span class="code">—</span><span class="what"><b>Streaming warehouse</b> — ClickHouse raw tables, FlowField MVs, ref model</span><span class="badge b-done">Done</span></div>
+      <div class="tr"><span class="code">G011</span><span class="what"><b>Provider transports</b> — Binance live ✓; Yahoo in worktree; FRED/Alpaca/Polygon/HF thin</span><span class="badge b-flight">In flight</span></div>
+      <div class="tr"><span class="code">G013</span><span class="what"><b>Event-spine durability</b> — outbox · session · bus · snapshot on Pg+S3</span><span class="badge b-flight">In flight</span></div>
+      <div class="tr"><span class="code">G012</span><span class="what"><b>Anthropic LLM adapter</b> — worktree open, not landed</span><span class="badge b-flight">In flight</span></div>
+      <div class="tr"><span class="code">G002–G07</span><span class="what"><b>Per-tranche crate hardening</b> — replace &ldquo;follow-ups&rdquo; with evidence</span><span class="badge b-open">Open</span></div>
+      <div class="tr"><span class="code">Policy</span><span class="what"><b>Daemon policy layer</b> — service boots with none → ops return <code>Failed</code></span><span class="badge b-open">Open</span></div>
+      <div class="tr"><span class="code">G008</span><span class="what"><b>Aggregate production-readiness gate</b> — the road to 1.0</span><span class="badge b-open">Open</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE / DATA FLOW -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">The runtime today &amp; the gap</span>
+      <h2>One runtime, many shells — and the missing link</h2>
+      <p>CLI, TUI, MCP and the service all drive one <code>CommandRunner</code>. Live ingest flows end-to-end into ClickHouse. But dispatched <em>operations</em> hit a daemon with no policy attached, so they terminate as <code>Failed</code> before reaching the engines.</p>
+    </div>
+    <div class="frame">
+      <svg viewBox="0 0 920 470" role="img" aria-label="Architecture and data flow">
+        <defs>
+          <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 Z" fill="#857C70"/>
+          </marker>
+          <marker id="arrowR" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 Z" fill="#C0392B"/>
+          </marker>
+          <marker id="arrowG" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 Z" fill="#1E8449"/>
+          </marker>
+        </defs>
+        <style>
+          .box{fill:#fff;stroke:#D6CCBA;stroke-width:1.5;rx:11}
+          .lbl{font-family:ui-monospace,monospace;font-size:12.5px;fill:#1B1714;font-weight:600}
+          .sub{font-family:ui-monospace,monospace;font-size:10.5px;fill:#857C70}
+          .layer{font-family:ui-monospace,monospace;font-size:10px;fill:#857C70;letter-spacing:.12em}
+          .ok{fill:#E4F2E9;stroke:#1E8449}
+          .gap{fill:#F7E0DD;stroke:#C0392B;stroke-dasharray:6 4}
+          .flow{font-family:ui-monospace,monospace;font-size:10px;fill:#4A433C}
+        </style>
+
+        <!-- shells -->
+        <text x="40" y="32" class="layer">SHELLS</text>
+        <rect class="box" x="40"  y="42" width="120" height="42"/><text x="100" y="62" text-anchor="middle" class="lbl">tdw-cli</text><text x="100" y="76" text-anchor="middle" class="sub">command</text>
+        <rect class="box" x="172" y="42" width="120" height="42"/><text x="232" y="62" text-anchor="middle" class="lbl">tdw-mcp</text><text x="232" y="76" text-anchor="middle" class="sub">stdio · HTTP</text>
+        <rect class="box" x="304" y="42" width="120" height="42"/><text x="364" y="62" text-anchor="middle" class="lbl">tdw-tui</text><text x="364" y="76" text-anchor="middle" class="sub">terminal</text>
+        <rect class="box" x="436" y="42" width="150" height="42"/><text x="511" y="62" text-anchor="middle" class="lbl">tdw-worker</text><text x="511" y="76" text-anchor="middle" class="sub">Pg/SQLite queue</text>
+
+        <!-- runner -->
+        <text x="40" y="128" class="layer">RUNTIME</text>
+        <rect class="box" x="40" y="138" width="546" height="58"/>
+        <text x="313" y="162" text-anchor="middle" class="lbl">CommandRunner — resolve(domain, endpoint, provider)</text>
+        <text x="313" y="180" text-anchor="middle" class="sub">Fetcher::fetch() / Streamer::stream() → Stream&lt;ProgressOrResult&gt;</text>
+
+        <!-- daemon + policy gap -->
+        <rect class="box" x="620" y="42" width="260" height="154"/>
+        <text x="750" y="34" text-anchor="middle" class="layer">SERVICE / DAEMON</text>
+        <text x="750" y="68" text-anchor="middle" class="lbl">tdw-service (ADR-0012)</text>
+        <text x="750" y="84" text-anchor="middle" class="sub">OpEnvelope dispatch loop</text>
+        <rect class="box gap" x="650" y="104" width="200" height="68"/>
+        <text x="750" y="130" text-anchor="middle" class="lbl" fill="#C0392B">⚠ no Policy attached</text>
+        <text x="750" y="148" text-anchor="middle" class="sub">dispatched ops → Failed</text>
+        <text x="750" y="163" text-anchor="middle" class="sub">until a policy is wired</text>
+
+        <!-- providers -->
+        <text x="40" y="240" class="layer">PROVIDERS</text>
+        <rect class="box ok" x="40"  y="250" width="120" height="46"/><text x="100" y="270" text-anchor="middle" class="lbl">binance</text><text x="100" y="285" text-anchor="middle" class="sub">live ws ✓</text>
+        <rect class="box" x="172" y="250" width="120" height="46"/><text x="232" y="270" text-anchor="middle" class="lbl">yahoo</text><text x="232" y="285" text-anchor="middle" class="sub">worktree</text>
+        <rect class="box" x="304" y="250" width="282" height="46"/><text x="445" y="270" text-anchor="middle" class="lbl">fred · alpaca · polygon · huggingface</text><text x="445" y="285" text-anchor="middle" class="sub">thin — fetchers to harden</text>
+
+        <!-- storage -->
+        <text x="40" y="340" class="layer">STORAGE ENGINES &nbsp;(5/5 real, feature-gated)</text>
+        <rect class="box ok" x="40"  y="350" width="104" height="46"/><text x="92" y="370" text-anchor="middle" class="lbl">ClickHouse</text><text x="92" y="385" text-anchor="middle" class="sub">OLAP</text>
+        <rect class="box ok" x="156" y="350" width="104" height="46"/><text x="208" y="370" text-anchor="middle" class="lbl">Postgres</text><text x="208" y="385" text-anchor="middle" class="sub">relational</text>
+        <rect class="box ok" x="272" y="350" width="104" height="46"/><text x="324" y="370" text-anchor="middle" class="lbl">S3 / MinIO</text><text x="324" y="385" text-anchor="middle" class="sub">blob</text>
+        <rect class="box ok" x="388" y="350" width="104" height="46"/><text x="440" y="370" text-anchor="middle" class="lbl">Qdrant</text><text x="440" y="385" text-anchor="middle" class="sub">vector</text>
+        <rect class="box ok" x="504" y="350" width="104" height="46"/><text x="556" y="370" text-anchor="middle" class="lbl">Meili</text><text x="556" y="385" text-anchor="middle" class="sub">lexical</text>
+
+        <!-- warehouse -->
+        <rect class="box ok" x="650" y="320" width="230" height="104"/>
+        <text x="765" y="312" text-anchor="middle" class="layer">STREAMING WAREHOUSE ✓</text>
+        <text x="765" y="346" text-anchor="middle" class="lbl">raw.tick / trade / quote / book</text>
+        <text x="765" y="364" text-anchor="middle" class="sub">DateTime64(9) · ZSTD · TTL · dedup</text>
+        <text x="765" y="386" text-anchor="middle" class="lbl">FlowField MVs</text>
+        <text x="765" y="404" text-anchor="middle" class="sub">OHLC · VWAP · RSI · depth · sentiment</text>
+
+        <!-- flows -->
+        <line x1="100" y1="84" x2="100" y2="136" stroke="#857C70" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <line x1="232" y1="84" x2="232" y2="136" stroke="#857C70" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <line x1="364" y1="84" x2="364" y2="136" stroke="#857C70" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <line x1="511" y1="84" x2="430" y2="136" stroke="#857C70" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <!-- runner to daemon (blocked) -->
+        <line x1="586" y1="150" x2="648" y2="135" stroke="#C0392B" stroke-width="1.8" marker-end="url(#arrowR)"/>
+        <text x="600" y="128" class="flow" fill="#C0392B">dispatch ✗</text>
+        <!-- live ingest path (works) -->
+        <line x1="100" y1="296" x2="100" y2="348" stroke="#1E8449" stroke-width="1.8" marker-end="url(#arrowG)"/>
+        <text x="108" y="324" class="flow" fill="#1E8449">live ingest ✓</text>
+        <line x1="608" y1="373" x2="648" y2="373" stroke="#1E8449" stroke-width="1.8" marker-end="url(#arrowG)"/>
+        <!-- runner down to providers -->
+        <line x1="200" y1="196" x2="120" y2="248" stroke="#857C70" stroke-width="1.5" marker-end="url(#arrow)"/>
+      </svg>
+      <div class="caption">Green = working today · Red dashed = the policy gap blocking dispatched operations</div>
+    </div>
+  </div>
+</section>
+
+<!-- SHIPPED TIMELINE -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">What&rsquo;s already done</span>
+      <h2>The slice that shipped</h2>
+      <p>Six releases cut on the pre-1.0 cadence — each a coherent, user-visible layer of the warehouse.</p>
+    </div>
+    <div class="tl">
+      <div class="node"><div class="ver">v0.1.x</div><h3>Release packaging</h3><p>Multi-target signed binary archives + provenance attestations + scanned GHCR images for service / cli / mcp / worker.</p></div>
+      <div class="node"><div class="ver">v0.2.0</div><h3>Daemon runtime &amp; MCP surface</h3><p>ADR-0012 daemon, stateful MCP server over stdio + Streamable HTTP, durable worker schedulers (SQLite + Postgres), live data backend, test-policy ADR.</p></div>
+      <div class="node"><div class="ver">v0.3.0</div><h3>Supervised worker &amp; real UDF runtime</h3><p>Lease-loop worker, <code>wasmi</code> UDF engine with fuel/memory/deny-imports hardening, live backend expansion (ClickHouse + Qdrant + Meili), mutation/loom/fuzz policy.</p></div>
+      <div class="node"><div class="ver">v0.4.0</div><h3>Worker dispatch &amp; UDF ABI</h3><p>Worker dispatches jobs to the daemon; wasm string-in/string-out ABI; sandbox routes to the hardened runtime — UDF hardening scope closed.</p></div>
+      <div class="node"><div class="ver">v0.5.0</div><h3>Streaming ClickHouse warehouse</h3><p>Real persisting ingest, raw tick/trade/quote/book tables, the full FlowField materialized-view tier, a Postgres+ClickHouse reference-entity model, and an optional rskafka broker. Validated on ClickHouse 26.6 + PG 18.</p></div>
+      <div class="node now"><div class="ver">v0.6.0 · today</div><h3>End-to-end live ingest &amp; deployment surface</h3><p>Cancellable WS ingest draining to OLAP (restart-safe dedup), live Binance feed + RSI/volatility UDFs, Postgres-backed <code>--serve</code> worker, long-running services in the <code>live</code> profile, and hardened MCP/daemon exposure.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- WHAT'S OPEN -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">What&rsquo;s still open</span>
+      <h2>The gaps between &ldquo;runs&rdquo; and &ldquo;production&rdquo;</h2>
+      <p>Ordered by severity. The policy gap is the only thing stopping the deployed stack from executing real operations.</p>
+    </div>
+    <div class="grid2">
+      <div class="gap hi">
+        <div class="tag">High · blocker</div>
+        <h3>No policy attached to the daemon</h3>
+        <p><code>tdw-service</code> boots with no policy, so every dispatched <code>OpEnvelope</code> returns <code>Failed</code>. The live profile is up but functionally inert for dispatched work.</p>
+        <div class="crate">tdw-service · tdw-service-api · tdw-acp</div>
+      </div>
+      <div class="gap med">
+        <div class="tag">Medium</div>
+        <h3>Provider coverage is one-deep</h3>
+        <p>Only Binance has a live streamer. Yahoo sits in a worktree; FRED, Alpaca, Polygon and HuggingFace are thin fetchers (1 test each). G011 production transports are unfinished.</p>
+        <div class="crate">tdw-provider-{yahoo,fred,alpaca,polygon,huggingface}</div>
+      </div>
+      <div class="gap med">
+        <div class="tag">Medium</div>
+        <h3>Event-spine durability unfinished</h3>
+        <p>G013 durable outbox / session / bus / snapshot on top of <code>PgEngine</code>+<code>S3Engine</code> are still on open worktrees, not merged to main.</p>
+        <div class="crate">tdw-outbox · tdw-session · tdw-bus · tdw-snapshot</div>
+      </div>
+      <div class="gap med">
+        <div class="tag">Medium</div>
+        <h3>No crate is fully &ldquo;Ready&rdquo;</h3>
+        <p>All 83 crates read &ldquo;Ready with follow-ups.&rdquo; G002–G007 must convert baseline follow-ups into evidence before G008 — the aggregate production gate — can pass.</p>
+        <div class="crate">docs/quality/crate-readiness/matrix.md</div>
+      </div>
+      <div class="gap lo">
+        <div class="tag">Low · known follow-ups</div>
+        <h3>Deferred engine details</h3>
+        <p>ClickHouse parameter binding is deferred; Qdrant string-ID normalization (UUID v5) is a follow-up; Anthropic LLM adapter (G012) not landed.</p>
+        <div class="crate">tdw-storage-clickhouse · tdw-storage-qdrant · tdw-llm-anthropic</div>
+      </div>
+      <div class="gap lo">
+        <div class="tag">Low · hygiene</div>
+        <h3>Stale worktrees &amp; no 1.0 definition</h3>
+        <p>Several <code>g010-*</code> worktrees likely outlived their merged PRs and can be pruned. The version field is unbumped and &ldquo;1.0 / production-ready&rdquo; is undefined.</p>
+        <div class="crate">work/g010-* · salvage-ultraqa · stub-matrix</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHAT'S NEXT -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">What comes next</span>
+      <h2>Four phases to a production gate</h2>
+      <p>Sequenced by dependency, not calendar. Phase A unblocks everything downstream; the gate (G008) is the terminal node.</p>
+    </div>
+
+    <div class="phase">
+      <div class="head"><span class="p-id">Phase A</span><h3>Wire the policy layer</h3><span class="badge b-open" style="margin-left:auto">unblocks all</span></div>
+      <p>Make the deployed daemon actually execute dispatched operations.</p>
+      <ul>
+        <li>Define the <b>policy model</b>: what a policy authorizes (which ops, providers, storage targets) and where it&rsquo;s configured.</li>
+        <li>Attach a <b>default policy</b> at <code>tdw-service</code> boot so dispatched ops resolve instead of returning <code>Failed</code>.</li>
+        <li>Add an <b>end-to-end smoke</b>: dispatch → policy → CommandRunner → engine → event evidence, on the <code>live</code> profile.</li>
+      </ul>
+      <div class="dep">Depends on: nothing · Blocks: a usable live stack, the G008 gate</div>
+    </div>
+
+    <div class="phase">
+      <div class="head"><span class="p-id">Phase B</span><h3>Finish the event spine (G013)</h3></div>
+      <ul>
+        <li>Land the durable <b>outbox</b>, <b>session</b>, <b>bus</b>, and <b>snapshot</b> backends from their worktrees onto main.</li>
+        <li>Validate cross-store consistency on Postgres + S3 with the env-gated integration tests already scaffolded.</li>
+        <li>Prune the merged <code>g013-*</code> and <code>g010-*</code> worktrees as each PR lands.</li>
+      </ul>
+      <div class="dep">Depends on: Phase A (policy for dispatched persistence) · Parallelizable with Phase C</div>
+    </div>
+
+    <div class="phase">
+      <div class="head"><span class="p-id">Phase C</span><h3>Broaden providers (G011) &amp; the LLM adapter (G012)</h3></div>
+      <ul>
+        <li>Promote the <b>Yahoo</b> worktree fetcher to a production transport; harden <b>FRED / Alpaca / Polygon</b> per the transport-status pattern.</li>
+        <li>Land the <b>Anthropic LLM adapter</b> behind the <code>tdw-llm</code> interface (G012).</li>
+        <li>Pick the provider set that matters for personal use — don&rsquo;t harden all six on principle.</li>
+      </ul>
+      <div class="dep">Depends on: storage + runtime (done) · Independent of Phase B</div>
+    </div>
+
+    <div class="phase">
+      <div class="head"><span class="p-id">Phase D</span><h3>Crate hardening → G008 production gate → 1.0</h3></div>
+      <ul>
+        <li>Walk G002–G007: replace each crate&rsquo;s baseline <b>&ldquo;follow-ups&rdquo;</b> with real evidence; flip verdicts to <b>Ready</b>.</li>
+        <li>Resolve deferred details: ClickHouse param binding, Qdrant ID normalization, test-policy enforcement cadence.</li>
+        <li>Define and run <b>G008</b> — the aggregate gate — then cut the first <code>1.0</code> tag.</li>
+      </ul>
+      <div class="dep">Depends on: Phases A–C complete · Terminal node</div>
+    </div>
+  </div>
+</section>
+
+<!-- RISKS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">What could bite</span>
+      <h2>Risks &amp; mitigations</h2>
+    </div>
+    <table>
+      <tr><th style="width:34%">Risk</th><th class="sev">Severity</th><th>Mitigation</th></tr>
+      <tr>
+        <td>Policy model under-specified → ad-hoc auth wiring that&rsquo;s hard to undo</td>
+        <td class="sev"><span class="pill hi">High</span></td>
+        <td>Write a short policy ADR before code; ship a minimal default policy first, expand behind it.</td>
+      </tr>
+      <tr>
+        <td>Provider hardening sprawls across all six on principle, not need</td>
+        <td class="sev"><span class="pill med">Med</span></td>
+        <td>Personal-use project — pick 2–3 providers that you actually query; defer the rest as documented stubs.</td>
+      </tr>
+      <tr>
+        <td>&ldquo;Ready with follow-ups&rdquo; debt is unbounded → G008 never converges</td>
+        <td class="sev"><span class="pill med">Med</span></td>
+        <td>Triage each follow-up as <em>blocker</em> vs <em>deferrable</em> up front; G008 only gates on blockers.</td>
+      </tr>
+      <tr>
+        <td>Stale worktrees mask which branch is canonical</td>
+        <td class="sev"><span class="pill lo">Low</span></td>
+        <td><code>git worktree remove</code> + branch delete on every merge; audit the worktree list now.</td>
+      </tr>
+      <tr>
+        <td>Live-stack regressions invisible offline (Docker-gated tests)</td>
+        <td class="sev"><span class="pill lo">Low</span></td>
+        <td>CI integration job already runs the gated tests with containers — keep it green; add the Phase-A dispatch smoke to it.</td>
+      </tr>
+    </table>
+  </div>
+</section>
+
+<!-- OPEN QUESTIONS -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">Decisions that gate the plan</span>
+      <h2>Open questions</h2>
+      <p>Four calls shape sequencing. None block reading this plan; all block finishing Phase A or D.</p>
+    </div>
+    <div class="grid2">
+      <div class="gap hi">
+        <div class="tag">Decide first</div>
+        <h3>What is a &ldquo;policy&rdquo;?</h3>
+        <p>Allow-list of ops? Per-provider/per-storage authorization? Static config vs runtime-attached? This shapes all of Phase A.</p>
+        <div class="crate">Decide before: any policy code</div>
+      </div>
+      <div class="gap med">
+        <div class="tag">Decide for Phase D</div>
+        <h3>What does 1.0 / &ldquo;production-ready&rdquo; mean here?</h3>
+        <p>Which crates must reach full <b>Ready</b>, and which follow-ups are acceptable to ship with? This defines the G008 gate criteria.</p>
+        <div class="crate">Decide before: G008</div>
+      </div>
+      <div class="gap med">
+        <div class="tag">Decide for Phase C</div>
+        <h3>Which providers actually matter?</h3>
+        <p>For a personal-use warehouse, which feeds do you query — and which stay documented stubs?</p>
+        <div class="crate">Decide before: G011 hardening</div>
+      </div>
+      <div class="gap lo">
+        <div class="tag">Decide soon</div>
+        <h3>Prune the worktree fleet?</h3>
+        <p>Confirm which <code>g010-*</code> / salvage / stub-matrix worktrees are post-merge and safe to remove.</p>
+        <div class="crate">Decide before: Phase B cleanup</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    FinX-Plattform · status as of v0.6.0 (2026-05-29) · sources: CHANGELOG.md, crate-readiness/matrix.md, production-storage-transports.md, .plans master plan
+  </div>
+</footer>
+
+</body>
+</html>

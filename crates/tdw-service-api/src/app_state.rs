@@ -221,7 +221,7 @@ impl AppState {
     /// are not written. This is safe: each flushed batch carries a
     /// content-addressed `insert_deduplication_token` (a hash of the batch
     /// scoped to `session_id` + `table`), so re-ingesting the same source after
-    /// a restart deduplicates identical batches at the ClickHouse INSERT and
+    /// a restart deduplicates identical batches at the `ClickHouse` INSERT and
     /// does not double-count through the materialized views. The pipeline is
     /// therefore at-least-once: a dropped tail is re-fetched on restart, and
     /// any already-persisted batch dedups instead of duplicating.
@@ -369,7 +369,7 @@ fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
 }
 
 /// Select the OLAP engine. With the `real-clickhouse` feature enabled and
-/// `TDW_CLICKHOUSE_URL` set, the daemon talks to a live ClickHouse over HTTP
+/// `TDW_CLICKHOUSE_URL` set, the daemon talks to a live `ClickHouse` over HTTP
 /// (so the ingest/query path persists for real); otherwise the offline
 /// `ClickHouseRecordingEngine` is used. `TDW_CLICKHOUSE_USER` /
 /// `TDW_CLICKHOUSE_PASSWORD` are optional (default user, no password).
@@ -377,6 +377,9 @@ fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
 /// # Errors
 ///
 /// Returns an error if `TDW_CLICKHOUSE_URL` is set but cannot be parsed.
+// Real Err path exists behind `real-clickhouse` (ClickHouseHttpEngine::new(..)?);
+// only looks unwrappable in the default build, so keep the Result and the allow.
+#[allow(clippy::unnecessary_wraps)]
 fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
     #[cfg(feature = "real-clickhouse")]
     {

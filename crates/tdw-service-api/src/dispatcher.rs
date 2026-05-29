@@ -79,7 +79,7 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             tool_name,
             arguments,
             ..
-        } => dispatch_tool(policy, tool_name, arguments).await,
+        } => dispatch_tool(policy, tool_name, arguments),
         Op::StreamStart {
             provider,
             symbol,
@@ -256,7 +256,7 @@ async fn dispatch_ingest(
 
 /// Persist a fetched batch as an idempotent `INSERT … FORMAT JSONEachRow` and
 /// return the row count. The caller supplies the deduplication token (so a
-/// client retry of the same op is dropped by ClickHouse rather than
+/// client retry of the same op is dropped by `ClickHouse` rather than
 /// double-written, and double-counted through dependent materialized views).
 /// Routes through `state.olap` so the offline recording engine captures the
 /// statement in unit tests and the real `ClickHouseHttpEngine` issues it over
@@ -272,7 +272,7 @@ async fn persist_batch<T: tdw_core::DataModel>(
     Ok(object.rows.len())
 }
 
-async fn dispatch_tool(
+fn dispatch_tool(
     policy: &PolicyEnforcementConfig,
     tool_name: &str,
     arguments: &Value,

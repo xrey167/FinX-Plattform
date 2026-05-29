@@ -41,7 +41,7 @@ impl std::fmt::Debug for QdrantHttpEngine {
             .field("base_url", &self.base_url.as_str())
             .field("api_key", &self.api_key.as_ref().map(|_| "REDACTED"))
             .field("distance", &self.distance)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -51,6 +51,10 @@ impl QdrantHttpEngine {
     /// supply it for managed Qdrant deployments that require it.
     /// `distance` defaults to `Cosine`; pass `with_distance` to
     /// override (e.g. `"Euclid"` or `"Dot"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub fn new(endpoint: &str, api_key: Option<String>) -> Result<Self> {
         let base_url = Url::parse(endpoint)
             .map_err(|error| Error::Storage(format!("qdrant endpoint: {error}")))?;
@@ -70,6 +74,7 @@ impl QdrantHttpEngine {
     /// Override the vector distance metric used when this engine
     /// auto-creates a collection on first upsert. Valid Qdrant values
     /// are `"Cosine"`, `"Dot"`, and `"Euclid"`.
+    #[must_use]
     pub fn with_distance(mut self, distance: impl Into<String>) -> Self {
         self.distance = distance.into();
         self
@@ -94,6 +99,10 @@ impl QdrantHttpEngine {
     /// Public so deployment bootstrap (`tdw-bootstrap`) can pre-create a
     /// baseline collection instead of relying on lazy creation at first
     /// upsert.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
     pub async fn ensure_collection(&self, name: &str, vector_size: usize) -> Result<()> {
         if let Ok(seen) = self.ensured.lock()
             && seen.contains(name)

@@ -109,15 +109,9 @@ pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, 
     let mut events = Vec::new();
     let deadline = Duration::from_secs(5);
     let result = tokio::time::timeout(deadline, async {
-        loop {
-            match read_frame(&mut stream).await {
-                Ok(Some(bytes)) => {
-                    if let Ok(event) = serde_json::from_slice::<EventMsg>(&bytes) {
-                        events.push(event);
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => break,
+        while let Ok(Some(bytes)) = read_frame(&mut stream).await {
+            if let Ok(event) = serde_json::from_slice::<EventMsg>(&bytes) {
+                events.push(event);
             }
         }
     })
@@ -131,7 +125,9 @@ pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, 
 
 async fn write_frame(stream: &mut TcpStream, envelope: &OpEnvelope) -> Result<(), CliError> {
     let json = serde_json::to_vec(envelope).map_err(|e| format!("serialize envelope: {e}"))?;
-    let len = (json.len() as u32).to_be_bytes();
+    let len = u32::try_from(json.len())
+        .map_err(|_| "envelope length exceeds u32 frame".to_string())?
+        .to_be_bytes();
     stream
         .write_all(&len)
         .await

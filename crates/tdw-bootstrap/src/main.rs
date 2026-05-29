@@ -4,7 +4,7 @@
 //! Postgres schemas needed by the G013 durable-persistence crates,
 //! writes a marker object to the configured S3/MinIO bucket, and -
 //! when their endpoints are configured - creates a baseline schema in
-//! ClickHouse, Qdrant, and Meilisearch so the full search/OLAP/vector
+//! `ClickHouse`, Qdrant, and Meilisearch so the full search/OLAP/vector
 //! backend is reachable before any application service starts.
 //!
 //! Emits one structured JSON line per step on stdout, suitable for
