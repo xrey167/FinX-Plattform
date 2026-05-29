@@ -1007,10 +1007,10 @@ fn parse_http_header_section(header_text: &str) -> Result<ParsedHttpHead, Stream
 }
 
 fn streamable_http_config_from_env() -> StreamableHttpConfig {
-    match std::env::var("TDW_MCP_HTTP_TOKEN") {
-        Ok(token) => StreamableHttpConfig::new().with_auth_token(token),
-        Err(_) => StreamableHttpConfig::new(),
-    }
+    std::env::var("TDW_MCP_HTTP_TOKEN").map_or_else(
+        |_| StreamableHttpConfig::new(),
+        |token| StreamableHttpConfig::new().with_auth_token(token),
+    )
 }
 
 fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHttpConfig) -> bool {
@@ -1047,11 +1047,10 @@ fn origin_is_allowed(origin: &str) -> bool {
         return false;
     };
     let authority = rest.split('/').next().unwrap_or("");
-    let host = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        authority.split(':').next().unwrap_or("")
-    };
+    let host = authority.strip_prefix('[').map_or_else(
+        || authority.split(':').next().unwrap_or(""),
+        |rest| rest.split(']').next().unwrap_or(""),
+    );
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }
 
