@@ -136,7 +136,7 @@ impl AppState {
         Ok(self)
     }
 
-    /// Build an `AppState` backed by an in-memory SQLite database and a unique
+    /// Build an `AppState` backed by an in-memory `SQLite` database and a unique
     /// temporary JSONL rollout file. Suitable for unit tests.
     pub async fn in_memory_for_tests() -> Self {
         let mut config = TdwConfig::default();

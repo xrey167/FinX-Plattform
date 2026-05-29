@@ -1,4 +1,4 @@
-//! Integration test for the real ClickHouse backend.
+//! Integration test for the real `ClickHouse` backend.
 //!
 //! Gated two ways:
 //!   - Compiled only with `--features clickhouse` (no reqwest dep otherwise).

@@ -1,4 +1,4 @@
-//! Tests for the real HuggingFace text-generation HTTP fetcher.
+//! Tests for the real `HuggingFace` text-generation HTTP fetcher.
 //!
 //! Gated by `--features http` (no reqwest dep otherwise).
 //!

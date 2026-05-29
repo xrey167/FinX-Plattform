@@ -2,7 +2,7 @@
 //!
 //! Endpoints:
 //!   POST /op   — submit an `OpEnvelope` JSON body; responds 202 Accepted.
-//!   GET  /events — open SSE stream; emits `data: {event-json}\n\n` per EventMsg.
+//!   GET  /events — open SSE stream; emits `data: {event-json}\n\n` per `EventMsg`.
 //!
 //! No axum/hyper dependency; plain `tokio::net::TcpStream` IO only.
 

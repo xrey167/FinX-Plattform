@@ -630,7 +630,7 @@ fn outcomes_crate_label(root: &Path, path: &Path) -> String {
 /// Extract the per-crate counts cargo-mutants records in `outcomes.json`.
 ///
 /// cargo-mutants writes a top-level `outcomes` array where each entry has a
-/// `summary` string ("CaughtMutant", "MissedMutant", "Timeout", ...) and a
+/// `summary` string ("`CaughtMutant`", "`MissedMutant`", "Timeout", ...) and a
 /// `total_phases.*` / `phase_results` timing. We tolerate schema drift by
 /// counting on the `summary` field and summing any numeric `*_time` we find.
 fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Value {
