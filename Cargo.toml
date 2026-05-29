@@ -4,6 +4,11 @@ members = [
     "crates/*",
     "xtask",
 ]
+# `fuzz/` is a standalone cargo-fuzz crate (nightly-only, libfuzzer-sys) and is
+# intentionally excluded so the stable workspace build and default `cargo test`
+# never pull in a nightly toolchain (TEST-POLICY-004). Build it with
+# `cargo +nightly fuzz run <target>` from the `fuzz/` directory.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

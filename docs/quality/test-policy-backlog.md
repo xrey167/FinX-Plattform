@@ -106,8 +106,9 @@ Status: implemented.
 
 ### TEST-POLICY-004: Add Initial Fuzz Harnesses
 
-Status: stable half implemented (corpus-replay harnesses run in default `cargo
-test`); nightly cargo-fuzz half is a follow-up PR.
+Status: implemented (both halves). The stable corpus-replay harnesses run in
+default `cargo test`; the nightly cargo-fuzz layout (`fuzz/` crate + `fuzz-smoke`
+nightly CI job) reuses the same shims under `cargo +nightly fuzz`.
 
 - Stable implementation (this PR): each scoped crate exposes a
   `#[doc(hidden)] pub fn __fuzz_<name>(&[u8])` shim that runs the real parse and
@@ -126,9 +127,20 @@ test`); nightly cargo-fuzz half is a follow-up PR.
   - `tdw-exec::__fuzz_sql_guard` (`sql_guard` corpus) — read-only SQL guard.
   The shims are designed so a future nightly cargo-fuzz target (the follow-up
   half of this task) can call the same entry points.
-- Deferred (follow-up PR): the nightly `fuzz/` cargo-fuzz layout that reuses
-  these `__fuzz_*` shims under `cargo +nightly fuzz`, plus crash-reproducer
-  artifact capture.
+- Nightly implementation (follow-up PR): the `fuzz/` cargo-fuzz crate
+  (`tdw-fuzz`, `publish = false`, `[package.metadata] cargo-fuzz = true`) defines
+  one `libfuzzer-sys` target per surface that reuses these `__fuzz_*` shims:
+  `protocol_json`, `config_toml`, `mcp_jsonrpc`, `mcp_http`, `daemon_frame`, and
+  `sql_guard`. The crate is excluded from the stable workspace
+  (`[workspace] exclude = ["fuzz"]`) so the default build and `cargo test` never
+  pull in a nightly toolchain. Small seed corpora live under
+  `fuzz/corpus/<target>/`; runtime crash reproducers and the generated corpus are
+  git-ignored. Build/run a single target with `cargo +nightly fuzz run <target>`
+  from the `fuzz/` directory. The `fuzz-smoke` job in
+  `.github/workflows/nightly.yml` installs nightly + cargo-fuzz and runs each
+  target for a bounded smoke budget (`-runs=10000 -max_total_time=30`), uploading
+  `fuzz/artifacts/**` on failure. It is non-blocking and is not a required PR
+  check (not wired into `ci.yml`).
 
 - Scope:
   - `protocol_op_event_json` for `tdw-protocol` `OpEnvelope`, `EventMsg`, and
