@@ -276,6 +276,14 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
                 "../../../migrations/clickhouse/20260528_0019_analytics_rolling_vol_fixed_n.sql"
             ),
         },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0020",
+            name: "analytics_rsi_wilder_exact_udf",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0020_analytics_rsi_wilder_exact_udf.sql"
+            ),
+        },
     ]
 }
 
