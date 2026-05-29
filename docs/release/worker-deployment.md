@@ -21,16 +21,29 @@ Source of truth: `crates/tdw-worker/src/lib.rs` and `crates/tdw-worker/src/main.
 | `tdw-worker --serve` (supervised lease loop, Ctrl-C drain) | shipped (CLI) |
 | `tdw-worker --serve-once` (drain ready backlog, then exit) | shipped (CLI) |
 | `WorkerRunner` + `JobHandler` (generic over the backend) | shipped (library) |
-| Job business logic (the `JobHandler` impl) | **your code** - default is `LoggingAckHandler` |
+| `DaemonJobHandler` - submits each job's `OpEnvelope` to the daemon | shipped (library) |
+| `LoggingAckHandler` - offline ack (no execution) | shipped (library, the default) |
 | Metrics endpoint / alerting | **not shipped** - requirements below |
 
 `tdw-worker --serve` runs the lease loop over a `SqliteWorkerQueue` (file path
 from `TDW_WORKER_DB`, default `sqlite://tdw-worker.sqlite`) and drains in-flight
-work on Ctrl-C. The one thing you supply is the `JobHandler` that executes each
-job's `OpEnvelope`; the shipped default, `LoggingAckHandler`, acknowledges and
-completes each job so the loop, retry, and dead-letter wiring can be exercised
-end to end before real dispatch is plugged in. Tunables come from
-`TDW_WORKER_ID`, `TDW_WORKER_LEASE_TTL_MS`, and `TDW_WORKER_POLL_MS`.
+work on Ctrl-C. It picks one of two handlers:
+
+- **`DaemonJobHandler` (real execution)** - selected when daemon dispatch is
+  configured (`TDW_WORKER_DISPATCH=daemon`, or any of
+  `TDW_WORKER_DAEMON_ADDR` / `TDW_WORKER_DAEMON_TRANSPORT` set). It submits each
+  leased job's `OpEnvelope` to the configured daemon via `tdw-app-client`
+  (`tcp` default `127.0.0.1:7878`, `uds`, or `http-sse`;
+  `TDW_WORKER_DAEMON_TIMEOUT_MS` default 2000) and waits for the terminal event.
+  `Completed` completes the job; `Failed`/`Cancelled`/transport error fails it,
+  so the retry/dead-letter wiring applies. Unsupported endpoints (e.g. UDS on
+  Windows) fail closed at startup.
+- **`LoggingAckHandler` (offline default)** - used when no daemon dispatch is
+  configured; acknowledges and completes each job without executing it, so the
+  loop/retry/dead-letter wiring can be exercised offline.
+
+Tunables: `TDW_WORKER_ID`, `TDW_WORKER_LEASE_TTL_MS`, `TDW_WORKER_POLL_MS`, plus
+the `TDW_WORKER_DAEMON_*` set above.
 
 ## Backend contract (the numbers you deploy against)
 
@@ -143,9 +156,12 @@ table. Suggested signals:
 
 ## What this does NOT cover
 
-- The job business logic. `--serve` ships with `LoggingAckHandler`, which
-  acknowledges each job; wiring a `JobHandler` that dispatches the `OpEnvelope`
-  (e.g. through `tdw-app-client` to a daemon) is the remaining integration step.
+- Concurrency. The lease loop processes one job at a time;
+  `DaemonJobHandler` submits and waits per job. Parallel in-flight jobs are a
+  follow-up.
+- Result forwarding. `DaemonJobHandler` maps the daemon's terminal event to
+  job success/failure but does not persist or forward the daemon `result`
+  payload beyond that.
 - A Postgres-backed `--serve` mode. The lease loop is generic over `ServeQueue`
   (both backends implement it), but the CLI currently serves the SQLite backend;
   selecting `PgWorkerQueue` from the CLI is a small follow-up.
