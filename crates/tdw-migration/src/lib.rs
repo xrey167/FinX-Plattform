@@ -252,6 +252,14 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
             name: "fx_rates",
             sql: include_str!("../../../migrations/clickhouse/20260528_0016_fx_rates.sql"),
         },
+        Migration {
+            target: MigrationTarget::ClickHouse,
+            version: "20260528_0017",
+            name: "analytics_rsi_wilder",
+            sql: include_str!(
+                "../../../migrations/clickhouse/20260528_0017_analytics_rsi_wilder.sql"
+            ),
+        },
     ]
 }
 
