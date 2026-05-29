@@ -60,7 +60,7 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
         Op::RunQuery { sql, .. } => dispatch_run_query(state, policy, sql).await,
         Op::IngestBatch {
             provider, endpoint, ..
-        } => dispatch_ingest(state, policy, provider, endpoint).await,
+        } => dispatch_ingest(state, policy, env, provider, endpoint).await,
         Op::ToolCall {
             tool_name,
             arguments,
@@ -95,6 +95,7 @@ async fn dispatch_run_query(
 async fn dispatch_ingest(
     state: &AppState,
     policy: &PolicyEnforcementConfig,
+    env: &OpEnvelope,
     provider: &str,
     endpoint: &str,
 ) -> Result<Value> {
@@ -103,24 +104,18 @@ async fn dispatch_ingest(
         enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
     let runner = CommandRunner::new((*state.registry).clone());
     let params = json!({ "symbol": "AAPL" });
-    let summary = match (provider, endpoint) {
+    // Persist into a bronze landing table keyed by (provider, endpoint). The
+    // provider row shape is written verbatim via JSONEachRow; normalization to
+    // `raw.market_data_bar` is a downstream (silver) concern. Previously this
+    // path fetched the batch and discarded it — the write below closes that gap.
+    let written = match (provider, endpoint) {
         ("fileset", "equity_historical") => {
             let object = runner.run(&FilesetEquityHistoricalFetcher, params).await?;
-            json!({
-                "evidence": evidence,
-                "provider": object.provider,
-                "endpoint": object.endpoint,
-                "rows": object.rows.len(),
-            })
+            persist_batch(state, env, "raw.equity_historical", &object).await?
         }
         ("yahoo", "equity_historical") => {
             let object = runner.run(&YahooEquityHistoricalFetcher, params).await?;
-            json!({
-                "evidence": evidence,
-                "provider": object.provider,
-                "endpoint": object.endpoint,
-                "rows": object.rows.len(),
-            })
+            persist_batch(state, env, "raw.equity_historical", &object).await?
         }
         (provider, endpoint) => {
             return Err(Error::Provider(format!(
@@ -128,7 +123,53 @@ async fn dispatch_ingest(
             )));
         }
     };
-    Ok(mask_json_response(summary, &policy.mask_rules))
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "provider": written.provider,
+            "endpoint": written.endpoint,
+            "table": written.table,
+            "rows": written.rows_written,
+            "dedup_token": written.dedup_token,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Outcome of persisting a fetched batch to the OLAP engine.
+struct WriteSummary {
+    provider: String,
+    endpoint: String,
+    table: String,
+    rows_written: usize,
+    dedup_token: String,
+}
+
+/// Persist a fetched batch as an idempotent `INSERT … FORMAT JSONEachRow`.
+///
+/// The deduplication token is derived from the protocol idempotency coordinates
+/// `(session_id, sequence)` so a client retry of the same op is dropped by
+/// ClickHouse instead of being double-written (and double-counted through any
+/// dependent materialized views). Routes through `state.olap` so the offline
+/// recording engine captures the statement in unit tests and the real
+/// `ClickHouseHttpEngine` issues it over HTTP in integration.
+async fn persist_batch<T: tdw_core::DataModel>(
+    state: &AppState,
+    env: &OpEnvelope,
+    table: &str,
+    object: &tdw_core::OBBject<T>,
+) -> Result<WriteSummary> {
+    let token =
+        tdw_storage_clickhouse::ingest_dedup_token(env.session_id.as_str(), env.sequence, table);
+    let insert = tdw_storage_clickhouse::build_insert_jsoneachrow(table, object, &token)?;
+    state.olap.execute(&insert).await?;
+    Ok(WriteSummary {
+        provider: object.provider.clone(),
+        endpoint: object.endpoint.clone(),
+        table: table.to_string(),
+        rows_written: object.rows.len(),
+        dedup_token: token,
+    })
 }
 
 async fn dispatch_tool(
@@ -324,6 +365,62 @@ mod tests {
                 assert_eq!(value["shutdown"], "requested");
             }
             other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_persists_and_reports_dedup_token() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "yahoo".to_string(),
+            endpoint: "equity_historical".to_string(),
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "yahoo");
+                assert_eq!(value["endpoint"], "equity_historical");
+                assert_eq!(value["table"], "raw.equity_historical");
+                assert!(
+                    value["rows"].as_u64().expect("rows count") >= 1,
+                    "expected at least one persisted row, got {value}"
+                );
+                // Token is keyed by (session_id, sequence, table) so a retry is
+                // de-duplicated by ClickHouse rather than double-written.
+                assert_eq!(value["dedup_token"], "session-test:1:raw.equity_historical");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_unsupported_provider_fails() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "nope".to_string(),
+            endpoint: "equity_historical".to_string(),
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("unsupported ingest provider/endpoint"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
         }
     }
 }

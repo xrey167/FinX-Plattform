@@ -1,0 +1,28 @@
+[package]
+name = "tdw-provider-ws"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+# Enables the live websocket subscribe path (tokio-tungstenite). Off by
+# default so the workspace test set stays offline; `decode_frame`, `snapshot`
+# and `registry_entry` are always available without opening a socket.
+ws = ["dep:tokio-tungstenite", "dep:tokio", "dep:futures-util"]
+
+[dependencies]
+async-trait = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true, optional = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-domain = { workspace = true }
+tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+
+[lints]
+workspace = true

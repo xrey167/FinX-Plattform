@@ -4,6 +4,7 @@ mod app_state;
 mod dispatcher;
 mod event_sink;
 mod policy;
+mod stream_ingest;
 
 pub use app_state::AppState;
 pub use dispatcher::dispatch_op;
@@ -14,6 +15,7 @@ pub use policy::{
     secure_endpoint_response_with_backend, secure_udf_run, secure_udf_run_with_backend,
     service_hook_policy,
 };
+pub use stream_ingest::run_stream_ingest;
 
 use std::collections::BTreeMap;
 use std::future::Future;
