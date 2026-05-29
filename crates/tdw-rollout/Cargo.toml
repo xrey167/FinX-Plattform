@@ -5,9 +5,16 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[features]
+## Postgres-backed `PgRollout` sink (in addition to the default `JsonlRollout`).
+## Pulls in `tdw-core` for the `RelationalEngine` trait; the concrete engine
+## (e.g. `PgEngine`) is supplied by the caller, so no driver dep lands here.
+postgres = ["dep:tdw-core"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-core = { workspace = true, optional = true }
 tdw-protocol = { workspace = true }
 thiserror = { workspace = true }
 

@@ -9,6 +9,10 @@ license = "MIT OR Apache-2.0"
 default = []
 transport-http = ["tdw-app-server/transport-http"]
 transport-uds = ["tdw-app-server/transport-uds"]
+## Postgres-back the daemon's session/rollout stores (forwards to
+## `tdw-service-api/daemon-postgres`). Selected at runtime via `TDW_DAEMON_PG_URL`
+## / `DATABASE_URL`; built into the `live` compose daemon image.
+daemon-postgres = ["tdw-service-api/daemon-postgres"]
 
 [dependencies]
 serde_json = { workspace = true }

@@ -30,8 +30,9 @@ use tdw_core::{
     QueryParams, RelationalEngine, Result, Streamer, VectorEngine,
 };
 use tdw_outbox::InMemoryOutbox;
-use tdw_rollout::JsonlRollout;
-use tdw_session::SqliteSessionStore;
+use tdw_protocol::SessionId;
+use tdw_rollout::{JsonlRollout, RolloutRecord};
+use tdw_session::{CostLedgerEntry, SessionError, SessionRecord, SqliteSessionStore};
 use tdw_snapshot::SnapshotStore;
 use tdw_storage_clickhouse::ClickHouseRecordingEngine;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
@@ -45,6 +46,108 @@ const DEFAULT_BUS_CAPACITY: usize = 1024;
 const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
 const LOCAL_POLICY_AUDIENCE: &str = "tdw-daemon";
 const LOCAL_POLICY_KID: &str = "local-dev";
+
+/// Daemon session store backend.
+///
+/// `Sqlite` is the always-available default (in-memory or file). `Pg` is
+/// selected at runtime in the `live` stack when the `daemon-postgres` feature
+/// is built and a Postgres URL is configured, so the cost ledger / session rows
+/// survive container restarts. Only the methods the daemon actually drives
+/// (`upsert_session`, `append_cost`, `cost_entries`) are exposed; both arms are
+/// unified onto [`tdw_core::Error`].
+#[derive(Clone)]
+pub enum SessionBackend {
+    Sqlite(SqliteSessionStore),
+    #[cfg(feature = "daemon-postgres")]
+    Pg(tdw_session::PgSessionStore),
+}
+
+impl SessionBackend {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn upsert_session(&self, record: &SessionRecord) -> Result<()> {
+        match self {
+            Self::Sqlite(store) => store
+                .upsert_session(record)
+                .await
+                .map_err(session_storage_err),
+            #[cfg(feature = "daemon-postgres")]
+            Self::Pg(store) => store.upsert_session(record).await,
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<()> {
+        match self {
+            Self::Sqlite(store) => store.append_cost(entry).await.map_err(session_storage_err),
+            #[cfg(feature = "daemon-postgres")]
+            Self::Pg(store) => store.append_cost(entry).await,
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn cost_entries(&self, session_id: &SessionId) -> Result<Vec<CostLedgerEntry>> {
+        match self {
+            Self::Sqlite(store) => store
+                .cost_entries(session_id)
+                .await
+                .map_err(session_storage_err),
+            #[cfg(feature = "daemon-postgres")]
+            Self::Pg(store) => store.cost_entries(session_id).await,
+        }
+    }
+}
+
+/// Daemon rollout (replay/audit) backend.
+///
+/// `Jsonl` is the always-available default (a local JSONL file). `Pg` mirrors
+/// it into a Postgres table when the `daemon-postgres` feature is built and a
+/// Postgres URL is configured, so rollout survives container restarts. Methods
+/// are async (the `Pg` arm awaits the DB; the `Jsonl` arm is sync underneath).
+#[derive(Clone)]
+pub enum RolloutBackend {
+    Jsonl(JsonlRollout),
+    #[cfg(feature = "daemon-postgres")]
+    Pg(tdw_rollout::PgRollout),
+}
+
+impl RolloutBackend {
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn append(&self, record: &RolloutRecord) -> Result<()> {
+        match self {
+            Self::Jsonl(rollout) => rollout
+                .append(record)
+                .map_err(|error| Error::Storage(error.to_string())),
+            #[cfg(feature = "daemon-postgres")]
+            Self::Pg(rollout) => rollout.append(record).await,
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn read_all(&self) -> Result<Vec<RolloutRecord>> {
+        match self {
+            Self::Jsonl(rollout) => rollout
+                .read_all()
+                .map_err(|error| Error::Storage(error.to_string())),
+            #[cfg(feature = "daemon-postgres")]
+            Self::Pg(rollout) => rollout.read_all().await,
+        }
+    }
+}
+
+/// Map a `tdw-session` error onto the unified [`tdw_core::Error`].
+fn session_storage_err(error: SessionError) -> Error {
+    Error::Storage(error.to_string())
+}
 
 /// Handle to a running streaming-ingest task.
 ///
@@ -74,8 +177,8 @@ pub struct AppState {
     pub outbox: Arc<Mutex<InMemoryOutbox>>,
     pub snapshot: Arc<Mutex<SnapshotStore>>,
     pub policy: Option<PolicyEnforcementConfig>,
-    pub session: SqliteSessionStore,
-    pub rollout: JsonlRollout,
+    pub session: SessionBackend,
+    pub rollout: RolloutBackend,
     /// Live streaming-ingest tasks keyed by `stream_id`. Shared by reference
     /// across `AppState` clones (the daemon clones `AppState` per connection),
     /// so a stream started on one clone is visible to `stop_stream` on another.
@@ -97,10 +200,7 @@ impl AppState {
     ///
     /// Returns an error variant if the underlying operation fails.
     pub async fn from_config(config: TdwConfig) -> Result<Self> {
-        let session = SqliteSessionStore::connect(&config.session.sqlite_path)
-            .await
-            .map_err(|e| tdw_core::Error::Storage(format!("session store: {e}")))?;
-        let rollout = JsonlRollout::new(&config.paths.rollout_dir);
+        let (session, rollout) = build_durable_stores(&config).await?;
 
         let blob: Arc<dyn BlobEngine> = select_blob_engine(&config);
         let policy = build_policy(&config);
@@ -393,6 +493,54 @@ fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
         }
     }
     Ok(Arc::new(ClickHouseRecordingEngine::default()))
+}
+
+/// Build the daemon's session + rollout stores.
+///
+/// Default (and the only path without the `daemon-postgres` feature): a SQLite
+/// session store and a JSONL rollout file, exactly as before. With
+/// `daemon-postgres` built **and** a Postgres URL configured (`TDW_DAEMON_PG_URL`
+/// or `DATABASE_URL`), both stores are Postgres-backed instead so they survive
+/// container restarts in the `live` stack; their schemas are created on connect.
+async fn build_durable_stores(config: &TdwConfig) -> Result<(SessionBackend, RolloutBackend)> {
+    #[cfg(feature = "daemon-postgres")]
+    if let Some(url) = daemon_pg_url() {
+        let engine = tdw_storage_postgres::PgEngine::connect(&url)
+            .await
+            .map_err(|e| Error::Storage(format!("daemon pg connect: {e}")))?;
+
+        let session = tdw_session::PgSessionStore::new(engine.clone());
+        session.ensure_schema().await?;
+
+        let rollout =
+            tdw_rollout::PgRollout::new(Arc::new(engine) as Arc<dyn tdw_core::RelationalEngine>);
+        rollout.ensure_schema().await?;
+
+        return Ok((SessionBackend::Pg(session), RolloutBackend::Pg(rollout)));
+    }
+
+    let session = SqliteSessionStore::connect(&config.session.sqlite_path)
+        .await
+        .map_err(|e| Error::Storage(format!("session store: {e}")))?;
+    let rollout = JsonlRollout::new(&config.paths.rollout_dir);
+    Ok((
+        SessionBackend::Sqlite(session),
+        RolloutBackend::Jsonl(rollout),
+    ))
+}
+
+/// Resolve the daemon's own Postgres URL from the environment, preferring the
+/// dedicated `TDW_DAEMON_PG_URL` over a shared `DATABASE_URL`. Returns `None`
+/// when neither is set (non-empty), keeping the SQLite/JSONL default.
+#[cfg(feature = "daemon-postgres")]
+fn daemon_pg_url() -> Option<String> {
+    ["TDW_DAEMON_PG_URL", "DATABASE_URL"]
+        .into_iter()
+        .find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
 }
 
 /// Build the daemon policy from config.

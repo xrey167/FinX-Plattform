@@ -282,7 +282,7 @@ async fn run_e2e(url: String) {
 
     // Rollout archive: the service loop appends frames during dispatch. At
     // least the RunQuery cycle (Started + Completed) should be there.
-    let rollout_records = state.rollout.read_all().expect("rollout read_all");
+    let rollout_records = state.rollout.read_all().await.expect("rollout read_all");
     assert!(
         rollout_records.len() >= 2,
         "rollout archive must contain at least 2 frames (Started + Completed for RunQuery); got {}",

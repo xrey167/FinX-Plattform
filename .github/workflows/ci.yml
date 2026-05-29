@@ -40,6 +40,12 @@ jobs:
       - run: cargo clippy -p tdw-udf-wasm --features wasmi --all-targets -- -D warnings
       - run: cargo clippy -p tdw-sandbox --features udf-wasm --all-targets -- -D warnings
       - run: cargo clippy -p tdw-service-api --features udf-wasm --all-targets -- -D warnings
+      # Postgres-backed daemon session/rollout stores are likewise opt-in: compile
+      # the feature here so a change cannot silently break the PG store path
+      # (runtime is exercised by the Docker-gated integration tests).
+      - run: cargo clippy -p tdw-rollout --features postgres --all-targets -- -D warnings
+      - run: cargo clippy -p tdw-service-api --features daemon-postgres --all-targets -- -D warnings
+      - run: cargo clippy -p tdw-service --features daemon-postgres --all-targets -- -D warnings
       - run: cargo test -p tdw-udf-wasm --features wasmi
       - run: cargo test -p tdw-sandbox --features udf-wasm
       - run: cargo deny check

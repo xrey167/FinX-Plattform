@@ -54,6 +54,7 @@ impl EventSink for AppState {
         };
         self.rollout
             .append(&record)
+            .await
             .map_err(|e| SinkError(format!("rollout append: {e}")))?;
 
         Ok(())
@@ -194,6 +195,7 @@ mod tests {
         let rollout_records = state
             .rollout
             .read_all()
+            .await
             .unwrap_or_else(|e| panic!("rollout read_all: {e}"));
         assert_eq!(rollout_records.len(), 2, "rollout must have 2 records");
     }

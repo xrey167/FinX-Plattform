@@ -157,17 +157,27 @@ services:
     # to the host: the daemon transport is unauthenticated + plaintext, so it
     # stays internal-only. (To reach it from the host for debugging, attach to
     # the compose network or add a temporary `ports:` override locally.)
-    image: finx-plattform/tdw-service:local
+    # Built with --features daemon-postgres so the daemon's own session/rollout
+    # stores are Postgres-backed (durable across restarts), selected at runtime
+    # via TDW_DAEMON_PG_URL. Distinct image tag from the `full`-profile
+    # tdw-service (which builds without features).
+    image: finx-plattform/tdw-service:local-pg
     build:
       context: .
       dockerfile: docker/tdw-service.Dockerfile
+      args:
+        FEATURES: daemon-postgres
     profiles: ["live"]
     depends_on:
+      postgres:
+        condition: service_healthy
       tdw-bootstrap:
         condition: service_completed_successfully
     environment:
       TDW_PROFILE: docker
       TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
+      # Postgres-back the daemon's session + rollout stores in live.
+      TDW_DAEMON_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
     restart: unless-stopped
 
   tdw-mcp-serve:
