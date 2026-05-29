@@ -64,7 +64,7 @@ impl<T: DataModel> WriteSink<T> for StorageRouter<T> {
         for sink in &self.sinks {
             match sink.health_check().await? {
                 HealthStatus::Healthy => {}
-                status => return Ok(status),
+                status @ HealthStatus::Degraded(_) => return Ok(status),
             }
         }
         Ok(HealthStatus::Healthy)
