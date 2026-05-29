@@ -5,7 +5,18 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+## Enables the real `wasmi`-backed UDF runtime (`execute_wasm_i64`) with fuel
+## metering, memory limits, and deny-by-default host imports. Off by default so
+## the deterministic fixture path stays the offline test default.
+wasmi = ["dep:wasmi"]
+
 [dependencies]
+wasmi = { workspace = true, optional = true }
+
+[dev-dependencies]
+wat = "1"
 
 [lints]
 workspace = true
