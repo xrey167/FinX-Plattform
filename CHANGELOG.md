@@ -12,6 +12,45 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.5.0] - 2026-05-29
+
+Adds a streaming market-data warehouse on ClickHouse. The 9 commits in
+`v0.4.0..HEAD` include a major new ingest/analytics feature, so per the pre-1.0
+policy this is a `MINOR` release.
+
+### Added
+
+- **Streaming market-data warehouse on ClickHouse** (#87). Real streaming
+  ingest that persists (`dispatch_ingest` now writes the fetched batch with an
+  idempotent `async_insert` + dedup-token helper), a `tdw-provider-ws`
+  tokio-tungstenite streamer, and raw tables (`raw.tick`/`trade`/`quote`/
+  `book_level` with `DateTime64(9)`, DoubleDelta+ZSTD codecs, `LowCardinality`
+  dims, monthly partitions, TTL, dedup windows). A tier of always-fresh
+  "FlowField" incremental materialized views (`AggregatingMergeTree` + reader
+  views): OHLC 1m/5m/1h/1d (per-venue + consolidated), VWAP, daily return, top
+  movers, trailing 52w high/low and 30d volatility, quote mid/spread, book
+  best-bid/ask + depth + imbalance, daily news sentiment, and technical
+  indicators. A reference-entity model (Postgres master + ClickHouse
+  dictionaries for `dictGet` enrichment: symbol info, trading calendar,
+  corporate actions, FX rates). Optional `tdw-storage-broker` (feature-gated
+  pure-Rust `rskafka` write sink + Kafka-engine consumer migrations). Validated
+  against live ClickHouse 26.6 + PostgreSQL 18.
+
+### Changed
+
+- **CI** now lints and tests the opt-in UDF runtime features
+  (`tdw-udf-wasm --features wasmi`, `tdw-sandbox`/`tdw-service-api --features
+  udf-wasm`), closing a blind spot where those paths were never built in the
+  default matrix; `dependabot.yml` ignores wasmi semver-major bumps (#97).
+- **Dependency bumps**: `aws-sdk-s3` 1.133→1.134 (#96), `uuid` 1.23.1→1.23.2
+  (#98), and GitHub Actions `setup-buildx`/`upload-artifact`/`download-artifact`/
+  `login-action`/`attest-build-provenance` (#90–#94).
+
+### Notes
+
+- `Cargo.toml` keeps `publish = false`; the workspace `version` field is not
+  bumped per release (releases are tag-driven).
+
 ## [0.4.0] - 2026-05-29
 
 Runtime follow-ups on top of `v0.3.0`: the worker now executes real work, and
@@ -183,7 +222,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.1.1...v0.2.0
