@@ -12,6 +12,49 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.7.0] - 2026-05-30
+
+Daemon hardening and durability follow-ups. The commits in `v0.6.0..HEAD`
+include four user-visible runtime/storage changes, so per the pre-1.0 policy
+this is a `MINOR` release.
+
+### Added
+
+- **Per-request WASM limits** (#110). `UdfRequest` gains an optional
+  `wasm_limits` (`WasmLimitsRequest { fuel, max_memory_bytes, max_memories }`)
+  so a caller can give an untrusted UDF a smaller fuel/memory budget per call.
+  Values can only **tighten** a limit — they are clamped to the runtime default
+  ceiling, never raised above it — so this is a budget knob, not a DoS lever.
+  The field is serde-default + skip, so existing `udf.run` payloads
+  deserialize/serialize unchanged.
+- **Postgres-backed daemon session + rollout stores** (#112). New
+  `daemon-postgres` feature plus `SessionBackend` / `RolloutBackend` enums on
+  `AppState` and a new `tdw_rollout::PgRollout`. With the feature built **and**
+  `TDW_DAEMON_PG_URL` (or `DATABASE_URL`) set, the daemon's session/cost ledger
+  and rollout archive persist to Postgres instead of SQLite + a JSONL file, so
+  they survive container restarts. Wired into the `live` compose daemon (image
+  built `--features daemon-postgres`); default builds are unchanged.
+- **Worker concurrency** (#111). `ServeConfig.max_concurrent` +
+  `TDW_WORKER_CONCURRENCY` let `tdw-worker --serve` drive up to N in-flight jobs
+  at once via `FuturesUnordered` (no extra threads). Default `1` preserves
+  strictly serial behavior; shutdown stops new leases and drains in-flight work.
+  The `live` worker runs at concurrency 4.
+
+### Changed
+
+- **Daemon honors `TDW_PROFILE`** (#109). `tdw-service` `load_config` now
+  applies the `TDW_PROFILE` env var (e.g. the `live` stack's `docker`), so the
+  profile-driven local policy attaches as intended and live dispatches resolve
+  instead of failing closed. The startup log reports the actual attached-policy
+  state rather than a fixed "no policy" message.
+
+### Internal
+
+- Multi-session git guardrails: pre-push hook + house-rules doc (#107); removal
+  of files accidentally committed in #106 (#108); clippy pedantic/nursery
+  warning cleanup 301 → 14 (#106). CI lint now also compile-checks the
+  `daemon-postgres` Postgres store paths.
+
 ## [0.6.0] - 2026-05-29
 
 Live streaming ingest plus the full long-running deployment surface. The 5
@@ -263,7 +306,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...v0.4.0
