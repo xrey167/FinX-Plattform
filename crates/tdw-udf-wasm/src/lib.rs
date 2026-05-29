@@ -12,9 +12,18 @@
 //!
 //! # Hardened — real `wasmi` backend (feature `wasmi`)
 //!
-//! With the `wasmi` feature enabled, [`WasmUdfRuntime::execute_wasm_i64`] runs a
-//! real WebAssembly module through the pure-Rust `wasmi` interpreter under
-//! explicit [`WasmLimits`]:
+//! With the `wasmi` feature enabled, the runtime runs a real WebAssembly module
+//! through the pure-Rust `wasmi` interpreter under explicit [`WasmLimits`]:
+//!
+//! - [`WasmUdfRuntime::execute_wasm_i64`] — an `(i64) -> i64` export.
+//! - [`WasmUdfRuntime::execute_wasm_string`] — a string-in/string-out export
+//!   over a linear-memory ABI (guest exports `memory` + `alloc(i32)->i32` +
+//!   `<func>(in_ptr,in_len)->i64` returning packed `(out_ptr,out_len)`). All
+//!   guest memory access uses wasmi's checked `Memory::read`/`write`, so a
+//!   malformed pointer/length yields [`WasmRuntimeError::BadAbi`], never a host
+//!   panic; output must be valid UTF-8.
+//!
+//! Both apply the same hardening:
 //!
 //! - **Fuel metering** bounds CPU; a runaway guest traps as
 //!   [`WasmRuntimeError::FuelExhausted`].
@@ -23,8 +32,8 @@
 //! - **Deny-by-default imports**: the [`wasmi::Linker`] is empty, so any module
 //!   that imports a host symbol is rejected before instantiation.
 //!
-//! The two APIs are independent; enabling `wasmi` does not change the fixture
-//! path or its callers. Routing daemon UDF calls to the hardened runtime when a
+//! These APIs are independent of the fixture [`WasmUdfRuntime::execute`], which
+//! stays the default. Routing daemon UDF calls to the hardened runtime when a
 //! profile enables it is the remaining integration step (see
 //! `docs/quality/udf-runtime-hardening-scope.md`).
 
@@ -189,7 +198,7 @@ pub use wasm_backend::WasmRuntimeError;
 #[cfg(feature = "wasmi")]
 mod wasm_backend {
     use super::{MAX_WASM_MODULE_BYTES, WasmLimits, WasmUdfRuntime, is_export_name};
-    use wasmi::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
+    use wasmi::{Config, Engine, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
 
     /// Errors from the real `wasmi`-backed execution path.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -214,6 +223,9 @@ mod wasm_backend {
         FuelExhausted,
         /// The guest trapped for some other reason.
         Trap(String),
+        /// The guest violated the string ABI: missing `memory`/`alloc` export,
+        /// an out-of-bounds pointer/length, or non-UTF-8 output.
+        BadAbi(String),
     }
 
     impl std::fmt::Display for WasmRuntimeError {
@@ -231,6 +243,7 @@ mod wasm_backend {
                 Self::BadSignature(name) => write!(f, "export is not (i64) -> i64: {name}"),
                 Self::FuelExhausted => f.write_str("fuel exhausted"),
                 Self::Trap(message) => write!(f, "guest trap: {message}"),
+                Self::BadAbi(message) => write!(f, "wasm ABI violation: {message}"),
             }
         }
     }
@@ -267,69 +280,164 @@ mod wasm_backend {
             arg: i64,
             limits: WasmLimits,
         ) -> Result<i64, WasmRuntimeError> {
-            if wasm_bytes.is_empty() {
-                return Err(WasmRuntimeError::EmptyModuleBytes);
-            }
-            if wasm_bytes.len() > MAX_WASM_MODULE_BYTES {
-                return Err(WasmRuntimeError::ModuleTooLarge);
-            }
-            if !wasm_bytes.starts_with(&[0x00, 0x61, 0x73, 0x6d]) {
-                return Err(WasmRuntimeError::InvalidMagic);
-            }
-            if !is_export_name(func) {
-                return Err(WasmRuntimeError::InvalidExportedFunction);
-            }
+            let (mut store, instance) = instantiate_guarded(wasm_bytes, func, limits)?;
+            let typed = instance
+                .get_typed_func::<i64, i64>(&store, func)
+                .map_err(|error| missing_or_bad_signature(&instance, &store, func, &error))?;
+            typed.call(&mut store, arg).map_err(classify_runtime)
+        }
 
-            let mut config = Config::default();
-            config.consume_fuel(true);
-            let engine = Engine::new(&config);
+        /// Execute a string-in / string-out export under the same hardening
+        /// guarantees as [`WasmUdfRuntime::execute_wasm_i64`], using a
+        /// linear-memory ABI.
+        ///
+        /// ABI contract — the guest module must export:
+        /// - `memory`: linear memory;
+        /// - `alloc(i32) -> i32`: returns a pointer to writable bytes;
+        /// - `<func>(in_ptr: i32, in_len: i32) -> i64`: reads `in_len` input bytes
+        ///   at `in_ptr`, writes the output into memory, and returns a packed
+        ///   `i64` of `((out_ptr as u64) << 32) | (out_len as u64)`.
+        ///
+        /// All guest memory access goes through wasmi's checked
+        /// `Memory::read`/`write`, so a malformed pointer/length yields
+        /// [`WasmRuntimeError::BadAbi`] rather than a host panic. Output must be
+        /// valid UTF-8.
+        ///
+        /// # Errors
+        ///
+        /// Returns a [`WasmRuntimeError`] for validation, instantiation, ABI, or
+        /// execution failures.
+        pub fn execute_wasm_string(
+            &self,
+            wasm_bytes: &[u8],
+            func: &str,
+            input: &str,
+            limits: WasmLimits,
+        ) -> Result<String, WasmRuntimeError> {
+            let (mut store, instance) = instantiate_guarded(wasm_bytes, func, limits)?;
 
-            let module = Module::new(&engine, wasm_bytes)
-                .map_err(|error| WasmRuntimeError::Compile(error.to_string()))?;
+            let memory = instance
+                .get_memory(&store, "memory")
+                .ok_or_else(|| WasmRuntimeError::BadAbi("missing `memory` export".to_string()))?;
+            let alloc = instance
+                .get_typed_func::<i32, i32>(&store, "alloc")
+                .map_err(|_| {
+                    WasmRuntimeError::BadAbi(
+                        "missing or mistyped `alloc` export (want (i32) -> i32)".to_string(),
+                    )
+                })?;
 
-            // Deny-by-default imports: reject any module that imports a host symbol.
-            if let Some(import) = module.imports().next() {
-                return Err(WasmRuntimeError::DisallowedImport(format!(
-                    "{}::{}",
-                    import.module(),
-                    import.name()
+            let in_len = i32::try_from(input.len())
+                .map_err(|_| WasmRuntimeError::BadAbi("input length exceeds i32".to_string()))?;
+            let in_ptr = alloc.call(&mut store, in_len).map_err(classify_runtime)?;
+            let in_ptr_usize = usize::try_from(in_ptr).map_err(|_| {
+                WasmRuntimeError::BadAbi("alloc returned a negative pointer".to_string())
+            })?;
+            memory
+                .write(&mut store, in_ptr_usize, input.as_bytes())
+                .map_err(|error| {
+                    WasmRuntimeError::BadAbi(format!("input write failed: {error}"))
+                })?;
+
+            let run = instance
+                .get_typed_func::<(i32, i32), i64>(&store, func)
+                .map_err(|error| missing_or_bad_signature(&instance, &store, func, &error))?;
+            let packed = run
+                .call(&mut store, (in_ptr, in_len))
+                .map_err(classify_runtime)? as u64;
+            let out_ptr = (packed >> 32) as u32 as usize;
+            let out_len = (packed & 0xffff_ffff) as u32 as usize;
+
+            let end = out_ptr
+                .checked_add(out_len)
+                .ok_or_else(|| WasmRuntimeError::BadAbi("output range overflow".to_string()))?;
+            let memory_size = memory.data(&store).len();
+            if end > memory_size {
+                return Err(WasmRuntimeError::BadAbi(format!(
+                    "output range {out_ptr}..{end} exceeds memory size {memory_size}"
                 )));
             }
 
-            let store_limits = StoreLimitsBuilder::new()
-                .memory_size(limits.max_memory_bytes)
-                .memories(limits.max_memories)
-                .build();
-            let mut store = Store::new(
-                &engine,
-                HostState {
-                    limits: store_limits,
-                },
-            );
-            store.limiter(|state| &mut state.limits);
-            store
-                .add_fuel(limits.fuel)
-                .map_err(|error| WasmRuntimeError::Instantiate(error.to_string()))?;
+            let mut buffer = vec![0u8; out_len];
+            memory.read(&store, out_ptr, &mut buffer).map_err(|error| {
+                WasmRuntimeError::BadAbi(format!("output read failed: {error}"))
+            })?;
+            String::from_utf8(buffer)
+                .map_err(|_| WasmRuntimeError::BadAbi("non-utf8 output".to_string()))
+        }
+    }
 
-            // Empty linker => no host functions are available to the guest.
-            let linker: Linker<HostState> = Linker::new(&engine);
-            let instance = linker
-                .instantiate(&mut store, &module)
-                .map_err(classify_instantiate)?
-                .start(&mut store)
-                .map_err(classify_instantiate)?;
+    /// Validate, compile (deny imports), and instantiate a module under the
+    /// `WasmLimits` (fuel + memory). Shared by both execution entry points.
+    fn instantiate_guarded(
+        wasm_bytes: &[u8],
+        func: &str,
+        limits: WasmLimits,
+    ) -> Result<(Store<HostState>, Instance), WasmRuntimeError> {
+        if wasm_bytes.is_empty() {
+            return Err(WasmRuntimeError::EmptyModuleBytes);
+        }
+        if wasm_bytes.len() > MAX_WASM_MODULE_BYTES {
+            return Err(WasmRuntimeError::ModuleTooLarge);
+        }
+        if !wasm_bytes.starts_with(&[0x00, 0x61, 0x73, 0x6d]) {
+            return Err(WasmRuntimeError::InvalidMagic);
+        }
+        if !is_export_name(func) {
+            return Err(WasmRuntimeError::InvalidExportedFunction);
+        }
 
-            let typed = instance
-                .get_typed_func::<i64, i64>(&store, func)
-                .map_err(|error| {
-                    if instance.get_func(&store, func).is_some() {
-                        WasmRuntimeError::BadSignature(error.to_string())
-                    } else {
-                        WasmRuntimeError::MissingExport(func.to_string())
-                    }
-                })?;
+        let mut config = Config::default();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config);
 
-            typed.call(&mut store, arg).map_err(classify_runtime)
+        let module = Module::new(&engine, wasm_bytes)
+            .map_err(|error| WasmRuntimeError::Compile(error.to_string()))?;
+
+        // Deny-by-default imports: reject any module that imports a host symbol.
+        if let Some(import) = module.imports().next() {
+            return Err(WasmRuntimeError::DisallowedImport(format!(
+                "{}::{}",
+                import.module(),
+                import.name()
+            )));
+        }
+
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
+            .memories(limits.max_memories)
+            .build();
+        let mut store = Store::new(
+            &engine,
+            HostState {
+                limits: store_limits,
+            },
+        );
+        store.limiter(|state| &mut state.limits);
+        store
+            .add_fuel(limits.fuel)
+            .map_err(|error| WasmRuntimeError::Instantiate(error.to_string()))?;
+
+        // Empty linker => no host functions are available to the guest.
+        let linker: Linker<HostState> = Linker::new(&engine);
+        let instance = linker
+            .instantiate(&mut store, &module)
+            .map_err(classify_instantiate)?
+            .start(&mut store)
+            .map_err(classify_instantiate)?;
+        Ok((store, instance))
+    }
+
+    fn missing_or_bad_signature(
+        instance: &Instance,
+        store: &Store<HostState>,
+        func: &str,
+        error: &wasmi::Error,
+    ) -> WasmRuntimeError {
+        if instance.get_func(store, func).is_some() {
+            WasmRuntimeError::BadSignature(error.to_string())
+        } else {
+            WasmRuntimeError::MissingExport(func.to_string())
         }
     }
 
@@ -449,6 +557,112 @@ mod wasmi_tests {
 
     fn wasm(text: &str) -> Vec<u8> {
         wat::parse_str(text).unwrap_or_else(|e| panic!("wat compiles: {e}"))
+    }
+
+    /// Guest implementing the string ABI: bump `alloc`, `memory`, and an `echo`
+    /// that returns the input slice unchanged (packed ptr/len).
+    const ECHO_GUEST: &str = r#"(module
+        (memory (export "memory") 1)
+        (global $bump (mut i32) (i32.const 1024))
+        (func (export "alloc") (param $len i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $bump))
+            (global.set $bump (i32.add (global.get $bump) (local.get $len)))
+            (local.get $ptr))
+        (func (export "echo") (param $ptr i32) (param $len i32) (result i64)
+            (i64.or
+                (i64.shl (i64.extend_i32_u (local.get $ptr)) (i64.const 32))
+                (i64.extend_i32_u (local.get $len)))))"#;
+
+    #[test]
+    fn string_abi_echo_roundtrips() {
+        let rt = WasmUdfRuntime::new();
+        let out = rt
+            .execute_wasm_string(
+                &wasm(ECHO_GUEST),
+                "echo",
+                "hello world",
+                WasmLimits::default(),
+            )
+            .unwrap_or_else(|e| panic!("echo should execute: {e}"));
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn string_abi_reads_distinct_output() {
+        // `run` ignores its input and returns the constant "OK" written at offset 0.
+        let guest = r#"(module
+            (memory (export "memory") 1)
+            (data (i32.const 0) "OK")
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 512))
+            (func (export "run") (param $ptr i32) (param $len i32) (result i64)
+                (i64.const 2)))"#;
+        let rt = WasmUdfRuntime::new();
+        let out = rt
+            .execute_wasm_string(&wasm(guest), "run", "ignored", WasmLimits::default())
+            .unwrap_or_else(|e| panic!("run should execute: {e}"));
+        assert_eq!(out, "OK");
+    }
+
+    #[test]
+    fn string_abi_fuel_exhaustion_traps() {
+        let guest = r#"(module
+            (memory (export "memory") 1)
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 0))
+            (func (export "spin") (param $ptr i32) (param $len i32) (result i64)
+                (loop (br 0)) (i64.const 0)))"#;
+        let rt = WasmUdfRuntime::new();
+        let limits = WasmLimits {
+            fuel: 10_000,
+            ..WasmLimits::default()
+        };
+        assert_eq!(
+            rt.execute_wasm_string(&wasm(guest), "spin", "x", limits),
+            Err(WasmRuntimeError::FuelExhausted)
+        );
+    }
+
+    #[test]
+    fn string_abi_missing_memory_is_bad_abi() {
+        let guest = r#"(module
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 0))
+            (func (export "run") (param $ptr i32) (param $len i32) (result i64) (i64.const 0)))"#;
+        let rt = WasmUdfRuntime::new();
+        assert!(matches!(
+            rt.execute_wasm_string(&wasm(guest), "run", "x", WasmLimits::default()),
+            Err(WasmRuntimeError::BadAbi(_))
+        ));
+    }
+
+    #[test]
+    fn string_abi_out_of_bounds_output_is_bad_abi() {
+        // run returns out_ptr=0, out_len=0x0FFFFFFF (~268MB) >> one 64KiB page.
+        let guest = r#"(module
+            (memory (export "memory") 1)
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 0))
+            (func (export "run") (param $ptr i32) (param $len i32) (result i64)
+                (i64.const 268435455)))"#;
+        let rt = WasmUdfRuntime::new();
+        assert!(matches!(
+            rt.execute_wasm_string(&wasm(guest), "run", "x", WasmLimits::default()),
+            Err(WasmRuntimeError::BadAbi(_))
+        ));
+    }
+
+    #[test]
+    fn string_abi_non_utf8_output_is_bad_abi() {
+        // Writes byte 0xFF at offset 0 and returns (ptr=0, len=1).
+        let guest = r#"(module
+            (memory (export "memory") 1)
+            (func (export "alloc") (param $len i32) (result i32) (i32.const 16))
+            (func (export "run") (param $ptr i32) (param $len i32) (result i64)
+                (i32.store8 (i32.const 0) (i32.const 255))
+                (i64.const 1)))"#;
+        let rt = WasmUdfRuntime::new();
+        assert!(matches!(
+            rt.execute_wasm_string(&wasm(guest), "run", "x", WasmLimits::default()),
+            Err(WasmRuntimeError::BadAbi(_))
+        ));
     }
 
     #[test]
