@@ -45,6 +45,7 @@ fn main() {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
         "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check"
@@ -63,6 +64,7 @@ fn bench() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms that genuinely return Err
 fn bench_compare(baseline: Option<String>) -> Result<(), String> {
     println!(
         "bench comparison scaffold; baseline={}",
@@ -311,6 +313,7 @@ fn ddl_export(target: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_up() -> Result<(), String> {
     println!(
         "offline migrate up plan: {}",
@@ -325,11 +328,13 @@ fn migrate_up() -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_down() -> Result<(), String> {
     println!("offline migrate down plan: no destructive migration is run by xtask scaffold");
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)] // sibling of migrate_* match arms (and the top-level dispatch) that must share Result<(), String>; uniform dispatch requires the wrapper
 fn migrate_status() -> Result<(), String> {
     println!("{}", tdw_migration::migration_status());
     Ok(())
