@@ -10,18 +10,27 @@ default = []
 # Enables the real Binance ticker-price HTTP fetcher (reqwest). Off by
 # default so workspace tests stay offline; live calls are additionally
 # gated by TDW_BINANCE_LIVE=1.
-http = ["dep:async-trait", "dep:bytes", "dep:reqwest", "dep:serde_json", "dep:tdw-core", "dep:tokio"]
+http = ["dep:bytes", "dep:reqwest", "dep:tokio"]
+# Enables the live Binance trade websocket subscribe path (tokio-tungstenite).
+# Off by default so the workspace test set stays offline; `decode_trade_frame`,
+# `snapshot` and `registry_entry` are always available without opening a socket.
+ws = ["dep:tokio-tungstenite", "dep:tokio", "dep:futures-util"]
 
 [dependencies]
-async-trait = { workspace = true, optional = true }
+async-trait = { workspace = true }
 bytes = { workspace = true, optional = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true, optional = true }
-tdw-core = { workspace = true, optional = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-domain = { workspace = true }
 thiserror = { workspace = true }
+time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing"] }
 tokio = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
 
 [lints]
 workspace = true

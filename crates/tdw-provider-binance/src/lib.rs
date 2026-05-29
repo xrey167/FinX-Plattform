@@ -6,6 +6,10 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::BinanceHttpTickerPriceFetcher;
 
+pub mod ws_streamer;
+
+pub use ws_streamer::{BinanceTradeQuery, BinanceTradeStreamer, decode_trade_frame};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

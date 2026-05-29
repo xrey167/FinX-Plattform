@@ -28,6 +28,12 @@ real-postgres = ["tdw-storage-postgres/postgres"]
 ## same explicitly for integration tests gated by `TDW_CLICKHOUSE_TEST_URL`.
 real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
 
+## Enable the live Binance trade websocket subscribe path in the streaming
+## ingest control ops. Forwarded to `tdw-provider-binance/ws`. Without this
+## feature the default offline (deterministic single-tick) streamer is used so
+## the workspace test set stays offline.
+ws = ["tdw-provider-binance/ws"]
+
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
@@ -66,6 +72,7 @@ tdw-llm-openai-compat = { workspace = true }
 tdw-mask = { path = "../tdw-mask" }
 tdw-outbox = { path = "../tdw-outbox" }
 tdw-pipe = { path = "../tdw-pipe" }
+tdw-provider-binance = { path = "../tdw-provider-binance" }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-ws = { path = "../tdw-provider-ws" }
 tdw-provider-ws-mock = { path = "../tdw-provider-ws-mock" }

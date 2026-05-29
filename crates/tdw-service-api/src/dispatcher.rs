@@ -80,12 +80,89 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             arguments,
             ..
         } => dispatch_tool(policy, tool_name, arguments),
+        Op::StreamStart {
+            provider,
+            symbol,
+            table,
+        } => dispatch_stream_start(state, policy, provider, symbol, table.clone()).await,
+        Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id).await,
         Op::ApprovalResponse { .. } => Ok(json!({ "acknowledged": "approval_response" })),
         Op::AppendUserMessage { .. } => Ok(json!({ "acknowledged": "append_user_message" })),
         Op::CompactContext { .. } => Ok(json!({ "acknowledged": "compact_context" })),
         Op::Cancel { .. } => Ok(json!({ "acknowledged": "cancel" })),
         Op::Shutdown => Ok(json!({ "shutdown": "requested" })),
     }
+}
+
+/// Start a live streaming-ingest task and report its `stream_id`.
+///
+/// Stream ingest *is* ingest, so it reuses [`ServiceEndpoint::IngestBatch`] for
+/// policy enforcement rather than introducing a new endpoint variant. Only the
+/// `binance` provider is supported.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if `provider` is
+/// not `binance`, or if the stream cannot be started (e.g. invalid symbol or a
+/// stream with the same id is already running).
+async fn dispatch_stream_start(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    provider: &str,
+    symbol: &str,
+    table: Option<String>,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
+
+    if provider != "binance" {
+        return Err(Error::Provider(format!(
+            "unsupported stream provider: {provider}"
+        )));
+    }
+
+    let stream_id = state.start_binance_stream(symbol, table)?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "stream_id": stream_id,
+            "provider": provider,
+            "status": "started",
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Stop a running streaming-ingest task by `stream_id`.
+///
+/// Reuses [`ServiceEndpoint::IngestBatch`] for policy enforcement (stream ingest
+/// is ingest). Reports whether a stream with that id was present.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails or if the internal
+/// streams registry lock is poisoned.
+async fn dispatch_stream_stop(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    stream_id: &str,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
+
+    let was_present = state.stop_stream(stream_id)?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "stream_id": stream_id,
+            "stopped": was_present,
+        }),
+        &policy.mask_rules,
+    ))
 }
 
 async fn dispatch_run_query(
@@ -459,6 +536,108 @@ mod tests {
                 );
             }
             other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_start_dispatches_and_reports_stream_id() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::StreamStart {
+            provider: "binance".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            table: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "binance");
+                assert_eq!(value["status"], "started");
+                assert_eq!(value["stream_id"], "binance:trades:BTCUSDT");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_start_unsupported_provider_fails() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::StreamStart {
+            provider: "kraken".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            table: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("unsupported stream provider"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_stop_reports_present_after_start() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+
+        // Start a stream so the registry has an entry to stop. We assert on the
+        // dispatch result rather than row counts: in offline mode the streamer
+        // emits one tick then ends, so the spawned task may already be finished
+        // by the time we stop it — `stop_stream` still reports it was present.
+        let stream_id = state
+            .start_binance_stream("BTCUSDT", None)
+            .unwrap_or_else(|error| panic!("start should succeed: {error}"));
+        assert_eq!(stream_id, "binance:trades:BTCUSDT");
+
+        let env = make_envelope(Op::StreamStop {
+            stream_id: stream_id.clone(),
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["stream_id"], stream_id);
+                assert_eq!(value["stopped"], true);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_stop_unknown_id_reports_not_present() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::StreamStop {
+            stream_id: "binance:trades:NOPE".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["stopped"], false);
+            }
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
