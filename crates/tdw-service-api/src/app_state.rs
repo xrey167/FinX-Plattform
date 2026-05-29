@@ -541,6 +541,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn docker_profile_attaches_local_policy_so_live_dispatches_resolve() {
+        // The compose `live` stack runs the daemon with `TDW_PROFILE: docker`.
+        // `docker` is non-prod, so `build_policy` must synthesize a local policy;
+        // without one the dispatcher returns Failed for every op.
+        let mut config = TdwConfig {
+            profile: "docker".to_string(),
+            ..TdwConfig::default()
+        };
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+
+        let state = AppState::from_config(config)
+            .await
+            .unwrap_or_else(|e| panic!("AppState should build: {e}"));
+
+        let policy = state
+            .policy
+            .expect("docker profile must attach a local policy");
+        assert_eq!(policy.auth.claims.sub, "local:default");
+        assert!(
+            policy
+                .auth
+                .claims
+                .roles
+                .iter()
+                .any(|role| role == "analyst")
+        );
+    }
+
+    #[tokio::test]
     async fn production_profile_does_not_synthesize_local_policy() {
         let mut config = TdwConfig {
             profile: "production".to_string(),

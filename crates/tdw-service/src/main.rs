@@ -41,11 +41,23 @@ async fn main() -> Result<(), ServiceError> {
         .await
         .map_err(|e| format!("AppState::from_config failed: {e}"))?;
 
-    // Note: no policy attached here by design — daemon will respond with
-    // Failed for any dispatch until a policy is attached (P7 will wire this).
-    eprintln!(
-        "tdw-service: daemon starting (no policy attached; dispatches will return Failed until P7)"
-    );
+    // The policy is built inside `AppState::from_config` via `build_policy`:
+    // every non-prod profile gets a local-default policy (principal
+    // `local:default`, roles analyst + udf_runner), so dispatches succeed; the
+    // `prod`/`production` profile intentionally gets none and must supply an
+    // auth-backed policy before any dispatch can resolve. Report the actual
+    // state rather than assuming, so the startup log never misleads operators.
+    if state.policy.is_some() {
+        eprintln!(
+            "tdw-service: daemon starting in '{}' profile with a policy attached; dispatches will resolve",
+            config.profile
+        );
+    } else {
+        eprintln!(
+            "tdw-service: daemon starting in '{}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired",
+            config.profile
+        );
+    }
 
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
 
@@ -93,6 +105,9 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
             .to_string_lossy()
             .into_owned();
         config.paths.rollout_dir = rollout;
+        // Honour TDW_PROFILE even when a TOML config is supplied, so a
+        // deployment can override the profile without editing the file.
+        config.profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
         return Ok(config);
     }
 
@@ -109,7 +124,24 @@ async fn load_config() -> Result<TdwConfig, ServiceError> {
     config.daemon.transport = DaemonTransport::Tcp;
     config.daemon.tcp_bind =
         Some(std::env::var("TDW_DAEMON_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:7878".to_string()));
+    // Honour TDW_PROFILE so the compose `live` stack (which sets
+    // `TDW_PROFILE: docker`) actually applies that profile instead of silently
+    // staying on `default`. The profile drives `build_policy`: non-prod profiles
+    // (incl. `docker`) attach a local-default policy so dispatches resolve;
+    // `prod`/`production` stay fail-closed until an auth-backed policy is wired.
+    config.profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
     Ok(config)
+}
+
+/// Resolve the effective profile: a non-empty `TDW_PROFILE` value overrides
+/// `current`; otherwise `current` is kept. Pure (env read happens at the call
+/// site) so the override precedence is unit-testable without mutating the
+/// process environment.
+fn resolve_profile(current: &str, env_profile: Option<String>) -> String {
+    match env_profile {
+        Some(profile) if !profile.trim().is_empty() => profile.trim().to_string(),
+        _ => current.to_string(),
+    }
 }
 
 /// Returns a human-readable description of the address we will bind.
@@ -248,6 +280,31 @@ async fn spawn_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_profile_prefers_non_empty_env_override() {
+        // A non-empty TDW_PROFILE overrides the config-derived profile, so the
+        // compose `live` stack's `TDW_PROFILE: docker` is actually applied.
+        assert_eq!(
+            resolve_profile("default", Some("docker".to_string())),
+            "docker"
+        );
+        // Surrounding whitespace is trimmed.
+        assert_eq!(
+            resolve_profile("default", Some("  production  ".to_string())),
+            "production"
+        );
+    }
+
+    #[test]
+    fn resolve_profile_keeps_current_when_env_absent_or_blank() {
+        assert_eq!(resolve_profile("service", None), "service");
+        assert_eq!(resolve_profile("service", Some(String::new())), "service");
+        assert_eq!(
+            resolve_profile("service", Some("   ".to_string())),
+            "service"
+        );
+    }
 
     #[cfg(not(feature = "transport-http"))]
     #[tokio::test]
