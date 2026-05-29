@@ -95,7 +95,8 @@ impl McpServer {
         Self::default()
     }
 
-    pub fn with_daemon_config(config: DaemonClientConfig) -> Self {
+    #[must_use]
+    pub const fn with_daemon_config(config: DaemonClientConfig) -> Self {
         Self {
             initialized: false,
             client_info: None,
@@ -122,7 +123,7 @@ impl McpServer {
     pub fn handle_json_rpc_line(&mut self, line: &str) -> Vec<String> {
         let messages = match parse_inbound(line) {
             Ok(inbound) if inbound.is_notification => self.handle_notification(&inbound),
-            Ok(inbound) => self.handle_request(inbound),
+            Ok(inbound) => self.handle_request(&inbound),
             Err(problem) => vec![error_message(problem)],
         };
 
@@ -160,7 +161,7 @@ impl McpServer {
         self.cancelled_requests.push(cancelled);
     }
 
-    fn handle_request(&mut self, inbound: JsonRpcInbound) -> Vec<Value> {
+    fn handle_request(&mut self, inbound: &JsonRpcInbound) -> Vec<Value> {
         let id = inbound.id.clone().unwrap_or(Value::Null);
         if !self.initialized && !matches!(inbound.method.as_str(), "initialize" | "ping") {
             return vec![error_message(JsonRpcProblem::new(
@@ -1108,7 +1109,8 @@ fn encode_json_messages(messages: &[String]) -> String {
     let values = messages
         .iter()
         .map(|message| {
-            serde_json::from_str::<Value>(message).unwrap_or(Value::String(message.clone()))
+            serde_json::from_str::<Value>(message)
+                .unwrap_or_else(|_| Value::String(message.clone()))
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&values).unwrap_or_else(|error| {

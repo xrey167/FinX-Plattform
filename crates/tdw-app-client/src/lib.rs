@@ -1034,7 +1034,7 @@ mod tests {
         let envelope = shutdown_envelope();
         let other = shutdown_envelope();
         let unrelated = EventMsg::Completed {
-            op_id: other.op_id.clone(),
+            op_id: other.op_id,
             summary: Some("other op finished".to_string()),
             result: None,
         };

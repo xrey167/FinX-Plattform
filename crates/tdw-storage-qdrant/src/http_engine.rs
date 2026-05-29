@@ -74,6 +74,7 @@ impl QdrantHttpEngine {
     /// Override the vector distance metric used when this engine
     /// auto-creates a collection on first upsert. Valid Qdrant values
     /// are `"Cosine"`, `"Dot"`, and `"Euclid"`.
+    #[must_use]
     pub fn with_distance(mut self, distance: impl Into<String>) -> Self {
         self.distance = distance.into();
         self

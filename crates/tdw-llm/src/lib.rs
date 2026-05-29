@@ -156,7 +156,7 @@ mod tests {
     struct EchoModel;
 
     impl LanguageModel for EchoModel {
-        fn model_id(&self) -> &str {
+        fn model_id(&self) -> &'static str {
             "echo"
         }
 

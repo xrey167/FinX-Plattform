@@ -29,7 +29,7 @@ pub struct Granularity {
 /// The default OHLC granularity set: 1m, 5m, 1h, 1d. TTLs are tunable retention
 /// defaults mirroring migration 0003 (1d retained indefinitely).
 #[must_use]
-pub fn default_granularities() -> &'static [Granularity] {
+pub const fn default_granularities() -> &'static [Granularity] {
     const G: &[Granularity] = &[
         Granularity {
             suffix: "1m",
