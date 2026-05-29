@@ -76,6 +76,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)] // exact representable value, not an approximate result: 202.0 is a fixed close from the static test fixture decoded verbatim
     fn fetcher_transforms_query_extracts_and_decodes_rows() {
         let fetcher = YahooEquityHistoricalFetcher;
         let query = YahooEquityHistoricalFetcher::transform_query(serde_json::json!({

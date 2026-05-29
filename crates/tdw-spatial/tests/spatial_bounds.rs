@@ -91,6 +91,7 @@ fn degenerate_box_contains_only_the_single_point() {
 }
 
 #[test]
+#[allow(clippy::float_cmp)] // exact representable value, not an approximate result: |lat-lat|+|lon-lon| over identical points is exactly 0.0
 fn manhattan_distance_is_zero_for_identical_points() {
     let p = Point { lat: 1.0, lon: 2.0 };
     assert_eq!(manhattan_distance(p, p), 0.0);

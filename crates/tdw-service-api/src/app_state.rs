@@ -269,6 +269,9 @@ fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
 /// # Errors
 ///
 /// Returns an error if `TDW_CLICKHOUSE_URL` is set but cannot be parsed.
+// Real Err path exists behind `real-clickhouse` (ClickHouseHttpEngine::new(..)?);
+// only looks unwrappable in the default build, so keep the Result and the allow.
+#[allow(clippy::unnecessary_wraps)]
 fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
     #[cfg(feature = "real-clickhouse")]
     {
