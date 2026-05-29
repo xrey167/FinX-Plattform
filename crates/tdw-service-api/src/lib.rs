@@ -372,6 +372,7 @@ pub fn extensibility_sample() -> Result<Value> {
             input: "aapl".to_string(),
             allow_network: false,
             allow_filesystem: false,
+            wasm_limits: None,
         })
         .map_err(|error| Error::Provider(error.to_string()))?;
     let acp = AcpServerInfo::default();
@@ -1031,6 +1032,7 @@ mod tests {
             input: "aapl".to_string(),
             allow_network,
             allow_filesystem: false,
+            wasm_limits: None,
         }
     }
 
