@@ -37,8 +37,8 @@ This starts:
 | `minio-init`        | `minio/mc:latest`                  | Creates the `tdw-default` bucket once, then exits                           |
 | `tdw-bootstrap`     | built from `Dockerfile.bootstrap`  | Applies G013 Postgres schemas, writes the S3 marker, and creates the ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection, and Meilisearch `tdw-default` index, then exits |
 | `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`) | Long-running `tdw-worker --serve` over **Postgres** (`PgWorkerQueue`, self-migrates `system.worker_jobs`); starts after bootstrap |
-| `tdw-service-daemon`| `docker/tdw-service.Dockerfile`    | Long-running daemon, binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); host `7878` |
-| `tdw-mcp-serve`     | `docker/tdw-mcp.Dockerfile`        | Long-running MCP Streamable HTTP at `0.0.0.0:8788` (host `8788`); daemon tools routed to `tdw-service-daemon:7878`; needs `TDW_MCP_HTTP_TOKEN` |
+| `tdw-service-daemon`| `docker/tdw-service.Dockerfile`    | Long-running daemon, binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); **internal-only** (not host-published — its transport is unauthenticated plaintext) |
+| `tdw-mcp-serve`     | `docker/tdw-mcp.Dockerfile`        | Long-running MCP Streamable HTTP at `0.0.0.0:8788` (host `8788`); daemon tools routed to `tdw-service-daemon:7878`; **requires** `TDW_MCP_HTTP_TOKEN` |
 
 `tdw-bootstrap` runs after `postgres` is healthy, `minio-init` has finished,
 and ClickHouse/Qdrant/Meilisearch have started. It emits one structured JSON
@@ -47,9 +47,10 @@ line per step on stdout, and is idempotent (all creates use
 and stay up (`restart: unless-stopped`): the Postgres-backed worker, the daemon
 (`tdw-service-daemon`), and the MCP HTTP server (`tdw-mcp-serve`).
 
-Set `TDW_MCP_HTTP_TOKEN` to a strong secret before exposing `tdw-mcp-serve`
-(it defaults to `local-dev-token` for local use; a non-loopback bind is refused
-without a token). Front it with a TLS/OAuth reverse proxy per
+`TDW_MCP_HTTP_TOKEN` is **required** (no default): `docker compose --profile
+live up` fails fast if it is unset. Set a strong, unique value in `.env`
+(e.g. `openssl rand -hex 32`) — the MCP server refuses a non-loopback bind
+without it. Front it with a TLS/OAuth reverse proxy per
 [`mcp-remote-deployment.md`](mcp-remote-deployment.md) for any non-local use.
 
 ## Verify the bootstrap
