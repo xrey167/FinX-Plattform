@@ -12,6 +12,41 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.4.0] - 2026-05-29
+
+Runtime follow-ups on top of `v0.3.0`: the worker now executes real work, and
+the hardened UDF runtime is wired end to end. The 3 commits in `v0.3.0..HEAD`
+are user-visible runtime changes, so per the pre-1.0 policy this is a `MINOR`
+release.
+
+### Added
+
+- **Worker daemon dispatch.** `tdw-worker --serve` gains a `DaemonJobHandler`
+  that submits each leased job's `OpEnvelope` to the configured TDW daemon via
+  `tdw-app-client` and maps the terminal event onto the job contract
+  (`Completed` -> complete; `Failed`/`Cancelled`/transport error -> retry then
+  dead-letter). Selected by `TDW_WORKER_DISPATCH=daemon` / `TDW_WORKER_DAEMON_*`
+  (TCP/UDS/HTTP-SSE); the offline `LoggingAckHandler` stays the default. (#85)
+- **Wasm UDF string ABI.** `tdw-udf-wasm` adds `execute_wasm_string` (feature
+  `wasmi`): a linear-memory string-in/string-out ABI (guest exports `memory` +
+  `alloc(i32)->i32` + `<func>(in_ptr,in_len)->i64` returning packed
+  `(out_ptr,out_len)`) under the existing fuel/memory/deny-imports hardening.
+  All guest memory access uses wasmi's checked `Memory::read`/`write`, so a bad
+  pointer/length or non-UTF-8 output yields `BadAbi`, never a host panic. (#86)
+- **Sandbox routing to the hardened runtime.** `tdw-sandbox`'s `udf-wasm`
+  feature now enables `tdw-udf-wasm/wasmi`; a `UdfRuntime::Wasm` request whose
+  `source` base64-decodes to a real wasm module runs through
+  `execute_wasm_string`, otherwise it falls back to the deterministic fixture.
+  This completes the UDF runtime hardening scope (step #5). (#88)
+
+### Notes
+
+- Default `cargo test --workspace` stays offline: the worker daemon path and the
+  `wasmi` UDF path are both opt-in (env / feature); without them the worker uses
+  the ack handler and the sandbox uses the built-in dispatcher.
+- `Cargo.toml` keeps `publish = false`; the workspace `version` field is not
+  bumped per release (releases are tag-driven).
+
 ## [0.3.0] - 2026-05-29
 
 Runtime, sandbox, and live-backend hardening on top of `v0.2.0`. The 12 commits
@@ -148,7 +183,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/xrey167/FinX-Plattform/compare/v0.1.0...v0.1.1
