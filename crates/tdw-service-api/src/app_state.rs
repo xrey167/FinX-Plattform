@@ -24,7 +24,8 @@ use tdw_auth_oidc::{JwksKey, JwtClaims};
 use tdw_bus::EventBus;
 use tdw_config::{PermissionAction, TdwConfig};
 use tdw_core::{
-    BlobEngine, LexicalEngine, OlapEngine, ProviderRegistry, RelationalEngine, Result, VectorEngine,
+    BlobEngine, Credentials, DataModel, LexicalEngine, OlapEngine, ProviderRegistry, QueryParams,
+    RelationalEngine, Result, Streamer, VectorEngine,
 };
 use tdw_outbox::InMemoryOutbox;
 use tdw_rollout::JsonlRollout;
@@ -36,7 +37,7 @@ use tdw_storage_postgres::PostgresRecordingEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_storage_s3::InMemoryS3BlobEngine;
 
-use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry};
+use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry, run_ws_ingest};
 
 const DEFAULT_BUS_CAPACITY: usize = 1024;
 const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
@@ -184,6 +185,62 @@ impl AppState {
             .await
             .unwrap_or_else(|e| panic!("in_memory_for_tests should build AppState: {e}"))
     }
+
+    /// Start a background streaming ingest task that drains a [`Streamer`]
+    /// subscription into the OLAP engine, racing the ingest against the supplied
+    /// [`CancellationToken`].
+    ///
+    /// This is the daemon-facing entrypoint: it clones the shared `olap` Arc,
+    /// derives a stable `session_id` of `stream:{PROVIDER}:{ENDPOINT}`, and
+    /// `tokio::spawn`s a task running [`run_ws_ingest`]. The returned
+    /// [`JoinHandle`] resolves to the total rows written (or `Ok(0)` if the
+    /// token cancels first).
+    ///
+    /// On cancellation the in-flight (unflushed) buffer is dropped, so its rows
+    /// are not written. This is safe: each flushed batch carries a
+    /// content-addressed `insert_deduplication_token` (a hash of the batch
+    /// scoped to `session_id` + `table`), so re-ingesting the same source after
+    /// a restart deduplicates identical batches at the ClickHouse INSERT and
+    /// does not double-count through the materialized views. The pipeline is
+    /// therefore at-least-once: a dropped tail is re-fetched on restart, and
+    /// any already-persisted batch dedups instead of duplicating.
+    ///
+    /// [`JoinHandle`]: tokio::task::JoinHandle
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn spawn_stream_ingest<S, Q, D>(
+        &self,
+        streamer: S,
+        query: Q,
+        creds: Credentials,
+        table: String,
+        max_rows: usize,
+        max_wait: std::time::Duration,
+        cancel: tdw_app_server::CancellationToken,
+    ) -> tokio::task::JoinHandle<tdw_core::Result<usize>>
+    where
+        S: Streamer<Q, D>,
+        Q: QueryParams,
+        D: DataModel,
+    {
+        let olap = Arc::clone(&self.olap);
+        let session_id = format!("stream:{}:{}", S::PROVIDER, S::ENDPOINT);
+        tokio::spawn(async move {
+            tokio::select! {
+                res = run_ws_ingest(
+                    olap.as_ref(),
+                    &streamer,
+                    query,
+                    &creds,
+                    &session_id,
+                    &table,
+                    max_rows,
+                    max_wait,
+                ) => res,
+                () = cancel.cancelled() => Ok(0),
+            }
+        })
+    }
 }
 
 /// Select the blob engine based on compile-time features and runtime config.
@@ -270,7 +327,9 @@ fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tdw_app_server::CancellationToken;
     use tdw_core::ProviderKind;
+    use tdw_provider_ws::{WsTickQuery, WsTickStreamer};
 
     #[tokio::test]
     async fn builds_in_memory_app_state_from_default_config() {
@@ -296,6 +355,58 @@ mod tests {
 
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.registry, &cloned.registry));
+    }
+
+    fn aapl_ws_query() -> WsTickQuery {
+        WsTickQuery {
+            url: String::new(),
+            symbol: "AAPL".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_stream_ingest_persists_offline_stream() {
+        let state = AppState::in_memory_for_tests().await;
+        let cancel = CancellationToken::new();
+
+        let handle = state.spawn_stream_ingest(
+            WsTickStreamer,
+            aapl_ws_query(),
+            Credentials::default(),
+            "raw.tick".to_string(),
+            10,
+            std::time::Duration::from_millis(50),
+            cancel,
+        );
+
+        let total = handle
+            .await
+            .unwrap_or_else(|e| panic!("ingest task should not panic: {e}"))
+            .unwrap_or_else(|e| panic!("ingest should succeed: {e}"));
+        assert_eq!(total, 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_stream_ingest_completes_cleanly_when_cancelled_first() {
+        let state = AppState::in_memory_for_tests().await;
+        let cancel = CancellationToken::new();
+        // Cancel before spawning: the select! must resolve to Ok(_) without hanging.
+        cancel.cancel();
+
+        let handle = state.spawn_stream_ingest(
+            WsTickStreamer,
+            aapl_ws_query(),
+            Credentials::default(),
+            "raw.tick".to_string(),
+            10,
+            std::time::Duration::from_millis(50),
+            cancel,
+        );
+
+        let result = handle
+            .await
+            .unwrap_or_else(|e| panic!("ingest task should not panic: {e}"));
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

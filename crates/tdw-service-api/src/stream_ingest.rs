@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use tdw_core::{DataModel, DataStream, OlapEngine, Result};
+use tdw_core::{Credentials, DataModel, DataStream, OlapEngine, QueryParams, Result, Streamer};
 use tdw_storage_clickhouse::{batch_dedup_token, build_insert_jsoneachrow};
 
 /// Provider label stamped on every streamed ingest batch envelope.
@@ -72,6 +72,40 @@ pub async fn run_stream_ingest<T: DataModel>(
     Ok(total)
 }
 
+/// Subscribe to a [`Streamer`] and drain its [`DataStream`] into ClickHouse via
+/// [`run_stream_ingest`].
+///
+/// This is the end-to-end driver that wires a provider subscription to the
+/// content-addressed dedup ingest loop: it calls `streamer.subscribe(query,
+/// creds)` to obtain the live stream, then hands it to [`run_stream_ingest`]
+/// with the same flush thresholds.
+///
+/// Returns the total number of rows written across all flushes.
+///
+/// # Errors
+///
+/// Returns an error if the subscription fails, the stream yields an error item,
+/// a batch fails to serialize, or the engine rejects an INSERT.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_ws_ingest<S, Q, D>(
+    olap: &dyn OlapEngine,
+    streamer: &S,
+    query: Q,
+    creds: &Credentials,
+    session_id: &str,
+    table: &str,
+    max_rows: usize,
+    max_wait: Duration,
+) -> Result<usize>
+where
+    S: Streamer<Q, D>,
+    Q: QueryParams,
+    D: DataModel,
+{
+    let stream = streamer.subscribe(query, creds).await?;
+    run_stream_ingest(olap, session_id, table, stream, max_rows, max_wait).await
+}
+
 async fn flush<T: DataModel>(
     olap: &dyn OlapEngine,
     session_id: &str,
@@ -102,6 +136,7 @@ mod tests {
     use futures_util::Stream;
     use tdw_core::Result as CoreResult;
     use tdw_domain::Tick;
+    use tdw_provider_ws::{WsTickQuery, WsTickStreamer};
     use tdw_storage_clickhouse::ClickHouseRecordingEngine;
 
     struct VecStream<T> {
@@ -179,6 +214,36 @@ mod tests {
         assert_ne!(statements[0], statements[1]);
         assert_ne!(statements[1], statements[2]);
         assert_ne!(statements[0], statements[2]);
+    }
+
+    #[tokio::test]
+    async fn ws_ingest_subscribes_and_persists_offline_tick() {
+        let engine = ClickHouseRecordingEngine::default();
+
+        let total = run_ws_ingest(
+            &engine,
+            &WsTickStreamer,
+            WsTickQuery {
+                url: String::new(),
+                symbol: "AAPL".into(),
+            },
+            &Credentials::default(),
+            "stream:ws:equity_ticks",
+            "raw.tick",
+            10,
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("ws ingest should succeed: {error}"));
+
+        assert_eq!(total, 1);
+        let statements = engine
+            .statements()
+            .unwrap_or_else(|error| panic!("statements should read: {error}"));
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].contains("INSERT INTO raw.tick"));
+        assert!(statements[0].contains("FORMAT JSONEachRow"));
+        assert!(statements[0].contains("\"symbol\":\"AAPL\""));
     }
 
     #[tokio::test]
