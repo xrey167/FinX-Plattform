@@ -707,9 +707,9 @@ impl SqliteWorkerQueue {
 
         let mut stats = WorkerQueueStats::default();
         for row in rows {
-            let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+            let job_status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
             let count = i64_to_u64(row.get("count"), "count")?;
-            match status {
+            match job_status {
                 WorkerJobStatus::Pending => stats.pending = count,
                 WorkerJobStatus::Leased => stats.leased = count,
                 WorkerJobStatus::Completed => stats.completed = count,
@@ -1073,9 +1073,9 @@ impl PgWorkerQueue {
 
         let mut stats = WorkerQueueStats::default();
         for row in rows {
-            let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+            let job_status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
             let count = i64_to_u64(row.get("count"), "count")?;
-            match status {
+            match job_status {
                 WorkerJobStatus::Pending => stats.pending = count,
                 WorkerJobStatus::Leased => stats.leased = count,
                 WorkerJobStatus::Completed => stats.completed = count,

@@ -163,9 +163,9 @@ pub fn batch_dedup_token<T: DataModel>(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     batch.rows.len().hash(&mut hasher);
     for row in &batch.rows {
-        let line = serde_json::to_string(row)
-            .map_err(|error| Error::Storage(format!("clickhouse serialize row: {error}")))?;
-        line.hash(&mut hasher);
+        serde_json::to_string(row)
+            .map_err(|error| Error::Storage(format!("clickhouse serialize row: {error}")))?
+            .hash(&mut hasher);
     }
     Ok(format!("{session_id}:{table}:{:016x}", hasher.finish()))
 }

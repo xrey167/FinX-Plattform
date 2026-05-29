@@ -16,6 +16,8 @@ fn table_name() -> String {
 
 #[tokio::test]
 async fn pg_bus_publishes_and_reads_back_in_order() {
+    use tdw_core::RelationalEngine;
+
     let Some(url) = database_url() else {
         eprintln!("TDW_POSTGRES_TEST_URL not set; skipping pg_bus integration test");
         return;
@@ -25,7 +27,6 @@ async fn pg_bus_publishes_and_reads_back_in_order() {
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
     let bus = PgEventBus::new(engine.clone()).with_table(table_name());
 
-    use tdw_core::RelationalEngine;
     let drop_sql = format!("DROP TABLE IF EXISTS {}", table_name());
     engine
         .execute(&drop_sql, serde_json::Value::Null)

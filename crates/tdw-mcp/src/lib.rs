@@ -183,14 +183,14 @@ impl McpServer {
                 &id,
                 &json!({ "resources": resource_descriptors() }),
             )],
-            "resources/read" => vec![self.read_resource(&id, &inbound.params)],
+            "resources/read" => vec![Self::read_resource(&id, &inbound.params)],
             "prompts/list" => {
                 vec![success_message(
                     &id,
                     &json!({ "prompts": prompt_descriptors() }),
                 )]
             }
-            "prompts/get" => vec![self.get_prompt(&id, &inbound.params)],
+            "prompts/get" => vec![Self::get_prompt(&id, &inbound.params)],
             _ => vec![error_message(JsonRpcProblem::new(
                 id,
                 -32601,
@@ -276,7 +276,7 @@ impl McpServer {
         }
     }
 
-    fn read_resource(&self, id: &Value, params: &Value) -> Value {
+    fn read_resource(id: &Value, params: &Value) -> Value {
         let Some(params_object) = params.as_object() else {
             return error_message(JsonRpcProblem::new(
                 id.clone(),
@@ -300,7 +300,7 @@ impl McpServer {
         }
     }
 
-    fn get_prompt(&self, id: &Value, params: &Value) -> Value {
+    fn get_prompt(id: &Value, params: &Value) -> Value {
         let Some(params_object) = params.as_object() else {
             return error_message(JsonRpcProblem::new(
                 id.clone(),
@@ -451,7 +451,7 @@ fn daemon_client_config_from_env() -> Result<DaemonClientConfig, String> {
         &config,
         non_empty_env("TDW_MCP_DAEMON_TRANSPORT"),
         non_empty_env("TDW_MCP_DAEMON_ADDR").or_else(|| non_empty_env("TDW_DAEMON_TCP_BIND")),
-        &non_empty_env("TDW_MCP_DAEMON_TIMEOUT_MS"),
+        non_empty_env("TDW_MCP_DAEMON_TIMEOUT_MS").as_deref(),
     )
 }
 
@@ -486,7 +486,7 @@ fn daemon_client_config_from_sources(
     config: &TdwConfig,
     transport_override: Option<String>,
     address_override: Option<String>,
-    timeout_ms: &Option<String>,
+    timeout_ms: Option<&str>,
 ) -> Result<DaemonClientConfig, String> {
     let transport = match transport_override {
         Some(value) => parse_daemon_transport(&value)?,
@@ -495,7 +495,6 @@ fn daemon_client_config_from_sources(
     let address =
         address_override.unwrap_or_else(|| daemon_endpoint_address_from_config(config, transport));
     let timeout = timeout_ms
-        .as_deref()
         .map(parse_timeout_ms)
         .transpose()?
         .unwrap_or_else(|| Duration::from_secs(2));
@@ -2224,9 +2223,8 @@ mod tests {
         let mut config = TdwConfig::default();
         config.daemon.tcp_bind = Some("127.0.0.1:9001".to_string());
 
-        let from_config =
-            daemon_client_config_from_sources(&config, None, None, &Some("75".to_string()))
-                .unwrap_or_else(|error| panic!("config override should resolve: {error}"));
+        let from_config = daemon_client_config_from_sources(&config, None, None, Some("75"))
+            .unwrap_or_else(|error| panic!("config override should resolve: {error}"));
         assert_eq!(from_config.endpoint().address, "127.0.0.1:9001");
         assert_eq!(from_config.timeout(), Duration::from_millis(75));
 
@@ -2234,7 +2232,7 @@ mod tests {
             &TdwConfig::default(),
             Some("tcp".to_string()),
             Some("127.0.0.1:9002".to_string()),
-            &None,
+            None,
         )
         .unwrap_or_else(|error| panic!("env-style override should resolve: {error}"));
         assert_eq!(from_env_style.endpoint().transport, DaemonTransport::Tcp);

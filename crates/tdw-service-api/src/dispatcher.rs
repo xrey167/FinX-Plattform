@@ -79,7 +79,7 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             tool_name,
             arguments,
             ..
-        } => dispatch_tool(policy, tool_name, arguments).await,
+        } => dispatch_tool(policy, tool_name, arguments),
         Op::ApprovalResponse { .. } => Ok(json!({ "acknowledged": "approval_response" })),
         Op::AppendUserMessage { .. } => Ok(json!({ "acknowledged": "append_user_message" })),
         Op::CompactContext { .. } => Ok(json!({ "acknowledged": "compact_context" })),
@@ -195,7 +195,7 @@ async fn persist_batch<T: tdw_core::DataModel>(
     Ok(object.rows.len())
 }
 
-async fn dispatch_tool(
+fn dispatch_tool(
     policy: &PolicyEnforcementConfig,
     tool_name: &str,
     arguments: &Value,

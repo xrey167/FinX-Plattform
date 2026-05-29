@@ -41,7 +41,7 @@ impl std::fmt::Debug for MeilisearchHttpEngine {
             .debug_struct("MeilisearchHttpEngine")
             .field("base_url", &self.base_url.as_str())
             .field("api_key", &self.api_key.as_ref().map(|_| "REDACTED"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

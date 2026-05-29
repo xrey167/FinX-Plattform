@@ -20,6 +20,8 @@ fn table_name() -> String {
 
 #[tokio::test]
 async fn pg_outbox_appends_marks_and_recovers_pending_records() {
+    use tdw_core::RelationalEngine;
+
     let Some(url) = database_url() else {
         eprintln!("TDW_POSTGRES_TEST_URL not set; skipping pg_outbox integration test");
         return;
@@ -33,7 +35,6 @@ async fn pg_outbox_appends_marks_and_recovers_pending_records() {
     // Hermetic setup: drop any leftovers from a previous interrupted
     // run, then create fresh.
     let drop_sql = format!("DROP TABLE IF EXISTS {}", table_name());
-    use tdw_core::RelationalEngine;
     engine
         .execute(&drop_sql, serde_json::Value::Null)
         .await
