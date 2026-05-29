@@ -131,7 +131,9 @@ pub async fn connect_and_run(addr: SocketAddr, op: Op) -> Result<Vec<EventMsg>, 
 
 async fn write_frame(stream: &mut TcpStream, envelope: &OpEnvelope) -> Result<(), CliError> {
     let json = serde_json::to_vec(envelope).map_err(|e| format!("serialize envelope: {e}"))?;
-    let len = (json.len() as u32).to_be_bytes();
+    let len = u32::try_from(json.len())
+        .map_err(|_| "envelope length exceeds u32 frame".to_string())?
+        .to_be_bytes();
     stream
         .write_all(&len)
         .await

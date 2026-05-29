@@ -664,7 +664,9 @@ mod tests {
         use tokio::net::{TcpListener, TcpStream};
 
         async fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> std::io::Result<()> {
-            let len = (bytes.len() as u32).to_be_bytes();
+            let len = u32::try_from(bytes.len())
+                .expect("test frame length fits u32")
+                .to_be_bytes();
             stream.write_all(&len).await?;
             stream.write_all(bytes).await?;
             stream.flush().await

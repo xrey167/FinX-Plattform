@@ -1018,7 +1018,9 @@ mod tests {
             Err(DaemonClientError::EmptyFrame)
         ));
 
-        let oversized_len = (MAX_DAEMON_FRAME_BYTES as u32 + 1).to_be_bytes();
+        let oversized_len = u32::try_from(MAX_DAEMON_FRAME_BYTES + 1)
+            .expect("oversized test length fits u32")
+            .to_be_bytes();
         let mut oversized = Cursor::new(oversized_len);
         assert!(matches!(
             read_length_delimited_event_frame(&mut oversized),
@@ -1059,7 +1061,11 @@ mod tests {
             trailing,
         ] {
             let json = serde_json::to_vec(&event).expect("serialize event");
-            bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(
+                &u32::try_from(json.len())
+                    .expect("event JSON length fits u32")
+                    .to_be_bytes(),
+            );
             bytes.extend_from_slice(&json);
         }
 
