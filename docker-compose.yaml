@@ -147,6 +147,8 @@ services:
       TDW_PROFILE: docker
       TDW_WORKER_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
       TDW_WORKER_ID: tdw-worker-live
+      # Drive up to 4 leased jobs in parallel within the serve task.
+      TDW_WORKER_CONCURRENCY: "4"
     restart: unless-stopped
 
   tdw-service-daemon:

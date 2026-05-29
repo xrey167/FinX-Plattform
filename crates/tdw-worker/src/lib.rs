@@ -1478,6 +1478,12 @@ pub struct ServeConfig {
     pub worker_id: String,
     pub lease_ttl_ms: u64,
     pub poll_interval_ms: u64,
+    /// Maximum number of jobs to run concurrently (in-flight at once).
+    ///
+    /// `1` preserves strictly serial processing. Higher values let the serve
+    /// loop lease and drive up to N handlers in parallel within the serve task
+    /// (no extra OS threads). Effectively treated as `max(1, n)`.
+    pub max_concurrent: usize,
 }
 
 impl Default for ServeConfig {
@@ -1486,6 +1492,28 @@ impl Default for ServeConfig {
             worker_id: "tdw-worker".to_string(),
             lease_ttl_ms: DEFAULT_LEASE_TTL_MS,
             poll_interval_ms: 500,
+            max_concurrent: 1,
+        }
+    }
+}
+
+/// Outcome of a single leased job, applied to the [`ServeReport`] once its
+/// in-flight future resolves. Kept separate from the report so a job future can
+/// be driven concurrently without touching shared mutable state.
+enum JobOutcome {
+    Completed,
+    Failed { dead_lettered: bool },
+}
+
+/// Fold a finished job's [`JobOutcome`] into the running [`ServeReport`].
+fn record_outcome(report: &mut ServeReport, outcome: JobOutcome) {
+    match outcome {
+        JobOutcome::Completed => report.completed = report.completed.saturating_add(1),
+        JobOutcome::Failed { dead_lettered } => {
+            report.failed = report.failed.saturating_add(1);
+            if dead_lettered {
+                report.dead_lettered = report.dead_lettered.saturating_add(1);
+            }
         }
     }
 }
@@ -1521,49 +1549,65 @@ where
         }
     }
 
-    async fn process_once(&self, report: &mut ServeReport) -> Result<bool> {
-        let Some(leased) = self
-            .queue
-            .lease_next_job_with_ttl(&self.config.worker_id, self.config.lease_ttl_ms)
-            .await?
-        else {
-            return Ok(false);
-        };
-
-        report.processed = report.processed.saturating_add(1);
+    /// Run one already-leased job to its terminal queue state and report the
+    /// outcome. Borrows `&self` only (never the report), so many of these can be
+    /// driven concurrently in a `FuturesUnordered`.
+    async fn run_leased_job(&self, leased: LeasedJob) -> Result<JobOutcome> {
         match self.handler.handle(&leased.job).await {
             Ok(()) => {
                 self.queue.complete(&leased.job.job_id).await?;
-                report.completed = report.completed.saturating_add(1);
+                Ok(JobOutcome::Completed)
             }
             Err(error) => {
                 let status = self.queue.fail(&leased.job.job_id, &error, 0).await?;
-                report.failed = report.failed.saturating_add(1);
-                if status == WorkerJobStatus::DeadLettered {
-                    report.dead_lettered = report.dead_lettered.saturating_add(1);
-                }
+                Ok(JobOutcome::Failed {
+                    dead_lettered: status == WorkerJobStatus::DeadLettered,
+                })
             }
         }
-        Ok(true)
     }
 
     /// Drain every ready job, reap expired leases, and return. Bounded: stops
-    /// as soon as the queue reports no ready job. Used by `--serve-once` and
-    /// tests.
+    /// once the queue reports no ready job and all in-flight jobs have finished.
+    /// Up to `config.max_concurrent` jobs run at once. Used by `--serve-once`
+    /// and tests.
     ///
     /// # Errors
     ///
     /// Returns an error variant if a queue operation fails.
     pub async fn run_until_idle(&self) -> Result<ServeReport> {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+
         let mut report = ServeReport::default();
-        while self.process_once(&mut report).await? {}
+        let max = self.config.max_concurrent.max(1);
+        let mut in_flight = FuturesUnordered::new();
+        loop {
+            while in_flight.len() < max {
+                match self
+                    .queue
+                    .lease_next_job_with_ttl(&self.config.worker_id, self.config.lease_ttl_ms)
+                    .await?
+                {
+                    Some(leased) => {
+                        report.processed = report.processed.saturating_add(1);
+                        in_flight.push(self.run_leased_job(leased));
+                    }
+                    None => break,
+                }
+            }
+            match in_flight.next().await {
+                Some(outcome) => record_outcome(&mut report, outcome?),
+                None => break,
+            }
+        }
         self.queue.reap_expired_leases().await?;
         Ok(report)
     }
 
-    /// Run the lease loop until `shutdown` resolves. In-flight jobs always run
-    /// to completion: `shutdown` is observed only between jobs and while idle,
-    /// so a stop signal never cancels work that has already been leased.
+    /// Run the lease loop until `shutdown` resolves, driving up to
+    /// `config.max_concurrent` jobs concurrently. In-flight jobs always run to
+    /// completion: `shutdown` stops new leases and is then drained, so a stop
+    /// signal never cancels work that has already been leased.
     ///
     /// # Errors
     ///
@@ -1572,31 +1616,63 @@ where
     where
         S: std::future::Future<Output = ()> + Send,
     {
+        use futures_util::stream::{FuturesUnordered, StreamExt};
+
         let mut report = ServeReport::default();
         let mut shutdown = std::pin::pin!(shutdown);
+        let max = self.config.max_concurrent.max(1);
+        let mut in_flight = FuturesUnordered::new();
+        // Once observed, shutdown stops new leases; remaining in-flight jobs are
+        // drained to completion before returning.
+        let mut draining = false;
+
         loop {
-            // Observe shutdown without cancelling any in-flight work.
-            let stop = tokio::select! {
-                biased;
-                () = &mut shutdown => true,
-                () = std::future::ready(()) => false,
-            };
-            if stop {
-                break;
+            // Fill to capacity, observing shutdown between leases without
+            // cancelling any in-flight work.
+            while !draining && in_flight.len() < max {
+                let stop = tokio::select! {
+                    biased;
+                    () = &mut shutdown => true,
+                    () = std::future::ready(()) => false,
+                };
+                if stop {
+                    draining = true;
+                    break;
+                }
+                match self
+                    .queue
+                    .lease_next_job_with_ttl(&self.config.worker_id, self.config.lease_ttl_ms)
+                    .await?
+                {
+                    Some(leased) => {
+                        report.processed = report.processed.saturating_add(1);
+                        in_flight.push(self.run_leased_job(leased));
+                    }
+                    None => break,
+                }
             }
 
-            if self.process_once(&mut report).await? {
+            if in_flight.is_empty() {
+                if draining {
+                    break;
+                }
+                // Idle: reap expired leases, then wait for work or shutdown.
+                self.queue.reap_expired_leases().await?;
+                tokio::select! {
+                    biased;
+                    () = &mut shutdown => draining = true,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(
+                        self.config.poll_interval_ms,
+                    )) => {}
+                }
                 continue;
             }
 
-            // Idle: reap expired leases, then wait for work or shutdown.
-            self.queue.reap_expired_leases().await?;
+            // Drive in-flight work; observe shutdown only until it first fires.
             tokio::select! {
                 biased;
-                () = &mut shutdown => break,
-                () = tokio::time::sleep(std::time::Duration::from_millis(
-                    self.config.poll_interval_ms,
-                )) => {}
+                () = &mut shutdown, if !draining => draining = true,
+                Some(outcome) = in_flight.next() => record_outcome(&mut report, outcome?),
             }
         }
         Ok(report)
@@ -1742,6 +1818,122 @@ mod serve_tests {
         let runner = WorkerRunner::new(queue, LoggingAckHandler, ServeConfig::default());
         let report = runner.run(std::future::ready(())).await.expect("run");
         assert_eq!(report, ServeReport::default());
+    }
+
+    /// Handler that records the peak number of simultaneously in-flight calls.
+    /// Each call holds for a short window so overlap is observable.
+    struct ConcurrencyProbe {
+        current: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        peak: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl JobHandler for ConcurrencyProbe {
+        async fn handle(&self, _job: &WorkerJob) -> std::result::Result<(), String> {
+            use std::sync::atomic::Ordering::SeqCst;
+            let now = self.current.fetch_add(1, SeqCst) + 1;
+            self.peak.fetch_max(now, SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            self.current.fetch_sub(1, SeqCst);
+            Ok(())
+        }
+    }
+
+    /// In-memory `ServeQueue` for runner-logic tests: hands out a fixed set of
+    /// jobs then reports empty. Avoids the SQLite test backend's write-lock
+    /// contention, which would otherwise serialize concurrent completions and
+    /// mask the runner's parallelism.
+    struct MockQueue {
+        pending: std::sync::Mutex<Vec<WorkerJob>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ServeQueue for MockQueue {
+        async fn lease_next_job_with_ttl(
+            &self,
+            worker_id: &str,
+            lease_ttl_ms: u64,
+        ) -> Result<Option<LeasedJob>> {
+            let job = self.pending.lock().expect("mock queue lock").pop();
+            Ok(job.map(|job| LeasedJob {
+                lease: WorkerLease {
+                    job_id: job.job_id.clone(),
+                    worker_id: worker_id.to_string(),
+                    attempt: 1,
+                    lease_expires_at_ms: lease_ttl_ms,
+                },
+                job,
+            }))
+        }
+
+        async fn complete(&self, _job_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn fail(
+            &self,
+            _job_id: &str,
+            _error: &str,
+            _retry_after_ms: u64,
+        ) -> Result<WorkerJobStatus> {
+            Ok(WorkerJobStatus::DeadLettered)
+        }
+
+        async fn reap_expired_leases(&self) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    async fn probe_peak_inflight(job_count: usize, max_concurrent: usize) -> (ServeReport, usize) {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+        let jobs = (0..job_count)
+            .map(|i| job_with(&format!("job-{i}"), 3))
+            .collect();
+        let queue = MockQueue {
+            pending: std::sync::Mutex::new(jobs),
+        };
+        let peak = Arc::new(AtomicUsize::new(0));
+        let probe = ConcurrencyProbe {
+            current: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::clone(&peak),
+        };
+        let config = ServeConfig {
+            max_concurrent,
+            ..ServeConfig::default()
+        };
+        let runner = WorkerRunner::new(queue, probe, config);
+        let report = runner.run_until_idle().await.expect("run");
+        (report, peak.load(SeqCst))
+    }
+
+    #[tokio::test]
+    async fn run_until_idle_runs_jobs_concurrently_up_to_max() {
+        // With max_concurrent = 4 and 4 ready jobs, all four are in-flight at
+        // once (peak == 4), proving the serve loop drives handlers in parallel.
+        let (report, peak) = probe_peak_inflight(4, 4).await;
+        assert_eq!(report.processed, 4);
+        assert_eq!(report.completed, 4);
+        assert_eq!(peak, 4, "all four jobs should overlap in-flight");
+    }
+
+    #[tokio::test]
+    async fn max_concurrent_one_is_strictly_serial() {
+        // The default (1) processes one at a time: peak in-flight is never > 1.
+        let (report, peak) = probe_peak_inflight(3, 1).await;
+        assert_eq!(report.processed, 3);
+        assert_eq!(report.completed, 3);
+        assert_eq!(peak, 1, "serial mode must never overlap jobs");
+    }
+
+    #[tokio::test]
+    async fn concurrency_is_capped_below_job_count() {
+        // 5 jobs, cap 2 → never more than 2 overlap, and all still complete.
+        let (report, peak) = probe_peak_inflight(5, 2).await;
+        assert_eq!(report.processed, 5);
+        assert_eq!(report.completed, 5);
+        assert_eq!(peak, 2, "in-flight count must be capped at max_concurrent");
     }
 }
 
