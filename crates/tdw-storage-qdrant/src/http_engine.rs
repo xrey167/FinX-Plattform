@@ -90,7 +90,11 @@ impl QdrantHttpEngine {
     /// Idempotently create the collection if this engine instance has
     /// not seen it before. Inspects the existence endpoint first to
     /// avoid noisy 409s in the server log.
-    async fn ensure_collection(&self, name: &str, vector_size: usize) -> Result<()> {
+    ///
+    /// Public so deployment bootstrap (`tdw-bootstrap`) can pre-create a
+    /// baseline collection instead of relying on lazy creation at first
+    /// upsert.
+    pub async fn ensure_collection(&self, name: &str, vector_size: usize) -> Result<()> {
         if let Ok(seen) = self.ensured.lock()
             && seen.contains(name)
         {

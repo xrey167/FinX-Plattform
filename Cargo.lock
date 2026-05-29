@@ -3282,7 +3282,10 @@ dependencies = [
  "tdw-outbox",
  "tdw-session",
  "tdw-snapshot",
+ "tdw-storage-clickhouse",
+ "tdw-storage-meilisearch",
  "tdw-storage-postgres",
+ "tdw-storage-qdrant",
  "tdw-storage-s3",
  "tokio",
 ]

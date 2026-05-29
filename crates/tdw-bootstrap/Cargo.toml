@@ -17,7 +17,10 @@ tdw-core = { workspace = true }
 tdw-outbox = { path = "../tdw-outbox", features = ["postgres"] }
 tdw-session = { path = "../tdw-session", features = ["postgres"] }
 tdw-snapshot = { path = "../tdw-snapshot", features = ["postgres"] }
+tdw-storage-clickhouse = { path = "../tdw-storage-clickhouse", features = ["clickhouse"] }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch", features = ["meilisearch"] }
 tdw-storage-postgres = { path = "../tdw-storage-postgres", features = ["postgres"] }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant", features = ["qdrant"] }
 tdw-storage-s3 = { path = "../tdw-storage-s3", features = ["s3"] }
 tokio = { workspace = true }
 
