@@ -562,6 +562,10 @@ pub struct DeferredApprovals {
 }
 
 impl DeferredApprovals {
+    /// # Panics
+    ///
+    /// Panics if the internally generated permission id fails validation
+    /// (should be unreachable in practice).
     pub fn request(
         &mut self,
         action: impl Into<String>,

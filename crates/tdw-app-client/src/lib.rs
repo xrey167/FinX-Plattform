@@ -103,6 +103,11 @@ impl DaemonClientConfig {
         self.timeout
     }
 
+    /// # Errors
+    ///
+    /// Returns `DaemonClientError::InvalidEndpoint` if the endpoint fails
+    /// validation, or `DaemonClientError::UnsupportedTransport` if a Unix
+    /// domain socket transport is requested on a non-Unix platform.
     pub fn validate(&self) -> std::result::Result<(), DaemonClientError> {
         self.endpoint
             .validate()
@@ -142,6 +147,10 @@ impl DaemonClient {
         &self.config
     }
 
+    /// # Errors
+    ///
+    /// Returns a `DaemonClientError` if config validation fails or the
+    /// underlying transport request fails.
     pub fn submit_and_wait(&self, envelope: OpEnvelope) -> DaemonClientResult {
         self.config.validate()?;
         match self.config.endpoint.transport {

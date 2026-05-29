@@ -344,6 +344,10 @@ pub const fn transport_label(t: DaemonTransport) -> &'static str {
 /// Spawn the in-memory outbox→bus relay. The task polls the outbox for
 /// pending records every `tick`, publishes each on the bus, and marks it
 /// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
+///
+/// # Panics
+///
+/// The spawned relay task panics if the outbox or bus mutex is poisoned.
 pub fn spawn_inmemory_relay(
     outbox: std::sync::Arc<std::sync::Mutex<tdw_outbox::InMemoryOutbox>>,
     bus: std::sync::Arc<std::sync::Mutex<tdw_bus::EventBus>>,

@@ -21,6 +21,11 @@ const MAX_HEADER_BYTES: usize = 8 * 1024;
 /// - anything else  → 404.
 ///
 /// Cancellation: returns when `cancel.cancelled()`.
+///
+/// # Errors
+///
+/// Returns an `io::Error` if accepting a connection or reading/writing a
+/// socket fails.
 pub async fn serve_http(
     listener: TcpListener,
     handle: crate::SubmissionHandle,
