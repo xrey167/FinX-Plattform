@@ -104,6 +104,7 @@ impl<T: DataModel> WriteSink<T> for InMemoryBrokerSink {
                 payload,
             });
         }
+        drop(messages);
         Ok(WriteReceipt {
             sink: "broker-recording",
             rows_written,

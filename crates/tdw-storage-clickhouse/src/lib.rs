@@ -203,6 +203,7 @@ impl<T: DataModel> WriteSink<T> for ClickHouseRecordingEngine {
             .lock()
             .map_err(|error| Error::Storage(error.to_string()))?;
         *rows += batch.rows.len();
+        drop(rows);
         Ok(WriteReceipt {
             sink: "clickhouse-recording",
             rows_written: batch.rows.len(),

@@ -63,6 +63,7 @@ impl VectorEngine for InMemoryVectorEngine {
                 collection_points.push(point);
             }
         }
+        drop(collections);
         Ok(())
     }
 
@@ -76,31 +77,35 @@ impl VectorEngine for InMemoryVectorEngine {
                 "query top_k must be greater than zero".to_string(),
             ));
         }
-        let collections = self
-            .collections
-            .lock()
-            .map_err(|error| Error::Storage(error.to_string()))?;
-        let points = collections
-            .get(collection)
-            .ok_or_else(|| Error::Storage(format!("unknown vector collection: {collection}")))?;
-        for point in points {
-            if point.vector.len() != query.vector.len() {
-                return Err(Error::Storage(format!(
-                    "vector dimension mismatch for point {}: query={}, point={}",
-                    point.id,
-                    query.vector.len(),
-                    point.vector.len()
-                )));
+        let mut scored = {
+            let collections = self
+                .collections
+                .lock()
+                .map_err(|error| Error::Storage(error.to_string()))?;
+            let points = collections.get(collection).ok_or_else(|| {
+                Error::Storage(format!("unknown vector collection: {collection}"))
+            })?;
+            for point in points {
+                if point.vector.len() != query.vector.len() {
+                    return Err(Error::Storage(format!(
+                        "vector dimension mismatch for point {}: query={}, point={}",
+                        point.id,
+                        query.vector.len(),
+                        point.vector.len()
+                    )));
+                }
             }
-        }
-        let mut scored = points
-            .iter()
-            .map(|point| ScoredPoint {
-                id: point.id.clone(),
-                score: dot_product(&point.vector, &query.vector),
-                payload: point.payload.clone(),
-            })
-            .collect::<Vec<_>>();
+            let collected = points
+                .iter()
+                .map(|point| ScoredPoint {
+                    id: point.id.clone(),
+                    score: dot_product(&point.vector, &query.vector),
+                    payload: point.payload.clone(),
+                })
+                .collect::<Vec<_>>();
+            drop(collections);
+            collected
+        };
 
         scored.sort_by(|left, right| {
             right

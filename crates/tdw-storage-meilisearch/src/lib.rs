@@ -36,35 +36,40 @@ impl LexicalEngine for InMemoryLexicalEngine {
                 index_docs.push(doc);
             }
         }
+        drop(indices);
         Ok(())
     }
 
     async fn search_text(&self, index: &str, query: TextQuery) -> Result<Vec<ScoredDoc>> {
         validate_index(index)?;
         validate_query(&query)?;
-        let indices = self
-            .indices
-            .lock()
-            .map_err(|error| Error::Storage(error.to_string()))?;
-        let docs = indices
-            .get(index)
-            .ok_or_else(|| Error::Storage(format!("unknown lexical index: {index}")))?;
         let needle = query.text.to_ascii_lowercase();
-        let mut scored = docs
-            .iter()
-            .map(|doc| {
-                let body = doc.body.to_ascii_lowercase();
-                // Match count -> f32 relevance score; match counts are tiny.
-                #[allow(clippy::cast_precision_loss)]
-                let score = body.matches(&needle).count() as f32;
-                ScoredDoc {
-                    id: doc.id.clone(),
-                    score,
-                    fields: doc.fields.clone(),
-                }
-            })
-            .filter(|doc| doc.score > 0.0)
-            .collect::<Vec<_>>();
+        let mut scored = {
+            let indices = self
+                .indices
+                .lock()
+                .map_err(|error| Error::Storage(error.to_string()))?;
+            let docs = indices
+                .get(index)
+                .ok_or_else(|| Error::Storage(format!("unknown lexical index: {index}")))?;
+            let collected = docs
+                .iter()
+                .map(|doc| {
+                    let body = doc.body.to_ascii_lowercase();
+                    // Match count -> f32 relevance score; match counts are tiny.
+                    #[allow(clippy::cast_precision_loss)]
+                    let score = body.matches(&needle).count() as f32;
+                    ScoredDoc {
+                        id: doc.id.clone(),
+                        score,
+                        fields: doc.fields.clone(),
+                    }
+                })
+                .filter(|doc| doc.score > 0.0)
+                .collect::<Vec<_>>();
+            drop(indices);
+            collected
+        };
         scored.sort_by(|left, right| {
             right
                 .score
