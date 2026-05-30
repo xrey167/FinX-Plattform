@@ -856,6 +856,372 @@ mod tests {
 
             result.expect("test timed out");
         }
+
+        // -------------------------------------------------------------------
+        // fu-04: multi-client concurrent-subscriber broadcast fan-out tests
+        //
+        // These pin the broadcast semantics of `serve_http`: a 1024-slot
+        // `broadcast::channel` fans every pumped `EventMsg` out to all live
+        // `GET /events` subscribers, with no replay/history for late joiners,
+        // and a lagging consumer is dropped (`RecvError::Lagged`) without
+        // starving the others.
+        //
+        // Out of scope (deferred — not exercised here): SSE auth,
+        // `Last-Event-ID` reconnect/replay, TLS.
+        // -------------------------------------------------------------------
+
+        /// Open an SSE subscriber: connect, send `GET /events` with the
+        /// `Accept: text/event-stream` header, and consume the response up to
+        /// and including the `\r\n\r\n` header terminator. Returns the open
+        /// stream positioned at the start of the SSE event body.
+        ///
+        /// The header-read is bounded by a 2-second timeout so a stalled
+        /// handshake fails fast with a clear message instead of silently
+        /// consuming the outer test timeout.
+        async fn open_sse(addr: std::net::SocketAddr) -> TcpStream {
+            let mut stream = TcpStream::connect(addr).await.expect("connect sse");
+            stream
+                .write_all(
+                    b"GET /events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n",
+                )
+                .await
+                .expect("write GET /events");
+            stream.flush().await.expect("flush sse request");
+
+            // Drain through the header terminator so the TCP send-buffer for
+            // this connection is ACKed by the server (i.e. serve_http's accept
+            // loop has called tx.subscribe() and spawned the SSE handler task)
+            // before we return. That subscription point — not the header
+            // exchange itself — is what guarantees zero event loss: broadcast
+            // receivers created by tx.subscribe() see every future send.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let mut buf = Vec::new();
+                loop {
+                    let mut chunk = [0u8; 256];
+                    let n = stream.read(&mut chunk).await.expect("read sse headers");
+                    assert_ne!(n, 0, "connection closed before SSE headers completed");
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        // Any bytes after the terminator would be event data;
+                        // the server flushes the SSE header block before any
+                        // event, so the post-terminator remainder must be empty.
+                        assert_eq!(
+                            pos + 4,
+                            buf.len(),
+                            "open_sse: server sent event data before headers completed; bytes would be lost"
+                        );
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("open_sse: timed out reading SSE response headers");
+
+            stream
+        }
+
+        /// POST an `OpEnvelope` to `/op` on a fresh connection and assert the
+        /// server answers `202 Accepted`.
+        async fn post_op(addr: std::net::SocketAddr, env: &OpEnvelope) {
+            let body = serde_json::to_vec(env).expect("serialize envelope");
+            let mut conn = TcpStream::connect(addr).await.expect("connect post");
+            let request = format!(
+                "POST /op HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                body.len()
+            );
+            conn.write_all(request.as_bytes())
+                .await
+                .expect("write request line");
+            conn.write_all(&body).await.expect("write body");
+            conn.flush().await.expect("flush post");
+
+            let mut resp = vec![0u8; 256];
+            let n = conn.read(&mut resp).await.expect("read post response");
+            let resp_str = std::str::from_utf8(&resp[..n]).expect("utf8 response");
+            assert!(
+                resp_str.starts_with("HTTP/1.1 202"),
+                "expected 202 Accepted, got: {resp_str}"
+            );
+        }
+
+        /// Read exactly `expected` SSE events (`data: ...\n\n` frames) from an
+        /// already-handshaken stream, returning the decoded JSON payloads in
+        /// arrival order. Takes ownership of the stream so it can be moved into
+        /// a `tokio::spawn` closure for concurrent multi-subscriber draining.
+        /// Bounded by `timeout` so a stall fails fast instead of hanging the
+        /// test harness forever.
+        async fn read_sse_events(
+            mut stream: TcpStream,
+            expected: usize,
+            timeout: Duration,
+        ) -> Vec<String> {
+            let collected = tokio::time::timeout(timeout, async {
+                let mut acc = Vec::new();
+                let mut payloads = Vec::new();
+                loop {
+                    let mut chunk = [0u8; 1024];
+                    let n = stream.read(&mut chunk).await.expect("read sse event");
+                    if n == 0 {
+                        // Peer closed; return what we have so callers can assert
+                        // on a short (lagging/disconnected) read.
+                        break;
+                    }
+                    acc.extend_from_slice(&chunk[..n]);
+                    // Split off complete `\n\n`-terminated frames.
+                    while let Some(pos) = acc.windows(2).position(|w| w == b"\n\n") {
+                        let frame: Vec<u8> = acc.drain(..pos + 2).collect();
+                        let text = String::from_utf8_lossy(&frame);
+                        for line in text.lines() {
+                            if let Some(json) = line.strip_prefix("data: ") {
+                                payloads.push(json.to_string());
+                            }
+                        }
+                        if payloads.len() >= expected {
+                            return payloads;
+                        }
+                    }
+                }
+                payloads
+            })
+            .await;
+            collected.unwrap_or_else(|_| panic!("timed out waiting for {expected} SSE events"))
+        }
+
+        /// Build an envelope with a fresh, unique `op_id` (UUIDv7 via
+        /// `OpEnvelope::new`) so emitted events can be told apart across the
+        /// broadcast. `OpId` has no public string constructor, so callers that
+        /// need to assert on identity capture `env.op_id.as_str()`.
+        fn make_seq_envelope() -> OpEnvelope {
+            make_test_envelope()
+        }
+
+        /// Emit a realistic `[Started, Completed]` event pair for `env` over the
+        /// mpsc events channel; `serve_http` pumps these onto the broadcast.
+        fn emit_started_completed(evt_tx: &mpsc::UnboundedSender<EventMsg>, env: &OpEnvelope) {
+            evt_tx
+                .send(EventMsg::Started {
+                    op_id: env.op_id.clone(),
+                })
+                .expect("send Started");
+            evt_tx
+                .send(EventMsg::Completed {
+                    op_id: env.op_id.clone(),
+                    summary: None,
+                    result: None,
+                })
+                .expect("send Completed");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn http_broadcasts_to_two_concurrent_subscribers() {
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                    let addr = listener.local_addr().expect("local addr");
+
+                    let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<OpEnvelope>();
+                    let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventMsg>();
+                    let handle = SubmissionHandle { sender: sub_tx };
+
+                    let cancel = CancellationToken::new();
+                    let cancel_srv = cancel.clone();
+                    let serve_join = tokio::spawn(async move {
+                        serve_http(listener, handle, evt_rx, cancel_srv)
+                            .await
+                            .expect("serve_http");
+                    });
+
+                    // Two concurrent subscribers. open_sse completes the HTTP
+                    // header handshake, which means serve_http's accept loop has
+                    // called tx.subscribe() and spawned each SSE handler task — so
+                    // both receivers are live in the broadcast before any POST.
+                    let sub_a = open_sse(addr).await;
+                    let sub_b = open_sse(addr).await;
+
+                    // POST two ops; for each, drain the submission so we know it
+                    // landed, then emit its [Started, Completed] pair.
+                    for _ in 0..2u64 {
+                        let env = make_seq_envelope();
+                        post_op(addr, &env).await;
+                        let received = sub_rx.recv().await.expect("op received");
+                        assert_eq!(received.op_id, env.op_id);
+                        emit_started_completed(&evt_tx, &env);
+                    }
+
+                    // Drain both subscribers CONCURRENTLY. Reading them serially
+                    // would stall: while draining A, nobody reads B, so B's socket
+                    // send-buffer fills and the server task for B blocks, which can
+                    // in turn cause A's inner timeout to blow under CI load.
+                    let reader_a = tokio::spawn(async move {
+                        read_sse_events(sub_a, 4, Duration::from_secs(2)).await
+                    });
+                    let reader_b = tokio::spawn(async move {
+                        read_sse_events(sub_b, 4, Duration::from_secs(2)).await
+                    });
+                    let events_a = reader_a.await.expect("reader A join");
+                    let events_b = reader_b.await.expect("reader B join");
+                    assert_eq!(events_a.len(), 4, "subscriber A should see all 4 events");
+                    assert_eq!(events_b.len(), 4, "subscriber B should see all 4 events");
+
+                    // Deterministic teardown: cancel then await the server task.
+                    // The streams were moved into the reader tasks and are already
+                    // dropped when those tasks completed.
+                    cancel.cancel();
+                    serve_join.await.expect("serve_http join");
+                })
+                .await;
+
+            result.expect("test timed out");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn http_late_subscriber_misses_pre_subscribe_events() {
+            let result = tokio::time::timeout(Duration::from_secs(5), async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+
+                let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<OpEnvelope>();
+                let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventMsg>();
+                let handle = SubmissionHandle { sender: sub_tx };
+
+                let cancel = CancellationToken::new();
+                let cancel_srv = cancel.clone();
+                let serve_join = tokio::spawn(async move {
+                    serve_http(listener, handle, evt_rx, cancel_srv)
+                        .await
+                        .expect("serve_http");
+                });
+
+                // Op #1 is POSTed and fully emitted BEFORE anyone subscribes.
+                let env1 = make_seq_envelope();
+                let op1 = env1.op_id.as_str().to_string();
+                post_op(addr, &env1).await;
+                let r1 = sub_rx.recv().await.expect("op1 received");
+                assert_eq!(r1.op_id, env1.op_id);
+                emit_started_completed(&evt_tx, &env1);
+
+                // Now subscribe. The broadcast has no history, so op #1's events
+                // are gone for this late joiner.
+                let sub = open_sse(addr).await;
+
+                // Op #2 happens after the subscription.
+                let env2 = make_seq_envelope();
+                let op2 = env2.op_id.as_str().to_string();
+                post_op(addr, &env2).await;
+                let r2 = sub_rx.recv().await.expect("op2 received");
+                assert_eq!(r2.op_id, env2.op_id);
+                emit_started_completed(&evt_tx, &env2);
+
+                // The late subscriber sees exactly op #2's two events, and they
+                // reference op #2 (never op #1).
+                let events = read_sse_events(sub, 2, Duration::from_secs(2)).await;
+                assert_eq!(events.len(), 2, "late subscriber should see only op #2");
+                for payload in &events {
+                    assert!(
+                        payload.contains(&op2),
+                        "late subscriber leaked a pre-subscribe event: {payload}"
+                    );
+                    assert!(
+                        !payload.contains(&op1),
+                        "late subscriber must not replay op #1: {payload}"
+                    );
+                }
+
+                // sub was moved into read_sse_events; it is already dropped.
+                cancel.cancel();
+                serve_join.await.expect("serve_http join");
+            })
+            .await;
+
+            result.expect("test timed out");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn http_slow_subscriber_does_not_starve_others() {
+            let result = tokio::time::timeout(Duration::from_secs(20), async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+
+                let (sub_tx, mut sub_rx) = mpsc::unbounded_channel::<OpEnvelope>();
+                let (evt_tx, evt_rx) = mpsc::unbounded_channel::<EventMsg>();
+                let handle = SubmissionHandle { sender: sub_tx };
+
+                let cancel = CancellationToken::new();
+                let cancel_srv = cancel.clone();
+                let serve_join = tokio::spawn(async move {
+                    serve_http(listener, handle, evt_rx, cancel_srv)
+                        .await
+                        .expect("serve_http");
+                });
+
+                // Fast reader and a slow reader that never reads from its socket.
+                let fast = open_sse(addr).await;
+                let slow = open_sse(addr).await;
+
+                // Overflow the 1024-slot broadcast buffer comfortably:
+                // 2000 ops × 2 events = 4000 events. The slow consumer cannot
+                // keep up and will be dropped (Lagged); the fast one must still
+                // receive every event.
+                const OPS: u64 = 2000;
+                const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
+
+                // Drain the fast reader concurrently so the server-side write to
+                // the fast connection never blocks while we are POSTing/emitting.
+                let fast_reader = tokio::spawn(async move {
+                    read_sse_events(fast, EXPECTED_EVENTS, Duration::from_secs(15)).await
+                });
+
+                for _ in 0..OPS {
+                    let env = make_seq_envelope();
+                    handle_submit_and_emit(addr, &mut sub_rx, &evt_tx, &env).await;
+                }
+
+                // The fast subscriber must receive ALL events.
+                let fast_events = fast_reader.await.expect("fast reader join");
+                assert_eq!(
+                    fast_events.len(),
+                    EXPECTED_EVENTS,
+                    "fast subscriber must receive every event despite a slow peer"
+                );
+
+                // The slow subscriber, never having read, must have lagged and
+                // been dropped by the server (`RecvError::Lagged`): it received
+                // strictly fewer than all events. `slow_events.len() == 0` is
+                // also acceptable — the server may lag-drop the receiver before
+                // writing a single byte to the socket. We assert "fewer than
+                // total" rather than an exact count, which is non-deterministic
+                // under the broadcast's overwrite policy.
+                let slow_events =
+                    read_sse_events(slow, EXPECTED_EVENTS, Duration::from_secs(2)).await;
+                assert!(
+                    slow_events.len() < EXPECTED_EVENTS,
+                    "slow subscriber should have lagged/disconnected, got {} of {}",
+                    slow_events.len(),
+                    EXPECTED_EVENTS
+                );
+
+                // slow was moved into read_sse_events; it is already dropped.
+                cancel.cancel();
+                serve_join.await.expect("serve_http join");
+            })
+            .await;
+
+            result.expect("test timed out");
+        }
+
+        /// POST `env`, drain its submission, and emit its `[Started, Completed]`
+        /// pair. Helper for the high-volume slow-consumer test.
+        async fn handle_submit_and_emit(
+            addr: std::net::SocketAddr,
+            sub_rx: &mut mpsc::UnboundedReceiver<OpEnvelope>,
+            evt_tx: &mpsc::UnboundedSender<EventMsg>,
+            env: &OpEnvelope,
+        ) {
+            post_op(addr, env).await;
+            let received = sub_rx.recv().await.expect("op received");
+            assert_eq!(received.op_id, env.op_id);
+            emit_started_completed(evt_tx, env);
+        }
     }
 
     #[test]

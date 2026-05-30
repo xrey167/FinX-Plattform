@@ -34,6 +34,12 @@ test-e2e-pg:
 test-adversarial:
     cargo test -p tdw-tag-rules -p tdw-mask -p tdw-auth -p tdw-auth-oidc
 
+# Opt-in HTTP/SSE transport: not in the default matrix, so the broadcast
+# fan-out and multi-subscriber tests only run with this feature on. Mirrors
+# the CI step.
+test-transport-http:
+    cargo test -p tdw-app-server --features transport-http
+
 coverage:
     cargo llvm-cov --workspace --lcov --output-path lcov.info
 
@@ -92,6 +98,7 @@ ci-local:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo test --workspace --no-default-features
+    cargo test -p tdw-app-server --features transport-http
     cargo run -p xtask -- schema-sync
     cargo run -p xtask -- events schema-check
     cargo run -p xtask -- quality-gate check

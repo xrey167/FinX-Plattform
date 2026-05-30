@@ -46,8 +46,13 @@ jobs:
       - run: cargo clippy -p tdw-rollout --features postgres --all-targets -- -D warnings
       - run: cargo clippy -p tdw-service-api --features daemon-postgres --all-targets -- -D warnings
       - run: cargo clippy -p tdw-service --features daemon-postgres --all-targets -- -D warnings
+      # The HTTP/SSE transport is opt-in (transport-http) and absent from the
+      # default `cargo test --workspace` matrix; lint + test it here so the
+      # broadcast fan-out and multi-subscriber path cannot silently break.
+      - run: cargo clippy -p tdw-app-server --features transport-http --all-targets -- -D warnings
       - run: cargo test -p tdw-udf-wasm --features wasmi
       - run: cargo test -p tdw-sandbox --features udf-wasm
+      - run: cargo test -p tdw-app-server --features transport-http
       - run: cargo deny check
       - run: cargo run -p xtask -- schema-sync
       - run: git diff --exit-code -- docs/schemas/agent
