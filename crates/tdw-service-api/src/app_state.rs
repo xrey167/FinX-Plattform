@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tdw_app_server::CancellationToken;
-use tdw_auth_oidc::{JwksKey, JwtClaims};
+use tdw_auth_oidc::{DEFAULT_ALLOWED_ALGORITHMS, JwksKey, JwtClaims, validate_claims_strict};
 use tdw_bus::EventBus;
 use tdw_config::{PermissionAction, TdwConfig};
 use tdw_core::{
@@ -551,7 +551,7 @@ fn daemon_pg_url() -> Option<String> {
 /// attaches a policy.
 fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
     if matches!(config.profile.as_str(), "prod" | "production") {
-        return None;
+        return build_prod_policy_from_env();
     }
 
     let roles = match config.permissions.default_action {
@@ -576,6 +576,111 @@ fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
             }],
             issuer: LOCAL_POLICY_ISSUER.to_string(),
             audience: LOCAL_POLICY_AUDIENCE.to_string(),
+        },
+        hooks: Vec::new(),
+        hook_execution: tdw_hooks::HookExecutionPolicy::default(),
+        mask_rules: Vec::new(),
+    })
+}
+
+/// Read a required, non-blank environment variable. Returns `None` when the
+/// variable is unset or trims to empty, so callers fail closed.
+fn required_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Production policy wrapper: reads the six `TDW_OIDC_*` environment variables
+/// (trimming, treating blank as absent) and delegates to [`build_prod_policy`].
+///
+/// Returns `None` (fail closed) when any required variable is missing or the
+/// resulting OIDC inputs fail structural validation.
+fn build_prod_policy_from_env() -> Option<PolicyEnforcementConfig> {
+    let issuer = required_env("TDW_OIDC_ISSUER")?;
+    let audience = required_env("TDW_OIDC_AUDIENCE")?;
+    let jwks_spec = required_env("TDW_OIDC_JWKS")?;
+    let subject = required_env("TDW_OIDC_SUBJECT")?;
+    let kid = required_env("TDW_OIDC_KID")?;
+    let roles_spec = std::env::var("TDW_OIDC_ROLES").unwrap_or_default();
+    build_prod_policy(&issuer, &audience, &jwks_spec, &subject, &kid, &roles_spec)
+}
+
+/// Pure (env-free) construction of an auth-backed production policy.
+///
+/// Parses `jwks_spec` (comma-separated `kid:alg` pairs) and `roles_spec`
+/// (comma-separated role names), assembles the principal claims, and validates
+/// the result with [`validate_claims_strict`] against
+/// [`DEFAULT_ALLOWED_ALGORITHMS`]. This checks claim/JWKS structural
+/// consistency only — it does not verify cryptographic signatures.
+///
+/// Returns `None` (fail closed) when the JWKS spec is malformed/empty or
+/// validation rejects the inputs (e.g. unknown kid, unsupported algorithm,
+/// invalid role). Empty/whitespace role entries are skipped.
+fn build_prod_policy(
+    issuer: &str,
+    audience: &str,
+    jwks_spec: &str,
+    subject: &str,
+    kid: &str,
+    roles_spec: &str,
+) -> Option<PolicyEnforcementConfig> {
+    let mut jwks = Vec::new();
+    for pair in jwks_spec.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let (key_id, alg) = pair.split_once(':')?;
+        let key_id = key_id.trim();
+        let alg = alg.trim();
+        if key_id.is_empty() || alg.is_empty() {
+            return None;
+        }
+        jwks.push(JwksKey {
+            kid: key_id.to_string(),
+            alg: alg.to_string(),
+        });
+    }
+    if jwks.is_empty() {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::new();
+    if jwks.iter().any(|k| !seen.insert(k.kid.as_str())) {
+        return None;
+    }
+
+    let roles = roles_spec
+        .split(',')
+        .map(str::trim)
+        .filter(|role| !role.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    let claims = JwtClaims {
+        sub: subject.to_string(),
+        iss: issuer.to_string(),
+        aud: audience.to_string(),
+        kid: kid.to_string(),
+        roles,
+    };
+
+    validate_claims_strict(
+        &claims,
+        &jwks,
+        issuer,
+        audience,
+        &DEFAULT_ALLOWED_ALGORITHMS,
+    )
+    .ok()?;
+
+    Some(PolicyEnforcementConfig {
+        auth: IngressAuthContext {
+            claims,
+            jwks,
+            issuer: issuer.to_string(),
+            audience: audience.to_string(),
         },
         hooks: Vec::new(),
         hook_execution: tdw_hooks::HookExecutionPolicy::default(),
@@ -730,6 +835,195 @@ mod tests {
             .unwrap_or_else(|e| panic!("AppState should build: {e}"));
 
         assert!(state.policy.is_none());
+    }
+
+    #[test]
+    fn build_prod_policy_accepts_valid_oidc_inputs() {
+        let policy = build_prod_policy(
+            "https://issuer.example",
+            "tdw-daemon",
+            "key1:RS256,key2:ES256",
+            "svc:prod",
+            "key1",
+            "analyst,udf_runner",
+        )
+        .expect("valid OIDC inputs should yield a policy");
+
+        assert_eq!(policy.auth.claims.sub, "svc:prod");
+        assert_eq!(policy.auth.issuer, "https://issuer.example");
+        assert_eq!(policy.auth.audience, "tdw-daemon");
+        assert_eq!(policy.auth.claims.kid, "key1");
+        assert_eq!(
+            policy.auth.claims.roles,
+            vec!["analyst".to_string(), "udf_runner".to_string()]
+        );
+        assert!(policy.auth.jwks.iter().any(|key| key.kid == "key1"));
+        assert!(policy.hooks.is_empty());
+        assert!(policy.mask_rules.is_empty());
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_blank_required_fields() {
+        // Blank subject.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:RS256",
+                "   ",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+        // Empty JWKS spec.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+        // Blank issuer.
+        assert!(
+            build_prod_policy("   ", "tdw-daemon", "key1:RS256", "svc:prod", "key1", "").is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_kid_not_in_jwks() {
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:RS256,key2:ES256",
+                "svc:prod",
+                "key3",
+                "",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_unsupported_algorithm() {
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:none",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_malformed_jwks_pair() {
+        // Missing the `:alg` separator.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+        // Empty alg side.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_parses_roles() {
+        let two = build_prod_policy(
+            "https://issuer.example",
+            "tdw-daemon",
+            "key1:RS256",
+            "svc:prod",
+            "key1",
+            "analyst,udf_runner",
+        )
+        .expect("valid inputs");
+        assert_eq!(two.auth.claims.roles.len(), 2);
+
+        let none = build_prod_policy(
+            "https://issuer.example",
+            "tdw-daemon",
+            "key1:RS256",
+            "svc:prod",
+            "key1",
+            "",
+        )
+        .expect("valid inputs with no roles");
+        assert!(none.auth.claims.roles.is_empty());
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_duplicate_kids_in_jwks() {
+        // Same kid with different algs — the second entry would shadow the first;
+        // reject to prevent ambiguous key resolution.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:RS256,key1:ES256",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_whitespace_only_jwks_spec() {
+        // A spec of only delimiters/whitespace segments must be fail-closed.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                ",, ,",
+                "svc:prod",
+                "key1",
+                "",
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn build_prod_policy_rejects_role_with_invalid_characters() {
+        // A space inside a role name is invalid per the role-name grammar.
+        assert!(
+            build_prod_policy(
+                "https://issuer.example",
+                "tdw-daemon",
+                "key1:RS256",
+                "svc:prod",
+                "key1",
+                "analyst,bad role",
+            )
+            .is_none()
+        );
     }
 
     /// With `storage-fs` feature: "default" profile must still use the
