@@ -144,10 +144,12 @@ docker compose --profile live down -v
 
 ## What this does NOT do
 
-- Attach a daemon policy. `tdw-service-daemon` boots with no policy attached, so
-  dispatched operations return `Failed` until a policy is wired; daemon-backed
-  MCP tool calls reach the daemon but get that `Failed` result. Deterministic
-  offline MCP tools work regardless.
+- Auto-configure daemon auth. This compose setup does not wire daemon auth, so
+  `tdw-service-daemon` boots fail-closed (no policy attached) and dispatched
+  operations return `Failed`; daemon-backed MCP tool calls reach the daemon but
+  get that `Failed` result. Deterministic offline MCP tools work regardless. A
+  `prod`/`production` daemon attaches an auth-backed policy when `TDW_OIDC_*` is
+  configured — see "Production auth (TDW_OIDC_*)" in `local-stack-runbook.md`.
 - Back the daemon's own stores with Postgres. `tdw-service-daemon` uses in-memory
   session/rollout defaults for boot; wiring its stores to the live Postgres is a
   further enhancement (the worker IS Postgres-backed).
