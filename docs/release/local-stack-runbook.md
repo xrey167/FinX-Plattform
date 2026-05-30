@@ -93,6 +93,41 @@ docker compose --profile live up -d --build
 docker compose logs tdw-bootstrap   # expect {"step":"done","status":"ok",...}
 ```
 
+## Production auth (TDW_OIDC_*)
+
+The stack above runs with `TDW_PROFILE=docker` (offline). For a **production**
+profile (`TDW_PROFILE=prod` or `production`), the daemon is **fail-closed by
+default**: with no auth configured it attaches no policy and every dispatch
+returns `Failed`. To attach an auth-backed policy, set the following
+environment variables (all read only when the profile is `prod`/`production`):
+
+| Variable           | Required | Meaning                                                                 |
+|--------------------|----------|-------------------------------------------------------------------------|
+| `TDW_OIDC_ISSUER`  | yes      | Expected token issuer (`iss`); must match the principal's claim.        |
+| `TDW_OIDC_AUDIENCE`| yes      | Expected audience (`aud`); must match the principal's claim.            |
+| `TDW_OIDC_JWKS`    | yes      | Comma-separated `kid:alg` pairs, e.g. `key1:RS256,key2:ES256`.          |
+| `TDW_OIDC_SUBJECT` | yes      | Principal subject (`sub`); must be non-empty.                           |
+| `TDW_OIDC_KID`     | yes      | The principal's active key id; must be one of the `TDW_OIDC_JWKS` kids. |
+| `TDW_OIDC_ROLES`   | no       | Comma-separated roles, e.g. `analyst,udf_runner`; empty/unset → none.   |
+
+Allowed algorithms are `RS256` and `ES256`. If any required variable is unset
+or blank, a JWKS pair is malformed, the active `kid` is not in the JWKS, or the
+algorithm is unsupported, the daemon **fails closed** (no policy attached).
+
+This validates claim/JWKS **consistency** (issuer, audience, kid membership,
+allowed algorithm, role name shape) — it does **not** verify cryptographic
+signatures.
+
+```powershell
+$env:TDW_PROFILE      = "prod"
+$env:TDW_OIDC_ISSUER  = "https://issuer.example"
+$env:TDW_OIDC_AUDIENCE= "tdw-daemon"
+$env:TDW_OIDC_JWKS    = "key1:RS256,key2:ES256"
+$env:TDW_OIDC_SUBJECT = "svc:prod"
+$env:TDW_OIDC_KID     = "key1"
+$env:TDW_OIDC_ROLES   = "analyst,udf_runner"
+```
+
 ## Tear down
 
 ```powershell

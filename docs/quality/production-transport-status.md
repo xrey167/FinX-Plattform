@@ -138,7 +138,13 @@ backends are reachable and writable; richer domain schemas are still created
 on first domain write. The `live` profile now runs the full long-running
 surface: a Postgres-backed worker, the `tdw-service` daemon (binds
 `0.0.0.0:7878`), and the `tdw-mcp` Streamable HTTP server (daemon-routed).
-Remaining: attach a daemon policy (dispatches return `Failed` until then) and
+The production profile is fail-closed **by default** (no `TDW_OIDC_*` config →
+no policy attached → dispatches return `Failed`), but it now attaches an
+auth-backed policy when the `TDW_OIDC_*` environment is configured and the OIDC
+inputs pass structural claim/JWKS validation (see the
+[`local-stack-runbook`](../release/local-stack-runbook.md) "Production auth"
+section). Note this validates claim/JWKS *consistency* (issuer, audience, kid ∈
+JWKS, allowed algorithm), not cryptographic signatures. Remaining:
 Postgres-back the daemon's own session/rollout stores. End-to-end run-through
 of the `live` profile requires a Docker daemon.
 

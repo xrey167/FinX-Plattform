@@ -76,6 +76,15 @@ G015 request-path binding landed in `tdw-service-api`:
 - Focused tests cover accepted and denied endpoint calls, invalid ingress
   claims, hook veto, unknown endpoint denial, response masking, accepted UDF
   execution, and denied network-capability UDF execution.
+- The `prod`/`production` profile is fail-closed **by default** (no policy
+  attached → dispatches return `Failed`), but `build_policy` now attempts to
+  attach an auth-backed policy from `TDW_OIDC_*` environment configuration
+  (`TDW_OIDC_ISSUER`, `TDW_OIDC_AUDIENCE`, `TDW_OIDC_JWKS`, `TDW_OIDC_SUBJECT`,
+  `TDW_OIDC_KID`, optional `TDW_OIDC_ROLES`). A pure `build_prod_policy` helper
+  parses + validates these inputs via `tdw-auth-oidc::validate_claims_strict`
+  and is unit-tested without mutating process env; any missing required var,
+  malformed JWKS pair, or validation failure returns `None` (fail closed). This
+  validates claim/JWKS structural consistency, not cryptographic signatures.
 
 Verification: `cargo +stable test -p tdw-service-api -- --nocapture` passed
 18/18 tests.
