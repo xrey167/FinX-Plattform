@@ -80,11 +80,24 @@ G015 request-path binding landed in `tdw-service-api`:
   attached → dispatches return `Failed`), but `build_policy` now attempts to
   attach an auth-backed policy from `TDW_OIDC_*` environment configuration
   (`TDW_OIDC_ISSUER`, `TDW_OIDC_AUDIENCE`, `TDW_OIDC_JWKS`, `TDW_OIDC_SUBJECT`,
-  `TDW_OIDC_KID`, optional `TDW_OIDC_ROLES`). A pure `build_prod_policy` helper
-  parses + validates these inputs via `tdw-auth-oidc::validate_claims_strict`
-  and is unit-tested without mutating process env; any missing required var,
-  malformed JWKS pair, or validation failure returns `None` (fail closed). This
-  validates claim/JWKS structural consistency, not cryptographic signatures.
+  `TDW_OIDC_KID`, optional `TDW_OIDC_ROLES`). The pure `build_prod_policy` helper
+  parses + validates these inputs via `tdw-auth-oidc::validate_claims_strict` and
+  now returns a typed `Result<_, OidcPolicyError>` (`MissingEnvVar`,
+  `MalformedJwksPair`, `DuplicateKid`, `InvalidClaims`) instead of a bare `None`,
+  so a misconfigured prod boot logs the **specific** cause. The env→policy
+  wrapper `build_prod_policy_from_lookup` is injectable (tested without mutating
+  process env): all-six-unset → `Ok(None)` (intentional fail-closed), partial
+  config → `Err(MissingEnvVar(..))`, all-valid → `Ok(Some(_))`.
+  `AppState::policy_attach_error` carries the cause to the daemon boot log. This
+  validates claim/JWKS structural consistency, not cryptographic signatures —
+  see [`production-auth-oidc`](../../release/production-auth-oidc.md).
+- Evidence: per-variant `build_prod_policy_*` unit tests assert the exact
+  `OidcPolicyError`; `build_prod_policy_from_lookup_*` tests cover the
+  unset/partial/valid wrapper semantics; and end-to-end tests prove a prod-built
+  policy resolves a `RunQuery` dispatch to `Completed`
+  (`prod_built_policy_lets_dispatch_resolve_to_completed`) and rejects tampered
+  ingress claims (`prod_built_policy_rejects_invalid_ingress_claims`).
 
-Verification: `cargo +stable test -p tdw-service-api -- --nocapture` passed
-18/18 tests.
+Verification: `cargo test -p tdw-service-api --target-dir target` passed (all
+tests, including the rewritten typed-error unit tests, the injected-lookup
+wrapper tests, and the two prod-policy E2E tests).

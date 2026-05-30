@@ -50,3 +50,16 @@ Ready with follow-ups. No G005 blocker remains inside tdw-auth-oidc; follow-ups 
 `tdw-service-api` now calls `validate_claims_strict` at the secure ingress
 boundary before authorizing or executing an endpoint. The focused G015 tests
 prove an audience mismatch fails before provider or UDF work is dispatched.
+
+## Phase 1 Closeout Evidence
+
+- The crate now carries `//!` module docs stating its **structural-not-signature**
+  scope (claim/JWKS consistency only; no JWT signature verification or JWKS
+  transport), with a pointer to
+  [`production-auth-oidc`](../../release/production-auth-oidc.md).
+- The consumer `tdw-service-api` maps each `ClaimValidationError` to a typed
+  `OidcPolicyError::InvalidClaims(..)` and asserts the exact variant per failure
+  mode (`build_prod_policy_*` unit tests), and proves a prod-built policy both
+  resolves a dispatch and rejects tampered ingress claims at request time
+  (`prod_built_policy_*` E2E tests) — exercising this crate's strict-validation
+  contract end to end.
