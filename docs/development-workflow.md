@@ -8,6 +8,8 @@ rules that already live in [`AGENTS.md`](../AGENTS.md),
 domain-specific doc wins — fix the link here.
 
 The `/feature` slash command (`.claude/commands/feature.md`) automates steps 1–7.
+For the *principles* behind these steps (habits, anti-patterns, known traps), see
+[`best-practices.md`](best-practices.md).
 
 ---
 
