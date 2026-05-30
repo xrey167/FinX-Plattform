@@ -1,6 +1,7 @@
 /target/
 /.worktrees/
-/.claude/
+/.claude/*
+!/.claude/commands/
 /.codex/
 /.mcp.json
 /.env
