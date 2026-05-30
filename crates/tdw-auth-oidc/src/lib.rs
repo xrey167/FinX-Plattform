@@ -1,4 +1,20 @@
 #![forbid(unsafe_code)]
+//! OIDC claim/JWKS **structural** validation for the daemon ingress boundary.
+//!
+//! This crate checks that a set of decoded [`JwtClaims`] is internally
+//! consistent with a local [`JwksKey`] set and the expected issuer/audience:
+//! non-empty subject, issuer/audience match, a non-empty `kid` that is present
+//! in the JWKS, an allowed algorithm (default [`DEFAULT_ALLOWED_ALGORITHMS`] =
+//! `RS256`/`ES256`), and well-formed role names. See [`validate_claims_strict`]
+//! (rich [`ClaimValidationError`]) and the [`validate_claims`] bool shim.
+//!
+//! # Scope: structural, not cryptographic
+//!
+//! It does **not** verify JWT signatures, parse/decode tokens, fetch or refresh
+//! a remote JWKS, or check token expiry — those are tracked follow-ups for the
+//! auth-service adapter. Consumers (notably `tdw-service-api`'s production
+//! `TDW_OIDC_*` policy builder) rely on this for claim/JWKS consistency only.
+//! See `docs/release/production-auth-oidc.md`.
 
 use serde::{Deserialize, Serialize};
 

@@ -95,6 +95,10 @@ docker compose logs tdw-bootstrap   # expect {"step":"done","status":"ok",...}
 
 ## Production auth (TDW_OIDC_*)
 
+> Full reference: [`production-auth-oidc.md`](./production-auth-oidc.md) —
+> consolidated `TDW_OIDC_*` contract, fail-closed semantics, and boot
+> diagnostics. The summary below is kept for convenience.
+
 The stack above runs with `TDW_PROFILE=docker` (offline). For a **production**
 profile (`TDW_PROFILE=prod` or `production`), the daemon is **fail-closed by
 default**: with no auth configured it attaches no policy and every dispatch

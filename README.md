@@ -60,6 +60,13 @@ Work is organized into tranches (`G0NN-<topic>`) that map to active worktrees on
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Security / production auth
+
+The `tdw-service` daemon is fail-closed by default; a `prod`/`production` profile
+attaches an auth-backed ingress policy from the six `TDW_OIDC_*` variables
+(structural claim/JWKS validation, not cryptographic signatures). See
+[`docs/release/production-auth-oidc.md`](docs/release/production-auth-oidc.md).
+
 ## Quickstart
 
 Prerequisites: Rust toolchain pinned by [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.95.0). Docker Desktop is only needed for live container smoke tests; the offline gates run without it.

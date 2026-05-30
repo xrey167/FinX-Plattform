@@ -178,6 +178,18 @@ services:
       TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
       # Postgres-back the daemon's session + rollout stores in live.
       TDW_DAEMON_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
+      # Production OIDC ingress auth. Read ONLY when TDW_PROFILE is prod|production
+      # (this stack runs `docker`, so they are inert here and left commented).
+      # Set all five required vars to attach an auth-backed policy; otherwise the
+      # daemon is fail-closed. JWKS is comma-separated kid:alg pairs (RS256/ES256).
+      # Validation is STRUCTURAL, not cryptographic. See
+      # docs/release/production-auth-oidc.md.
+      # TDW_OIDC_ISSUER: https://issuer.example
+      # TDW_OIDC_AUDIENCE: tdw-daemon
+      # TDW_OIDC_JWKS: key1:RS256,key2:ES256
+      # TDW_OIDC_SUBJECT: svc:prod
+      # TDW_OIDC_KID: key1
+      # TDW_OIDC_ROLES: analyst,udf_runner
     restart: unless-stopped
 
   tdw-mcp-serve:

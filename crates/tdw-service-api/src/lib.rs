@@ -1,4 +1,23 @@
 #![forbid(unsafe_code)]
+//! Daemon service API: the secure request path and composition root.
+//!
+//! This crate wires the daemon's ingress enforcement (`policy`), async op
+//! dispatch (`dispatcher`), and the [`AppState`] composition root
+//! (`app_state`). Every request passes a sync policy guard
+//! (`enforce_request_path_with_backend`): OIDC claim validation via
+//! `tdw-auth-oidc`, role authorization via `tdw-auth`, hook execution via
+//! `tdw-hooks`, and response masking via `tdw-mask`.
+//!
+//! # Production auth scope: structural, not cryptographic
+//!
+//! In a `prod`/`production` profile the policy is built from the six
+//! `TDW_OIDC_*` environment variables (see [`OidcPolicyError`] for the typed
+//! failure causes and `docs/release/production-auth-oidc.md` for the operator
+//! contract). That validation is **structural** — claim/JWKS consistency
+//! (issuer, audience, `kid` ∈ JWKS, allowed algorithm, role shape) — and does
+//! **not** verify JWT cryptographic signatures or fetch a remote JWKS. Non-prod
+//! profiles synthesize a deterministic local-default policy so offline daemon
+//! dispatches resolve; a fully-unset prod profile stays fail-closed by design.
 
 mod app_state;
 mod dispatcher;
@@ -6,7 +25,7 @@ mod event_sink;
 mod policy;
 mod stream_ingest;
 
-pub use app_state::AppState;
+pub use app_state::{AppState, OidcPolicyError};
 pub use dispatcher::dispatch_op;
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,

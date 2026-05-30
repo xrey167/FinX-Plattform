@@ -177,6 +177,12 @@ pub struct AppState {
     pub outbox: Arc<Mutex<InMemoryOutbox>>,
     pub snapshot: Arc<Mutex<SnapshotStore>>,
     pub policy: Option<PolicyEnforcementConfig>,
+    /// In a `prod`/`production` boot, the specific reason no auth-backed policy
+    /// was attached when the OIDC config was *partially* present or invalid.
+    /// `None` for a fully-unset (intentional fail-closed) prod boot and for all
+    /// non-prod profiles (which synthesize a local policy). Read at boot to log
+    /// the actionable cause; see `tdw-service/src/main.rs`.
+    pub policy_attach_error: Option<OidcPolicyError>,
     pub session: SessionBackend,
     pub rollout: RolloutBackend,
     /// Live streaming-ingest tasks keyed by `stream_id`. Shared by reference
@@ -203,7 +209,7 @@ impl AppState {
         let (session, rollout) = build_durable_stores(&config).await?;
 
         let blob: Arc<dyn BlobEngine> = select_blob_engine(&config);
-        let policy = build_policy(&config);
+        let (policy, policy_attach_error) = build_policy(&config);
 
         Ok(Self {
             config,
@@ -217,6 +223,7 @@ impl AppState {
             outbox: Arc::new(Mutex::new(InMemoryOutbox::default())),
             snapshot: Arc::new(Mutex::new(SnapshotStore::default())),
             policy,
+            policy_attach_error,
             session,
             rollout,
             streams: Arc::new(Mutex::new(HashMap::new())),
@@ -543,15 +550,49 @@ fn daemon_pg_url() -> Option<String> {
         })
 }
 
+/// Typed failure cause for production OIDC policy construction.
+///
+/// Each variant names a specific, operator-actionable reason the auth-backed
+/// production policy could not be attached, so a misconfigured `prod`/`production`
+/// boot can log *why* it fell back to fail-closed (rather than collapsing every
+/// cause to a bare `None`). `InvalidClaims` carries the rich
+/// [`tdw_auth_oidc::ClaimValidationError`] from structural validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OidcPolicyError {
+    /// A required `TDW_OIDC_*` variable was unset or blank (the named var).
+    MissingEnvVar(&'static str),
+    /// A `kid:alg` JWKS segment was malformed (missing `:` or an empty side).
+    MalformedJwksPair(String),
+    /// The same `kid` appeared more than once in the JWKS spec.
+    DuplicateKid(String),
+    /// Structural claim/JWKS validation rejected the inputs.
+    InvalidClaims(tdw_auth_oidc::ClaimValidationError),
+}
+
+impl std::fmt::Display for OidcPolicyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingEnvVar(var) => write!(f, "{var} missing"),
+            Self::MalformedJwksPair(pair) => write!(f, "malformed JWKS pair: {pair}"),
+            Self::DuplicateKid(kid) => write!(f, "duplicate kid in JWKS: {kid}"),
+            Self::InvalidClaims(error) => write!(f, "invalid claims: {error:?}"),
+        }
+    }
+}
+
 /// Build the daemon policy from config.
 ///
 /// Local/non-production profiles synthesize a deterministic principal so
 /// offline daemon tests can execute real dispatch paths. Production profiles do
 /// not synthesize credentials; they remain fail-closed until real ingress auth
-/// attaches a policy.
-fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
+/// attaches a policy. Any production attach failure is returned alongside the
+/// (absent) policy so the caller can surface the specific cause at boot.
+fn build_policy(config: &TdwConfig) -> (Option<PolicyEnforcementConfig>, Option<OidcPolicyError>) {
     if matches!(config.profile.as_str(), "prod" | "production") {
-        return build_prod_policy_from_env();
+        return match build_prod_policy_from_env() {
+            Ok(policy) => (policy, None),
+            Err(error) => (None, Some(error)),
+        };
     }
 
     let roles = match config.permissions.default_action {
@@ -561,26 +602,29 @@ fn build_policy(config: &TdwConfig) -> Option<PolicyEnforcementConfig> {
         PermissionAction::Deny => Vec::new(),
     };
 
-    Some(PolicyEnforcementConfig {
-        auth: IngressAuthContext {
-            claims: JwtClaims {
-                sub: "local:default".to_string(),
-                iss: LOCAL_POLICY_ISSUER.to_string(),
-                aud: LOCAL_POLICY_AUDIENCE.to_string(),
-                kid: LOCAL_POLICY_KID.to_string(),
-                roles,
+    (
+        Some(PolicyEnforcementConfig {
+            auth: IngressAuthContext {
+                claims: JwtClaims {
+                    sub: "local:default".to_string(),
+                    iss: LOCAL_POLICY_ISSUER.to_string(),
+                    aud: LOCAL_POLICY_AUDIENCE.to_string(),
+                    kid: LOCAL_POLICY_KID.to_string(),
+                    roles,
+                },
+                jwks: vec![JwksKey {
+                    kid: LOCAL_POLICY_KID.to_string(),
+                    alg: "RS256".to_string(),
+                }],
+                issuer: LOCAL_POLICY_ISSUER.to_string(),
+                audience: LOCAL_POLICY_AUDIENCE.to_string(),
             },
-            jwks: vec![JwksKey {
-                kid: LOCAL_POLICY_KID.to_string(),
-                alg: "RS256".to_string(),
-            }],
-            issuer: LOCAL_POLICY_ISSUER.to_string(),
-            audience: LOCAL_POLICY_AUDIENCE.to_string(),
-        },
-        hooks: Vec::new(),
-        hook_execution: tdw_hooks::HookExecutionPolicy::default(),
-        mask_rules: Vec::new(),
-    })
+            hooks: Vec::new(),
+            hook_execution: tdw_hooks::HookExecutionPolicy::default(),
+            mask_rules: Vec::new(),
+        }),
+        None,
+    )
 }
 
 /// Read a required, non-blank environment variable. Returns `None` when the
@@ -592,19 +636,81 @@ fn required_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// Production policy wrapper: reads the six `TDW_OIDC_*` environment variables
-/// (trimming, treating blank as absent) and delegates to [`build_prod_policy`].
+/// The five required `TDW_OIDC_*` variables, in the order they are read.
+const REQUIRED_OIDC_VARS: [&str; 5] = [
+    "TDW_OIDC_ISSUER",
+    "TDW_OIDC_AUDIENCE",
+    "TDW_OIDC_JWKS",
+    "TDW_OIDC_SUBJECT",
+    "TDW_OIDC_KID",
+];
+
+/// Production policy wrapper: reads the five required `TDW_OIDC_*` variables via
+/// [`required_env`] (plus the optional `TDW_OIDC_ROLES`) and delegates to
+/// [`build_prod_policy_from_lookup`].
 ///
-/// Returns `None` (fail closed) when any required variable is missing or the
-/// resulting OIDC inputs fail structural validation.
-fn build_prod_policy_from_env() -> Option<PolicyEnforcementConfig> {
-    let issuer = required_env("TDW_OIDC_ISSUER")?;
-    let audience = required_env("TDW_OIDC_AUDIENCE")?;
-    let jwks_spec = required_env("TDW_OIDC_JWKS")?;
-    let subject = required_env("TDW_OIDC_SUBJECT")?;
-    let kid = required_env("TDW_OIDC_KID")?;
-    let roles_spec = std::env::var("TDW_OIDC_ROLES").unwrap_or_default();
-    build_prod_policy(&issuer, &audience, &jwks_spec, &subject, &kid, &roles_spec)
+/// See [`build_prod_policy_from_lookup`] for the all-unset/partial/valid
+/// semantics.
+///
+/// # Errors
+///
+/// Returns [`OidcPolicyError`] when some (but not all) required variables are
+/// set, or when the OIDC inputs fail structural validation.
+fn build_prod_policy_from_env()
+-> std::result::Result<Option<PolicyEnforcementConfig>, OidcPolicyError> {
+    build_prod_policy_from_lookup(required_env)
+}
+
+/// Env-injectable production policy construction.
+///
+/// `lookup` returns the trimmed, non-blank value of a `TDW_OIDC_*` variable (or
+/// `None` when unset/blank). Taking a closure keeps this race-free and testable
+/// without mutating the process environment.
+///
+/// Semantics:
+/// - **all five required vars unset → `Ok(None)`** (deliberately unconfigured,
+///   fail-closed by design — not an error).
+/// - **some required vars present, others missing → `Err(MissingEnvVar(..))`**
+///   naming the first missing required var (a partial misconfiguration).
+/// - **all required present but parse/validation fails → `Err(..)`**.
+/// - **all valid → `Ok(Some(policy))`**.
+///
+/// `TDW_OIDC_ROLES` is optional and never triggers the missing-var path.
+///
+/// # Errors
+///
+/// Returns [`OidcPolicyError`] for a partial configuration or any
+/// parse/validation failure (see semantics above).
+fn build_prod_policy_from_lookup(
+    lookup: impl Fn(&str) -> Option<String>,
+) -> std::result::Result<Option<PolicyEnforcementConfig>, OidcPolicyError> {
+    let resolved: Vec<Option<String>> = REQUIRED_OIDC_VARS.iter().map(|key| lookup(key)).collect();
+
+    // All five required vars unset: intentionally unconfigured, fail closed.
+    if resolved.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+
+    // Some present, some missing: a partial misconfiguration is an error so the
+    // operator sees which var to set rather than a silent fail-closed.
+    let mut required = Vec::with_capacity(REQUIRED_OIDC_VARS.len());
+    for (key, value) in REQUIRED_OIDC_VARS.iter().zip(resolved) {
+        match value {
+            Some(value) => required.push(value),
+            None => return Err(OidcPolicyError::MissingEnvVar(key)),
+        }
+    }
+
+    let roles_spec = lookup("TDW_OIDC_ROLES").unwrap_or_default();
+    build_prod_policy(
+        &required[0],
+        &required[1],
+        &required[2],
+        &required[3],
+        &required[4],
+        &roles_spec,
+    )
+    .map(Some)
 }
 
 /// Pure (env-free) construction of an auth-backed production policy.
@@ -615,9 +721,17 @@ fn build_prod_policy_from_env() -> Option<PolicyEnforcementConfig> {
 /// [`DEFAULT_ALLOWED_ALGORITHMS`]. This checks claim/JWKS structural
 /// consistency only — it does not verify cryptographic signatures.
 ///
-/// Returns `None` (fail closed) when the JWKS spec is malformed/empty or
-/// validation rejects the inputs (e.g. unknown kid, unsupported algorithm,
-/// invalid role). Empty/whitespace role entries are skipped.
+/// Returns an [`OidcPolicyError`] (fail closed) when the JWKS spec is
+/// malformed/empty or validation rejects the inputs (e.g. unknown kid,
+/// unsupported algorithm, invalid role). Empty/whitespace role entries are
+/// skipped.
+///
+/// # Errors
+///
+/// - [`OidcPolicyError::MalformedJwksPair`] when a `kid:alg` segment is missing
+///   its `:` separator, has an empty side, or the whole spec is empty/blank.
+/// - [`OidcPolicyError::DuplicateKid`] when a `kid` appears more than once.
+/// - [`OidcPolicyError::InvalidClaims`] when structural validation fails.
 fn build_prod_policy(
     issuer: &str,
     audience: &str,
@@ -625,18 +739,20 @@ fn build_prod_policy(
     subject: &str,
     kid: &str,
     roles_spec: &str,
-) -> Option<PolicyEnforcementConfig> {
+) -> std::result::Result<PolicyEnforcementConfig, OidcPolicyError> {
     let mut jwks = Vec::new();
     for pair in jwks_spec.split(',') {
         let pair = pair.trim();
         if pair.is_empty() {
             continue;
         }
-        let (key_id, alg) = pair.split_once(':')?;
+        let (key_id, alg) = pair
+            .split_once(':')
+            .ok_or_else(|| OidcPolicyError::MalformedJwksPair(pair.to_string()))?;
         let key_id = key_id.trim();
         let alg = alg.trim();
         if key_id.is_empty() || alg.is_empty() {
-            return None;
+            return Err(OidcPolicyError::MalformedJwksPair(pair.to_string()));
         }
         jwks.push(JwksKey {
             kid: key_id.to_string(),
@@ -644,11 +760,11 @@ fn build_prod_policy(
         });
     }
     if jwks.is_empty() {
-        return None;
+        return Err(OidcPolicyError::MalformedJwksPair(jwks_spec.to_string()));
     }
     let mut seen = std::collections::HashSet::new();
-    if jwks.iter().any(|k| !seen.insert(k.kid.as_str())) {
-        return None;
+    if let Some(duplicate) = jwks.iter().find(|k| !seen.insert(k.kid.as_str())) {
+        return Err(OidcPolicyError::DuplicateKid(duplicate.kid.clone()));
     }
 
     let roles = roles_spec
@@ -673,9 +789,9 @@ fn build_prod_policy(
         audience,
         &DEFAULT_ALLOWED_ALGORITHMS,
     )
-    .ok()?;
+    .map_err(OidcPolicyError::InvalidClaims)?;
 
-    Some(PolicyEnforcementConfig {
+    Ok(PolicyEnforcementConfig {
         auth: IngressAuthContext {
             claims,
             jwks,
@@ -864,8 +980,8 @@ mod tests {
 
     #[test]
     fn build_prod_policy_rejects_blank_required_fields() {
-        // Blank subject.
-        assert!(
+        // Blank subject → claim validation rejects an empty `sub`.
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -873,11 +989,13 @@ mod tests {
                 "   ",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::InvalidClaims(
+                tdw_auth_oidc::ClaimValidationError::EmptySubject
+            ))
         );
-        // Empty JWKS spec.
-        assert!(
+        // Empty JWKS spec → malformed (no usable pairs); carries the raw spec.
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -885,18 +1003,21 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::MalformedJwksPair(String::new()))
         );
-        // Blank issuer.
-        assert!(
-            build_prod_policy("   ", "tdw-daemon", "key1:RS256", "svc:prod", "key1", "").is_none()
+        // Blank issuer → claim validation rejects an issuer mismatch/empty.
+        assert_eq!(
+            build_prod_policy("   ", "tdw-daemon", "key1:RS256", "svc:prod", "key1", ""),
+            Err(OidcPolicyError::InvalidClaims(
+                tdw_auth_oidc::ClaimValidationError::IssuerMismatch
+            ))
         );
     }
 
     #[test]
     fn build_prod_policy_rejects_kid_not_in_jwks() {
-        assert!(
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -904,14 +1025,16 @@ mod tests {
                 "svc:prod",
                 "key3",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::InvalidClaims(
+                tdw_auth_oidc::ClaimValidationError::UnknownKeyId
+            ))
         );
     }
 
     #[test]
     fn build_prod_policy_rejects_unsupported_algorithm() {
-        assert!(
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -919,15 +1042,17 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::InvalidClaims(
+                tdw_auth_oidc::ClaimValidationError::UnsupportedAlgorithm
+            ))
         );
     }
 
     #[test]
     fn build_prod_policy_rejects_malformed_jwks_pair() {
-        // Missing the `:alg` separator.
-        assert!(
+        // Missing the `:alg` separator → carries the offending segment.
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -935,11 +1060,11 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::MalformedJwksPair("key1".to_string()))
         );
-        // Empty alg side.
-        assert!(
+        // Empty alg side → still malformed, carries the offending segment.
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -947,8 +1072,8 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::MalformedJwksPair("key1:".to_string()))
         );
     }
 
@@ -981,7 +1106,7 @@ mod tests {
     fn build_prod_policy_rejects_duplicate_kids_in_jwks() {
         // Same kid with different algs — the second entry would shadow the first;
         // reject to prevent ambiguous key resolution.
-        assert!(
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -989,15 +1114,16 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::DuplicateKid("key1".to_string()))
         );
     }
 
     #[test]
     fn build_prod_policy_rejects_whitespace_only_jwks_spec() {
-        // A spec of only delimiters/whitespace segments must be fail-closed.
-        assert!(
+        // A spec of only delimiters/whitespace segments must be fail-closed;
+        // no usable pairs → malformed (carries the raw spec).
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -1005,15 +1131,15 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::MalformedJwksPair(",, ,".to_string()))
         );
     }
 
     #[test]
     fn build_prod_policy_rejects_role_with_invalid_characters() {
         // A space inside a role name is invalid per the role-name grammar.
-        assert!(
+        assert_eq!(
             build_prod_policy(
                 "https://issuer.example",
                 "tdw-daemon",
@@ -1021,8 +1147,130 @@ mod tests {
                 "svc:prod",
                 "key1",
                 "analyst,bad role",
-            )
-            .is_none()
+            ),
+            Err(OidcPolicyError::InvalidClaims(
+                tdw_auth_oidc::ClaimValidationError::InvalidRole
+            ))
+        );
+    }
+
+    /// Exact `valid_oidc_inputs` set used by the wrapper + E2E tests.
+    fn valid_oidc_lookup(key: &str) -> Option<String> {
+        match key {
+            "TDW_OIDC_ISSUER" => Some("https://issuer.example".to_string()),
+            "TDW_OIDC_AUDIENCE" => Some("tdw-daemon".to_string()),
+            "TDW_OIDC_JWKS" => Some("key1:RS256,key2:ES256".to_string()),
+            "TDW_OIDC_SUBJECT" => Some("svc:prod".to_string()),
+            "TDW_OIDC_KID" => Some("key1".to_string()),
+            "TDW_OIDC_ROLES" => Some("analyst,udf_runner".to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn build_prod_policy_from_lookup_all_unset_is_ok_none() {
+        // No TDW_OIDC_* present at all: a deliberately unconfigured prod boot is
+        // fail-closed by design, not an error.
+        let result = build_prod_policy_from_lookup(|_| None).expect("all-unset must be Ok(None)");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn build_prod_policy_from_lookup_partial_config_names_missing_var() {
+        // Issuer + audience present, JWKS (a required var) missing: the wrapper
+        // must surface the first missing required var, not silently fail closed.
+        let map = std::collections::HashMap::from([
+            ("TDW_OIDC_ISSUER", "https://issuer.example"),
+            ("TDW_OIDC_AUDIENCE", "tdw-daemon"),
+        ]);
+        let result = build_prod_policy_from_lookup(|key| map.get(key).map(ToString::to_string));
+        assert_eq!(result, Err(OidcPolicyError::MissingEnvVar("TDW_OIDC_JWKS")));
+    }
+
+    #[test]
+    fn build_prod_policy_from_lookup_all_valid_is_ok_some() {
+        let policy = build_prod_policy_from_lookup(valid_oidc_lookup)
+            .expect("all-valid must be Ok")
+            .expect("all-valid must yield Some(policy)");
+        assert_eq!(policy.auth.claims.sub, "svc:prod");
+        assert_eq!(policy.auth.issuer, "https://issuer.example");
+        assert_eq!(
+            policy.auth.claims.roles,
+            vec!["analyst".to_string(), "udf_runner".to_string()]
+        );
+    }
+
+    /// Build the same valid production policy the wrapper would, directly via
+    /// the pure fn (no env), so the E2E tests stay race-free in the parallel
+    /// suite. `analyst` is included so the `RunQuery` (analyst-gated) endpoint
+    /// authorizes.
+    fn prod_built_policy() -> PolicyEnforcementConfig {
+        build_prod_policy(
+            "https://issuer.example",
+            "tdw-daemon",
+            "key1:RS256,key2:ES256",
+            "svc:prod",
+            "key1",
+            "analyst,udf_runner",
+        )
+        .expect("valid prod OIDC inputs should yield a policy")
+    }
+
+    #[tokio::test]
+    async fn prod_built_policy_lets_dispatch_resolve_to_completed() {
+        use tdw_protocol::{ActorKind, ActorRef, EventMsg, Op, OpEnvelope, SessionId};
+
+        // The HIGH gap: prove a *prod-built* policy actually resolves a dispatch
+        // (not just the in-memory `policy_config` ones in the unit suite).
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(prod_built_policy());
+
+        let env = OpEnvelope::new(
+            SessionId::new("session-prod-e2e").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "user:test".to_string(),
+                kind: ActorKind::User,
+                tenant_id: Some("default".to_string()),
+            },
+            Op::RunQuery {
+                sql: "select 1".to_string(),
+                plan_id: None,
+                cost_hint: None,
+            },
+        );
+        let op_id = env.op_id.clone();
+        let events = crate::dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            EventMsg::Started { op_id: started } => assert_eq!(started, &op_id),
+            other => panic!("expected Started, got {other:?}"),
+        }
+        match &events[1] {
+            EventMsg::Completed {
+                op_id: completed, ..
+            } => assert_eq!(completed, &op_id),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn prod_built_policy_rejects_invalid_ingress_claims() {
+        // The request-time `validate_claims` gate must also hold for prod-built
+        // policies: a tampered ingress claim (audience mismatch) is rejected
+        // before any provider/UDF work runs.
+        let mut policy = prod_built_policy();
+        policy.auth.claims.aud = "attacker-audience".to_string();
+
+        let mut backend = tdw_hooks::SystemHookHandlerBackend::default();
+        let rejected =
+            crate::secure_endpoint_response_with_backend(&policy, "fileset", "aapl", &mut backend)
+                .expect_err("tampered ingress claims must be rejected");
+        assert!(
+            rejected.to_string().contains("ingress jwt rejected"),
+            "expected ingress rejection, got: {rejected}"
         );
     }
 

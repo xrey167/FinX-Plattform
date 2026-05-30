@@ -149,7 +149,7 @@ docker compose --profile live down -v
   operations return `Failed`; daemon-backed MCP tool calls reach the daemon but
   get that `Failed` result. Deterministic offline MCP tools work regardless. A
   `prod`/`production` daemon attaches an auth-backed policy when `TDW_OIDC_*` is
-  configured — see "Production auth (TDW_OIDC_*)" in `local-stack-runbook.md`.
+  configured — see [`production-auth-oidc.md`](./production-auth-oidc.md).
 - Back the daemon's own stores with Postgres. `tdw-service-daemon` uses in-memory
   session/rollout defaults for boot; wiring its stores to the live Postgres is a
   further enhancement (the worker IS Postgres-backed).

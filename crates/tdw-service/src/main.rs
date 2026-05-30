@@ -52,9 +52,17 @@ async fn main() -> Result<(), ServiceError> {
             "tdw-service: daemon starting in '{}' profile with a policy attached; dispatches will resolve",
             config.profile
         );
+    } else if let Some(error) = &state.policy_attach_error {
+        // Production profile with a partial/invalid TDW_OIDC_* config: name the
+        // specific cause (which var is missing, or which structural validation
+        // failed) so the misconfiguration is diagnosable from the boot log.
+        eprintln!(
+            "tdw-service: daemon starting in '{}' profile with no policy attached: {error}; configure TDW_OIDC_* correctly so dispatches resolve",
+            config.profile
+        );
     } else {
         eprintln!(
-            "tdw-service: daemon starting in '{}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired",
+            "tdw-service: daemon starting in '{}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired (configure TDW_OIDC_*)",
             config.profile
         );
     }
