@@ -34,8 +34,7 @@
       },
       "required": [
         "uri",
-        "kind",
-        "tags"
+        "kind"
       ],
       "type": "object"
     },
@@ -58,8 +57,7 @@
       },
       "required": [
         "case_id",
-        "prompt",
-        "expected_refs"
+        "prompt"
       ],
       "type": "object"
     }
@@ -88,8 +86,7 @@
   "required": [
     "run_id",
     "agent_id",
-    "dataset_id",
-    "cases"
+    "dataset_id"
   ],
   "title": "EvalRunRequest",
   "type": "object"
