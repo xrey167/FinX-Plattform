@@ -44,7 +44,11 @@ async fn knowledge_index_then_search_returns_the_document() {
         .await
         .expect("knowledge search should succeed");
 
-    assert_eq!(hits.len(), 1, "search must surface exactly the one indexed doc");
+    assert_eq!(
+        hits.len(),
+        1,
+        "search must surface exactly the one indexed doc"
+    );
     assert_eq!(hits[0].id, "doc-aapl-momentum");
     assert_eq!(hits[0].entity_id, "instrument:AAPL");
 }
@@ -64,7 +68,11 @@ async fn working_memory_expires_on_first_consolidation_pass() {
     assert_eq!(backend.list_memories().await.len(), 1);
 
     let actions = backend.consolidate_now().await.expect("consolidate");
-    assert_eq!(actions.len(), 1, "the working buffer yields exactly one action");
+    assert_eq!(
+        actions.len(),
+        1,
+        "the working buffer yields exactly one action"
+    );
     assert!(
         actions
             .iter()
@@ -162,7 +170,10 @@ fn eval_feedback_updates_learning_skill_and_skips_configured_skill() {
         .expect("the Learning skill must have accrued quality state");
     assert_eq!(quality.runs, 1, "exactly one eval fed back");
     assert_eq!(quality.pass_rate, Some(1.0), "the case passed");
-    assert!(!quality.disabled, "pass_rate >= threshold keeps the skill enabled");
+    assert!(
+        !quality.disabled,
+        "pass_rate >= threshold keeps the skill enabled"
+    );
     assert_eq!(
         quality.last_eval.as_deref(),
         Some("2026-05-31T00:00:00+00:00")

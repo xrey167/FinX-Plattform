@@ -66,7 +66,9 @@ async fn knowledge_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
             tags: vec!["asset:equity".to_string()],
         })
         .await?;
-    println!("[knowledge] indexed 1 document (in-memory embedder; durable under real-qdrant + TDW_QDRANT_URL)");
+    println!(
+        "[knowledge] indexed 1 document (in-memory embedder; durable under real-qdrant + TDW_QDRANT_URL)"
+    );
 
     let hits = backend.knowledge_search("AAPL momentum", 1).await?;
     let top = hits.first().ok_or("knowledge search returned no hit")?;
@@ -80,7 +82,9 @@ async fn knowledge_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
 /// Capability 2 — the memory consolidation loop expires an ephemeral working
 /// buffer on the first pass.
 async fn memory_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
-    backend.upsert_memory(working_memory("scratch-buffer")).await?;
+    backend
+        .upsert_memory(working_memory("scratch-buffer"))
+        .await?;
     println!(
         "[memory] upserted a Working-tier memory; store now holds {}",
         backend.list_memories().await.len()
@@ -97,7 +101,9 @@ async fn memory_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
     println!(
         "[memory] after consolidation, store holds {} memories (buffer expired = {})",
         remaining.len(),
-        remaining.iter().all(|m| m.meta.base.name != "scratch-buffer")
+        remaining
+            .iter()
+            .all(|m| m.meta.base.name != "scratch-buffer")
     );
     Ok(())
 }

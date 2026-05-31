@@ -40,7 +40,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     cfg.tdw.daemon.tcp_bind = Some("127.0.0.1:0".to_string());
 
     let mut backend = Backend::in_memory_for_tests().await;
-    println!("[data] built in-memory backend ({} providers)", backend.registry().entries().len());
+    println!(
+        "[data] built in-memory backend ({} providers)",
+        backend.registry().entries().len()
+    );
 
     // --- 2. Serve the daemon in-process (Both-style) and read its address. ---
     backend.serve(&cfg).await?;
@@ -122,7 +125,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tokio::time::timeout(Duration::from_secs(3), backend.shutdown())
         .await
         .map_err(|_| "daemon shutdown hung")??;
-    println!("[data] daemon shut down; bound_addr cleared = {}", backend.bound_addr().is_none());
+    println!(
+        "[data] daemon shut down; bound_addr cleared = {}",
+        backend.bound_addr().is_none()
+    );
 
     Ok(())
 }

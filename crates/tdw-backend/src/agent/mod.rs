@@ -13,15 +13,15 @@ use std::sync::Arc;
 
 use tdw_agent::{AgentCard, EntityKind, EvalRunRequest, Registry, WorkflowDefinition};
 use tdw_agent_store::AgentStore;
+use tdw_app_client::DaemonClientConfig;
 use tdw_eval_runner::{EvalRunOutcome, EvalRunner, StubLanguageModel};
-use tdw_llm::LanguageModel;
 use tdw_event::EventEnvelope;
 use tdw_feature_store::{FeatureSnapshot, FeatureStore};
 use tdw_hooks::{
     HookExecutionOutcome, HookExecutionPolicy, HookRegistry, HookSpec, SystemHookHandlerBackend,
 };
 use tdw_kg::{Entity, KnowledgeGraph, Relationship};
-use tdw_app_client::DaemonClientConfig;
+use tdw_llm::LanguageModel;
 use tdw_mcp::McpServer;
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use tdw_tool_exec::{CommandPolicy, ToolExecutor, ToolOutcome};
@@ -198,11 +198,7 @@ impl AgentBackend {
     ///
     /// Returns [`crate::error::BackendError::Exec`] if the tool is unknown, unbound, rejected
     /// by policy, or fails to execute.
-    pub fn call_tool(
-        &self,
-        name: &str,
-        args: &serde_json::Value,
-    ) -> BackendResult<ToolOutcome> {
+    pub fn call_tool(&self, name: &str, args: &serde_json::Value) -> BackendResult<ToolOutcome> {
         Ok(self.executor.execute(&self.registry, name, args)?)
     }
 
@@ -448,11 +444,9 @@ impl AgentBackend {
         &mut self,
         envelope: &EventEnvelope<serde_json::Value>,
     ) -> BackendResult<Vec<HookExecutionOutcome>> {
-        Ok(self.hooks.execute_handlers(
-            envelope,
-            &self.hook_policy,
-            &mut self.hook_backend,
-        )?)
+        Ok(self
+            .hooks
+            .execute_handlers(envelope, &self.hook_policy, &mut self.hook_backend)?)
     }
 }
 
@@ -502,10 +496,8 @@ mod tests {
     /// Write the `search` tool fixture into a fresh temp registry dir and build a backend.
     fn backend_with_search_tool() -> (std::path::PathBuf, AgentBackend) {
         let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "tdw_backend_agent_{}_{seq}",
-            std::process::id(),
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("tdw_backend_agent_{}_{seq}", std::process::id(),));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir temp registry dir");
         std::fs::write(dir.join("tool_search.json5"), TOOL_SEARCH_JSON5).expect("write fixture");
@@ -602,9 +594,7 @@ mod tests {
 
     #[test]
     fn run_eval_applies_gated_feedback_to_learning_skill_only() {
-        use tdw_agent::{
-            AgentCard, AgentSkill, ContentKind, ContentRef,
-        };
+        use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
 
         let (dir, mut backend) = backend_with_search_tool();
 
@@ -683,11 +673,17 @@ mod tests {
         let configured = &updated.skills[1];
 
         // The Learning skill received feedback: runs=1, pass_rate=1.0, enabled.
-        let quality = learning.quality.as_ref().expect("learning skill quality set");
+        let quality = learning
+            .quality
+            .as_ref()
+            .expect("learning skill quality set");
         assert_eq!(quality.runs, 1);
         assert_eq!(quality.pass_rate, Some(1.0));
         assert!(!quality.disabled);
-        assert_eq!(quality.last_eval.as_deref(), Some("2026-05-31T00:00:00+00:00"));
+        assert_eq!(
+            quality.last_eval.as_deref(),
+            Some("2026-05-31T00:00:00+00:00")
+        );
 
         // The Configured skill was gate-skipped: quality stays None.
         assert!(configured.quality.is_none());

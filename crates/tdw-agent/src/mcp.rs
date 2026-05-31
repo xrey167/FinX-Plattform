@@ -240,16 +240,14 @@ pub enum McpEntity {
 ///
 /// Returns a [`serde_json::Error`] if the resource does not re-type into the expected
 /// canonical entity.
-pub fn project_to_mcp(
-    resource: &Resource<Value>,
-) -> Result<Option<McpEntity>, serde_json::Error> {
+pub fn project_to_mcp(resource: &Resource<Value>) -> Result<Option<McpEntity>, serde_json::Error> {
     let entity = match resource.kind {
-        EntityKind::Tool => Some(McpEntity::Tool(McpTool::from(
-            &entity_from_resource::<crate::Tool>(resource)?,
-        ))),
-        EntityKind::Prompt => Some(McpEntity::Prompt(McpPrompt::from(
-            &entity_from_resource::<crate::Prompt>(resource)?,
-        ))),
+        EntityKind::Tool => Some(McpEntity::Tool(McpTool::from(&entity_from_resource::<
+            crate::Tool,
+        >(resource)?))),
+        EntityKind::Prompt => Some(McpEntity::Prompt(McpPrompt::from(&entity_from_resource::<
+            crate::Prompt,
+        >(resource)?))),
         _ => None,
     };
     Ok(entity)

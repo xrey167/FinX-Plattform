@@ -34,7 +34,9 @@ pub enum Materialization {
 }
 
 /// Validation-gate status for a data/content entity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum ValidationStatus {
     /// Not yet validated.
@@ -180,7 +182,9 @@ mod tests {
         // ops always present (not skipped); tracksDrift present as false.
         assert!(encoded.get("ops").is_some());
         assert_eq!(
-            encoded.get("tracksDrift").and_then(serde_json::Value::as_bool),
+            encoded
+                .get("tracksDrift")
+                .and_then(serde_json::Value::as_bool),
             Some(false)
         );
     }

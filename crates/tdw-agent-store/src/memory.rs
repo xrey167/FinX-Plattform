@@ -549,7 +549,9 @@ mod tests {
             "the promoted tier survives a reload from disk"
         );
         assert_eq!(
-            reloaded.get("note").and_then(|m| m.last_consolidated.clone()),
+            reloaded
+                .get("note")
+                .and_then(|m| m.last_consolidated.clone()),
             Some(now.to_string()),
             "the consolidation breadcrumb survives a reload"
         );
@@ -587,11 +589,8 @@ mod tests {
         let store = Arc::new(Mutex::new(seed));
 
         let cancel = CancellationToken::new();
-        let handle = spawn_consolidation_scheduler(
-            store.clone(),
-            Duration::from_millis(5),
-            cancel.clone(),
-        );
+        let handle =
+            spawn_consolidation_scheduler(store.clone(), Duration::from_millis(5), cancel.clone());
 
         // The first tick (uses the real clock) expires the Working buffer.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

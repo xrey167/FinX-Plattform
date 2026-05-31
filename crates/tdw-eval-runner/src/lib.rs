@@ -159,7 +159,12 @@ impl EvalRunner {
 /// card.
 fn agent_system_prompt(card: &AgentCard) -> String {
     let mut lines = Vec::new();
-    let title = card.meta.base.title.as_deref().unwrap_or(&card.meta.base.name);
+    let title = card
+        .meta
+        .base
+        .title
+        .as_deref()
+        .unwrap_or(&card.meta.base.name);
     lines.push(format!("You are the agent \"{title}\"."));
     if let Some(description) = card.meta.base.description.as_deref() {
         lines.push(description.to_string());

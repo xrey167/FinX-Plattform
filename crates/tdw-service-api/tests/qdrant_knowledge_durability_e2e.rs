@@ -74,8 +74,10 @@ async fn e2e_real_qdrant_knowledge_persists_across_index_instances() {
     // in process.
     let fresh_engine = QdrantHttpEngine::new(&url, api_key)
         .expect("fresh QdrantHttpEngine build failed — check TDW_QDRANT_TEST_URL");
-    let fresh_index =
-        KnowledgeIndex::new(Arc::new(HashEmbeddingProvider::default()), Arc::new(fresh_engine));
+    let fresh_index = KnowledgeIndex::new(
+        Arc::new(HashEmbeddingProvider::default()),
+        Arc::new(fresh_engine),
+    );
 
     let hits = fresh_index
         .search("AAPL momentum", 1)

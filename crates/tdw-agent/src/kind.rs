@@ -249,8 +249,8 @@ mod tests {
                 serde_json::to_value(kind).expect("kind should serialize"),
                 serde_json::Value::String(token.to_string())
             );
-            let decoded: EntityKind = serde_json::from_value(serde_json::json!(token))
-                .expect("token should deserialize");
+            let decoded: EntityKind =
+                serde_json::from_value(serde_json::json!(token)).expect("token should deserialize");
             assert_eq!(decoded, kind);
         };
         check(EntityKind::AgentRouter, "agentrouter");

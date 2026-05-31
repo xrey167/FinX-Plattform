@@ -152,7 +152,11 @@ pub async fn spawn_transport(
 ) -> Result<TransportTask, ServerError> {
     match config.daemon.transport {
         DaemonTransport::Tcp => {
-            let bind = config.daemon.tcp_bind.as_deref().unwrap_or("127.0.0.1:7878");
+            let bind = config
+                .daemon
+                .tcp_bind
+                .as_deref()
+                .unwrap_or("127.0.0.1:7878");
             let (listener, bound_addr) = bind_tcp(bind, "TCP").await?;
             let join = tokio::spawn(async move {
                 tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await
@@ -178,9 +182,10 @@ async fn spawn_uds(
     let path = PathBuf::from(&config.daemon.uds_path);
     let bound_addr = config.daemon.uds_path.clone();
     eprintln!("tdw-backend: UDS listener on {path:?}");
-    let join = tokio::spawn(async move {
-        tdw_app_server::serve_uds(path, handle, events_rx, cancel).await
-    });
+    let join =
+        tokio::spawn(
+            async move { tdw_app_server::serve_uds(path, handle, events_rx, cancel).await },
+        );
     Ok(TransportTask { join, bound_addr })
 }
 
@@ -203,7 +208,11 @@ async fn spawn_http(
     events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
     cancel: CancellationToken,
 ) -> Result<TransportTask, ServerError> {
-    let bind = config.daemon.http_bind.as_deref().unwrap_or("127.0.0.1:7879");
+    let bind = config
+        .daemon
+        .http_bind
+        .as_deref()
+        .unwrap_or("127.0.0.1:7879");
     let (listener, bound_addr) = bind_tcp(bind, "HTTP/SSE").await?;
     let join = tokio::spawn(async move {
         tdw_app_server::serve_http(listener, handle, events_rx, cancel).await

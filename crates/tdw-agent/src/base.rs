@@ -135,7 +135,9 @@ pub const FEEDBACK_MIN_ADAPTIVITY: Adaptivity = Adaptivity::Learning;
 pub enum AdaptivityError {
     /// The entity's adaptivity is below [`Adaptivity::Learning`], so it may not be mutated
     /// by feedback.
-    #[error("entity '{name}' is not learning-adaptive (adaptivity: {adaptivity:?}); cannot receive eval feedback")]
+    #[error(
+        "entity '{name}' is not learning-adaptive (adaptivity: {adaptivity:?}); cannot receive eval feedback"
+    )]
     NotLearning {
         /// The offending entity's programmatic name.
         name: String,
@@ -426,14 +428,26 @@ mod tests {
 
     #[test]
     fn reference_source_maps_external_channels() {
-        assert_eq!(Reference::Git("a@b:c".to_string()).source(), Source::External);
-        assert_eq!(Reference::Http("https://x".to_string()).source(), Source::External);
+        assert_eq!(
+            Reference::Git("a@b:c".to_string()).source(),
+            Source::External
+        );
+        assert_eq!(
+            Reference::Http("https://x".to_string()).source(),
+            Source::External
+        );
         assert_eq!(
             Reference::Connector("warehouse".to_string()).source(),
             Source::External
         );
-        assert_eq!(Reference::File("./x".to_string()).source(), Source::Internal);
-        assert_eq!(Reference::Variable("X".to_string()).source(), Source::Internal);
+        assert_eq!(
+            Reference::File("./x".to_string()).source(),
+            Source::Internal
+        );
+        assert_eq!(
+            Reference::Variable("X".to_string()).source(),
+            Source::Internal
+        );
         assert_eq!(Reference::Literal(json!(1)).source(), Source::Internal);
     }
 
@@ -475,9 +489,15 @@ mod tests {
 
         let encoded = serde_json::to_value(&meta).expect("EntityMeta should serialize");
         // BaseMetadata is flattened: name sits at the top level, not under `base`.
-        assert_eq!(encoded.get("name").and_then(Value::as_str), Some("market_researcher"));
+        assert_eq!(
+            encoded.get("name").and_then(Value::as_str),
+            Some("market_researcher")
+        );
         assert!(encoded.get("base").is_none());
-        assert_eq!(encoded.get("title").and_then(Value::as_str), Some("Market Researcher"));
+        assert_eq!(
+            encoded.get("title").and_then(Value::as_str),
+            Some("Market Researcher")
+        );
 
         let decoded: EntityMeta =
             serde_json::from_value(encoded).expect("EntityMeta should deserialize");
