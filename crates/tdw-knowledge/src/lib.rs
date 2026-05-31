@@ -101,6 +101,7 @@ impl KnowledgeIndex {
         let embedding = self
             .embedder
             .embed(&document.body)
+            .await
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
         self.graph.upsert_entity(document.entity.clone());
         self.graph.add_relationship(Relationship {
@@ -151,6 +152,7 @@ impl KnowledgeIndex {
         let embedding = self
             .embedder
             .embed(query)
+            .await
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
         let hits = self
             .vectors
@@ -362,6 +364,7 @@ mod tests {
         let vector = index
             .embedder
             .embed("AAPL")
+            .await
             .unwrap_or_else(|error| panic!("embedding should succeed: {error}"))
             .vector;
         index

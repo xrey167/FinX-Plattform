@@ -3513,7 +3513,9 @@ dependencies = [
  "tdw-config",
  "tdw-core",
  "tdw-domain",
+ "tdw-embed",
  "tdw-embed-local",
+ "tdw-embed-openai",
  "tdw-eval-runner",
  "tdw-event",
  "tdw-feature-store",
@@ -3643,14 +3645,17 @@ dependencies = [
 name = "tdw-embed"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
 name = "tdw-embed-google"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "reqwest",
  "serde",
  "serde_json",
@@ -3663,13 +3668,16 @@ dependencies = [
 name = "tdw-embed-local"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "tdw-embed",
+ "tokio",
 ]
 
 [[package]]
 name = "tdw-embed-openai"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "reqwest",
  "serde",
  "serde_json",

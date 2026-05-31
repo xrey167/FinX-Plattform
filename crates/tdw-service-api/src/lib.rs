@@ -258,8 +258,7 @@ model = "unset"
 /// Returns an error variant if the underlying operation fails.
 pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> {
     let embedder = HashEmbeddingProvider::default();
-    let embedding = embedder
-        .embed(&format!("{} {}", note.title, note.body))
+    let embedding = block_on(embedder.embed(&format!("{} {}", note.title, note.body)))
         .map_err(|error| Error::Provider(error.to_string()))?;
     let vector = InMemoryVectorEngine::default();
     let lexical = InMemoryLexicalEngine::default();

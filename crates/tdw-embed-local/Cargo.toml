@@ -6,7 +6,11 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+async-trait = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

@@ -11,6 +11,7 @@ use serde_json::Value;
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
+use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
@@ -79,7 +80,7 @@ impl Backend {
             .map_err(|error| BackendError::Init(error.to_string()))?;
         let runner = CommandRunner::default();
         let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            Arc::new(HashEmbeddingProvider::default()),
+            select_embedder()?,
             state.vector.clone(),
         )));
         Ok(Self {
@@ -421,6 +422,63 @@ impl Backend {
         let index = self.index.lock().await;
         Ok(index.search(query, top_k).await?)
     }
+}
+
+/// Select the knowledge embedder. Default / offline / unset →
+/// the deterministic [`HashEmbeddingProvider`] so CI and offline runs
+/// stay reproducible. With the `openai` feature built **and**
+/// `TDW_EMBED_PROVIDER=openai` plus an API key configured
+/// (`TDW_OPENAI_EMBEDDING_API_KEY` or `OPENAI_API_KEY`), a real
+/// OpenAI HTTP embedder is used instead. `TDW_EMBED_MODEL` overrides
+/// the model (default `text-embedding-3-small`);
+/// `TDW_OPENAI_EMBEDDING_BASE_URL` optionally overrides the endpoint.
+///
+/// Mirrors `select_vector_engine` in `tdw-service-api`: the real
+/// arm is `#[cfg]`-gated so the default build never compiles reqwest.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Init`] if the OpenAI provider is requested
+/// but cannot be constructed (e.g. an invalid base URL).
+// The real Err path exists only behind `openai`; the default build's
+// single `Ok` makes the `Result` look unwrappable, so keep the allow.
+#[allow(clippy::unnecessary_wraps)]
+fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
+    #[cfg(feature = "openai")]
+    {
+        if std::env::var("TDW_EMBED_PROVIDER")
+            .map(|value| value.trim().eq_ignore_ascii_case("openai"))
+            .unwrap_or(false)
+        {
+            let api_key = ["TDW_OPENAI_EMBEDDING_API_KEY", "OPENAI_API_KEY"]
+                .iter()
+                .find_map(|name| {
+                    std::env::var(name)
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                });
+            if let Some(api_key) = api_key {
+                let model = std::env::var("TDW_EMBED_MODEL")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "text-embedding-3-small".to_string());
+                let mut client =
+                    tdw_embed_openai::OpenAiEmbeddingHttpClient::new(api_key, model)
+                        .map_err(|error| BackendError::Init(error.to_string()))?;
+                if let Ok(base_url) = std::env::var("TDW_OPENAI_EMBEDDING_BASE_URL")
+                    && !base_url.trim().is_empty()
+                {
+                    client = client
+                        .with_base_url(base_url.trim())
+                        .map_err(|error| BackendError::Init(error.to_string()))?;
+                }
+                return Ok(Arc::new(client));
+            }
+        }
+    }
+    Ok(Arc::new(HashEmbeddingProvider::default()))
 }
 
 #[cfg(test)]
