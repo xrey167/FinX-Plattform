@@ -1,0 +1,29 @@
+[package]
+name = "tdw-backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Phase 0 path dependencies — only crates actually referenced this phase. Later
+# phases add more (tdw-app-server, tdw-app-client, tdw-kg, tdw-tags,
+# tdw-feature-store, tdw-knowledge, tdw-workflow-engine, tdw-eval-runner,
+# tdw-protocol, tdw-auth, tdw-hooks, tdw-event) as their surfaces are wired in.
+tdw-service-api = { path = "../tdw-service-api" }
+tdw-runtime = { path = "../tdw-runtime" }
+tdw-config = { path = "../tdw-config" }
+tdw-agent = { path = "../tdw-agent" }
+tdw-tool-exec = { path = "../tdw-tool-exec" }
+tdw-mcp = { path = "../tdw-mcp" }
+tdw-agent-store = { path = "../tdw-agent-store" }
+
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
