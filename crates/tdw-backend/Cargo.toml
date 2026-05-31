@@ -25,6 +25,11 @@ tdw-app-server = { path = "../tdw-app-server" }
 # Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# Phase 3 — the knowledge group: sync KG/tags/features + the async knowledge index.
+tdw-kg = { path = "../tdw-kg" }
+tdw-tags = { path = "../tdw-tags" }
+tdw-feature-store = { path = "../tdw-feature-store" }
+tdw-knowledge = { path = "../tdw-knowledge" }
 
 thiserror = { workspace = true }
 serde_json = { workspace = true }

@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tdw_config::TdwConfig;
+use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tokio::sync::Mutex;
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, LexicalEngine, OBBject, OlapEngine, ProgressStream,
     ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -24,6 +26,10 @@ use crate::error::{BackendError, BackendResult};
 pub struct Backend {
     state: AppState,
     runner: CommandRunner,
+    /// The async knowledge index. Held behind a [`tokio::sync::Mutex`] because
+    /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
+    /// guard is acquired per-call and never held across unrelated awaits.
+    index: Arc<Mutex<KnowledgeIndex>>,
 }
 
 impl Backend {
@@ -43,7 +49,12 @@ impl Backend {
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
         let runner = CommandRunner::new((*state.registry).clone());
-        Ok(Self { state, runner })
+        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        Ok(Self {
+            state,
+            runner,
+            index,
+        })
     }
 
     /// Build a backend backed by deterministic in-memory engines, for tests.
@@ -53,7 +64,12 @@ impl Backend {
     pub async fn in_memory_for_tests() -> Self {
         let state = AppState::in_memory_for_tests().await;
         let runner = CommandRunner::new((*state.registry).clone());
-        Self { state, runner }
+        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        Self {
+            state,
+            runner,
+            index,
+        }
     }
 
     /// The underlying daemon composition root.
@@ -205,6 +221,40 @@ impl Backend {
                 .await??;
         Ok(object)
     }
+
+    // --- Knowledge index (async, behind a per-call mutex) ------------------
+
+    /// Index a [`KnowledgeDocument`] into the embedded knowledge index.
+    ///
+    /// The index mutex is acquired, the single async `index_document` call is
+    /// awaited, and the guard is dropped — it is never held across unrelated
+    /// awaits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the document is invalid or an
+    /// embedding/storage/tag step fails.
+    pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
+        let mut index = self.index.lock().await;
+        index.index_document(doc).await?;
+        Ok(())
+    }
+
+    /// Search the embedded knowledge index for the `top_k` nearest hits to
+    /// `query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the query is empty, `top_k` is
+    /// zero, or an embedding/storage step fails.
+    pub async fn knowledge_search(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> BackendResult<Vec<KnowledgeHit>> {
+        let index = self.index.lock().await;
+        Ok(index.search(query, top_k).await?)
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +394,37 @@ mod tests {
             .stop_stream("binance:trades:NOPE")
             .unwrap_or_else(|error| panic!("stop should succeed: {error}"));
         assert!(!absent, "an unknown stream id must report not present");
+    }
+
+    #[tokio::test]
+    async fn knowledge_index_then_search_returns_hit() {
+        use tdw_kg::{Entity, EntityKind};
+
+        let backend = Backend::in_memory_for_tests().await;
+        // Construction mirrors `tdw-knowledge`'s own
+        // `indexes_and_searches_embedded_knowledge` test fixture.
+        backend
+            .knowledge_index(KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "AAPL equity momentum research".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec!["AAPL".to_string()],
+                },
+                tags: vec!["asset:equity".to_string()],
+            })
+            .await
+            .unwrap_or_else(|error| panic!("index should succeed: {error}"));
+
+        let hits = backend
+            .knowledge_search("AAPL momentum", 1)
+            .await
+            .unwrap_or_else(|error| panic!("search should succeed: {error}"));
+
+        assert_eq!(hits[0].id, "doc-1");
+        assert_eq!(hits[0].entity_id, "instrument:AAPL");
     }
 
     /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's

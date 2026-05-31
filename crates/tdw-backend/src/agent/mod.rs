@@ -8,10 +8,15 @@
 
 use std::path::Path;
 
+use std::collections::BTreeMap;
+
 use tdw_agent::{AgentCard, EntityKind, EvalRunRequest, Registry, WorkflowDefinition};
 use tdw_agent_store::AgentStore;
 use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
+use tdw_feature_store::{FeatureSnapshot, FeatureStore};
+use tdw_kg::{Entity, KnowledgeGraph, Relationship};
 use tdw_mcp::McpServer;
+use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use tdw_tool_exec::{CommandPolicy, ToolExecutor, ToolOutcome};
 use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};
 
@@ -29,6 +34,12 @@ pub struct AgentBackend {
     executor: ToolExecutor,
     mcp: McpServer,
     store: AgentStore,
+    /// The synchronous knowledge graph (entities + relationships).
+    kg: KnowledgeGraph,
+    /// The synchronous tag taxonomy store.
+    tags: TagStore,
+    /// The synchronous feature store, materializing snapshots over [`Self::tags`].
+    features: FeatureStore,
 }
 
 impl AgentBackend {
@@ -75,6 +86,9 @@ impl AgentBackend {
             executor,
             mcp,
             store: AgentStore::new(),
+            kg: KnowledgeGraph::default(),
+            tags: TagStore::default(),
+            features: FeatureStore::default(),
         }
     }
 
@@ -185,6 +199,117 @@ impl AgentBackend {
     #[must_use]
     pub fn workflow(&self, id: &str) -> Option<&WorkflowDefinition> {
         self.store.workflow(id)
+    }
+
+    // --- Knowledge graph (sync) --------------------------------------------
+
+    /// Shared access to the embedded [`KnowledgeGraph`].
+    #[must_use]
+    pub fn kg(&self) -> &KnowledgeGraph {
+        &self.kg
+    }
+
+    /// Mutable access to the embedded [`KnowledgeGraph`].
+    pub fn kg_mut(&mut self) -> &mut KnowledgeGraph {
+        &mut self.kg
+    }
+
+    /// Insert or replace an [`Entity`] in the knowledge graph.
+    pub fn upsert_entity(&mut self, entity: Entity) {
+        self.kg.upsert_entity(entity);
+    }
+
+    /// Append a [`Relationship`] edge to the knowledge graph.
+    pub fn add_relationship(&mut self, rel: Relationship) {
+        self.kg.add_relationship(rel);
+    }
+
+    /// Look up an [`Entity`] by id.
+    #[must_use]
+    pub fn entity(&self, id: &str) -> Option<&Entity> {
+        self.kg.entity(id)
+    }
+
+    /// The entities reachable by one outgoing edge from `id`.
+    #[must_use]
+    pub fn neighbors(&self, id: &str) -> Vec<&Entity> {
+        self.kg.neighbors(id)
+    }
+
+    // --- Tags (sync) -------------------------------------------------------
+
+    /// Shared access to the embedded [`TagStore`].
+    #[must_use]
+    pub fn tags(&self) -> &TagStore {
+        &self.tags
+    }
+
+    /// Mutable access to the embedded [`TagStore`].
+    pub fn tags_mut(&mut self) -> &mut TagStore {
+        &mut self.tags
+    }
+
+    /// Define a [`TagDefinition`] in the taxonomy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BackendError::Tag`] if the tag id is invalid, the
+    /// parent is unknown, or the definition introduces a cycle.
+    pub fn define_tag(&mut self, def: TagDefinition) -> BackendResult<()> {
+        self.tags.define(def)?;
+        Ok(())
+    }
+
+    /// Assign a [`TagAssignment`] to an entity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BackendError::Tag`] if the assignment is invalid
+    /// or references an unknown tag.
+    pub fn assign_tag(&mut self, a: TagAssignment) -> BackendResult<()> {
+        self.tags.assign(a)?;
+        Ok(())
+    }
+
+    /// The tag ids active for `entity_id` as of `as_of` (a `YYYY-MM-DD` date).
+    #[must_use]
+    pub fn active_tags(&self, entity_id: &str, as_of: &str) -> Vec<String> {
+        self.tags.active_tags(entity_id, as_of)
+    }
+
+    // --- Feature store (sync) ----------------------------------------------
+
+    /// Shared access to the embedded [`FeatureStore`].
+    #[must_use]
+    pub fn features(&self) -> &FeatureStore {
+        &self.features
+    }
+
+    /// Mutable access to the embedded [`FeatureStore`].
+    pub fn features_mut(&mut self) -> &mut FeatureStore {
+        &mut self.features
+    }
+
+    /// Materialize a [`FeatureSnapshot`] for `entity_id` as of `as_of`, joining
+    /// the active tags from the embedded [`TagStore`].
+    ///
+    /// The call borrows `self.features` mutably and `self.tags` immutably; these
+    /// are distinct fields, so the split borrow is accepted by the borrow
+    /// checker.
+    pub fn materialize_features(
+        &mut self,
+        entity_id: &str,
+        as_of: &str,
+        features: BTreeMap<String, f64>,
+    ) -> FeatureSnapshot {
+        self.features
+            .materialize(entity_id, as_of, features, &self.tags)
+    }
+
+    /// The most recently materialized [`FeatureSnapshot`] for `entity_id`.
+    #[must_use]
+    pub fn latest_features(&self, entity_id: &str) -> Option<&FeatureSnapshot> {
+        self.features.latest(entity_id)
     }
 }
 
@@ -367,6 +492,109 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert!(responses[0].contains("\"protocolVersion\""));
         assert!(backend.mcp_server().is_initialized());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kg_upsert_entity_and_neighbors_round_trip() {
+        use tdw_kg::EntityKind;
+
+        let (dir, mut backend) = backend_with_search_tool();
+        // Construction mirrors `tdw-kg`'s own
+        // `queries_entities_edges_and_manual_merge_audit` fixture.
+        backend.upsert_entity(Entity {
+            entity_id: "instrument:AAPL".to_string(),
+            kind: EntityKind::Instrument,
+            label: "Apple".to_string(),
+            aliases: vec!["AAPL".to_string()],
+        });
+        backend.upsert_entity(Entity {
+            entity_id: "dataset:ohlcv".to_string(),
+            kind: EntityKind::Dataset,
+            label: "OHLCV".to_string(),
+            aliases: Vec::new(),
+        });
+        backend.add_relationship(Relationship {
+            from: "instrument:AAPL".to_string(),
+            to: "dataset:ohlcv".to_string(),
+            rel_type: "has_prices".to_string(),
+            provenance: "fixture".to_string(),
+        });
+
+        assert_eq!(
+            backend.entity("instrument:AAPL").map(|e| e.label.clone()),
+            Some("Apple".to_string())
+        );
+        assert_eq!(
+            backend.neighbors("instrument:AAPL")[0].entity_id,
+            "dataset:ohlcv"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tags_define_assign_and_active_round_trip() {
+        let (dir, mut backend) = backend_with_search_tool();
+        // Construction mirrors `tdw-tags`'s own
+        // `manages_tag_dag_ttl_provenance_and_stats` fixture.
+        backend
+            .define_tag(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        backend
+            .assign_tag(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "asset:equity".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: None,
+                provenance: "manual".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("assignment should persist: {error}"));
+
+        assert_eq!(
+            backend.active_tags("instrument:AAPL", "2026-05-22"),
+            vec!["asset:equity".to_string()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn features_materialize_and_latest_round_trip() {
+        let (dir, mut backend) = backend_with_search_tool();
+        // Construction mirrors `tdw-feature-store`'s own
+        // `materializes_feature_snapshot_with_active_tags` fixture.
+        backend
+            .define_tag(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        backend
+            .assign_tag(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "asset:equity".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: None,
+                provenance: "manual".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("assignment should persist: {error}"));
+
+        let mut features = BTreeMap::new();
+        features.insert("return_1d".to_string(), 0.01);
+        let snapshot = backend.materialize_features("instrument:AAPL", "2026-05-21", features);
+        assert_eq!(snapshot.as_of, "2026-05-21");
+        assert_eq!(snapshot.tags, vec!["asset:equity".to_string()]);
+
+        assert_eq!(
+            backend
+                .latest_features("instrument:AAPL")
+                .map(|latest| latest.as_of.clone()),
+            Some("2026-05-21".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

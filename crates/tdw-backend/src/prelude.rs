@@ -27,3 +27,10 @@ pub use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
 pub use tdw_mcp::McpServer;
 pub use tdw_tool_exec::{CommandPolicy, ExecError, ToolOutcome};
 pub use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};
+
+// Phase 3 — the knowledge group's typed surface (sync KG/tags/features + the
+// async knowledge index).
+pub use tdw_feature_store::{FeatureSnapshot, FeatureStore};
+pub use tdw_kg::{Entity, KnowledgeGraph, Relationship};
+pub use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+pub use tdw_tags::{TagAssignment, TagDefinition, TagStore};

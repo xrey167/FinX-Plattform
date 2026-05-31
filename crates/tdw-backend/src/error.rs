@@ -41,6 +41,14 @@ pub enum BackendError {
     /// was cancelled).
     #[error("blocking task join failed: {0}")]
     Join(#[from] tokio::task::JoinError),
+
+    /// An async knowledge-index operation (`index_document` / `search`) failed.
+    #[error("knowledge error: {0}")]
+    Knowledge(#[from] tdw_knowledge::KnowledgeError),
+
+    /// A tag taxonomy operation (`define` / `assign`) failed.
+    #[error("tag error: {0}")]
+    Tag(#[from] tdw_tags::TagError),
 }
 
 /// Convenience alias for fallible backend operations.
