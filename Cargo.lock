@@ -3562,6 +3562,7 @@ dependencies = [
  "tdw-hooks",
  "tdw-kg",
  "tdw-knowledge",
+ "tdw-llm",
  "tdw-mcp",
  "tdw-outbox",
  "tdw-protocol",
@@ -3740,8 +3741,11 @@ name = "tdw-eval-runner"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-llm",
+ "tdw-llm-anthropic",
 ]
 
 [[package]]

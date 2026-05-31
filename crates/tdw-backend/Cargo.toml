@@ -28,6 +28,10 @@ tdw-app-client = { path = "../tdw-app-client" }
 # Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# Phase C1 — the eval runner now executes cases through a `LanguageModel`; the
+# backend injects the deterministic offline `StubLanguageModel` by default so
+# `run_eval` never hits the network.
+tdw-llm = { path = "../tdw-llm" }
 # Phase 3 — the knowledge group: sync KG/tags/features + the async knowledge index.
 tdw-kg = { path = "../tdw-kg" }
 tdw-tags = { path = "../tdw-tags" }

@@ -9,10 +9,12 @@
 use std::path::Path;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tdw_agent::{AgentCard, EntityKind, EvalRunRequest, Registry, WorkflowDefinition};
 use tdw_agent_store::AgentStore;
-use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
+use tdw_eval_runner::{EvalRunOutcome, EvalRunner, StubLanguageModel};
+use tdw_llm::LanguageModel;
 use tdw_event::EventEnvelope;
 use tdw_feature_store::{FeatureSnapshot, FeatureStore};
 use tdw_hooks::{
@@ -51,6 +53,10 @@ pub struct AgentBackend {
     hook_policy: HookExecutionPolicy,
     /// The handler backend that runs command/http/mcp/prompt/agent handlers.
     hook_backend: SystemHookHandlerBackend,
+    /// The language model the eval runner executes cases through. Defaults to the
+    /// deterministic offline [`StubLanguageModel`] so `run_eval` never hits the network;
+    /// swap in a real client via [`Self::with_language_model`].
+    language_model: Arc<dyn LanguageModel>,
 }
 
 impl AgentBackend {
@@ -103,7 +109,17 @@ impl AgentBackend {
             hooks: HookRegistry::default(),
             hook_policy: HookExecutionPolicy::default(),
             hook_backend: SystemHookHandlerBackend::new(),
+            language_model: Arc::new(StubLanguageModel),
         }
+    }
+
+    /// Replace the eval runner's [`LanguageModel`] (default: the offline
+    /// [`StubLanguageModel`]). Inject a real client here to run evals against a live
+    /// model. Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_language_model(mut self, model: Arc<dyn LanguageModel>) -> Self {
+        self.language_model = model;
+        self
     }
 
     /// Point the embedded [`McpServer`] at a daemon loopback `addr` so its
@@ -205,10 +221,12 @@ impl AgentBackend {
         Ok(WorkflowEngine::compile(wf)?)
     }
 
-    /// Run an evaluation request against the embedded [`AgentStore`], persisting the run and
-    /// returning its outcome.
+    /// Run an evaluation request against the embedded [`AgentStore`], executing each case
+    /// through the configured [`LanguageModel`], persisting the run, and returning its
+    /// outcome.
     pub fn run_eval(&mut self, request: EvalRunRequest) -> EvalRunOutcome {
-        EvalRunner::run(request, &mut self.store)
+        let runner = EvalRunner::new(Arc::clone(&self.language_model));
+        runner.run(request, &mut self.store)
     }
 
     /// Upsert an [`AgentCard`] into the embedded store.

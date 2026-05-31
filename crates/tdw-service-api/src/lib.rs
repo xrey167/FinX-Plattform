@@ -70,7 +70,7 @@ use tdw_domain::{EquityHistoricalData, ResearchNote};
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_entity_resolver::{manual_merge_decision, resolve_symbol};
-use tdw_eval_runner::EvalRunner;
+use tdw_eval_runner::{EvalRunner, StubLanguageModel};
 use tdw_event::{EventEnvelope, event_schema_bundle};
 use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
@@ -454,7 +454,9 @@ pub fn agent_tool_sample() -> Result<Value> {
         WorkflowEngine::compile(&workflow).map_err(|error| Error::Provider(error.to_string()))?;
     store.upsert_workflow(workflow);
 
-    let eval = EvalRunner::run(
+    // Inject the deterministic offline stub so this sample never reaches the network.
+    let eval_runner = EvalRunner::new(Arc::new(StubLanguageModel));
+    let eval = eval_runner.run(
         EvalRunRequest {
             run_id: "eval-1".to_string(),
             agent_id: card.meta.id.clone(),
