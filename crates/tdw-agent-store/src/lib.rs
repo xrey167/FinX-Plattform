@@ -19,6 +19,11 @@ pub struct StoredEvalRun {
     pub request: EvalRunRequest,
     pub metrics: Vec<EvalMetric>,
     pub status: String,
+    /// The ids of the skills this run's feedback actually mutated (those whose adaptivity
+    /// cleared the gate). Additive + defaulted: pre-C2 runs and gate-skipped runs omit it,
+    /// serializing identically to before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub updated_skills: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +200,7 @@ mod tests {
             request: eval_request,
             metrics: Vec::new(),
             status: "success".to_string(),
+            updated_skills: Vec::new(),
         };
         store.record_eval_run(eval_run.clone());
         assert_eq!(store.eval_run("eval-1"), Some(&eval_run));
@@ -236,6 +242,7 @@ mod tests {
                     metric_value: f64::NAN,
                 }],
                 status: "success".to_string(),
+                updated_skills: Vec::new(),
             }),
             Err(StoreError::InvalidEvalRun)
         );

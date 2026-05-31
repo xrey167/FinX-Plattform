@@ -111,6 +111,9 @@ impl EvalRunner {
             request,
             metrics,
             status,
+            // The runner records the run; feedback (and the skill backlink) is attached by
+            // the backend layer in a later, gated pass.
+            updated_skills: Vec::new(),
         });
         outcome
     }

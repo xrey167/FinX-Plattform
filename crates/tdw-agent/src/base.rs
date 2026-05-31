@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 use validator::Validate;
 
 use crate::kind::EntityKind;
@@ -121,6 +122,45 @@ pub enum Adaptivity {
     Learning,
     /// Rewrites its own structure (e.g. memory consolidation).
     SelfModifying,
+}
+
+/// The feedback gate's minimum adaptivity: an entity must be at least [`Adaptivity::Learning`]
+/// to receive eval-driven mutations. A `None`/`Configured` entity is static or merely
+/// parameterized, so applying learned feedback to it would be a contract violation.
+pub const FEEDBACK_MIN_ADAPTIVITY: Adaptivity = Adaptivity::Learning;
+
+/// Error returned by [`ensure_adaptive_for_feedback`] when an entity is not adaptive enough
+/// to receive eval feedback.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum AdaptivityError {
+    /// The entity's adaptivity is below [`Adaptivity::Learning`], so it may not be mutated
+    /// by feedback.
+    #[error("entity '{name}' is not learning-adaptive (adaptivity: {adaptivity:?}); cannot receive eval feedback")]
+    NotLearning {
+        /// The offending entity's programmatic name.
+        name: String,
+        /// The entity's declared adaptivity.
+        adaptivity: Adaptivity,
+    },
+}
+
+/// The Adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >=`
+/// [`Adaptivity::Learning`]. This guards every feedback mutation so that only
+/// `Learning`/`SelfModifying` entities accrue learned state; a `None`/`Configured` entity is
+/// rejected with [`AdaptivityError::NotLearning`].
+///
+/// # Errors
+///
+/// Returns [`AdaptivityError::NotLearning`] when `meta.adaptivity < Adaptivity::Learning`.
+pub fn ensure_adaptive_for_feedback(meta: &EntityMeta) -> Result<(), AdaptivityError> {
+    if meta.adaptivity >= FEEDBACK_MIN_ADAPTIVITY {
+        Ok(())
+    } else {
+        Err(AdaptivityError::NotLearning {
+            name: meta.base.name.clone(),
+            adaptivity: meta.adaptivity,
+        })
+    }
 }
 
 /// Human-memory-inspired retention tier for the `memory` kind. Ordinal: shorter-lived

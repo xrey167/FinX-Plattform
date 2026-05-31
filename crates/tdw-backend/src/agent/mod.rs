@@ -35,6 +35,12 @@ use crate::error::BackendResult;
 /// stand-alone MCP surfaces resolve the same registry.
 pub const REGISTRY_DIR_ENV: &str = tdw_mcp::REGISTRY_DIR_ENV;
 
+/// The `pass_rate` threshold below which eval feedback disables a skill. A run whose
+/// aggregate pass rate falls under this bound flips the skill's `quality.disabled` flag;
+/// at or above it the skill stays enabled. Half is a neutral, deterministic default —
+/// majority-failing means disable.
+const FEEDBACK_DISABLE_BELOW: f64 = 0.5;
+
 /// The synchronous agent/MCP facade.
 pub struct AgentBackend {
     registry: Registry,
@@ -222,11 +228,61 @@ impl AgentBackend {
     }
 
     /// Run an evaluation request against the embedded [`AgentStore`], executing each case
-    /// through the configured [`LanguageModel`], persisting the run, and returning its
-    /// outcome.
+    /// through the configured [`LanguageModel`], persisting the run, then closing the loop by
+    /// feeding the run's `pass_rate` back into the evaluated agent's skills (Phase C2),
+    /// GATED by the [`Adaptivity`](tdw_agent::Adaptivity) axis. Returns the run outcome.
+    ///
+    /// Feedback uses the live wall clock (`chrono::Utc::now().to_rfc3339()`); the
+    /// deterministic core is [`Self::run_eval_at`].
     pub fn run_eval(&mut self, request: EvalRunRequest) -> EvalRunOutcome {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.run_eval_at(request, &now)
+    }
+
+    /// Deterministic core of [`Self::run_eval`]: execute the run, then apply gated eval
+    /// feedback using the injected `now` (RFC 3339) so the mutation is reproducible in tests.
+    ///
+    /// After the runner records the [`StoredEvalRun`], this extracts the `pass_rate` metric,
+    /// looks up the evaluated [`AgentCard`], and for EACH skill calls
+    /// [`AgentSkill::apply_eval_feedback`](tdw_agent::AgentSkill::apply_eval_feedback):
+    /// skills whose adaptivity is `>= Learning` are updated; skills the gate rejects are
+    /// skipped (not an error). The mutated card is re-upserted, and the stored run is
+    /// re-recorded with the `updated_skills` backlink.
+    pub fn run_eval_at(&mut self, request: EvalRunRequest, now: &str) -> EvalRunOutcome {
+        // The runner consumes `request`; capture the evaluated agent id first for feedback.
+        let agent_id = request.agent_id.clone();
         let runner = EvalRunner::new(Arc::clone(&self.language_model));
-        runner.run(request, &mut self.store)
+        let outcome = runner.run(request, &mut self.store);
+
+        let pass_rate = outcome
+            .metrics
+            .iter()
+            .find(|metric| metric.metric_name == "pass_rate")
+            .map(|metric| metric.metric_value);
+
+        if let Some(pass_rate) = pass_rate
+            && let Some(mut card) = self.store.agent(&agent_id).cloned()
+        {
+            let mut updated_skills = Vec::new();
+            for skill in &mut card.skills {
+                // The gate (adaptivity < Learning) skips a skill without aborting the run.
+                if skill
+                    .apply_eval_feedback(pass_rate, now, FEEDBACK_DISABLE_BELOW)
+                    .is_ok()
+                {
+                    updated_skills.push(skill.meta.id.clone());
+                }
+            }
+            if !updated_skills.is_empty() {
+                self.store.upsert_agent(card);
+                if let Some(mut stored) = self.store.eval_run(&outcome.run_id).cloned() {
+                    stored.updated_skills = updated_skills;
+                    self.store.record_eval_run(stored);
+                }
+            }
+        }
+
+        outcome
     }
 
     /// Upsert an [`AgentCard`] into the embedded store.
@@ -541,6 +597,101 @@ mod tests {
         });
         assert_eq!(outcome.run_id, "eval-1");
         assert_eq!(outcome.status, "success");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_eval_applies_gated_feedback_to_learning_skill_only() {
+        use tdw_agent::{
+            AgentCard, AgentSkill, ContentKind, ContentRef,
+        };
+
+        let (dir, mut backend) = backend_with_search_tool();
+
+        let skill = |name: &str, adaptivity: Adaptivity| AgentSkill {
+            meta: EntityMeta::new(
+                name,
+                name,
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                adaptivity,
+                false,
+            )
+            .with_title(name)
+            .with_description("A skill."),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: serde_json::json!({"type": "object"}),
+            quality: None,
+        };
+
+        // A card with two skills: one Learning (gate passes) and one Configured (gate skips).
+        // The content_ref URI is surfaced by the stub's echoed grounding context, so a case
+        // expecting that URI passes -> pass_rate 1.0 (>= threshold, skill stays enabled).
+        let card = AgentCard {
+            meta: EntityMeta::new(
+                "market-researcher",
+                "market-researcher",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::Learning,
+                true,
+            )
+            .with_title("Market Researcher")
+            .with_description("Generates evidence-backed notes."),
+            skills: vec![
+                skill("research.note", Adaptivity::Learning),
+                skill("research.summary", Adaptivity::Configured),
+            ],
+            content_refs: vec![ContentRef {
+                uri: "tdw://docs/research-template".to_string(),
+                kind: ContentKind::Prompt,
+                checksum: None,
+                tags: Vec::new(),
+            }],
+            endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+        };
+        backend.upsert_agent(card);
+
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "eval-c2".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden-market-notes".to_string(),
+                cases: vec![EvalCase {
+                    case_id: "case-1".to_string(),
+                    prompt: "Summarize AAPL".to_string(),
+                    expected_refs: vec![ContentRef {
+                        uri: "tdw://docs/research-template".to_string(),
+                        kind: ContentKind::Prompt,
+                        checksum: None,
+                        tags: Vec::new(),
+                    }],
+                }],
+            },
+            "2026-05-31T00:00:00+00:00",
+        );
+        assert_eq!(outcome.status, "success");
+
+        let updated = backend.agent("market-researcher").expect("card present");
+        let learning = &updated.skills[0];
+        let configured = &updated.skills[1];
+
+        // The Learning skill received feedback: runs=1, pass_rate=1.0, enabled.
+        let quality = learning.quality.as_ref().expect("learning skill quality set");
+        assert_eq!(quality.runs, 1);
+        assert_eq!(quality.pass_rate, Some(1.0));
+        assert!(!quality.disabled);
+        assert_eq!(quality.last_eval.as_deref(), Some("2026-05-31T00:00:00+00:00"));
+
+        // The Configured skill was gate-skipped: quality stays None.
+        assert!(configured.quality.is_none());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
