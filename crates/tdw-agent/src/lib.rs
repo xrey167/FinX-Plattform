@@ -22,22 +22,22 @@ pub use base::{
     Adaptivity, BaseMetadata, EntityMeta, Icon, Origin, Reference, Retention, Source, Tier,
     ToolEffect, ToolImplementation,
 };
+pub use consolidate::{ConsolidationAction, consolidation_plan};
 pub use facets::{
     DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState, ValidationStatus,
 };
-pub use consolidate::{ConsolidationAction, consolidation_plan};
 pub use kind::{EntityKind, Group};
 pub use loader::{LoadError, load_resource, load_typed};
-pub use registry::Registry;
-pub use watch::{RegistryWatcher, WatchError};
 pub use mcp::{
-    IconMimeSupport, McpEntity, McpPrompt, McpPromptArgument, McpTool, ParallelSafety,
-    ToolAnnotations, icon_mime_support, project_to_mcp, MCP_PROTOCOL_VERSION,
+    IconMimeSupport, MCP_PROTOCOL_VERSION, McpEntity, McpPrompt, McpPromptArgument, McpTool,
+    ParallelSafety, ToolAnnotations, icon_mime_support, project_to_mcp,
 };
+pub use registry::Registry;
 pub use resource::{
     RegistryEntity, Resource, ResourceDefinition, TDW_API_GROUP, TDW_API_VERSION,
     entity_from_resource,
 };
+pub use watch::{RegistryWatcher, WatchError};
 
 /// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names. Q8 reclassified
 /// storage to a `resourcedefinition` persistence facet; prefer [`resource_definitions`].
@@ -637,9 +637,7 @@ pub struct Plugin {
 }
 
 /// Backoff strategy applied between retries under an [`ErrorPolicy`].
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub enum Backoff {
     /// A constant delay between retries.
     Fixed,
@@ -1683,7 +1681,11 @@ mod tests {
 
         // every kind now carries a concrete spec schema.
         assert!(find(EntityKind::Agent).spec_schema.is_some());
-        assert!(resource_definitions().iter().all(|d| d.spec_schema.is_some()));
+        assert!(
+            resource_definitions()
+                .iter()
+                .all(|d| d.spec_schema.is_some())
+        );
         // facet flags come straight from the kind registry.
         assert!(find(EntityKind::Agent).autonomy_capable);
         assert!(!find(EntityKind::Skill).autonomy_capable);

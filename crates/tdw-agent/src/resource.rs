@@ -118,9 +118,14 @@ pub fn entity_from_resource<T: serde::de::DeserializeOwned>(
 ) -> Result<T, serde_json::Error> {
     let mut spec = resource.spec.clone();
     let Some(object) = spec.as_object_mut() else {
-        return Err(serde_json::Error::custom("resource spec must be a JSON object"));
+        return Err(serde_json::Error::custom(
+            "resource spec must be a JSON object",
+        ));
     };
-    object.insert(META_FIELD.to_string(), serde_json::to_value(&resource.metadata)?);
+    object.insert(
+        META_FIELD.to_string(),
+        serde_json::to_value(&resource.metadata)?,
+    );
     serde_json::from_value(spec)
 }
 

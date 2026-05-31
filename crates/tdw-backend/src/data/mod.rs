@@ -11,17 +11,17 @@ use serde_json::Value;
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
-use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
-use tdw_outbox::InMemoryOutbox;
-use tokio::sync::Mutex;
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, LexicalEngine, OBBject, OlapEngine, ProgressStream,
     ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
 };
 use tdw_domain::EquityHistoricalData;
+use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tdw_outbox::InMemoryOutbox;
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
 use tdw_service_api::{AppState, fetch_equity_historical};
+use tokio::sync::Mutex;
 
 use crate::config::BackendConfig;
 use crate::error::{BackendError, BackendResult};
@@ -219,14 +219,10 @@ impl Backend {
             cancel.clone(),
         );
 
-        let transport = crate::server::spawn_transport(
-            &cfg.tdw,
-            handle.clone(),
-            events_rx,
-            cancel.clone(),
-        )
-        .await
-        .map_err(|error| BackendError::Init(error.to_string()))?;
+        let transport =
+            crate::server::spawn_transport(&cfg.tdw, handle.clone(), events_rx, cancel.clone())
+                .await
+                .map_err(|error| BackendError::Init(error.to_string()))?;
 
         let serve_cancel = cancel.clone();
         let serve_task = tokio::spawn(async move {
@@ -440,7 +436,10 @@ mod tests {
         let backend = Backend::in_memory_for_tests().await;
 
         // The registry handle shares the composition root's `Arc`.
-        assert!(Arc::ptr_eq(&backend.registry(), &backend.app_state().registry));
+        assert!(Arc::ptr_eq(
+            &backend.registry(),
+            &backend.app_state().registry
+        ));
         assert!(backend.registry().entries().len() >= 3);
 
         // Each engine handle clones without panicking and is independently
@@ -480,7 +479,10 @@ mod tests {
     async fn fetch_uses_wired_registry_and_returns_typed_object() {
         let backend = Backend::in_memory_for_tests().await;
         let object: OBBject<EquityHistoricalData> = backend
-            .fetch(&FilesetEquityHistoricalFetcher, serde_json::json!({ "symbol": "aapl" }))
+            .fetch(
+                &FilesetEquityHistoricalFetcher,
+                serde_json::json!({ "symbol": "aapl" }),
+            )
             .await
             .unwrap_or_else(|error| panic!("fetch should succeed: {error}"));
 
@@ -494,7 +496,10 @@ mod tests {
 
         let backend = Backend::in_memory_for_tests().await;
         let mut stream = backend
-            .stream(&FilesetEquityHistoricalFetcher, serde_json::json!({ "symbol": "aapl" }))
+            .stream(
+                &FilesetEquityHistoricalFetcher,
+                serde_json::json!({ "symbol": "aapl" }),
+            )
             .await
             .unwrap_or_else(|error| panic!("stream should start: {error}"));
 
@@ -616,7 +621,9 @@ mod tests {
         assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
 
         let bus = backend.event_bus();
-        let _bus_guard = bus.lock().unwrap_or_else(|error| panic!("bus lock: {error}"));
+        let _bus_guard = bus
+            .lock()
+            .unwrap_or_else(|error| panic!("bus lock: {error}"));
         drop(_bus_guard);
 
         let outbox = backend.outbox();
@@ -685,7 +692,10 @@ mod tests {
         assert!(backend.submission_handle().is_none());
 
         // Shutdown is idempotent when not serving.
-        backend.shutdown().await.expect("second shutdown is a no-op");
+        backend
+            .shutdown()
+            .await
+            .expect("second shutdown is a no-op");
     }
 
     /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's

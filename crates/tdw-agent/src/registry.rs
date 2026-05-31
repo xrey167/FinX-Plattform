@@ -242,8 +242,8 @@ impl Registry {
     /// entity, or [`LoadError::Parse`] if a plugin spec is malformed.
     pub fn validate_plugins(&self) -> Result<(), LoadError> {
         for resource in self.by_kind(EntityKind::Plugin) {
-            let plugin: crate::Plugin =
-                entity_from_resource(resource).map_err(|error| LoadError::Parse(error.to_string()))?;
+            let plugin: crate::Plugin = entity_from_resource(resource)
+                .map_err(|error| LoadError::Parse(error.to_string()))?;
             for member in &plugin.members {
                 if !self.contains_name(member) {
                     return Err(LoadError::MissingMember {
@@ -289,7 +289,10 @@ impl Registry {
 
     /// Iterate over the resources of a single kind.
     pub fn by_kind(&self, kind: EntityKind) -> impl Iterator<Item = &Resource<Value>> {
-        self.entries.get(&kind).into_iter().flat_map(BTreeMap::values)
+        self.entries
+            .get(&kind)
+            .into_iter()
+            .flat_map(BTreeMap::values)
     }
 }
 
@@ -473,7 +476,10 @@ mod tests {
         let mut registry = Registry::new();
         assert!(matches!(
             registry.insert(load_resource(text).expect("parse")),
-            Err(LoadError::Invariant { kind: EntityKind::Tool, .. })
+            Err(LoadError::Invariant {
+                kind: EntityKind::Tool,
+                ..
+            })
         ));
     }
 }
