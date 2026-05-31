@@ -160,6 +160,15 @@ impl McpServer {
         self.registry = Some(registry);
     }
 
+    /// Set (or replace) the daemon client configuration the daemon-backed tools
+    /// (e.g. `tdw.daemon.query.submit`) use to reach the TDW daemon. Mirrors
+    /// [`Self::set_registry`] as an in-place setter, so an already-composed server
+    /// (registry + executor attached) can be pointed at a late-bound daemon
+    /// address without rebuilding it.
+    pub fn set_daemon_config(&mut self, config: DaemonClientConfig) {
+        self.daemon = DaemonToolRuntime::configured(config);
+    }
+
     #[must_use]
     pub const fn is_initialized(&self) -> bool {
         self.initialized

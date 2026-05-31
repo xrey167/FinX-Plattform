@@ -51,10 +51,6 @@ pub struct AgentBackend {
     hook_policy: HookExecutionPolicy,
     /// The handler backend that runs command/http/mcp/prompt/agent handlers.
     hook_backend: SystemHookHandlerBackend,
-    /// The command policy the MCP server's executor was built with, retained so
-    /// [`Self::with_daemon_addr`] can rebuild the embedded [`McpServer`] with the
-    /// same registry + executor composition while adding a daemon config.
-    command_policy: CommandPolicy,
 }
 
 impl AgentBackend {
@@ -95,7 +91,7 @@ impl AgentBackend {
         let executor = ToolExecutor::new().with_command_policy(policy.clone());
         let mcp = McpServer::new()
             .with_registry(registry.clone())
-            .with_executor(ToolExecutor::new().with_command_policy(policy.clone()));
+            .with_executor(ToolExecutor::new().with_command_policy(policy));
         Self {
             registry,
             executor,
@@ -107,7 +103,6 @@ impl AgentBackend {
             hooks: HookRegistry::default(),
             hook_policy: HookExecutionPolicy::default(),
             hook_backend: SystemHookHandlerBackend::new(),
-            command_policy: policy,
         }
     }
 
@@ -118,16 +113,14 @@ impl AgentBackend {
     ///
     /// This is the library-level counterpart to how
     /// [`server::run_both`](crate::server) wires the standalone MCP loop at the
-    /// daemon's [`bound_addr`](crate::data::Backend::bound_addr): the embedded
-    /// server is rebuilt from [`McpServer::with_daemon_config`] with the same
-    /// registry + executor composition as [`Self::assemble`], so registry-tool
-    /// listing/dispatch are preserved while the daemon-backed tools gain a
-    /// concrete TCP endpoint. Consumes and returns `self` for builder use.
+    /// daemon's [`bound_addr`](crate::data::Backend::bound_addr). It updates the
+    /// already-composed server in place via
+    /// [`McpServer::set_daemon_config`], so the attached registry + executor (and
+    /// the cached tool descriptors) are preserved while the daemon-backed tools
+    /// gain a concrete TCP endpoint. Consumes and returns `self` for builder use.
     #[must_use]
     pub fn with_daemon_addr(mut self, addr: &str) -> Self {
-        self.mcp = McpServer::with_daemon_config(DaemonClientConfig::tcp(addr))
-            .with_registry(self.registry.clone())
-            .with_executor(ToolExecutor::new().with_command_policy(self.command_policy.clone()));
+        self.mcp.set_daemon_config(DaemonClientConfig::tcp(addr));
         self
     }
 

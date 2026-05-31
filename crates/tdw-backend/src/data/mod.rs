@@ -62,10 +62,11 @@ pub struct Backend {
 impl Backend {
     /// Build a backend from a layered [`TdwConfig`].
     ///
-    /// The provider [`CommandRunner`] is sourced from the composition root's
-    /// registry (`AppState::registry`) so typed [`fetch`](Self::fetch) /
-    /// [`stream`](Self::stream) calls dispatch against the same real providers
-    /// the daemon serves, not an empty default registry.
+    /// Typed [`fetch`](Self::fetch) / [`stream`](Self::stream) dispatch directly
+    /// through the [`Fetcher`] supplied at the call site (which carries the
+    /// provider logic), so the [`CommandRunner`] only supplies default
+    /// [`Credentials`](tdw_core::Credentials) and does not consult a provider
+    /// registry on that path.
     ///
     /// # Errors
     ///
@@ -75,7 +76,7 @@ impl Backend {
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
-        let runner = CommandRunner::new((*state.registry).clone());
+        let runner = CommandRunner::default();
         let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
         Ok(Self {
             state,
@@ -86,12 +87,9 @@ impl Backend {
     }
 
     /// Build a backend backed by deterministic in-memory engines, for tests.
-    ///
-    /// The runner is wired to the in-memory `AppState`'s registry, exactly as in
-    /// [`from_config`](Self::from_config), so tests exercise the real fetch path.
     pub async fn in_memory_for_tests() -> Self {
         let state = AppState::in_memory_for_tests().await;
-        let runner = CommandRunner::new((*state.registry).clone());
+        let runner = CommandRunner::default();
         let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
         Self {
             state,
