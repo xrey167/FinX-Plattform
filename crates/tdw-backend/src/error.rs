@@ -23,6 +23,16 @@ pub enum BackendError {
     /// A filesystem error surfaced while resolving a path or directory.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An engine/provider/dispatch operation surfaced a unified
+    /// [`tdw_core::Error`] (e.g. a runner fetch, a stream-ingest control call).
+    #[error("engine error: {0}")]
+    Engine(#[from] tdw_core::Error),
+
+    /// A blocking offload (`spawn_blocking`) task failed to join (panicked or
+    /// was cancelled).
+    #[error("blocking task join failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
 }
 
 /// Convenience alias for fallible backend operations.

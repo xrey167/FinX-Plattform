@@ -17,6 +17,11 @@ tdw-agent = { path = "../tdw-agent" }
 tdw-tool-exec = { path = "../tdw-tool-exec" }
 tdw-mcp = { path = "../tdw-mcp" }
 tdw-agent-store = { path = "../tdw-agent-store" }
+# Phase 1 — the async data facade surfaces these crates' types directly.
+tdw-core = { path = "../tdw-core" }
+tdw-domain = { path = "../tdw-domain" }
+tdw-protocol = { path = "../tdw-protocol" }
+tdw-app-server = { path = "../tdw-app-server" }
 
 thiserror = { workspace = true }
 serde_json = { workspace = true }
@@ -24,6 +29,8 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Reused as the offline, deterministic test fetcher for fetch/stream coverage.
+tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 
 [lints]
 workspace = true
