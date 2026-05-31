@@ -62,6 +62,20 @@ pub struct KnowledgeIndex {
     vectors: Arc<dyn VectorEngine>,
     graph: KnowledgeGraph,
     tags: TagStore,
+    /// The vector collection, namespaced by the embedder's `model_id` so two
+    /// embedders of different dimension (e.g. the 8-dim hash vs a 1536-dim
+    /// OpenAI model) never share — and silently corrupt — one collection.
+    collection: String,
+}
+
+/// Build the per-embedder collection name: `tdw_knowledge__<model>` with the
+/// model id sanitized to `[A-Za-z0-9_]` so it is a safe collection identifier.
+fn collection_name(model_id: &str) -> String {
+    let safe: String = model_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("tdw_knowledge__{safe}")
 }
 
 impl Default for KnowledgeIndex {
@@ -85,11 +99,13 @@ impl KnowledgeIndex {
     /// in-process (`Default`).
     #[must_use]
     pub fn new(embedder: Arc<dyn EmbeddingProvider>, vectors: Arc<dyn VectorEngine>) -> Self {
+        let collection = collection_name(embedder.model_id());
         Self {
             embedder,
             vectors,
             graph: KnowledgeGraph::default(),
             tags: TagStore::default(),
+            collection,
         }
     }
 
@@ -130,7 +146,7 @@ impl KnowledgeIndex {
         }
         self.vectors
             .upsert(
-                "tdw_knowledge",
+                &self.collection,
                 vec![VectorPoint {
                     id: document.id,
                     vector: embedding.vector,
@@ -157,7 +173,7 @@ impl KnowledgeIndex {
         let hits = self
             .vectors
             .search_knn(
-                "tdw_knowledge",
+                &self.collection,
                 VectorQuery {
                     vector: embedding.vector,
                     top_k,
@@ -370,7 +386,7 @@ mod tests {
         index
             .vectors
             .upsert(
-                "tdw_knowledge",
+                &index.collection,
                 vec![VectorPoint {
                     id: "bad-payload".to_string(),
                     vector,
@@ -388,6 +404,24 @@ mod tests {
             error,
             KnowledgeError::InvalidPayloadField("entity_id")
         ));
+    }
+
+    #[test]
+    fn collection_name_is_namespaced_and_sanitized_per_model() {
+        // Embedders of different dimension must map to DIFFERENT collections so
+        // they never share — and silently corrupt — one vector collection.
+        assert_eq!(
+            collection_name("local-hash-8"),
+            "tdw_knowledge__local_hash_8"
+        );
+        assert_eq!(
+            collection_name("text-embedding-3-small"),
+            "tdw_knowledge__text_embedding_3_small"
+        );
+        assert_ne!(
+            collection_name("local-hash-8"),
+            collection_name("text-embedding-3-small")
+        );
     }
 
     #[tokio::test]
