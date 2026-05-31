@@ -22,6 +22,9 @@ tdw-core = { path = "../tdw-core" }
 tdw-domain = { path = "../tdw-domain" }
 tdw-protocol = { path = "../tdw-protocol" }
 tdw-app-server = { path = "../tdw-app-server" }
+# Phase 5 — the loopback daemon client the embedded MCP surface uses to reach
+# the in-process daemon over TCP/UDS/HTTP at its bound address.
+tdw-app-client = { path = "../tdw-app-client" }
 # Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
@@ -41,7 +44,20 @@ tdw-outbox = { path = "../tdw-outbox" }
 
 thiserror = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync", "time"] }
+
+[features]
+default = []
+## Forward the daemon transport features to `tdw-app-server`/`server::spawn_transport`
+## so a `tdw-backend` build (lib or binary) can serve UDS/HTTP, exactly as the
+## `tdw-service` binary's features did. `transport-tcp` is always on via the
+## `tdw-app-server` default; these add the optional transports.
+transport-http = ["tdw-app-server/transport-http"]
+transport-uds = ["tdw-app-server/transport-uds"]
+
+[[bin]]
+name = "tdw-backend"
+path = "src/bin/tdw-backend.rs"
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -1,14 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
-use std::time::Duration;
-
-use tdw_app_server::{
-    CancellationToken, SubmissionHandle, serve, service_channel, spawn_inmemory_relay,
-};
-use tdw_config::{DaemonTransport, TdwConfig};
-use tdw_protocol::EventMsg;
-use tdw_service_api::AppState;
+use tdw_backend::server::{load_config, run_daemon};
 use tdw_test_utils::smoke::{allocate_storage_root, run_end_to_end_smoke};
 
 pub type ServiceError = Box<dyn std::error::Error + Send + Sync>;
@@ -35,259 +27,21 @@ async fn main() -> Result<(), ServiceError> {
         return Ok(());
     }
 
-    // Daemon mode.
+    // Daemon mode. The bootstrap (config resolution, AppState wiring, relay +
+    // transport spawn, serve-until-ctrl-c) is factored into `tdw-backend`'s
+    // `server` module so the standalone binary and the unified `tdw-backend`
+    // binary share one implementation. This crate stays a thin entrypoint.
     let config = load_config().await?;
-    let state = AppState::from_config(config.clone())
-        .await
-        .map_err(|e| format!("AppState::from_config failed: {e}"))?;
-
-    // The policy is built inside `AppState::from_config` via `build_policy`:
-    // every non-prod profile gets a local-default policy (principal
-    // `local:default`, roles analyst + udf_runner), so dispatches succeed; the
-    // `prod`/`production` profile intentionally gets none and must supply an
-    // auth-backed policy before any dispatch can resolve. Report the actual
-    // state rather than assuming, so the startup log never misleads operators.
-    if state.policy.is_some() {
-        eprintln!(
-            "tdw-service: daemon starting in '{}' profile with a policy attached; dispatches will resolve",
-            config.profile
-        );
-    } else if let Some(error) = &state.policy_attach_error {
-        // Production profile with a partial/invalid TDW_OIDC_* config: name the
-        // specific cause (which var is missing, or which structural validation
-        // failed) so the misconfiguration is diagnosable from the boot log.
-        eprintln!(
-            "tdw-service: daemon starting in '{}' profile with no policy attached: {error}; configure TDW_OIDC_* correctly so dispatches resolve",
-            config.profile
-        );
-    } else {
-        eprintln!(
-            "tdw-service: daemon starting in '{}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired (configure TDW_OIDC_*)",
-            config.profile
-        );
-    }
-
-    let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
-
-    let cancel = CancellationToken::new();
-
-    let relay = spawn_inmemory_relay(
-        state.outbox.clone(),
-        state.bus.clone(),
-        Duration::from_millis(50),
-        cancel.clone(),
-    );
-
-    let transport_addr = effective_transport_addr(&config);
-    let transport_task = spawn_transport(&config, handle, events_rx, cancel.clone()).await?;
-
-    println!(
-        "tdw-service: daemon up. transport={:?} addr={}. ctrl-c to exit.",
-        config.daemon.transport, transport_addr
-    );
-
-    serve(service_loop, relay, cancel.clone()).await?;
-    let _ = transport_task.await;
-
+    run_daemon(&config).await?;
     Ok(())
-}
-
-async fn load_config() -> Result<TdwConfig, ServiceError> {
-    // Honour TDW_CONFIG env var if set: read that TOML file and merge layers.
-    if let Ok(path) = std::env::var("TDW_CONFIG") {
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|e| format!("TDW_CONFIG read error ({path}): {e}"))?;
-        let layer = tdw_config::ConfigLayer::from_toml(
-            tdw_config::ConfigLayerKind::EnvFile,
-            "TDW_CONFIG",
-            &contents,
-        )
-        .map_err(|e| format!("TDW_CONFIG parse error: {e}"))?;
-        let mut config =
-            tdw_config::merge_layers(&[layer]).map_err(|e| format!("config merge error: {e}"))?;
-        // Override volatile paths to safe in-memory defaults for daemon boot.
-        config.session.sqlite_path = "sqlite::memory:".to_string();
-        let rollout = std::env::temp_dir()
-            .join("tdw-rollout.jsonl")
-            .to_string_lossy()
-            .into_owned();
-        config.paths.rollout_dir = rollout;
-        // Honour TDW_PROFILE even when a TOML config is supplied, so a
-        // deployment can override the profile without editing the file.
-        config.profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
-        return Ok(config);
-    }
-
-    // Default minimal config: in-memory session store + tmp rollout.
-    let mut config = TdwConfig::default();
-    config.session.sqlite_path = "sqlite::memory:".to_string();
-    config.paths.rollout_dir = std::env::temp_dir()
-        .join("tdw-rollout.jsonl")
-        .to_string_lossy()
-        .into_owned();
-    // Local TCP by default; `TDW_DAEMON_TCP_BIND` overrides the bind address so
-    // the daemon can be reached across a container network (e.g. `0.0.0.0:7878`
-    // in the compose `live` profile). Unset = `127.0.0.1:7878` (unchanged).
-    config.daemon.transport = DaemonTransport::Tcp;
-    config.daemon.tcp_bind =
-        Some(std::env::var("TDW_DAEMON_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:7878".to_string()));
-    // Honour TDW_PROFILE so the compose `live` stack (which sets
-    // `TDW_PROFILE: docker`) actually applies that profile instead of silently
-    // staying on `default`. The profile drives `build_policy`: non-prod profiles
-    // (incl. `docker`) attach a local-default policy so dispatches resolve;
-    // `prod`/`production` stay fail-closed until an auth-backed policy is wired.
-    config.profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
-    Ok(config)
-}
-
-/// Resolve the effective profile: a non-empty `TDW_PROFILE` value overrides
-/// `current`; otherwise `current` is kept. Pure (env read happens at the call
-/// site) so the override precedence is unit-testable without mutating the
-/// process environment.
-fn resolve_profile(current: &str, env_profile: Option<String>) -> String {
-    match env_profile {
-        Some(profile) if !profile.trim().is_empty() => profile.trim().to_string(),
-        _ => current.to_string(),
-    }
-}
-
-/// Returns a human-readable description of the address we will bind.
-fn effective_transport_addr(config: &TdwConfig) -> String {
-    match config.daemon.transport {
-        DaemonTransport::Tcp => config
-            .daemon
-            .tcp_bind
-            .clone()
-            .unwrap_or_else(|| "127.0.0.1:7878".to_string()),
-        DaemonTransport::Uds => {
-            // UDS not available on Windows; we fall back to TCP.
-            #[cfg(not(unix))]
-            {
-                config
-                    .daemon
-                    .tcp_bind
-                    .clone()
-                    .unwrap_or_else(|| "127.0.0.1:7878".to_string())
-            }
-            #[cfg(unix)]
-            {
-                config.daemon.uds_path.clone()
-            }
-        }
-        DaemonTransport::HttpSse => config
-            .daemon
-            .http_bind
-            .clone()
-            .unwrap_or_else(|| "127.0.0.1:7879".to_string()),
-    }
-}
-
-async fn spawn_transport(
-    config: &TdwConfig,
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    match config.daemon.transport {
-        DaemonTransport::Tcp => {
-            let addr: SocketAddr = config
-                .daemon
-                .tcp_bind
-                .as_deref()
-                .unwrap_or("127.0.0.1:7878")
-                .parse()
-                .map_err(|e| format!("invalid tcp_bind address: {e}"))?;
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .map_err(|e| format!("TCP bind failed ({addr}): {e}"))?;
-            let bound = listener
-                .local_addr()
-                .map_err(|e| format!("local_addr: {e}"))?;
-            eprintln!("tdw-service: TCP listener bound on {bound}");
-            Ok(tokio::spawn(async move {
-                tdw_app_server::serve_tcp(listener, handle, events_rx, cancel).await
-            }))
-        }
-
-        DaemonTransport::Uds => spawn_uds(config, handle, events_rx, cancel).await,
-
-        DaemonTransport::HttpSse => spawn_http(config, handle, events_rx, cancel).await,
-    }
-}
-
-// Feature-gated UDS helper — only compiled on Unix with the transport-uds feature.
-#[cfg(all(unix, feature = "transport-uds"))]
-async fn spawn_uds(
-    config: &TdwConfig,
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    use std::path::PathBuf;
-    let path = PathBuf::from(&config.daemon.uds_path);
-    eprintln!("tdw-service: UDS listener on {:?}", path);
-    Ok(tokio::spawn(async move {
-        tdw_app_server::serve_uds(path, handle, events_rx, cancel).await
-    }))
-}
-
-// UDS is explicit: fail startup instead of silently binding a different transport.
-#[cfg(not(all(unix, feature = "transport-uds")))]
-async fn spawn_uds(
-    _config: &TdwConfig,
-    _handle: SubmissionHandle,
-    _events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    _cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    Err("UDS transport requested but this binary was not built for transport-uds on Unix".into())
-}
-
-// Feature-gated HTTP/SSE helper.
-#[cfg(feature = "transport-http")]
-async fn spawn_http(
-    config: &TdwConfig,
-    handle: SubmissionHandle,
-    events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    let bind_str = config
-        .daemon
-        .http_bind
-        .as_deref()
-        .unwrap_or("127.0.0.1:7879");
-    let addr: SocketAddr = bind_str
-        .parse()
-        .map_err(|e| format!("invalid http_bind address: {e}"))?;
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("HTTP bind failed ({addr}): {e}"))?;
-    let bound = listener
-        .local_addr()
-        .map_err(|e| format!("local_addr: {e}"))?;
-    eprintln!("tdw-service: HTTP/SSE listener bound on {bound}");
-    Ok(tokio::spawn(async move {
-        tdw_app_server::serve_http(listener, handle, events_rx, cancel).await
-    }))
-}
-
-// HTTP/SSE is explicit: fail startup instead of silently binding a different transport.
-#[cfg(not(feature = "transport-http"))]
-async fn spawn_http(
-    _config: &TdwConfig,
-    _handle: SubmissionHandle,
-    _events_rx: tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
-    _cancel: CancellationToken,
-) -> Result<tokio::task::JoinHandle<std::io::Result<()>>, ServiceError> {
-    Err(
-        "HTTP/SSE transport requested but this binary was not built with feature 'transport-http'"
-            .into(),
-    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tdw_app_server::{CancellationToken, service_channel};
+    use tdw_backend::server::{resolve_profile, spawn_transport};
+    use tdw_config::{DaemonTransport, TdwConfig};
+    use tdw_service_api::AppState;
 
     #[test]
     fn resolve_profile_prefers_non_empty_env_override() {

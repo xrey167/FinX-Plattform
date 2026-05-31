@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
@@ -22,7 +23,28 @@ use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
 use tdw_service_api::{AppState, fetch_equity_historical};
 
+use crate::config::BackendConfig;
 use crate::error::{BackendError, BackendResult};
+
+/// The live handles for a daemon started via [`Backend::serve`].
+///
+/// Holds everything needed to submit ops in-process (the [`SubmissionHandle`]),
+/// to address the daemon over loopback (the bound `addr`), and to shut it down
+/// cleanly (the [`CancellationToken`] plus the spawned task handles). Created by
+/// [`Backend::serve`] and cleared by [`Backend::shutdown`].
+struct DaemonHandle {
+    /// Cancels the service loop, relay, and transport on shutdown.
+    cancel: CancellationToken,
+    /// In-process op submission into the running service loop (no socket).
+    submission: SubmissionHandle,
+    /// The `serve(service_loop, relay, ..)` driver task.
+    serve_task: tokio::task::JoinHandle<()>,
+    /// The spawned transport (TCP/UDS/HTTP) server task.
+    transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
+    /// The address the transport actually bound (post-OS-assignment), e.g. the
+    /// concrete port for an ephemeral `127.0.0.1:0` request.
+    bound_addr: String,
+}
 
 /// The async backend facade over the data/daemon surface.
 pub struct Backend {
@@ -32,6 +54,9 @@ pub struct Backend {
     /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
     /// guard is acquired per-call and never held across unrelated awaits.
     index: Arc<Mutex<KnowledgeIndex>>,
+    /// The running daemon's live handles, populated by [`Backend::serve`] and
+    /// cleared by [`Backend::shutdown`]. `None` until/after serving.
+    daemon: Option<DaemonHandle>,
 }
 
 impl Backend {
@@ -56,6 +81,7 @@ impl Backend {
             state,
             runner,
             index,
+            daemon: None,
         })
     }
 
@@ -71,6 +97,7 @@ impl Backend {
             state,
             runner,
             index,
+            daemon: None,
         }
     }
 
@@ -163,6 +190,103 @@ impl Backend {
     /// implementation on [`AppState`].
     pub async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
         tdw_app_server::Dispatcher::dispatch(&self.state, env).await
+    }
+
+    // --- Daemon lifecycle ---------------------------------------------------
+
+    /// Start the daemon in-process: wire the service loop + relay + transport
+    /// onto the current tokio runtime and **store** their handles instead of
+    /// blocking. This is the non-blocking counterpart to the standalone
+    /// `tdw-service` binary's bootstrap.
+    ///
+    /// After this returns, [`submission_handle`](Self::submission_handle) yields
+    /// an in-process op-submission handle and [`bound_addr`](Self::bound_addr)
+    /// yields the transport's actual bound address (the OS-assigned port for an
+    /// ephemeral `127.0.0.1:0` request). Call [`shutdown`](Self::shutdown) to
+    /// stop it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the transport cannot bind (e.g. an
+    /// invalid `tcp_bind` address, an address already in use, or a transport
+    /// requested but not compiled into this build).
+    pub async fn serve(&mut self, cfg: &BackendConfig) -> BackendResult<()> {
+        let (handle, events_rx, service_loop) =
+            tdw_app_server::service_channel(self.state.clone(), self.state.clone());
+        let cancel = CancellationToken::new();
+        let relay = tdw_app_server::spawn_inmemory_relay(
+            self.state.outbox.clone(),
+            self.state.bus.clone(),
+            std::time::Duration::from_millis(50),
+            cancel.clone(),
+        );
+
+        let transport = crate::server::spawn_transport(
+            &cfg.tdw,
+            handle.clone(),
+            events_rx,
+            cancel.clone(),
+        )
+        .await
+        .map_err(|error| BackendError::Init(error.to_string()))?;
+
+        let serve_cancel = cancel.clone();
+        let serve_task = tokio::spawn(async move {
+            // The service loop never returns an error in practice; log and
+            // swallow so the join handle yields `()` and shutdown is uniform.
+            if let Err(error) = tdw_app_server::serve(service_loop, relay, serve_cancel).await {
+                eprintln!("tdw-backend: service loop error: {error}");
+            }
+        });
+
+        self.daemon = Some(DaemonHandle {
+            cancel,
+            submission: handle,
+            serve_task,
+            transport_task: transport.join,
+            bound_addr: transport.bound_addr,
+        });
+        Ok(())
+    }
+
+    /// An in-process [`SubmissionHandle`] for the running daemon, or `None` when
+    /// not serving. Submissions go straight into the service loop — no socket.
+    #[must_use]
+    pub fn submission_handle(&self) -> Option<SubmissionHandle> {
+        self.daemon.as_ref().map(|d| d.submission.clone())
+    }
+
+    /// The address the running daemon's transport bound, or `None` when not
+    /// serving. Hand this to a loopback [`DaemonClient`](tdw_app_client::DaemonClient)
+    /// (e.g. from the embedded MCP surface).
+    #[must_use]
+    pub fn bound_addr(&self) -> Option<&str> {
+        self.daemon.as_ref().map(|d| d.bound_addr.as_str())
+    }
+
+    /// Stop the running daemon: cancel its token, await the service-loop and
+    /// transport tasks (aborting the transport if it does not observe
+    /// cancellation promptly), and clear the stored handle.
+    ///
+    /// Idempotent: calling [`shutdown`](Self::shutdown) when not serving is a
+    /// no-op that returns `Ok(())`.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible (returns `Ok(())`); the `Result` return is kept so
+    /// future transports can surface a drain error without an API break.
+    pub async fn shutdown(&mut self) -> BackendResult<()> {
+        let Some(daemon) = self.daemon.take() else {
+            return Ok(());
+        };
+        daemon.cancel.cancel();
+        // The serve task cancels the relay internally and returns promptly.
+        let _ = daemon.serve_task.await;
+        // The transport observes the same token; abort if it lingers so
+        // shutdown is bounded and never hangs the caller.
+        daemon.transport_task.abort();
+        let _ = daemon.transport_task.await;
+        Ok(())
     }
 
     // --- Typed fetch / stream ----------------------------------------------
@@ -501,6 +625,69 @@ mod tests {
         let _outbox_guard = outbox
             .lock()
             .unwrap_or_else(|error| panic!("outbox lock: {error}"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_binds_ephemeral_port_submits_via_loopback_then_shuts_down() {
+        use std::time::Duration;
+        use tdw_app_client::{DaemonClient, DaemonClientConfig};
+
+        // Bind an ephemeral port so the test is hermetic and never collides.
+        let mut cfg = BackendConfig::default();
+        cfg.tdw.daemon.transport = tdw_config::DaemonTransport::Tcp;
+        cfg.tdw.daemon.tcp_bind = Some("127.0.0.1:0".to_string());
+
+        let mut backend = Backend::in_memory_for_tests().await;
+        backend.serve(&cfg).await.expect("serve should start");
+
+        // The OS-assigned address is observable and submission handle is live.
+        let addr = backend
+            .bound_addr()
+            .expect("a served daemon exposes its bound address")
+            .to_string();
+        assert!(addr.parse::<std::net::SocketAddr>().is_ok());
+        assert_ne!(
+            addr.rsplit(':').next().expect("port segment"),
+            "0",
+            "ephemeral bind must resolve to a concrete OS-assigned port"
+        );
+        assert!(backend.submission_handle().is_some());
+
+        // A loopback client submits a Shutdown op and must observe a terminal
+        // event. `submit_and_wait` is blocking, so run it off the async worker.
+        let client_addr = addr.clone();
+        let submission = tokio::task::spawn_blocking(move || {
+            let client = DaemonClient::new(
+                DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(2)),
+            );
+            client.submit_and_wait(&make_envelope(Op::Shutdown))
+        });
+        let submission = tokio::time::timeout(Duration::from_secs(3), submission)
+            .await
+            .expect("loopback submit must not hang")
+            .expect("spawn_blocking join")
+            .expect("loopback submission should reach the in-process daemon");
+        assert!(
+            submission
+                .events
+                .iter()
+                .any(|event| matches!(event, EventMsg::Completed { .. })),
+            "the daemon must emit a terminal Completed event for the op"
+        );
+
+        // Shutdown returns Ok, is bounded, and clears the stored handle.
+        tokio::time::timeout(Duration::from_secs(3), backend.shutdown())
+            .await
+            .expect("shutdown must not hang")
+            .expect("shutdown should return Ok");
+        assert!(
+            backend.bound_addr().is_none(),
+            "the daemon handle must be cleared after shutdown"
+        );
+        assert!(backend.submission_handle().is_none());
+
+        // Shutdown is idempotent when not serving.
+        backend.shutdown().await.expect("second shutdown is a no-op");
     }
 
     /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's

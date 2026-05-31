@@ -494,8 +494,28 @@ impl McpServer {
 
 #[must_use]
 pub fn run_stdio_json_rpc() -> i32 {
+    run_stdio_json_rpc_with_daemon(None)
+}
+
+/// Run the blocking stdio JSON-RPC loop, optionally pointing the embedded
+/// daemon tools at an explicit [`DaemonClientConfig`] instead of the
+/// environment-derived default.
+///
+/// When `daemon` is `Some`, the server is built via
+/// [`McpServer::with_daemon_config`] so its daemon-backed tools submit to that
+/// endpoint — used by the unified `tdw-backend` binary to point the in-process
+/// MCP surface at the co-resident daemon's loopback address without mutating
+/// the process environment. When `None`, behavior is byte-for-byte identical to
+/// [`run_stdio_json_rpc`] (env-derived daemon config). In both cases the
+/// `TDW_AGENT_REGISTRY_DIR` registry (if any) is attached.
+#[must_use]
+pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32 {
     let stdin = std::io::stdin();
-    let mut server = match attach_env_registry(McpServer::new()) {
+    let base = match daemon {
+        Some(config) => McpServer::with_daemon_config(config),
+        None => McpServer::new(),
+    };
+    let mut server = match attach_env_registry(base) {
         Ok(server) => server,
         Err(error) => {
             eprintln!("tdw-mcp registry configuration error: {error}");
@@ -878,6 +898,18 @@ pub const fn default_streamable_http_bind() -> &'static str {
 
 #[must_use]
 pub fn run_streamable_http(bind: &str) -> i32 {
+    run_streamable_http_with_daemon(bind, None)
+}
+
+/// Run the blocking Streamable HTTP loop, optionally pointing the embedded
+/// daemon tools at an explicit [`DaemonClientConfig`] instead of the
+/// environment-derived default.
+///
+/// See [`run_stdio_json_rpc_with_daemon`] for the rationale; this is the HTTP
+/// counterpart used by the unified `tdw-backend` binary. When `daemon` is
+/// `None`, behavior is identical to [`run_streamable_http`].
+#[must_use]
+pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientConfig>) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
             "tdw-mcp refusing non-loopback bind {bind}; set TDW_MCP_HTTP_TOKEN to enable authenticated remote binding"
@@ -894,7 +926,11 @@ pub fn run_streamable_http(bind: &str) -> i32 {
     };
     eprintln!("tdw-mcp Streamable HTTP listening on http://{bind}{STREAMABLE_HTTP_PATH}");
 
-    let server = match attach_env_registry(McpServer::new()) {
+    let base = match daemon {
+        Some(config) => McpServer::with_daemon_config(config),
+        None => McpServer::new(),
+    };
+    let server = match attach_env_registry(base) {
         Ok(server) => Arc::new(Mutex::new(server)),
         Err(error) => {
             eprintln!("tdw-mcp registry configuration error: {error}");

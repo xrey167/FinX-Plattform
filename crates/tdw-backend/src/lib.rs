@@ -12,3 +12,4 @@ pub mod config;
 pub mod data;
 pub mod error;
 pub mod prelude;
+pub mod server;
