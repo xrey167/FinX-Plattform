@@ -1,5 +1,184 @@
 {
   "$defs": {
+    "Adaptivity": {
+      "description": "Ordinal degree to which an entity changes itself over time.",
+      "oneOf": [
+        {
+          "const": "None",
+          "description": "Static.",
+          "type": "string"
+        },
+        {
+          "const": "Configured",
+          "description": "Parameterized but not self-changing.",
+          "type": "string"
+        },
+        {
+          "const": "Learning",
+          "description": "Learns/updates from feedback or data.",
+          "type": "string"
+        },
+        {
+          "const": "SelfModifying",
+          "description": "Rewrites its own structure (e.g. memory consolidation).",
+          "type": "string"
+        }
+      ]
+    },
+    "EntityMeta": {
+      "description": "The shared metadata envelope embedded by every entity kind (the CRD `metadata`).\n\nCarries [`BaseMetadata`] (flattened, so `name`/`title`/… sit at the top level) plus the\nFinX classification and a forward-compatible `_meta` bag for unknown fields.",
+      "properties": {
+        "_meta": {
+          "additionalProperties": true,
+          "description": "Forward-compatibility bag for unknown/future metadata fields.",
+          "type": "object"
+        },
+        "adaptivity": {
+          "$ref": "#/$defs/Adaptivity",
+          "description": "Degree of self-change."
+        },
+        "autonomous": {
+          "description": "Whether this entity is an autonomous actor (true only for agents).",
+          "type": "boolean"
+        },
+        "description": {
+          "description": "Optional human-readable description (a model-facing hint).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional display icons.",
+          "items": {
+            "$ref": "#/$defs/Icon"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Internal stable identifier (ULID-shaped).",
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "description": "Unique programmatic identifier; also the display fallback.",
+          "minLength": 1,
+          "type": "string"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin",
+          "description": "Orthogonal classification."
+        },
+        "tags": {
+          "description": "Free-form tags.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Optional human-readable display name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Semantic version of this definition.",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "id",
+        "version",
+        "origin",
+        "adaptivity",
+        "autonomous"
+      ],
+      "type": "object"
+    },
+    "Icon": {
+      "description": "A display icon descriptor (`src` + optional MIME type and size hints).",
+      "properties": {
+        "mimeType": {
+          "description": "Optional MIME type (e.g. `image/png`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sizes": {
+          "description": "Optional space-separated size hints (e.g. `\"48x48 96x96\"`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "Source URI of the icon (`data:` or `https:`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src"
+      ],
+      "type": "object"
+    },
+    "Origin": {
+      "description": "Orthogonal entity classification.\n\nThis is NOT lineage: where a particular piece of *data* came from is recorded by a\nseparate `provenance` field. `Origin` classifies the kind itself.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/Source",
+          "description": "Whether the kind bridges outside the platform."
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier",
+          "description": "How built-in/specialized the kind is."
+        }
+      },
+      "required": [
+        "tier",
+        "source"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "description": "Origin source — whether the kind is defined inside the platform or bridges outside.",
+      "oneOf": [
+        {
+          "const": "Internal",
+          "description": "Defined inside the platform/user.",
+          "type": "string"
+        },
+        {
+          "const": "External",
+          "description": "Wraps or mirrors a third-party standard or service.",
+          "type": "string"
+        }
+      ]
+    },
+    "Tier": {
+      "description": "Origin tier — how built-in or specialized an entity kind is.",
+      "oneOf": [
+        {
+          "const": "System",
+          "description": "Platform primitive.",
+          "type": "string"
+        },
+        {
+          "const": "Domain",
+          "description": "Finance/trading-domain specific.",
+          "type": "string"
+        },
+        {
+          "const": "Custom",
+          "description": "User-authored at runtime.",
+          "type": "string"
+        }
+      ]
+    },
     "WorkflowEdge": {
       "properties": {
         "from": {
@@ -49,21 +228,18 @@
       },
       "type": "array"
     },
+    "meta": {
+      "$ref": "#/$defs/EntityMeta"
+    },
     "nodes": {
       "items": {
         "$ref": "#/$defs/WorkflowNode"
       },
       "type": "array"
-    },
-    "workflow_id": {
-      "minLength": 1,
-      "type": "string"
     }
   },
   "required": [
-    "workflow_id",
-    "nodes",
-    "edges"
+    "meta"
   ],
   "title": "WorkflowDefinition",
   "type": "object"

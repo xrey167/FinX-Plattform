@@ -1,18 +1,15 @@
 [package]
-name = "tdw-agent"
+name = "tdw-tool-exec"
 version = "0.1.0"
 edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-json5 = { workspace = true }
-notify = { workspace = true }
-schemars = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-validator = { workspace = true }
+tdw-agent = { path = "../tdw-agent" }
+tdw-tools = { path = "../tdw-tools" }
 
 [lints]
 workspace = true

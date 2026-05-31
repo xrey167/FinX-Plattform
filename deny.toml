@@ -20,6 +20,9 @@ allow = [
     "Unicode-3.0",
     "CDLA-Permissive-2.0",
     "Zlib",
+    # Public-domain dedication (no obligations; more permissive than MIT).
+    # Pulled by `notify` (registry hot-reload watcher) and its transitive `dunce`.
+    "CC0-1.0",
 ]
 
 [bans]

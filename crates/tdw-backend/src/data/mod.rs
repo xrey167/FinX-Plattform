@@ -1,0 +1,721 @@
+//! Async data/daemon facade.
+//!
+//! Owns the daemon composition root ([`AppState`]) and a [`CommandRunner`] for
+//! provider dispatch, and exposes the async query/ingest surface over them. This
+//! crate holds **no business logic**: every method is a thin, typed delegation
+//! to the underlying `tdw-*` crates.
+
+use std::sync::Arc;
+
+use serde_json::Value;
+use tdw_app_server::{CancellationToken, SubmissionHandle};
+use tdw_bus::EventBus;
+use tdw_config::TdwConfig;
+use tdw_core::{
+    BlobEngine, DataModel, Fetcher, LexicalEngine, OBBject, OlapEngine, ProgressStream,
+    ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
+};
+use tdw_domain::EquityHistoricalData;
+use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tdw_outbox::InMemoryOutbox;
+use tdw_protocol::{EventMsg, OpEnvelope};
+use tdw_runtime::CommandRunner;
+use tdw_service_api::{AppState, fetch_equity_historical};
+use tokio::sync::Mutex;
+
+use crate::config::BackendConfig;
+use crate::error::{BackendError, BackendResult};
+
+/// The live handles for a daemon started via [`Backend::serve`].
+///
+/// Holds everything needed to submit ops in-process (the [`SubmissionHandle`]),
+/// to address the daemon over loopback (the bound `addr`), and to shut it down
+/// cleanly (the [`CancellationToken`] plus the spawned task handles). Created by
+/// [`Backend::serve`] and cleared by [`Backend::shutdown`].
+struct DaemonHandle {
+    /// Cancels the service loop, relay, and transport on shutdown.
+    cancel: CancellationToken,
+    /// In-process op submission into the running service loop (no socket).
+    submission: SubmissionHandle,
+    /// The `serve(service_loop, relay, ..)` driver task.
+    serve_task: tokio::task::JoinHandle<()>,
+    /// The spawned transport (TCP/UDS/HTTP) server task.
+    transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
+    /// The address the transport actually bound (post-OS-assignment), e.g. the
+    /// concrete port for an ephemeral `127.0.0.1:0` request.
+    bound_addr: String,
+}
+
+/// The async backend facade over the data/daemon surface.
+pub struct Backend {
+    state: AppState,
+    runner: CommandRunner,
+    /// The async knowledge index. Held behind a [`tokio::sync::Mutex`] because
+    /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
+    /// guard is acquired per-call and never held across unrelated awaits.
+    index: Arc<Mutex<KnowledgeIndex>>,
+    /// The running daemon's live handles, populated by [`Backend::serve`] and
+    /// cleared by [`Backend::shutdown`]. `None` until/after serving.
+    daemon: Option<DaemonHandle>,
+}
+
+impl Backend {
+    /// Build a backend from a layered [`TdwConfig`].
+    ///
+    /// Typed [`fetch`](Self::fetch) / [`stream`](Self::stream) dispatch directly
+    /// through the [`Fetcher`] supplied at the call site (which carries the
+    /// provider logic), so the [`CommandRunner`] only supplies default
+    /// [`Credentials`](tdw_core::Credentials) and does not consult a provider
+    /// registry on that path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the daemon composition root cannot be
+    /// constructed from `config`.
+    pub async fn from_config(config: TdwConfig) -> BackendResult<Self> {
+        let state = AppState::from_config(config)
+            .await
+            .map_err(|error| BackendError::Init(error.to_string()))?;
+        let runner = CommandRunner::default();
+        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        Ok(Self {
+            state,
+            runner,
+            index,
+            daemon: None,
+        })
+    }
+
+    /// Build a backend backed by deterministic in-memory engines, for tests.
+    pub async fn in_memory_for_tests() -> Self {
+        let state = AppState::in_memory_for_tests().await;
+        let runner = CommandRunner::default();
+        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        Self {
+            state,
+            runner,
+            index,
+            daemon: None,
+        }
+    }
+
+    /// The underlying daemon composition root.
+    #[must_use]
+    pub fn app_state(&self) -> &AppState {
+        &self.state
+    }
+
+    // --- Engine accessors (cheap `Arc` clones from the composition root) ----
+
+    /// The OLAP (analytical) engine handle.
+    #[must_use]
+    pub fn olap(&self) -> Arc<dyn OlapEngine> {
+        Arc::clone(&self.state.olap)
+    }
+
+    /// The relational engine handle.
+    #[must_use]
+    pub fn relational(&self) -> Arc<dyn RelationalEngine> {
+        Arc::clone(&self.state.relational)
+    }
+
+    /// The blob (object storage) engine handle.
+    #[must_use]
+    pub fn blob(&self) -> Arc<dyn BlobEngine> {
+        Arc::clone(&self.state.blob)
+    }
+
+    /// The vector engine handle.
+    #[must_use]
+    pub fn vector(&self) -> Arc<dyn VectorEngine> {
+        Arc::clone(&self.state.vector)
+    }
+
+    /// The lexical (full-text) engine handle.
+    #[must_use]
+    pub fn lexical(&self) -> Arc<dyn LexicalEngine> {
+        Arc::clone(&self.state.lexical)
+    }
+
+    /// The provider registry handle.
+    #[must_use]
+    pub fn registry(&self) -> Arc<ProviderRegistry> {
+        Arc::clone(&self.state.registry)
+    }
+
+    // --- Policy enforcement -------------------------------------------------
+
+    /// Enforce the attached policy for an `equity_historical` request against
+    /// `provider`/`symbol`, returning the masked response envelope.
+    ///
+    /// Delegates to [`tdw_service_api::secure_endpoint_response`] using the
+    /// composition root's [`PolicyEnforcementConfig`](tdw_service_api::PolicyEnforcementConfig).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::NoPolicy`] if no policy is attached to the
+    /// composition root, or [`BackendError::Engine`] if the request is rejected
+    /// (ingress JWT, missing role, denied endpoint) or the response cannot be
+    /// produced.
+    pub fn enforce_policy(&self, provider: &str, symbol: &str) -> BackendResult<Value> {
+        let policy = self.state.policy.as_ref().ok_or(BackendError::NoPolicy)?;
+        Ok(tdw_service_api::secure_endpoint_response(
+            policy, provider, symbol,
+        )?)
+    }
+
+    // --- Event spine accessors ----------------------------------------------
+
+    /// The shared event bus handle (cloned from the composition root).
+    #[must_use]
+    pub fn event_bus(&self) -> Arc<std::sync::Mutex<EventBus>> {
+        Arc::clone(&self.state.bus)
+    }
+
+    /// The shared outbox handle (cloned from the composition root).
+    #[must_use]
+    pub fn outbox(&self) -> Arc<std::sync::Mutex<InMemoryOutbox>> {
+        Arc::clone(&self.state.outbox)
+    }
+
+    // --- Op dispatch --------------------------------------------------------
+
+    /// Dispatch a single [`OpEnvelope`] through the secure service path and
+    /// return the emitted events (a `Started` followed by a terminal
+    /// `Completed`/`Failed`).
+    ///
+    /// Delegates to the [`Dispatcher`](tdw_app_server::Dispatcher)
+    /// implementation on [`AppState`].
+    pub async fn dispatch(&self, env: OpEnvelope) -> Vec<EventMsg> {
+        tdw_app_server::Dispatcher::dispatch(&self.state, env).await
+    }
+
+    // --- Daemon lifecycle ---------------------------------------------------
+
+    /// Start the daemon in-process: wire the service loop + relay + transport
+    /// onto the current tokio runtime and **store** their handles instead of
+    /// blocking. This is the non-blocking counterpart to the standalone
+    /// `tdw-service` binary's bootstrap.
+    ///
+    /// After this returns, [`submission_handle`](Self::submission_handle) yields
+    /// an in-process op-submission handle and [`bound_addr`](Self::bound_addr)
+    /// yields the transport's actual bound address (the OS-assigned port for an
+    /// ephemeral `127.0.0.1:0` request). Call [`shutdown`](Self::shutdown) to
+    /// stop it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the transport cannot bind (e.g. an
+    /// invalid `tcp_bind` address, an address already in use, or a transport
+    /// requested but not compiled into this build).
+    pub async fn serve(&mut self, cfg: &BackendConfig) -> BackendResult<()> {
+        let (handle, events_rx, service_loop) =
+            tdw_app_server::service_channel(self.state.clone(), self.state.clone());
+        let cancel = CancellationToken::new();
+        let relay = tdw_app_server::spawn_inmemory_relay(
+            self.state.outbox.clone(),
+            self.state.bus.clone(),
+            std::time::Duration::from_millis(50),
+            cancel.clone(),
+        );
+
+        let transport =
+            crate::server::spawn_transport(&cfg.tdw, handle.clone(), events_rx, cancel.clone())
+                .await
+                .map_err(|error| BackendError::Init(error.to_string()))?;
+
+        let serve_cancel = cancel.clone();
+        let serve_task = tokio::spawn(async move {
+            // The service loop never returns an error in practice; log and
+            // swallow so the join handle yields `()` and shutdown is uniform.
+            if let Err(error) = tdw_app_server::serve(service_loop, relay, serve_cancel).await {
+                eprintln!("tdw-backend: service loop error: {error}");
+            }
+        });
+
+        self.daemon = Some(DaemonHandle {
+            cancel,
+            submission: handle,
+            serve_task,
+            transport_task: transport.join,
+            bound_addr: transport.bound_addr,
+        });
+        Ok(())
+    }
+
+    /// An in-process [`SubmissionHandle`] for the running daemon, or `None` when
+    /// not serving. Submissions go straight into the service loop — no socket.
+    #[must_use]
+    pub fn submission_handle(&self) -> Option<SubmissionHandle> {
+        self.daemon.as_ref().map(|d| d.submission.clone())
+    }
+
+    /// The address the running daemon's transport bound, or `None` when not
+    /// serving. Hand this to a loopback [`DaemonClient`](tdw_app_client::DaemonClient)
+    /// (e.g. from the embedded MCP surface).
+    #[must_use]
+    pub fn bound_addr(&self) -> Option<&str> {
+        self.daemon.as_ref().map(|d| d.bound_addr.as_str())
+    }
+
+    /// Stop the running daemon: cancel its token, await the service-loop and
+    /// transport tasks (aborting the transport if it does not observe
+    /// cancellation promptly), and clear the stored handle.
+    ///
+    /// Idempotent: calling [`shutdown`](Self::shutdown) when not serving is a
+    /// no-op that returns `Ok(())`.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible (returns `Ok(())`); the `Result` return is kept so
+    /// future transports can surface a drain error without an API break.
+    pub async fn shutdown(&mut self) -> BackendResult<()> {
+        let Some(daemon) = self.daemon.take() else {
+            return Ok(());
+        };
+        daemon.cancel.cancel();
+        // The serve task cancels the relay internally and returns promptly.
+        let _ = daemon.serve_task.await;
+        // The transport observes the same token; abort if it lingers so
+        // shutdown is bounded and never hangs the caller.
+        daemon.transport_task.abort();
+        let _ = daemon.transport_task.await;
+        Ok(())
+    }
+
+    // --- Typed fetch / stream ----------------------------------------------
+
+    /// Fetch a typed result from `fetcher`, sourcing providers from the wired
+    /// registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Engine`] if the underlying fetch fails (e.g. an
+    /// invalid query, an unregistered provider, or a transport error).
+    pub async fn fetch<F, Q, D>(&self, fetcher: &F, params: Value) -> BackendResult<OBBject<D>>
+    where
+        F: Fetcher<Q, D>,
+        Q: QueryParams,
+        D: DataModel,
+    {
+        Ok(self.runner.run(fetcher, params).await?)
+    }
+
+    /// Stream typed progress + a terminal result from `fetcher`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Engine`] if the underlying fetch fails before the
+    /// stream can be produced.
+    pub async fn stream<F, Q, D>(
+        &self,
+        fetcher: &F,
+        params: Value,
+    ) -> BackendResult<ProgressStream<D>>
+    where
+        F: Fetcher<Q, D>,
+        Q: QueryParams,
+        D: DataModel,
+    {
+        Ok(self.runner.run_streaming(fetcher, params).await?)
+    }
+
+    // --- Stream ingest control (sync passthroughs) -------------------------
+
+    /// Start a live Binance trade streaming-ingest task for `symbol`, returning
+    /// its stable `stream_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Engine`] if the symbol is invalid, the streams
+    /// registry lock is poisoned, or a stream with the same id is already
+    /// running.
+    pub fn start_binance_stream(
+        &self,
+        symbol: &str,
+        table: Option<String>,
+    ) -> BackendResult<String> {
+        Ok(self.state.start_binance_stream(symbol, table)?)
+    }
+
+    /// Stop a running streaming-ingest task by `id`. Returns `true` if a stream
+    /// with that id was present.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Engine`] if the streams registry lock is
+    /// poisoned.
+    pub fn stop_stream(&self, id: &str) -> BackendResult<bool> {
+        Ok(self.state.stop_stream(id)?)
+    }
+
+    // --- Equity historical (sync API offloaded off the async worker) -------
+
+    /// Fetch equity historical bars for `symbol` from `provider` (`fileset` or
+    /// `yahoo`).
+    ///
+    /// [`tdw_service_api::fetch_equity_historical`] is synchronous and drives a
+    /// busy-loop `block_on` internally, so it is offloaded onto a blocking
+    /// thread via [`tokio::task::spawn_blocking`] to avoid blocking the async
+    /// worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Join`] if the blocking task fails to join, or
+    /// [`BackendError::Engine`] if the fetch itself fails (e.g. an unknown
+    /// provider).
+    pub async fn fetch_equity_historical(
+        &self,
+        provider: &str,
+        symbol: &str,
+    ) -> BackendResult<OBBject<EquityHistoricalData>> {
+        let provider = provider.to_string();
+        let symbol = symbol.to_string();
+        let object =
+            tokio::task::spawn_blocking(move || fetch_equity_historical(&provider, &symbol))
+                .await??;
+        Ok(object)
+    }
+
+    // --- Knowledge index (async, behind a per-call mutex) ------------------
+
+    /// Index a [`KnowledgeDocument`] into the embedded knowledge index.
+    ///
+    /// The index mutex is acquired, the single async `index_document` call is
+    /// awaited, and the guard is dropped — it is never held across unrelated
+    /// awaits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the document is invalid or an
+    /// embedding/storage/tag step fails.
+    pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
+        let mut index = self.index.lock().await;
+        index.index_document(doc).await?;
+        Ok(())
+    }
+
+    /// Search the embedded knowledge index for the `top_k` nearest hits to
+    /// `query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the query is empty, `top_k` is
+    /// zero, or an embedding/storage step fails.
+    pub async fn knowledge_search(
+        &self,
+        query: &str,
+        top_k: usize,
+    ) -> BackendResult<Vec<KnowledgeHit>> {
+        let index = self.index.lock().await;
+        Ok(index.search(query, top_k).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tdw_protocol::{ActorKind, ActorRef, Op, SessionId};
+    use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+
+    fn make_envelope(op: Op) -> OpEnvelope {
+        OpEnvelope::new(
+            SessionId::new("session-backend-test").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "user:test".to_string(),
+                kind: ActorKind::User,
+                tenant_id: Some("default".to_string()),
+            },
+            op,
+        )
+    }
+
+    #[tokio::test]
+    async fn engine_accessors_return_usable_handles() {
+        let backend = Backend::in_memory_for_tests().await;
+
+        // The registry handle shares the composition root's `Arc`.
+        assert!(Arc::ptr_eq(
+            &backend.registry(),
+            &backend.app_state().registry
+        ));
+        assert!(backend.registry().entries().len() >= 3);
+
+        // Each engine handle clones without panicking and is independently
+        // droppable.
+        let _ = backend.olap();
+        let _ = backend.relational();
+        let _ = backend.blob();
+        let _ = backend.vector();
+        let _ = backend.lexical();
+    }
+
+    #[tokio::test]
+    async fn dispatch_run_query_returns_started_then_completed() {
+        let backend = Backend::in_memory_for_tests().await;
+        let env = make_envelope(Op::RunQuery {
+            sql: "select 1".to_string(),
+            plan_id: None,
+            cost_hint: None,
+        });
+        let op_id = env.op_id.clone();
+        let events = backend.dispatch(env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            EventMsg::Started { op_id: started } => assert_eq!(started, &op_id),
+            other => panic!("expected Started, got {other:?}"),
+        }
+        match &events[1] {
+            EventMsg::Completed {
+                op_id: completed, ..
+            } => assert_eq!(completed, &op_id),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_uses_wired_registry_and_returns_typed_object() {
+        let backend = Backend::in_memory_for_tests().await;
+        let object: OBBject<EquityHistoricalData> = backend
+            .fetch(
+                &FilesetEquityHistoricalFetcher,
+                serde_json::json!({ "symbol": "aapl" }),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("fetch should succeed: {error}"));
+
+        assert_eq!(object.provider, "fileset");
+        assert_eq!(object.rows[0].symbol, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn stream_emits_progress_then_done() {
+        use tdw_core::ProgressOrResult;
+
+        let backend = Backend::in_memory_for_tests().await;
+        let mut stream = backend
+            .stream(
+                &FilesetEquityHistoricalFetcher,
+                serde_json::json!({ "symbol": "aapl" }),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("stream should start: {error}"));
+
+        let mut saw_progress = false;
+        let mut saw_done = false;
+        while let Some(event) = futures_poll_next(&mut stream) {
+            match event.unwrap_or_else(|error| panic!("stream item should be ok: {error}")) {
+                ProgressOrResult::Progress { .. } => saw_progress = true,
+                ProgressOrResult::Done(object) => {
+                    assert_eq!(object.provider, "fileset");
+                    saw_done = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_progress, "expected at least one progress event");
+        assert!(saw_done, "expected a terminal Done event");
+    }
+
+    #[tokio::test]
+    async fn fetch_equity_historical_offloads_blocking_call() {
+        let backend = Backend::in_memory_for_tests().await;
+        let object = backend
+            .fetch_equity_historical("fileset", "aapl")
+            .await
+            .unwrap_or_else(|error| panic!("equity historical should succeed: {error}"));
+
+        assert_eq!(object.provider, "fileset");
+        assert_eq!(object.rows[0].symbol, "AAPL");
+    }
+
+    #[tokio::test]
+    async fn fetch_equity_historical_unknown_provider_errors() {
+        let backend = Backend::in_memory_for_tests().await;
+        let result = backend.fetch_equity_historical("nope", "aapl").await;
+        assert!(result.is_err(), "unknown provider must surface an error");
+    }
+
+    #[tokio::test]
+    async fn stream_ingest_start_stop_round_trips() {
+        // Offline (no `ws` feature) the Binance streamer emits one tick then
+        // ends, so the spawned task may already be finished by the time we stop
+        // it — `stop_stream` still reports the registered stream was present.
+        let backend = Backend::in_memory_for_tests().await;
+        let stream_id = backend
+            .start_binance_stream("BTCUSDT", None)
+            .unwrap_or_else(|error| panic!("start should succeed: {error}"));
+        assert_eq!(stream_id, "binance:trades:BTCUSDT");
+
+        let present = backend
+            .stop_stream(&stream_id)
+            .unwrap_or_else(|error| panic!("stop should succeed: {error}"));
+        assert!(present, "the just-started stream must be present on stop");
+
+        let absent = backend
+            .stop_stream("binance:trades:NOPE")
+            .unwrap_or_else(|error| panic!("stop should succeed: {error}"));
+        assert!(!absent, "an unknown stream id must report not present");
+    }
+
+    #[tokio::test]
+    async fn knowledge_index_then_search_returns_hit() {
+        use tdw_kg::{Entity, EntityKind};
+
+        let backend = Backend::in_memory_for_tests().await;
+        // Construction mirrors `tdw-knowledge`'s own
+        // `indexes_and_searches_embedded_knowledge` test fixture.
+        backend
+            .knowledge_index(KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "AAPL equity momentum research".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec!["AAPL".to_string()],
+                },
+                tags: vec!["asset:equity".to_string()],
+            })
+            .await
+            .unwrap_or_else(|error| panic!("index should succeed: {error}"));
+
+        let hits = backend
+            .knowledge_search("AAPL momentum", 1)
+            .await
+            .unwrap_or_else(|error| panic!("search should succeed: {error}"));
+
+        assert_eq!(hits[0].id, "doc-1");
+        assert_eq!(hits[0].entity_id, "instrument:AAPL");
+    }
+
+    #[tokio::test]
+    async fn enforce_policy_returns_masked_response_envelope() {
+        // `in_memory_for_tests` boots a `default` profile, which `build_policy`
+        // resolves to a local policy granting the `analyst` role required by the
+        // `equity_historical` endpoint — so enforcement succeeds and returns the
+        // `{ "policy", "response" }` envelope.
+        let backend = Backend::in_memory_for_tests().await;
+        let response = backend
+            .enforce_policy("fileset", "AAPL")
+            .unwrap_or_else(|error| panic!("policy enforcement should succeed: {error}"));
+
+        assert!(
+            response.get("response").is_some(),
+            "the masked response envelope must carry a `response` field"
+        );
+        assert!(
+            response.get("policy").is_some(),
+            "the masked response envelope must carry the policy evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_spine_accessors_return_usable_handles() {
+        let backend = Backend::in_memory_for_tests().await;
+
+        // Each handle shares the composition root's `Arc` and locks cleanly.
+        assert!(Arc::ptr_eq(&backend.event_bus(), &backend.app_state().bus));
+        assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
+
+        let bus = backend.event_bus();
+        let _bus_guard = bus
+            .lock()
+            .unwrap_or_else(|error| panic!("bus lock: {error}"));
+        drop(_bus_guard);
+
+        let outbox = backend.outbox();
+        let _outbox_guard = outbox
+            .lock()
+            .unwrap_or_else(|error| panic!("outbox lock: {error}"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_binds_ephemeral_port_submits_via_loopback_then_shuts_down() {
+        use std::time::Duration;
+        use tdw_app_client::{DaemonClient, DaemonClientConfig};
+
+        // Bind an ephemeral port so the test is hermetic and never collides.
+        let mut cfg = BackendConfig::default();
+        cfg.tdw.daemon.transport = tdw_config::DaemonTransport::Tcp;
+        cfg.tdw.daemon.tcp_bind = Some("127.0.0.1:0".to_string());
+
+        let mut backend = Backend::in_memory_for_tests().await;
+        backend.serve(&cfg).await.expect("serve should start");
+
+        // The OS-assigned address is observable and submission handle is live.
+        let addr = backend
+            .bound_addr()
+            .expect("a served daemon exposes its bound address")
+            .to_string();
+        assert!(addr.parse::<std::net::SocketAddr>().is_ok());
+        assert_ne!(
+            addr.rsplit(':').next().expect("port segment"),
+            "0",
+            "ephemeral bind must resolve to a concrete OS-assigned port"
+        );
+        assert!(backend.submission_handle().is_some());
+
+        // A loopback client submits a Shutdown op and must observe a terminal
+        // event. `submit_and_wait` is blocking, so run it off the async worker.
+        let client_addr = addr.clone();
+        let submission = tokio::task::spawn_blocking(move || {
+            let client = DaemonClient::new(
+                DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(2)),
+            );
+            client.submit_and_wait(&make_envelope(Op::Shutdown))
+        });
+        let submission = tokio::time::timeout(Duration::from_secs(3), submission)
+            .await
+            .expect("loopback submit must not hang")
+            .expect("spawn_blocking join")
+            .expect("loopback submission should reach the in-process daemon");
+        assert!(
+            submission
+                .events
+                .iter()
+                .any(|event| matches!(event, EventMsg::Completed { .. })),
+            "the daemon must emit a terminal Completed event for the op"
+        );
+
+        // Shutdown returns Ok, is bounded, and clears the stored handle.
+        tokio::time::timeout(Duration::from_secs(3), backend.shutdown())
+            .await
+            .expect("shutdown must not hang")
+            .expect("shutdown should return Ok");
+        assert!(
+            backend.bound_addr().is_none(),
+            "the daemon handle must be cleared after shutdown"
+        );
+        assert!(backend.submission_handle().is_none());
+
+        // Shutdown is idempotent when not serving.
+        backend
+            .shutdown()
+            .await
+            .expect("second shutdown is a no-op");
+    }
+
+    /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's
+    /// in-memory streams are always-ready (no real I/O), so a busy poll that
+    /// treats `Pending` as end-of-stream is sufficient and deterministic here.
+    fn futures_poll_next<T: DataModel>(
+        stream: &mut ProgressStream<T>,
+    ) -> Option<tdw_core::Result<tdw_core::ProgressOrResult<T>>> {
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct NoopWake;
+        impl Wake for NoopWake {
+            fn wake(self: Arc<Self>) {}
+        }
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        match stream.as_mut().poll_next(&mut context) {
+            Poll::Ready(item) => item,
+            Poll::Pending => None,
+        }
+    }
+}

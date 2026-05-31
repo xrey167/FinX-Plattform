@@ -1,0 +1,65 @@
+//! Unified error type for the backend facade.
+//!
+//! Kept minimal but `#[from]`-friendly so later phases can extend it with the
+//! error types of each capability group they wire in.
+
+use thiserror::Error;
+
+/// A failure constructing or driving a backend facade.
+#[derive(Debug, Error)]
+pub enum BackendError {
+    /// Composition-root construction failed (e.g. building [`AppState`] from
+    /// config). The underlying engine error is flattened to a string so this
+    /// crate does not need a direct dependency on the engine error type.
+    ///
+    /// [`AppState`]: tdw_service_api::AppState
+    #[error("backend init failed: {0}")]
+    Init(String),
+
+    /// Loading a `tdw-agent` registry directory failed.
+    #[error("registry load failed: {0}")]
+    Load(#[from] tdw_agent::LoadError),
+
+    /// Resolving or executing a registry tool's implementation failed.
+    #[error("tool execution failed: {0}")]
+    Exec(#[from] tdw_tool_exec::ExecError),
+
+    /// Compiling a workflow against the agent contract failed.
+    #[error("workflow contract failed: {0}")]
+    Contract(#[from] tdw_agent::AgentContractError),
+
+    /// A filesystem error surfaced while resolving a path or directory.
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// An engine/provider/dispatch operation surfaced a unified
+    /// [`tdw_core::Error`] (e.g. a runner fetch, a stream-ingest control call).
+    #[error("engine error: {0}")]
+    Engine(#[from] tdw_core::Error),
+
+    /// A blocking offload (`spawn_blocking`) task failed to join (panicked or
+    /// was cancelled).
+    #[error("blocking task join failed: {0}")]
+    Join(#[from] tokio::task::JoinError),
+
+    /// An async knowledge-index operation (`index_document` / `search`) failed.
+    #[error("knowledge error: {0}")]
+    Knowledge(#[from] tdw_knowledge::KnowledgeError),
+
+    /// A tag taxonomy operation (`define` / `assign`) failed.
+    #[error("tag error: {0}")]
+    Tag(#[from] tdw_tags::TagError),
+
+    /// [`enforce_policy`](crate::data::Backend::enforce_policy) was called on a
+    /// backend whose composition root has no policy enforcement config attached.
+    #[error("no policy attached")]
+    NoPolicy,
+
+    /// A hook registry execution (`run_hooks`) failed (recursion guard, depth
+    /// limit, permission denial, veto, or a handler error).
+    #[error("hook error: {0}")]
+    Hook(#[from] tdw_hooks::HookError),
+}
+
+/// Convenience alias for fallible backend operations.
+pub type BackendResult<T> = Result<T, BackendError>;

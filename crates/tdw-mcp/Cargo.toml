@@ -8,11 +8,13 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-agent = { path = "../tdw-agent" }
 tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
 tdw-config = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
+tdw-tool-exec = { path = "../tdw-tool-exec" }
 
 [dev-dependencies]
 tdw-app-server = { workspace = true, features = ["transport-http"] }

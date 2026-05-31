@@ -1,0 +1,19 @@
+{
+  // A hand-authored agent definition.
+  apiVersion: "tdw.finx/v1",
+  kind: "agent",
+  metadata: {
+    name: "market-researcher",
+    title: "Market Researcher",
+    id: "market-researcher",
+    version: "0.1.0",
+    origin: { tier: "Domain", source: "Internal" },
+    adaptivity: "Learning",
+    autonomous: true, // the only autonomy-capable kind
+  },
+  spec: {
+    skills: [],
+    content_refs: [],
+    endpoint: "mcp://tdw/agents/market-researcher",
+  },
+}

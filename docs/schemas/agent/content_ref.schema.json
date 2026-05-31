@@ -35,8 +35,7 @@
   },
   "required": [
     "uri",
-    "kind",
-    "tags"
+    "kind"
   ],
   "title": "ContentRef",
   "type": "object"
