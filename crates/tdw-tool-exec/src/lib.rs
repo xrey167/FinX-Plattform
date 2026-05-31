@@ -173,11 +173,7 @@ impl ToolExecutor {
     ///
     /// Returns [`ExecError::BadArguments`] if `name` is not a valid tool name or already
     /// registered.
-    pub fn with_builtin(
-        mut self,
-        name: &str,
-        handler: ToolHandler,
-    ) -> Result<Self, ExecError> {
+    pub fn with_builtin(mut self, name: &str, handler: ToolHandler) -> Result<Self, ExecError> {
         let definition = ToolDefinition {
             name: name.to_string(),
             description: format!("builtin handler {name}"),
@@ -228,9 +224,9 @@ impl ToolExecutor {
             ToolImplementation::Http { .. } => {
                 Err(ExecError::NotYetSupported("http (needs credential wiring)"))
             }
-            ToolImplementation::Mcp { .. } => {
-                Err(ExecError::NotYetSupported("mcp proxy (needs server resolution)"))
-            }
+            ToolImplementation::Mcp { .. } => Err(ExecError::NotYetSupported(
+                "mcp proxy (needs server resolution)",
+            )),
             ToolImplementation::Pty { .. } => Err(ExecError::NotYetSupported("pty (Phase 3)")),
             ToolImplementation::Wasm { .. } => Err(ExecError::NotYetSupported("wasm (Phase 4)")),
             ToolImplementation::Ref { .. } => {
@@ -257,7 +253,9 @@ impl ToolExecutor {
 /// control characters, and no `..` traversal.
 fn validate_command(command: &str) -> Result<(), ExecError> {
     if command.is_empty() {
-        return Err(ExecError::BadArguments("command must not be empty".to_string()));
+        return Err(ExecError::BadArguments(
+            "command must not be empty".to_string(),
+        ));
     }
     if command.contains("..") {
         return Err(ExecError::BadArguments(format!(
@@ -336,7 +334,9 @@ fn dispatch_command(
                 let _ = child.kill();
                 let _ = join_reader(stdout_reader);
                 let _ = join_reader(stderr_reader);
-                return Err(ExecError::Backend(format!("failed to await command: {error}")));
+                return Err(ExecError::Backend(format!(
+                    "failed to await command: {error}"
+                )));
             }
         }
     };
@@ -370,15 +370,15 @@ where
 
 /// Join a reader thread, returning its captured bytes (empty on join failure / absent stream).
 fn join_reader(handle: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
-    handle.map(|handle| handle.join().unwrap_or_default()).unwrap_or_default()
+    handle
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tdw_agent::{
-        Adaptivity, EntityMeta, Origin, RegistryEntity, Source, Tier, ToolEffect,
-    };
+    use tdw_agent::{Adaptivity, EntityMeta, Origin, RegistryEntity, Source, Tier, ToolEffect};
 
     // The workspace forbids `unsafe_code` (so `std::env::set_var`, which is `unsafe` in
     // edition 2024, is unavailable). Instead of mutating process-global environment variables
@@ -395,6 +395,24 @@ mod tests {
 
     fn allow(names: &[&str]) -> CommandPolicy {
         policy(Some(names), Duration::from_secs(30))
+    }
+
+    /// `(command, args)` for a shell that runs `script`, portable across CI runners.
+    /// On Windows: `cmd /c <script>`; on Unix: `sh -c "<script>"`.
+    fn shell_command(script: &str) -> (String, Vec<String>) {
+        if cfg!(windows) {
+            (
+                "cmd".to_string(),
+                vec!["/c".to_string(), script.to_string()],
+            )
+        } else {
+            ("sh".to_string(), vec!["-c".to_string(), script.to_string()])
+        }
+    }
+
+    /// The shell binary name, for the executor allow-list.
+    fn shell_bin() -> &'static str {
+        if cfg!(windows) { "cmd" } else { "sh" }
     }
 
     fn tool_with_impl(name: &str, implementation: ToolImplementation) -> Tool {
@@ -422,10 +440,9 @@ mod tests {
     }
 
     fn registry_with(tool: &Tool) -> Registry {
-        Registry::from_resources([
-            tool.to_resource()
-                .unwrap_or_else(|error| panic!("tool resource: {error}")),
-        ])
+        Registry::from_resources([tool
+            .to_resource()
+            .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"))
     }
 
@@ -439,16 +456,17 @@ mod tests {
 
     #[test]
     fn command_allow_listed_runs_and_returns_stdout() {
+        let (command, args) = shell_command("echo hi");
         let tool = tool_with_impl(
             "tool.exec.echo",
             ToolImplementation::Command {
-                command: "cmd".to_string(),
-                args: vec!["/c".to_string(), "echo".to_string(), "hi".to_string()],
+                command,
+                args,
                 background: false,
             },
         );
         let registry = registry_with(&tool);
-        let executor = ToolExecutor::new().with_command_policy(allow(&["cmd"]));
+        let executor = ToolExecutor::new().with_command_policy(allow(&[shell_bin()]));
 
         let outcome = executor
             .execute(&registry, "tool.exec.echo", &serde_json::json!({}))
@@ -465,11 +483,12 @@ mod tests {
 
     #[test]
     fn command_without_allow_list_is_not_permitted() {
+        let (command, args) = shell_command("echo hi");
         let tool = tool_with_impl(
             "tool.exec.denied",
             ToolImplementation::Command {
-                command: "cmd".to_string(),
-                args: vec!["/c".to_string(), "echo".to_string(), "hi".to_string()],
+                command,
+                args,
                 background: false,
             },
         );
@@ -515,7 +534,7 @@ mod tests {
             },
         );
         let registry = registry_with(&tool);
-        let executor = ToolExecutor::new().with_command_policy(allow(&["cmd"]));
+        let executor = ToolExecutor::new().with_command_policy(allow(&[shell_bin()]));
 
         let error = executor
             .execute(&registry, "tool.exec.other", &serde_json::json!({}))
@@ -525,24 +544,25 @@ mod tests {
 
     #[test]
     fn command_exceeding_timeout_is_killed() {
-        // `ping 127.0.0.1 -n 5` takes ~4s on Windows; the 1s timeout must kill it.
+        // A command that runs ~5s on both platforms; the 1s timeout must kill it.
+        // `cmd /c sleep 5` does not exist on Windows, so use a per-OS script.
+        let script = if cfg!(windows) {
+            "ping -n 6 127.0.0.1 >NUL"
+        } else {
+            "sleep 5"
+        };
+        let (command, args) = shell_command(script);
         let tool = tool_with_impl(
             "tool.exec.slow",
             ToolImplementation::Command {
-                command: "cmd".to_string(),
-                args: vec![
-                    "/c".to_string(),
-                    "ping".to_string(),
-                    "127.0.0.1".to_string(),
-                    "-n".to_string(),
-                    "5".to_string(),
-                ],
+                command,
+                args,
                 background: false,
             },
         );
         let registry = registry_with(&tool);
         let executor = ToolExecutor::new()
-            .with_command_policy(policy(Some(&["cmd"]), Duration::from_secs(1)));
+            .with_command_policy(policy(Some(&[shell_bin()]), Duration::from_secs(1)));
 
         let error = executor
             .execute(&registry, "tool.exec.slow", &serde_json::json!({}))
@@ -618,7 +638,10 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("builtin should execute: {error}"));
 
-        assert_eq!(outcome.structured["echoed"], serde_json::json!({ "ping": true }));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "ping": true })
+        );
     }
 
     #[test]
@@ -643,7 +666,7 @@ mod tests {
         let tool = tool_with_impl(
             "tool.exec.bg",
             ToolImplementation::Command {
-                command: "cmd".to_string(),
+                command: shell_bin().to_string(),
                 args: Vec::new(),
                 background: true,
             },
