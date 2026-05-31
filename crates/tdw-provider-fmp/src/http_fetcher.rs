@@ -18,8 +18,8 @@ use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{
-    BASE_URL, FmpError, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow, FmpStatement,
-    API_KEY_ENV,
+    API_KEY_ENV, BASE_URL, FmpError, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow,
+    FmpStatement,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -76,7 +76,9 @@ fn api_key() -> std::result::Result<String, FmpError> {
         .map_err(|_| FmpError::Provider(format!("{API_KEY_ENV} not set")))?;
     let key = key.trim().to_string();
     if key.is_empty() {
-        return Err(FmpError::Provider(format!("{API_KEY_ENV} must not be empty")));
+        return Err(FmpError::Provider(format!(
+            "{API_KEY_ENV} must not be empty"
+        )));
     }
     Ok(key)
 }
@@ -123,8 +125,7 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
             .or_else(|| params.get("ticker"))
             .and_then(Value::as_str)
             .ok_or_else(|| Error::InvalidQuery("fmp symbol must be a string".to_string()))?;
-        FmpHistoricalQuery::new(symbol)
-            .map_err(|e| Error::InvalidQuery(e.to_string()))
+        FmpHistoricalQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
     async fn extract_data(
@@ -161,16 +162,10 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
             .map_err(|e| Error::Provider(format!("fmp read body: {e}")))
     }
 
-    fn transform_data(
-        &self,
-        query: &FmpHistoricalQuery,
-        raw: Bytes,
-    ) -> Result<Vec<MarketDataBar>> {
+    fn transform_data(&self, query: &FmpHistoricalQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
         let envelope: FmpHistoricalEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("fmp parse_json: {e}")))?;
-        let symbol = envelope
-            .symbol
-            .unwrap_or_else(|| query.symbol.clone());
+        let symbol = envelope.symbol.unwrap_or_else(|| query.symbol.clone());
         let mut rows = Vec::with_capacity(envelope.historical.len());
         for bar in envelope.historical {
             rows.push(MarketDataBar {
@@ -273,10 +268,7 @@ impl Fetcher<FmpFundamentalsQuery, FmpIncomeRow> for FmpHttpIncomeFetcher {
         let client = fmp_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
             .get(&url)
-            .query(&[
-                ("limit", query.limit.to_string()),
-                ("apikey", api_key),
-            ])
+            .query(&[("limit", query.limit.to_string()), ("apikey", api_key)])
             .send()
             .await
             .map_err(|e| Error::Provider(format!("fmp income extract_data: {e}")))?;

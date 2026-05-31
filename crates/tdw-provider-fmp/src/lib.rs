@@ -191,8 +191,8 @@ mod tests {
 
     #[test]
     fn historical_query_normalises_symbol_to_uppercase() {
-        let query = FmpHistoricalQuery::new("aapl")
-            .unwrap_or_else(|e| panic!("query should build: {e}"));
+        let query =
+            FmpHistoricalQuery::new("aapl").unwrap_or_else(|e| panic!("query should build: {e}"));
         assert_eq!(query.symbol, "AAPL");
     }
 
@@ -241,14 +241,19 @@ mod tests {
 
     #[test]
     fn fundamentals_statement_path_segments_are_correct() {
-        assert_eq!(FmpStatement::Balance.as_path_segment(), "balance-sheet-statement");
-        assert_eq!(FmpStatement::Cashflow.as_path_segment(), "cash-flow-statement");
+        assert_eq!(
+            FmpStatement::Balance.as_path_segment(),
+            "balance-sheet-statement"
+        );
+        assert_eq!(
+            FmpStatement::Cashflow.as_path_segment(),
+            "cash-flow-statement"
+        );
     }
 
     #[test]
     fn mock_historical_fetcher_returns_stub_row() {
-        let query =
-            FmpHistoricalQuery::new("MSFT").unwrap_or_else(|e| panic!("query: {e}"));
+        let query = FmpHistoricalQuery::new("MSFT").unwrap_or_else(|e| panic!("query: {e}"));
         let rows = FmpMockHistoricalFetcher::fetch_stub(&query)
             .unwrap_or_else(|e| panic!("stub should succeed: {e}"));
         assert_eq!(rows.len(), 1);
@@ -271,7 +276,11 @@ mod tests {
     fn fmp_error_messages_are_descriptive() {
         assert!(FmpError::EmptySymbol.to_string().contains("empty"));
         assert!(FmpError::InvalidSymbol.to_string().contains("unsupported"));
-        assert!(FmpError::InvalidLimit.to_string().contains("greater than zero"));
+        assert!(
+            FmpError::InvalidLimit
+                .to_string()
+                .contains("greater than zero")
+        );
         assert!(
             FmpError::Provider("timeout".to_string())
                 .to_string()

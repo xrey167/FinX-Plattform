@@ -150,7 +150,11 @@ fn income_transform_query_rejects_unknown_statement() {
 fn empty_historical_response_produces_empty_vec() {
     let fetcher = FmpHttpHistoricalFetcher::default();
     let query = FmpHistoricalQuery::new("AAPL").unwrap_or_else(|e| panic!("query: {e}"));
-    let raw = Bytes::from(json!({"symbol": "AAPL", "historical": []}).to_string().into_bytes());
+    let raw = Bytes::from(
+        json!({"symbol": "AAPL", "historical": []})
+            .to_string()
+            .into_bytes(),
+    );
 
     let rows = fetcher
         .transform_data(&query, raw)
