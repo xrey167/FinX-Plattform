@@ -550,16 +550,28 @@ fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
     Ok(Arc::new(HashEmbeddingProvider::default()))
 }
 
+/// The configured persistent memory directory (`TDW_MEMORY_DIR`), trimmed and
+/// non-empty, or `None` when unset. This is the daemon's only durable memory
+/// surface, so the standalone daemon only runs consolidation when it is set.
+pub(crate) fn memory_dir() -> Option<String> {
+    std::env::var("TDW_MEMORY_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Whether a persistent memory directory is configured (see [`memory_dir`]).
+#[must_use]
+pub(crate) fn memory_dir_configured() -> bool {
+    memory_dir().is_some()
+}
+
 /// Build the agent [`MemoryStore`]: load `*.json5` files from `TDW_MEMORY_DIR`
 /// when that env var names a usable directory (so tier changes persist across
 /// restarts), otherwise an empty in-memory-only store. A load failure is logged
 /// and degraded to an in-memory store so the daemon still boots.
 pub(crate) fn build_memory_store() -> MemoryStore {
-    let Some(dir) = std::env::var("TDW_MEMORY_DIR")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(dir) = memory_dir() else {
         return MemoryStore::new();
     };
     match MemoryStore::load_dir(std::path::Path::new(&dir)) {
