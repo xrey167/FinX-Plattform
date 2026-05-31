@@ -70,6 +70,12 @@ pub struct KnowledgeIndex {
 
 /// Build the per-embedder collection name: `tdw_knowledge__<model>` with the
 /// model id sanitized to `[A-Za-z0-9_]` so it is a safe collection identifier.
+///
+/// Sanitization is not injective (e.g. `text-embedding-3` and `text_embedding_3`
+/// collapse to one name). That is acceptable here: the only harmful collision is
+/// two models of *different* vector dimension sharing a collection, which the
+/// backing engine's dimension guard
+/// (`QdrantHttpEngine::ensure_collection`) rejects loudly rather than corrupting.
 fn collection_name(model_id: &str) -> String {
     let safe: String = model_id
         .chars()
