@@ -22,6 +22,9 @@ tdw-core = { path = "../tdw-core" }
 tdw-domain = { path = "../tdw-domain" }
 tdw-protocol = { path = "../tdw-protocol" }
 tdw-app-server = { path = "../tdw-app-server" }
+# Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
+tdw-workflow-engine = { path = "../tdw-workflow-engine" }
+tdw-eval-runner = { path = "../tdw-eval-runner" }
 
 thiserror = { workspace = true }
 serde_json = { workspace = true }

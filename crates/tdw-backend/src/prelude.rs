@@ -16,3 +16,14 @@ pub use tdw_core::{
 };
 pub use tdw_domain::EquityHistoricalData;
 pub use tdw_protocol::{EventMsg, Op, OpEnvelope};
+
+// Phase 2 — the sync agent/MCP facade's typed surface.
+pub use tdw_agent::{
+    AgentCard, EvalRunRequest, Registry, RegistryWatcher, Tool, ToolImplementation,
+    WorkflowDefinition,
+};
+pub use tdw_agent_store::AgentStore;
+pub use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
+pub use tdw_mcp::McpServer;
+pub use tdw_tool_exec::{CommandPolicy, ExecError, ToolOutcome};
+pub use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};

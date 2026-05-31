@@ -20,6 +20,14 @@ pub enum BackendError {
     #[error("registry load failed: {0}")]
     Load(#[from] tdw_agent::LoadError),
 
+    /// Resolving or executing a registry tool's implementation failed.
+    #[error("tool execution failed: {0}")]
+    Exec(#[from] tdw_tool_exec::ExecError),
+
+    /// Compiling a workflow against the agent contract failed.
+    #[error("workflow contract failed: {0}")]
+    Contract(#[from] tdw_agent::AgentContractError),
+
     /// A filesystem error surfaced while resolving a path or directory.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
