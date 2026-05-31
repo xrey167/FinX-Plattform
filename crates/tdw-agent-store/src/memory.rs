@@ -317,7 +317,12 @@ pub fn consolidate_at(
 ///
 /// This is the **only** place the real clock is read; the apply step stays
 /// deterministic. A consolidation error on a tick is logged and the loop
-/// continues (a transient FS error must not kill the scheduler).
+/// continues (a transient FS error must not kill the scheduler), and the apply
+/// step is additionally guarded against a panic so one bad tick can never
+/// *silently* end the scheduler task: under `panic = "unwind"` the panic is
+/// caught, logged, and the loop continues (tokio's `Mutex` does not poison, so
+/// the store stays usable); under release `panic = "abort"` a panic aborts the
+/// whole process loudly. Either way the failure is never invisible.
 #[must_use]
 pub fn spawn_consolidation_scheduler(
     store: Arc<Mutex<MemoryStore>>,
@@ -329,8 +334,19 @@ pub fn spawn_consolidation_scheduler(
             {
                 let now = chrono::Utc::now().to_rfc3339();
                 let mut guard = store.lock().await;
-                if let Err(error) = consolidate_at(&mut guard, &now) {
-                    eprintln!("tdw-agent-store: consolidation tick error: {error}");
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    consolidate_at(&mut guard, &now)
+                }));
+                match outcome {
+                    Ok(Ok(_actions)) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("tdw-agent-store: consolidation tick error: {error}");
+                    }
+                    Err(_panic) => {
+                        eprintln!(
+                            "tdw-agent-store: consolidation tick panicked; the scheduler continues"
+                        );
+                    }
                 }
             }
             tokio::select! {
