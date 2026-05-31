@@ -28,6 +28,11 @@ pub use tdw_mcp::McpServer;
 pub use tdw_tool_exec::{CommandPolicy, ExecError, ToolOutcome};
 pub use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};
 
+// Phase 5/6 — the loopback daemon client the embedded MCP surface uses to reach
+// the in-process daemon at its bound address (see
+// [`AgentBackend::with_daemon_addr`](crate::agent::AgentBackend::with_daemon_addr)).
+pub use tdw_app_client::{DaemonClient, DaemonClientConfig};
+
 // Phase 3 — the knowledge group's typed surface (sync KG/tags/features + the
 // async knowledge index).
 pub use tdw_feature_store::{FeatureSnapshot, FeatureStore};
