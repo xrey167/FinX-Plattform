@@ -13,7 +13,11 @@ use std::collections::BTreeMap;
 use tdw_agent::{AgentCard, EntityKind, EvalRunRequest, Registry, WorkflowDefinition};
 use tdw_agent_store::AgentStore;
 use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
+use tdw_event::EventEnvelope;
 use tdw_feature_store::{FeatureSnapshot, FeatureStore};
+use tdw_hooks::{
+    HookExecutionOutcome, HookExecutionPolicy, HookRegistry, HookSpec, SystemHookHandlerBackend,
+};
 use tdw_kg::{Entity, KnowledgeGraph, Relationship};
 use tdw_mcp::McpServer;
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
@@ -40,6 +44,12 @@ pub struct AgentBackend {
     tags: TagStore,
     /// The synchronous feature store, materializing snapshots over [`Self::tags`].
     features: FeatureStore,
+    /// The hook registry (ordered hook specs).
+    hooks: HookRegistry,
+    /// The permission/veto policy applied when executing hook handlers.
+    hook_policy: HookExecutionPolicy,
+    /// The handler backend that runs command/http/mcp/prompt/agent handlers.
+    hook_backend: SystemHookHandlerBackend,
 }
 
 impl AgentBackend {
@@ -89,6 +99,9 @@ impl AgentBackend {
             kg: KnowledgeGraph::default(),
             tags: TagStore::default(),
             features: FeatureStore::default(),
+            hooks: HookRegistry::default(),
+            hook_policy: HookExecutionPolicy::default(),
+            hook_backend: SystemHookHandlerBackend::new(),
         }
     }
 
@@ -310,6 +323,43 @@ impl AgentBackend {
     #[must_use]
     pub fn latest_features(&self, entity_id: &str) -> Option<&FeatureSnapshot> {
         self.features.latest(entity_id)
+    }
+
+    // --- Hooks (sync) ------------------------------------------------------
+
+    /// Register a [`HookSpec`] into the embedded registry (kept ordered by the
+    /// registry on insert).
+    pub fn register_hook(&mut self, hook: HookSpec) {
+        self.hooks.register(hook);
+    }
+
+    /// The names of the registered hooks, in registry order.
+    #[must_use]
+    pub fn hook_names(&self) -> Vec<String> {
+        self.hooks.hook_names()
+    }
+
+    /// Execute the registered hook handlers for `envelope` under the configured
+    /// [`HookExecutionPolicy`], returning each handler's structured outcome.
+    ///
+    /// The call splits three distinct fields: `self.hooks` (`&mut`),
+    /// `self.hook_policy` (`&`), and `self.hook_backend` (`&mut`); the borrow
+    /// checker accepts the disjoint borrows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BackendError::Hook`] if a hook spec is invalid,
+    /// the recursion/depth guard trips, a handler is denied/requires approval,
+    /// a veto is denied, or a handler fails.
+    pub fn run_hooks(
+        &mut self,
+        envelope: &EventEnvelope<serde_json::Value>,
+    ) -> BackendResult<Vec<HookExecutionOutcome>> {
+        Ok(self.hooks.execute_handlers(
+            envelope,
+            &self.hook_policy,
+            &mut self.hook_backend,
+        )?)
     }
 }
 
@@ -595,6 +645,39 @@ mod tests {
                 .map(|latest| latest.as_of.clone()),
             Some("2026-05-21".to_string())
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn register_hook_lists_name_and_runs_under_default_policy() {
+        use tdw_event::sample_event;
+        use tdw_hooks::{HandlerKind, HookError, HookSpec, TransactionMode};
+
+        let (dir, mut backend) = backend_with_search_tool();
+
+        // A no-op command hook (named differently from the sample event's
+        // `event_type` so the recursion guard does not trip). Mirrors the
+        // construction in `tdw-hooks`' own handler-execution tests.
+        let hook = HookSpec::new("audit-log", 0, TransactionMode::PostCommit).with_handler(
+            HandlerKind::Command {
+                command: "true".to_string(),
+                args: Vec::new(),
+            },
+        );
+        backend.register_hook(hook);
+        assert_eq!(backend.hook_names(), vec!["audit-log".to_string()]);
+
+        // The default `HookExecutionPolicy` denies by default, so executing the
+        // handler surfaces a mapped `PermissionDenied` for the command action.
+        let envelope = sample_event("backend");
+        let error = backend
+            .run_hooks(&envelope)
+            .expect_err("default deny policy must reject the hook handler");
+        assert!(matches!(
+            error,
+            crate::error::BackendError::Hook(HookError::PermissionDenied(action))
+                if action == "hook.command.true"
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

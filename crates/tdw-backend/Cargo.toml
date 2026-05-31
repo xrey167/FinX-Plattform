@@ -30,6 +30,14 @@ tdw-kg = { path = "../tdw-kg" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+# Phase 4 — the auth/hooks/policy/events group. `tdw-bus`/`tdw-outbox` are named
+# only to type the event-spine accessors (`AppState.bus` / `AppState.outbox`),
+# which `tdw-service-api` does not re-export.
+tdw-auth = { path = "../tdw-auth" }
+tdw-hooks = { path = "../tdw-hooks" }
+tdw-event = { path = "../tdw-event" }
+tdw-bus = { path = "../tdw-bus" }
+tdw-outbox = { path = "../tdw-outbox" }
 
 thiserror = { workspace = true }
 serde_json = { workspace = true }

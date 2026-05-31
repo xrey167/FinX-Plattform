@@ -34,3 +34,16 @@ pub use tdw_feature_store::{FeatureSnapshot, FeatureStore};
 pub use tdw_kg::{Entity, KnowledgeGraph, Relationship};
 pub use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 pub use tdw_tags::{TagAssignment, TagDefinition, TagStore};
+
+// Phase 4 — the auth/hooks/policy/events group's typed surface.
+pub use tdw_auth::{AuthPolicy, Principal, authorize};
+pub use tdw_service_api::{
+    PolicyEnforcementConfig, ServiceEndpoint, enforce_request_path_with_backend,
+    mask_json_response, secure_endpoint_response,
+};
+pub use tdw_hooks::{
+    HandlerKind, HookEvent, HookExecutionOutcome, HookExecutionPolicy, HookHandlerBackend,
+    HookRegistry, HookSpec, PermissionEffect, PermissionRule, PermissionRules,
+    SystemHookHandlerBackend, TransactionMode,
+};
+pub use tdw_event::{Actor, ActorKind, EventEnvelope, Origin, TraceContext};

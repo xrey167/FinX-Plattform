@@ -8,8 +8,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tdw_outbox::InMemoryOutbox;
 use tokio::sync::Mutex;
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, LexicalEngine, OBBject, OlapEngine, ProgressStream,
@@ -114,6 +116,41 @@ impl Backend {
     #[must_use]
     pub fn registry(&self) -> Arc<ProviderRegistry> {
         Arc::clone(&self.state.registry)
+    }
+
+    // --- Policy enforcement -------------------------------------------------
+
+    /// Enforce the attached policy for an `equity_historical` request against
+    /// `provider`/`symbol`, returning the masked response envelope.
+    ///
+    /// Delegates to [`tdw_service_api::secure_endpoint_response`] using the
+    /// composition root's [`PolicyEnforcementConfig`](tdw_service_api::PolicyEnforcementConfig).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::NoPolicy`] if no policy is attached to the
+    /// composition root, or [`BackendError::Engine`] if the request is rejected
+    /// (ingress JWT, missing role, denied endpoint) or the response cannot be
+    /// produced.
+    pub fn enforce_policy(&self, provider: &str, symbol: &str) -> BackendResult<Value> {
+        let policy = self.state.policy.as_ref().ok_or(BackendError::NoPolicy)?;
+        Ok(tdw_service_api::secure_endpoint_response(
+            policy, provider, symbol,
+        )?)
+    }
+
+    // --- Event spine accessors ----------------------------------------------
+
+    /// The shared event bus handle (cloned from the composition root).
+    #[must_use]
+    pub fn event_bus(&self) -> Arc<std::sync::Mutex<EventBus>> {
+        Arc::clone(&self.state.bus)
+    }
+
+    /// The shared outbox handle (cloned from the composition root).
+    #[must_use]
+    pub fn outbox(&self) -> Arc<std::sync::Mutex<InMemoryOutbox>> {
+        Arc::clone(&self.state.outbox)
     }
 
     // --- Op dispatch --------------------------------------------------------
@@ -425,6 +462,45 @@ mod tests {
 
         assert_eq!(hits[0].id, "doc-1");
         assert_eq!(hits[0].entity_id, "instrument:AAPL");
+    }
+
+    #[tokio::test]
+    async fn enforce_policy_returns_masked_response_envelope() {
+        // `in_memory_for_tests` boots a `default` profile, which `build_policy`
+        // resolves to a local policy granting the `analyst` role required by the
+        // `equity_historical` endpoint — so enforcement succeeds and returns the
+        // `{ "policy", "response" }` envelope.
+        let backend = Backend::in_memory_for_tests().await;
+        let response = backend
+            .enforce_policy("fileset", "AAPL")
+            .unwrap_or_else(|error| panic!("policy enforcement should succeed: {error}"));
+
+        assert!(
+            response.get("response").is_some(),
+            "the masked response envelope must carry a `response` field"
+        );
+        assert!(
+            response.get("policy").is_some(),
+            "the masked response envelope must carry the policy evidence"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_spine_accessors_return_usable_handles() {
+        let backend = Backend::in_memory_for_tests().await;
+
+        // Each handle shares the composition root's `Arc` and locks cleanly.
+        assert!(Arc::ptr_eq(&backend.event_bus(), &backend.app_state().bus));
+        assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
+
+        let bus = backend.event_bus();
+        let _bus_guard = bus.lock().unwrap_or_else(|error| panic!("bus lock: {error}"));
+        drop(_bus_guard);
+
+        let outbox = backend.outbox();
+        let _outbox_guard = outbox
+            .lock()
+            .unwrap_or_else(|error| panic!("outbox lock: {error}"));
     }
 
     /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's

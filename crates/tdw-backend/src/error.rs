@@ -49,6 +49,16 @@ pub enum BackendError {
     /// A tag taxonomy operation (`define` / `assign`) failed.
     #[error("tag error: {0}")]
     Tag(#[from] tdw_tags::TagError),
+
+    /// [`enforce_policy`](crate::data::Backend::enforce_policy) was called on a
+    /// backend whose composition root has no policy enforcement config attached.
+    #[error("no policy attached")]
+    NoPolicy,
+
+    /// A hook registry execution (`run_hooks`) failed (recursion guard, depth
+    /// limit, permission denial, veto, or a handler error).
+    #[error("hook error: {0}")]
+    Hook(#[from] tdw_hooks::HookError),
 }
 
 /// Convenience alias for fallible backend operations.

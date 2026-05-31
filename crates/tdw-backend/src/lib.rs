@@ -7,6 +7,7 @@
 //! surface (knowledge, auth/hooks/policy/events) and add the serving binary.
 
 pub mod agent;
+pub mod auth;
 pub mod config;
 pub mod data;
 pub mod error;
