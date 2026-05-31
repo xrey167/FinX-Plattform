@@ -17,6 +17,8 @@ pub enum EmbeddingError {
     EmptyVector,
     #[error("embedding vector contains a non-finite value")]
     NonFiniteVector,
+    #[error("embedding provider error: {0}")]
+    Provider(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,12 +27,13 @@ pub struct Embedding {
     pub vector: Vec<f32>,
 }
 
+#[async_trait::async_trait]
 pub trait EmbeddingProvider: Send + Sync {
     fn model_id(&self) -> &str;
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
-    fn embed(&self, text: &str) -> Result<Embedding>;
+    async fn embed(&self, text: &str) -> Result<Embedding>;
 }
 
 /// # Errors
@@ -55,12 +58,13 @@ mod tests {
 
     struct ConstantProvider;
 
+    #[async_trait::async_trait]
     impl EmbeddingProvider for ConstantProvider {
         fn model_id(&self) -> &'static str {
             "constant"
         }
 
-        fn embed(&self, text: &str) -> Result<Embedding> {
+        async fn embed(&self, text: &str) -> Result<Embedding> {
             if text.is_empty() {
                 return Err(EmbeddingError::EmptyInput);
             }
@@ -71,11 +75,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn provider_contract_returns_model_id_with_vector() {
+    #[tokio::test]
+    async fn provider_contract_returns_model_id_with_vector() {
         let provider = ConstantProvider;
         let embedding = provider
             .embed("research")
+            .await
             .unwrap_or_else(|error| panic!("embedding should succeed: {error}"));
 
         assert_eq!(embedding.model_id, "constant");

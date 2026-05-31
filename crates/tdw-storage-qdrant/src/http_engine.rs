@@ -127,6 +127,11 @@ impl QdrantHttpEngine {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
+                // The collection already exists — verify its vector size matches
+                // what we are about to write. A mismatch (e.g. an 8-dim hash
+                // collection reused for a 1536-dim model) would otherwise corrupt
+                // upserts/searches silently, so fail loudly instead.
+                self.verify_vector_size(name, vector_size).await?;
                 if let Ok(mut seen) = self.ensured.lock() {
                     seen.insert(name.to_string());
                 }
@@ -159,6 +164,48 @@ impl QdrantHttpEngine {
         }
         Ok(())
     }
+
+    /// Fetch an existing collection's config and error if its (single, unnamed)
+    /// vector size differs from `expected`. A config we cannot read or parse is
+    /// treated as "cannot verify" and allowed (best effort) rather than blocking
+    /// an otherwise valid write.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`] if the collection's vector size is known and
+    /// does not equal `expected`.
+    async fn verify_vector_size(&self, name: &str, expected: usize) -> Result<()> {
+        let path = format!("/collections/{name}");
+        let response = self
+            .request(reqwest::Method::GET, &path)?
+            .send()
+            .await
+            .map_err(|error| Error::Storage(format!("qdrant get_collection: {error}")))?;
+        if !response.status().is_success() {
+            return Ok(());
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| Error::Storage(format!("qdrant get_collection body: {error}")))?;
+        if let Some(actual) = existing_vector_size(&body)
+            && actual != expected as u64
+        {
+            return Err(Error::Storage(format!(
+                "qdrant collection {name} has vector size {actual} but {expected} was requested; \
+                 refusing a dimension-mismatched collection (use a model-specific collection)"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Extract a single unnamed vector's `size` from a Qdrant `GET /collections/{name}`
+/// body (`result.config.params.vectors.size`). Returns `None` for a named-vector
+/// config or an unexpected shape (treated as "cannot verify").
+fn existing_vector_size(body: &Value) -> Option<u64> {
+    body.pointer("/result/config/params/vectors/size")
+        .and_then(Value::as_u64)
 }
 
 #[derive(Deserialize)]
@@ -270,5 +317,27 @@ impl VectorEngine for QdrantHttpEngine {
                 payload: hit.payload.unwrap_or(Value::Null),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::existing_vector_size;
+    use serde_json::json;
+
+    #[test]
+    fn existing_vector_size_reads_single_vector_config() {
+        let body = json!({
+            "result": { "config": { "params": { "vectors": { "size": 1536, "distance": "Cosine" } } } }
+        });
+        assert_eq!(existing_vector_size(&body), Some(1536));
+    }
+
+    #[test]
+    fn existing_vector_size_is_none_for_unexpected_shape() {
+        // Named-vector configs / odd shapes are "cannot verify" (None), so the
+        // guard allows the write rather than blocking on a config it can't read.
+        assert_eq!(existing_vector_size(&json!({ "result": {} })), None);
+        assert_eq!(existing_vector_size(&json!({})), None);
     }
 }

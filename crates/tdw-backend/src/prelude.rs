@@ -23,6 +23,12 @@ pub use tdw_agent::{
     WorkflowDefinition,
 };
 pub use tdw_agent_store::AgentStore;
+
+// Phase B — the agent memory consolidation loop's typed surface: the `Memory`
+// entity + its `Retention` tier, the `ConsolidationAction` the loop applies, and
+// the `MemoryStore` the daemon persists tier changes into.
+pub use tdw_agent::{ConsolidationAction, Memory, Retention};
+pub use tdw_agent_store::MemoryStore;
 pub use tdw_eval_runner::{EvalRunOutcome, EvalRunner};
 pub use tdw_mcp::McpServer;
 pub use tdw_tool_exec::{CommandPolicy, ExecError, ToolOutcome};

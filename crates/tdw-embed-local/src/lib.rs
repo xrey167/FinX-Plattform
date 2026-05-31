@@ -36,12 +36,13 @@ impl HashEmbeddingProvider {
     }
 }
 
+#[async_trait::async_trait]
 impl EmbeddingProvider for HashEmbeddingProvider {
     fn model_id(&self) -> &str {
         &self.model_id
     }
 
-    fn embed(&self, text: &str) -> Result<Embedding> {
+    async fn embed(&self, text: &str) -> Result<Embedding> {
         if text.trim().is_empty() {
             return Err(EmbeddingError::EmptyInput);
         }
@@ -62,15 +63,17 @@ impl EmbeddingProvider for HashEmbeddingProvider {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hash_embedding_is_deterministic() {
+    #[tokio::test]
+    async fn hash_embedding_is_deterministic() {
         let provider = HashEmbeddingProvider::default();
 
         let first = provider
             .embed("macro research")
+            .await
             .unwrap_or_else(|error| panic!("embedding should succeed: {error}"));
         let second = provider
             .embed("macro research")
+            .await
             .unwrap_or_else(|error| panic!("embedding should succeed: {error}"));
 
         assert_eq!(first, second);

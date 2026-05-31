@@ -8,7 +8,7 @@
 
 use reqwest::{Client, Url};
 use serde::Deserialize;
-use tdw_embed::Embedding;
+use tdw_embed::{Embedding, EmbeddingError, EmbeddingProvider};
 use thiserror::Error;
 
 use crate::{
@@ -112,6 +112,24 @@ impl OpenAiEmbeddingHttpClient {
         }
         let envelope: EmbeddingsEnvelope = response.json().await?;
         parse_response(&self.model_id, envelope)
+    }
+}
+
+/// Bridge the real OpenAI HTTP client onto the workspace
+/// [`EmbeddingProvider`] trait so the knowledge index can drive it
+/// behind `Arc<dyn EmbeddingProvider>`. The crate-specific
+/// [`OpenAiEmbeddingHttpError`] is flattened onto
+/// [`EmbeddingError::Provider`], preserving its message.
+#[async_trait::async_trait]
+impl EmbeddingProvider for OpenAiEmbeddingHttpClient {
+    fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    async fn embed(&self, text: &str) -> tdw_embed::Result<Embedding> {
+        OpenAiEmbeddingHttpClient::embed(self, text)
+            .await
+            .map_err(|error| EmbeddingError::Provider(error.to_string()))
     }
 }
 

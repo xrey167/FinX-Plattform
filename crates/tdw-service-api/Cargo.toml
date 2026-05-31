@@ -39,6 +39,15 @@ daemon-postgres = [
 ## same explicitly for integration tests gated by `TDW_CLICKHOUSE_TEST_URL`.
 real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
 
+## Swap the vector engine in `AppState` for the real `QdrantHttpEngine`
+## (reqwest over the Qdrant HTTP interface). Activates
+## `tdw-storage-qdrant/qdrant`. When enabled, `from_config` reads
+## `TDW_QDRANT_URL` (+ optional `TDW_QDRANT_API_KEY`) to point the knowledge
+## index at a live Qdrant so durable knowledge survives restarts;
+## `with_real_qdrant` does the same explicitly for integration tests gated by
+## `TDW_QDRANT_TEST_URL`.
+real-qdrant = ["tdw-storage-qdrant/qdrant"]
+
 ## Enable the live Binance trade websocket subscribe path in the streaming
 ## ingest control ops. Forwarded to `tdw-provider-binance/ws`. Without this
 ## feature the default offline (deterministic single-tick) streamer is used so

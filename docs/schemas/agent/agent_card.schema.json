@@ -31,7 +31,18 @@
         "meta": {
           "$ref": "#/$defs/EntityMeta"
         },
-        "output_schema": true
+        "output_schema": true,
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillQuality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Eval-driven quality state, present only after gated feedback has been applied."
+        }
       },
       "required": [
         "meta",
@@ -194,6 +205,49 @@
       "required": [
         "tier",
         "source"
+      ],
+      "type": "object"
+    },
+    "SkillQuality": {
+      "description": "Eval-driven quality state attached to a skill once it has received feedback.\n\nDefaults to \"never evaluated\" (all-`None`/zero). Mutated only through\n[`AgentSkill::apply_eval_feedback`], which is gated by the [`Adaptivity`] axis — a\n`None`/`Configured` skill never accrues quality state. The field is additive and skipped\nwhen absent, so existing golden fixtures serialize byte-identically.",
+      "properties": {
+        "disabled": {
+          "description": "Whether the latest run disabled this skill (pass rate fell below the threshold).",
+          "type": "boolean"
+        },
+        "lastEval": {
+          "description": "When the last eval feedback was applied (RFC 3339).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastEvalScore": {
+          "description": "The score from the most recent eval (currently the same as `pass_rate`).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "passRate": {
+          "description": "The most recent run's aggregate pass rate (`0.0..=1.0`).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "runs": {
+          "description": "How many eval runs have fed back into this skill.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "disabled"
       ],
       "type": "object"
     },

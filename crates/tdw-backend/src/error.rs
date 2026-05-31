@@ -59,6 +59,12 @@ pub enum BackendError {
     /// limit, permission denial, veto, or a handler error).
     #[error("hook error: {0}")]
     Hook(#[from] tdw_hooks::HookError),
+
+    /// An agent memory-store operation (`upsert_memory` / `consolidate_now`)
+    /// failed to persist or delete a backing `*.json5` file (Phase B). The
+    /// underlying [`tdw_agent_store::MemoryStoreError`] is flattened to a string.
+    #[error("memory store error: {0}")]
+    Memory(String),
 }
 
 /// Convenience alias for fallible backend operations.
