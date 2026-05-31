@@ -45,6 +45,9 @@ tdw-embed-local = { path = "../tdw-embed-local" }
 # (it forwards the dependency's `http` feature, which pulls reqwest). Off by
 # default so the default backend build stays fully offline.
 tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
+# Phase A2 — the real Google/Gemini HTTP embedder, only when the `google` feature
+# is on (forwards the dependency's `http` feature). Off by default.
+tdw-embed-google = { path = "../tdw-embed-google", optional = true }
 # Phase 4 — the auth/hooks/policy/events group. `tdw-bus`/`tdw-outbox` are named
 # only to type the event-spine accessors (`AppState.bus` / `AppState.outbox`),
 # which `tdw-service-api` does not re-export.
@@ -67,6 +70,9 @@ default = []
 ## backend build pulls no HTTP embedder and `select_embedder` always returns the
 ## deterministic hash embedder.
 openai = ["dep:tdw-embed-openai", "tdw-embed-openai/http"]
+## Compile the real Google/Gemini HTTP embedder selector arm. Forwards
+## `tdw-embed-google/http` (reqwest). Off by default.
+google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
 ## Forward the daemon transport features to `tdw-app-server`/`server::spawn_transport`
 ## so a `tdw-backend` build (lib or binary) can serve UDS/HTTP, exactly as the
 ## `tdw-service` binary's features did. `transport-tcp` is always on via the

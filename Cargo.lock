@@ -3554,6 +3554,7 @@ dependencies = [
  "tdw-core",
  "tdw-domain",
  "tdw-embed",
+ "tdw-embed-google",
  "tdw-embed-local",
  "tdw-embed-openai",
  "tdw-eval-runner",

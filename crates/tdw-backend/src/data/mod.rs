@@ -502,52 +502,101 @@ impl Backend {
 /// the model (default `text-embedding-3-small`);
 /// `TDW_OPENAI_EMBEDDING_BASE_URL` optionally overrides the endpoint.
 ///
-/// Mirrors `select_vector_engine` in `tdw-service-api`: the real
-/// arm is `#[cfg]`-gated so the default build never compiles reqwest.
+/// Select the embedder for the shared knowledge index from `TDW_EMBED_PROVIDER`.
+///
+/// Default / unset / `hash` / `local` → the deterministic offline
+/// [`HashEmbeddingProvider`]. `openai` / `google` build the real HTTP embedder
+/// when the matching feature is compiled and an API key is present; otherwise a
+/// **warning is logged** and the hash embedder is used (the daemon still boots
+/// rather than silently degrading without a trace). The real arms are
+/// `#[cfg]`-gated so the default build never compiles reqwest.
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::Init`] if the OpenAI provider is requested
-/// but cannot be constructed (e.g. an invalid base URL).
-// The real Err path exists only behind `openai`; the default build's
-// single `Ok` makes the `Result` look unwrappable, so keep the allow.
+/// Returns [`BackendError::Init`] if a real provider is requested, its key is
+/// present, but the client cannot be constructed (e.g. an invalid base URL).
+// In the default (no-feature) build only the hash/unknown arms remain, all `Ok`,
+// so the `Result` looks unwrappable there — keep the allow.
 #[allow(clippy::unnecessary_wraps)]
 fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
-    #[cfg(feature = "openai")]
-    {
-        if std::env::var("TDW_EMBED_PROVIDER")
-            .map(|value| value.trim().eq_ignore_ascii_case("openai"))
-            .unwrap_or(false)
-        {
-            let api_key = ["TDW_OPENAI_EMBEDDING_API_KEY", "OPENAI_API_KEY"]
-                .iter()
-                .find_map(|name| {
-                    std::env::var(name)
-                        .ok()
-                        .map(|value| value.trim().to_string())
-                        .filter(|value| !value.is_empty())
-                });
-            if let Some(api_key) = api_key {
-                let model = std::env::var("TDW_EMBED_MODEL")
-                    .ok()
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| "text-embedding-3-small".to_string());
-                let mut client =
-                    tdw_embed_openai::OpenAiEmbeddingHttpClient::new(api_key, model)
-                        .map_err(|error| BackendError::Init(error.to_string()))?;
-                if let Ok(base_url) = std::env::var("TDW_OPENAI_EMBEDDING_BASE_URL")
-                    && !base_url.trim().is_empty()
-                {
-                    client = client
-                        .with_base_url(base_url.trim())
-                        .map_err(|error| BackendError::Init(error.to_string()))?;
-                }
-                return Ok(Arc::new(client));
-            }
+    let provider = std::env::var("TDW_EMBED_PROVIDER")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    match provider.as_deref() {
+        None | Some("hash") | Some("local") => Ok(Arc::new(HashEmbeddingProvider::default())),
+        #[cfg(feature = "openai")]
+        Some("openai") => build_openai_embedder(),
+        #[cfg(feature = "google")]
+        Some("google") => build_google_embedder(),
+        Some(other) => {
+            eprintln!(
+                "tdw-backend: TDW_EMBED_PROVIDER={other} is unavailable in this build \
+                 (is the matching feature compiled?); using the offline hash embedder"
+            );
+            Ok(Arc::new(HashEmbeddingProvider::default()))
         }
     }
-    Ok(Arc::new(HashEmbeddingProvider::default()))
+}
+
+/// First non-empty value among `names`, trimmed.
+#[cfg(any(feature = "openai", feature = "google"))]
+fn first_env(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+/// The embedding model id from `TDW_EMBED_MODEL`, or `default`.
+#[cfg(any(feature = "openai", feature = "google"))]
+fn embed_model(default: &str) -> String {
+    first_env(&["TDW_EMBED_MODEL"]).unwrap_or_else(|| default.to_string())
+}
+
+#[cfg(feature = "openai")]
+fn build_openai_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
+    let Some(api_key) = first_env(&["TDW_OPENAI_EMBEDDING_API_KEY", "OPENAI_API_KEY"]) else {
+        eprintln!(
+            "tdw-backend: TDW_EMBED_PROVIDER=openai but no API key \
+             (TDW_OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY); using the offline hash embedder"
+        );
+        return Ok(Arc::new(HashEmbeddingProvider::default()));
+    };
+    let mut client =
+        tdw_embed_openai::OpenAiEmbeddingHttpClient::new(api_key, embed_model("text-embedding-3-small"))
+            .map_err(|error| BackendError::Init(error.to_string()))?;
+    if let Some(base_url) = first_env(&["TDW_OPENAI_EMBEDDING_BASE_URL"]) {
+        client = client
+            .with_base_url(&base_url)
+            .map_err(|error| BackendError::Init(error.to_string()))?;
+    }
+    Ok(Arc::new(client))
+}
+
+#[cfg(feature = "google")]
+fn build_google_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
+    let Some(api_key) =
+        first_env(&["TDW_GOOGLE_EMBEDDING_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"])
+    else {
+        eprintln!(
+            "tdw-backend: TDW_EMBED_PROVIDER=google but no API key \
+             (TDW_GOOGLE_EMBEDDING_API_KEY / GOOGLE_API_KEY / GEMINI_API_KEY); \
+             using the offline hash embedder"
+        );
+        return Ok(Arc::new(HashEmbeddingProvider::default()));
+    };
+    let mut client =
+        tdw_embed_google::GoogleEmbeddingHttpClient::new(api_key, embed_model("gemini-embedding-001"))
+            .map_err(|error| BackendError::Init(error.to_string()))?;
+    if let Some(base_url) = first_env(&["TDW_GOOGLE_EMBEDDING_BASE_URL"]) {
+        client = client
+            .with_base_url(&base_url)
+            .map_err(|error| BackendError::Init(error.to_string()))?;
+    }
+    Ok(Arc::new(client))
 }
 
 /// The configured persistent memory directory (`TDW_MEMORY_DIR`), trimmed and
