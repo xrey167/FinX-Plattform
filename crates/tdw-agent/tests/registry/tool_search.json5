@@ -1,0 +1,21 @@
+{
+  // A hand-authored tool definition (JSON5: comments + trailing commas allowed).
+  apiVersion: "tdw.finx/v1",
+  kind: "tool",
+  metadata: {
+    name: "search",
+    title: "Search",
+    id: "search",
+    version: "0.1.0",
+    origin: { tier: "Domain", source: "Internal" },
+    adaptivity: "None",
+    autonomous: false,
+  },
+  spec: {
+    input_schema: { type: "object" },
+    output_schema: null,
+    effect: "ReadOnly",
+    idempotent: true,
+    open_world: false,
+  },
+}

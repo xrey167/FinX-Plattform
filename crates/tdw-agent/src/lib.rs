@@ -8,6 +8,40 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use validator::Validate;
 
+pub mod base;
+pub mod consolidate;
+pub mod facets;
+pub mod kind;
+pub mod loader;
+pub mod mcp;
+pub mod registry;
+pub mod resource;
+pub mod watch;
+
+pub use base::{
+    Adaptivity, BaseMetadata, EntityMeta, Icon, Origin, Reference, Retention, Source, Tier,
+    ToolEffect, ToolImplementation,
+};
+pub use facets::{
+    DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState, ValidationStatus,
+};
+pub use consolidate::{ConsolidationAction, consolidation_plan};
+pub use kind::{EntityKind, Group};
+pub use loader::{LoadError, load_resource, load_typed};
+pub use registry::Registry;
+pub use watch::{RegistryWatcher, WatchError};
+pub use mcp::{
+    IconMimeSupport, McpEntity, McpPrompt, McpPromptArgument, McpTool, ParallelSafety,
+    ToolAnnotations, icon_mime_support, project_to_mcp, MCP_PROTOCOL_VERSION,
+};
+pub use resource::{
+    RegistryEntity, Resource, ResourceDefinition, TDW_API_GROUP, TDW_API_VERSION,
+    entity_from_resource,
+};
+
+/// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names. Q8 reclassified
+/// storage to a `resourcedefinition` persistence facet; prefer [`resource_definitions`].
+/// Retained because downstream crates still consume it.
 pub const AGENT_SCHEMA_NAMES: [&str; 9] = [
     "agent_card",
     "agent_skill",
@@ -41,35 +75,88 @@ pub struct ContentRef {
     #[validate(length(min = 1))]
     pub uri: String,
     pub kind: ContentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentSkill {
-    #[validate(length(min = 1))]
-    pub skill_id: String,
-    #[validate(length(min = 1))]
-    pub name: String,
-    #[validate(length(min = 1))]
-    pub description: String,
+    #[validate(nested)]
+    pub meta: EntityMeta,
     pub input_schema: Value,
     pub output_schema: Value,
-    pub tags: Vec<String>,
+}
+
+/// A canonical tool definition (the `tool` kind), MCP-agnostic. Projects to an MCP
+/// `Tool` via `McpTool::from(&tool)` in the `mcp` adapter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Tool {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    /// JSON Schema (2020-12) for inputs; the root must be an object.
+    pub input_schema: Value,
+    /// Optional JSON Schema (2020-12) for structured output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+    /// Effect on the world (drives execution scheduling).
+    #[serde(default)]
+    pub effect: ToolEffect,
+    /// Whether repeated calls with the same arguments are safe.
+    #[serde(default)]
+    pub idempotent: bool,
+    /// Whether the tool interacts with an open/external world.
+    #[serde(default)]
+    pub open_world: bool,
+    /// How the tool is executed (defaults to [`ToolImplementation::Unbound`]).
+    #[serde(default)]
+    pub implementation: ToolImplementation,
+}
+
+/// A single argument of a [`Prompt`]. The optional `default` is an R1 [`Reference`] so it
+/// can resolve at runtime from a variable/file/git/etc. (domain-only; not on the MCP wire).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct PromptArgument {
+    /// Argument name.
+    #[validate(length(min = 1))]
+    pub name: String,
+    /// Optional human description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the argument is required.
+    #[serde(default)]
+    pub required: bool,
+    /// Optional default value, resolved at runtime via R1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Reference>,
+}
+
+/// A canonical prompt definition (the `prompt` kind), MCP-agnostic. Projects to an MCP
+/// `Prompt` via `McpPrompt::from(&prompt)` in the `mcp` adapter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Prompt {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    /// Template body (e.g. minijinja).
+    pub template: String,
+    /// Declared arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
+    pub arguments: Vec<PromptArgument>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentCard {
-    #[validate(length(min = 1))]
-    pub agent_id: String,
-    #[validate(length(min = 1))]
-    pub name: String,
-    #[validate(length(min = 1))]
-    pub version: String,
-    #[validate(length(min = 1))]
-    pub description: String,
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub skills: Vec<AgentSkill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub content_refs: Vec<ContentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 }
 
@@ -77,16 +164,17 @@ pub struct AgentCard {
 pub struct SlashArg {
     #[validate(length(min = 1))]
     pub name: String,
+    #[serde(default)]
     pub required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct SlashCommand {
-    #[validate(length(min = 1))]
-    pub name: String,
-    #[validate(length(min = 1))]
-    pub description: String,
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<SlashArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
 }
 
@@ -103,6 +191,7 @@ pub struct EvalCase {
     pub case_id: String,
     #[validate(length(min = 1))]
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expected_refs: Vec<ContentRef>,
 }
 
@@ -114,6 +203,7 @@ pub struct EvalRunRequest {
     pub agent_id: String,
     #[validate(length(min = 1))]
     pub dataset_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cases: Vec<EvalCase>,
 }
 
@@ -124,12 +214,28 @@ pub struct EvalMetric {
     pub metric_value: f64,
 }
 
+/// A canonical evaluation definition (the `evaluation` kind): what to evaluate plus the
+/// ML-rigor facets (track A). The runtime DTOs (`EvalRunRequest`/`EvalCase`/`EvalMetric`)
+/// are separate execution-plane types and are not registry entities.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Evaluation {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    /// Dataset this evaluation runs against.
+    pub dataset_id: String,
+    /// ML-rigor facets (baselines, fixed splits, slices, drift, failure attribution, ops).
+    #[serde(default)]
+    #[validate(nested)]
+    pub facets: EvalFacets,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct WorkflowNode {
     #[validate(length(min = 1))]
     pub node_id: String,
     #[validate(length(min = 1))]
     pub task: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_id: Option<String>,
 }
 
@@ -143,31 +249,702 @@ pub struct WorkflowEdge {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct WorkflowDefinition {
-    #[validate(length(min = 1))]
-    pub workflow_id: String,
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<WorkflowNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<WorkflowEdge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Gotcha {
-    #[validate(length(min = 1))]
-    pub gotcha_id: String,
-    #[validate(length(min = 1))]
-    pub title: String,
+    #[validate(nested)]
+    pub meta: EntityMeta,
     pub severity: GotchaSeverity,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applies_to: Vec<String>,
     #[validate(length(min = 1))]
     pub remediation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<ContentRef>,
 }
 
+/// DEPRECATED (pre-taxonomy): an entity→table mapping. Q8 reclassified storage to a
+/// `resourcedefinition` persistence facet + relation, so this is no longer a first-class
+/// kind. Retained because downstream crates still consume it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StorageMapping {
     pub entity: String,
     pub schema: String,
     pub table: String,
     pub primary_key: Vec<String>,
+}
+
+impl RegistryEntity for AgentCard {
+    const KIND: EntityKind = EntityKind::Agent;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for AgentSkill {
+    const KIND: EntityKind = EntityKind::Skill;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Tool {
+    const KIND: EntityKind = EntityKind::Tool;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Prompt {
+    const KIND: EntityKind = EntityKind::Prompt;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Evaluation {
+    const KIND: EntityKind = EntityKind::Evaluation;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for SlashCommand {
+    const KIND: EntityKind = EntityKind::Command;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Gotcha {
+    const KIND: EntityKind = EntityKind::Gotcha;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for WorkflowDefinition {
+    const KIND: EntityKind = EntityKind::Workflow;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+// === core ===
+
+/// A `personality` entity: trait/tone profile applied to an agent's behavior.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Personality {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub traits: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+    pub system_directive: String,
+}
+
+/// A `prompttemplate` entity: a reusable template with declared variable names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct PromptTemplate {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub template: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<String>,
+}
+
+/// A `template` entity: a formatted body with an associated output format.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Template {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub body: String,
+    pub format: String,
+}
+
+/// An `instruction` entity: a directive with an ordering priority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Instruction {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub directive: String,
+    /// Ordering priority; higher = applied first.
+    pub priority: u16,
+}
+
+/// A `context` entity: contextual content with an optional source reference.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Context {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub content: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Reference>,
+}
+
+/// A `config` entity: named configuration values resolved via R1 references.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Config {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub values: BTreeMap<String, Reference>,
+}
+
+/// A `primitive` entity: a bare JSON Schema fragment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Primitive {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub json_schema: Value,
+}
+
+/// An `environmentvariable` entity: a key bound to an R1-resolved value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EnvironmentVariable {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[validate(length(min = 1))]
+    pub key: String,
+    pub value: Reference,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+// === tools ===
+
+/// A `function` entity: an in-process callable with input/output schemas.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Function {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub input_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+    pub implementation: String,
+}
+
+/// An `mcpserver` entity: a remote MCP server endpoint and transport.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct McpServer {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub url: String,
+    pub transport: String,
+}
+
+/// An `mcptool` entity: a reference to a named tool exposed by an MCP server.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct McpToolRef {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub server: String,
+    pub tool_name: String,
+}
+
+/// A `connector` entity: an integration handle with endpoint and optional auth.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Connector {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub kind: String,
+    pub endpoint: Reference,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Reference>,
+}
+
+/// A `webhook` entity: a callback URL subscribed to a set of events.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Webhook {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub url: Reference,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<String>,
+}
+
+// === orchestration ===
+
+/// A `task` entity: an action with declared dependencies.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Task {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub action: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+/// A `hook` entity: an event-triggered handler.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Hook {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub event: String,
+    pub handler: String,
+}
+
+/// An `agentrouter` entity: routes requests across agents with an optional default.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct AgentRouter {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+}
+
+/// A `toolrouter` entity: routes calls across tools.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ToolRouter {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+}
+
+// === knowledge (embed DataFacets: derive PartialEq, not Eq) ===
+
+/// A `knowledge` entity: a knowledge body carrying data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Knowledge {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub body: String,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `document` entity: a referenced document carrying data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Document {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub uri: Reference,
+    pub content_type: String,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `ragpipeline` entity: an ordered set of retrieval stages with data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct RagPipeline {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<String>,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `knowledgegraph` entity: a graph definition with declared node kinds and data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct KnowledgeGraph {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_kinds: Vec<String>,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `memory` entity: a retention policy over stored content with data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Memory {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    /// Retention tier (working → core); drives TTL and consolidation.
+    #[serde(default)]
+    pub retention: Retention,
+    /// When this memory was last consolidated (RFC 3339), if ever — the breadcrumb a
+    /// background consolidator updates as it promotes/rewrites entries between tiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_consolidated: Option<String>,
+    /// Ids of the source memories this entry was consolidated from.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_entries: Vec<String>,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `featurestore` entity: a store of features carrying data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FeatureStore {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `feature` entity: a single typed feature carrying data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Feature {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub value_type: String,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+/// A `featurelist` entity: a named list of features carrying data facets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FeatureList {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[validate(nested)]
+    pub facets: DataFacets,
+}
+
+// === governance ===
+
+/// A `guardrail` entity: a policy directive constraining behavior.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Guardrail {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub directive: String,
+}
+
+/// A `rule` entity: a boolean expression evaluated against context.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Rule {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub expression: String,
+}
+
+/// A `plugin` entity: a bundle of members with client/server execution flags.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Plugin {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
+    #[serde(default)]
+    pub client_side: bool,
+    #[serde(default)]
+    pub server_side: bool,
+}
+
+/// Backoff strategy applied between retries under an [`ErrorPolicy`].
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema,
+)]
+pub enum Backoff {
+    /// A constant delay between retries.
+    Fixed,
+    /// An exponentially growing delay between retries.
+    #[default]
+    Exponential,
+    /// A linearly growing delay between retries.
+    Linear,
+}
+
+/// An `errorpolicy` entity: retry/backoff behavior on error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ErrorPolicy {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub on_error: String,
+    pub max_retries: u32,
+    #[serde(default)]
+    pub backoff: Backoff,
+}
+
+// === infra ===
+
+/// A `network` entity: a set of reachable endpoints.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Network {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<String>,
+}
+
+/// A `compute` entity: a runtime with optional resource sizing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Compute {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<String>,
+}
+
+/// A `datastore` entity: a storage engine addressed by a DSN reference.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct DataStore {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub engine: String,
+    pub dsn: Reference,
+}
+
+/// A `secretstore` entity: a secret-management provider.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SecretStore {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub provider: String,
+}
+
+/// An `observability` entity: a telemetry exporter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Observability {
+    #[validate(nested)]
+    pub meta: EntityMeta,
+    pub exporter: String,
+}
+
+// === RegistryEntity impls for the 34 spec types ===
+
+impl RegistryEntity for Personality {
+    const KIND: EntityKind = EntityKind::Personality;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for PromptTemplate {
+    const KIND: EntityKind = EntityKind::PromptTemplate;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Template {
+    const KIND: EntityKind = EntityKind::Template;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Instruction {
+    const KIND: EntityKind = EntityKind::Instruction;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Context {
+    const KIND: EntityKind = EntityKind::Context;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Config {
+    const KIND: EntityKind = EntityKind::Config;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Primitive {
+    const KIND: EntityKind = EntityKind::Primitive;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for EnvironmentVariable {
+    const KIND: EntityKind = EntityKind::EnvironmentVariable;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Function {
+    const KIND: EntityKind = EntityKind::Function;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for McpServer {
+    const KIND: EntityKind = EntityKind::McpServer;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for McpToolRef {
+    const KIND: EntityKind = EntityKind::McpTool;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Connector {
+    const KIND: EntityKind = EntityKind::Connector;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Webhook {
+    const KIND: EntityKind = EntityKind::Webhook;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Task {
+    const KIND: EntityKind = EntityKind::Task;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Hook {
+    const KIND: EntityKind = EntityKind::Hook;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for AgentRouter {
+    const KIND: EntityKind = EntityKind::AgentRouter;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for ToolRouter {
+    const KIND: EntityKind = EntityKind::ToolRouter;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Knowledge {
+    const KIND: EntityKind = EntityKind::Knowledge;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Document {
+    const KIND: EntityKind = EntityKind::Document;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for RagPipeline {
+    const KIND: EntityKind = EntityKind::RagPipeline;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for KnowledgeGraph {
+    const KIND: EntityKind = EntityKind::KnowledgeGraph;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Memory {
+    const KIND: EntityKind = EntityKind::Memory;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for FeatureStore {
+    const KIND: EntityKind = EntityKind::FeatureStore;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Feature {
+    const KIND: EntityKind = EntityKind::Feature;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for FeatureList {
+    const KIND: EntityKind = EntityKind::FeatureList;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Guardrail {
+    const KIND: EntityKind = EntityKind::Guardrail;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Rule {
+    const KIND: EntityKind = EntityKind::Rule;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Plugin {
+    const KIND: EntityKind = EntityKind::Plugin;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for ErrorPolicy {
+    const KIND: EntityKind = EntityKind::ErrorPolicy;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Network {
+    const KIND: EntityKind = EntityKind::Network;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Compute {
+    const KIND: EntityKind = EntityKind::Compute;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for DataStore {
+    const KIND: EntityKind = EntityKind::DataStore;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for SecretStore {
+    const KIND: EntityKind = EntityKind::SecretStore;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
+}
+
+impl RegistryEntity for Observability {
+    const KIND: EntityKind = EntityKind::Observability;
+    fn metadata(&self) -> &EntityMeta {
+        &self.meta
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -245,7 +1022,7 @@ impl WorkflowDefinition {
 
         while let Some(node_id) = ready.pop_front() {
             order.push(node_id.clone());
-            let next_nodes = outgoing.get(&node_id).cloned().unwrap_or_default();
+            let next_nodes = std::mem::take(outgoing.entry(node_id.clone()).or_default());
             for next in next_nodes {
                 let Some(count) = indegree.get_mut(&next) else {
                     return Err(WorkflowValidationError::MissingNode(next));
@@ -301,14 +1078,28 @@ pub fn parse_skill_manifest(input: &str) -> Result<AgentSkill, AgentParseError> 
     if !is_agent_identifier(&skill_id) {
         return Err(AgentParseError::InvalidIdentifier("id", skill_id));
     }
+    let name = take_required(&fields, "name")?;
+    let description = take_required(&fields, "description")?;
+
+    let meta = EntityMeta::new(
+        skill_id.clone(),
+        skill_id,
+        "0.1.0",
+        Origin {
+            tier: Tier::Domain,
+            source: Source::Internal,
+        },
+        Adaptivity::Configured,
+        false,
+    )
+    .with_title(name)
+    .with_description(description)
+    .with_tags(tags);
 
     Ok(AgentSkill {
-        skill_id,
-        name: take_required(&fields, "name")?,
-        description: take_required(&fields, "description")?,
+        meta,
         input_schema: json!({"type": "object"}),
         output_schema: json!({"type": "object"}),
-        tags,
     })
 }
 
@@ -351,14 +1142,18 @@ pub fn parse_slash_command_invocation(
 ///
 /// Returns an error variant if the underlying operation fails.
 pub fn validate_agent_card_contract(card: &AgentCard) -> Result<(), AgentContractError> {
-    validate_identifier_field("agent_id", &card.agent_id)?;
-    require_non_empty("name", &card.name)?;
-    require_non_empty("version", &card.version)?;
-    require_non_empty("description", &card.description)?;
+    validate_identifier_field("name", &card.meta.base.name)?;
+    require_non_empty("version", &card.meta.version)?;
+    require_non_empty(
+        "description",
+        card.meta.base.description.as_deref().unwrap_or_default(),
+    )?;
     for skill in &card.skills {
-        validate_identifier_field("skill_id", &skill.skill_id)?;
-        require_non_empty("skill_name", &skill.name)?;
-        require_non_empty("skill_description", &skill.description)?;
+        validate_identifier_field("skill_name", &skill.meta.base.name)?;
+        require_non_empty(
+            "skill_description",
+            skill.meta.base.description.as_deref().unwrap_or_default(),
+        )?;
     }
     for content_ref in &card.content_refs {
         validate_uri(&content_ref.uri)?;
@@ -375,7 +1170,7 @@ pub fn validate_agent_card_contract(card: &AgentCard) -> Result<(), AgentContrac
 pub fn validate_workflow_contract(
     workflow: &WorkflowDefinition,
 ) -> Result<Vec<String>, AgentContractError> {
-    validate_identifier_field("workflow_id", &workflow.workflow_id)?;
+    validate_identifier_field("workflow_name", &workflow.meta.base.name)?;
     for node in &workflow.nodes {
         validate_identifier_field("node_id", &node.node_id)?;
         require_non_empty("task", &node.task)?;
@@ -386,6 +1181,9 @@ pub fn validate_workflow_contract(
     workflow.validate_dag().map_err(AgentContractError::from)
 }
 
+/// DEPRECATED (pre-taxonomy): the legacy seed of entity→table storage mappings. Q8
+/// reclassified storage to a `resourcedefinition` persistence facet + relation. Retained
+/// because downstream crates still consume it.
 #[must_use]
 pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     vec![
@@ -422,6 +1220,78 @@ pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     ]
 }
 
+/// The self-describing registry: one [`ResourceDefinition`] per classified kind, in
+/// manifest-group order. Kinds with a concrete Rust spec type carry their JSON Schema;
+/// `candidate` kinds carry `None` until their spec lands.
+#[must_use]
+pub fn resource_definitions() -> Vec<ResourceDefinition> {
+    EntityKind::ALL
+        .into_iter()
+        .map(|kind| ResourceDefinition {
+            group: TDW_API_GROUP.to_string(),
+            kind,
+            manifest_group: kind.group(),
+            spec_schema: spec_schema_for(kind),
+            has_data_facets: kind.is_data_kind(),
+            autonomy_capable: kind.is_autonomy_capable(),
+        })
+        .collect()
+}
+
+/// JSON Schema for a kind's spec, when a concrete Rust type backs it. The
+/// `resourcedefinition` kind returns its own schema, making the registry self-describing.
+fn spec_schema_for(kind: EntityKind) -> Option<Value> {
+    match kind {
+        EntityKind::Agent => Some(schema_json::<AgentCard>()),
+        EntityKind::Skill => Some(schema_json::<AgentSkill>()),
+        EntityKind::Tool => Some(schema_json::<Tool>()),
+        EntityKind::Prompt => Some(schema_json::<Prompt>()),
+        EntityKind::Command => Some(schema_json::<SlashCommand>()),
+        EntityKind::Gotcha => Some(schema_json::<Gotcha>()),
+        EntityKind::Workflow => Some(schema_json::<WorkflowDefinition>()),
+        EntityKind::Evaluation => Some(schema_json::<Evaluation>()),
+        EntityKind::ResourceDefinition => Some(schema_json::<ResourceDefinition>()),
+        EntityKind::Personality => Some(schema_json::<Personality>()),
+        EntityKind::PromptTemplate => Some(schema_json::<PromptTemplate>()),
+        EntityKind::Template => Some(schema_json::<Template>()),
+        EntityKind::Instruction => Some(schema_json::<Instruction>()),
+        EntityKind::Context => Some(schema_json::<Context>()),
+        EntityKind::Config => Some(schema_json::<Config>()),
+        EntityKind::Primitive => Some(schema_json::<Primitive>()),
+        EntityKind::EnvironmentVariable => Some(schema_json::<EnvironmentVariable>()),
+        EntityKind::Function => Some(schema_json::<Function>()),
+        EntityKind::McpServer => Some(schema_json::<McpServer>()),
+        EntityKind::McpTool => Some(schema_json::<McpToolRef>()),
+        EntityKind::Connector => Some(schema_json::<Connector>()),
+        EntityKind::Webhook => Some(schema_json::<Webhook>()),
+        EntityKind::Task => Some(schema_json::<Task>()),
+        EntityKind::Hook => Some(schema_json::<Hook>()),
+        EntityKind::AgentRouter => Some(schema_json::<AgentRouter>()),
+        EntityKind::ToolRouter => Some(schema_json::<ToolRouter>()),
+        EntityKind::Knowledge => Some(schema_json::<Knowledge>()),
+        EntityKind::Document => Some(schema_json::<Document>()),
+        EntityKind::RagPipeline => Some(schema_json::<RagPipeline>()),
+        EntityKind::KnowledgeGraph => Some(schema_json::<KnowledgeGraph>()),
+        EntityKind::Memory => Some(schema_json::<Memory>()),
+        EntityKind::FeatureStore => Some(schema_json::<FeatureStore>()),
+        EntityKind::Feature => Some(schema_json::<Feature>()),
+        EntityKind::FeatureList => Some(schema_json::<FeatureList>()),
+        EntityKind::Guardrail => Some(schema_json::<Guardrail>()),
+        EntityKind::Rule => Some(schema_json::<Rule>()),
+        EntityKind::Plugin => Some(schema_json::<Plugin>()),
+        EntityKind::ErrorPolicy => Some(schema_json::<ErrorPolicy>()),
+        EntityKind::Network => Some(schema_json::<Network>()),
+        EntityKind::Compute => Some(schema_json::<Compute>()),
+        EntityKind::DataStore => Some(schema_json::<DataStore>()),
+        EntityKind::SecretStore => Some(schema_json::<SecretStore>()),
+        EntityKind::Observability => Some(schema_json::<Observability>()),
+    }
+}
+
+/// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle. Q8 reclassified storage to a
+/// `resourcedefinition` persistence facet; prefer [`resource_definitions`] /
+/// [`spec_schema_for`] for the self-describing registry. Retained because downstream crates
+/// still consume it.
 #[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
@@ -443,17 +1313,36 @@ pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
 #[must_use]
 pub fn sample_agent_card() -> AgentCard {
     AgentCard {
-        agent_id: "market-researcher".to_string(),
-        name: "Market Researcher".to_string(),
-        version: "0.1.0".to_string(),
-        description: "Generates evidence-backed market research notes.".to_string(),
+        meta: EntityMeta::new(
+            "market-researcher",
+            "market-researcher",
+            "0.1.0",
+            Origin {
+                tier: Tier::Domain,
+                source: Source::Internal,
+            },
+            Adaptivity::Learning,
+            true,
+        )
+        .with_title("Market Researcher")
+        .with_description("Generates evidence-backed market research notes."),
         skills: vec![AgentSkill {
-            skill_id: "research.note".to_string(),
-            name: "Research Note".to_string(),
-            description: "Draft a research note from retrieved content.".to_string(),
+            meta: EntityMeta::new(
+                "research.note",
+                "research.note",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::Configured,
+                false,
+            )
+            .with_title("Research Note")
+            .with_description("Draft a research note from retrieved content.")
+            .with_tags(vec!["research".to_string(), "mcp".to_string()]),
             input_schema: json!({"type": "object", "required": ["symbol"]}),
             output_schema: json!({"type": "object", "required": ["note"]}),
-            tags: vec!["research".to_string(), "mcp".to_string()],
         }],
         content_refs: vec![ContentRef {
             uri: "tdw://docs/research-template".to_string(),
@@ -468,8 +1357,18 @@ pub fn sample_agent_card() -> AgentCard {
 #[must_use]
 pub fn gotcha_seed() -> Vec<Gotcha> {
     vec![Gotcha {
-        gotcha_id: "agent-output-needs-provenance".to_string(),
-        title: "Agent output needs provenance".to_string(),
+        meta: EntityMeta::new(
+            "agent-output-needs-provenance",
+            "agent-output-needs-provenance",
+            "0.1.0",
+            Origin {
+                tier: Tier::Domain,
+                source: Source::Internal,
+            },
+            Adaptivity::None,
+            false,
+        )
+        .with_title("Agent output needs provenance"),
         severity: GotchaSeverity::Warning,
         applies_to: vec!["research.note".to_string()],
         remediation: "Attach source content refs before persisting agent output.".to_string(),
@@ -554,6 +1453,268 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resource_round_trips_to_mcp_via_projection() {
+        let tool = Tool {
+            meta: EntityMeta::new(
+                "search",
+                "search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Search"),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: ToolImplementation::Unbound,
+        };
+
+        // Tool -> Resource (registry form) -> re-typed -> MCP wire.
+        let resource = tool.to_resource().expect("to_resource");
+        let projected = project_to_mcp(&resource)
+            .expect("projection should not error")
+            .expect("a tool is mcp-exposable");
+        match projected {
+            McpEntity::Tool(mcp_tool) => {
+                assert_eq!(mcp_tool, McpTool::from(&tool));
+                assert_eq!(mcp_tool.display_name(), "Search");
+            }
+            McpEntity::Prompt(_) => panic!("expected a tool projection"),
+        }
+
+        // A non-MCP-exposable kind (agent) projects to None.
+        let card_resource = sample_agent_card().to_resource().expect("card resource");
+        assert!(
+            project_to_mcp(&card_resource)
+                .expect("projection should not error")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn tool_implementation_defaults_unbound_and_binds_via_json5() {
+        // No implementation declared -> Unbound (still lists, not executable).
+        let unbound: Tool = load_typed(
+            r#"{ meta: { name:"t", id:"t", version:"0.1.0",
+                 origin:{tier:"Domain",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 input_schema: { type: "object" } }"#,
+        )
+        .expect("minimal tool parses");
+        assert_eq!(unbound.implementation, ToolImplementation::Unbound);
+
+        // A Command implementation binds via the adjacently-tagged enum in JSON5.
+        let bound: Tool = load_typed(
+            r#"{ meta: { name:"echo", id:"echo", version:"0.1.0",
+                 origin:{tier:"Domain",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 input_schema: { type: "object" },
+                 implementation: { kind: "command",
+                   value: { command: "echo", args: ["hi"], background: false } } }"#,
+        )
+        .expect("command tool parses");
+        assert_eq!(
+            bound.implementation,
+            ToolImplementation::Command {
+                command: "echo".to_string(),
+                args: vec!["hi".to_string()],
+                background: false,
+            }
+        );
+    }
+
+    #[test]
+    fn canonical_tool_projects_to_mcp_tool() {
+        let tool = Tool {
+            meta: EntityMeta::new(
+                "search",
+                "search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Search"),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(json!({"type": "object"})),
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: ToolImplementation::Unbound,
+        };
+
+        let projected = McpTool::from(&tool);
+        assert_eq!(projected.base.name, "search");
+        assert_eq!(projected.display_name(), "Search");
+        // ReadOnly effect → parallel-safe via MCP annotations.
+        assert_eq!(projected.parallel_safety(), ParallelSafety::Parallel);
+        assert!(projected.is_idempotent());
+
+        let destructive = Tool {
+            effect: ToolEffect::Destructive,
+            idempotent: false,
+            ..tool
+        };
+        assert_eq!(
+            McpTool::from(&destructive).parallel_safety(),
+            ParallelSafety::Sequential
+        );
+    }
+
+    #[test]
+    fn canonical_prompt_projects_to_mcp_prompt() {
+        let prompt = Prompt {
+            meta: EntityMeta::new(
+                "research.prompt",
+                "research.prompt",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Research Prompt"),
+            template: "Summarize {{ symbol }}".to_string(),
+            arguments: vec![PromptArgument {
+                name: "symbol".to_string(),
+                description: Some("Ticker".to_string()),
+                required: true,
+                // R1: domain default resolves from an env variable at runtime.
+                default: Some(Reference::Variable("DEFAULT_SYMBOL".to_string())),
+            }],
+        };
+
+        let projected = McpPrompt::from(&prompt);
+        assert_eq!(projected.base.name, "research.prompt");
+        assert_eq!(projected.arguments.len(), 1);
+        assert_eq!(projected.arguments[0].required, Some(true));
+
+        // The R1 default is domain-only: it must not appear on the MCP wire.
+        let encoded = serde_json::to_value(&projected).expect("prompt should serialize");
+        let arg = &encoded["arguments"][0];
+        assert!(arg.get("default").is_none());
+        assert_eq!(arg.get("name").and_then(Value::as_str), Some("symbol"));
+    }
+
+    #[test]
+    fn memory_defaults_retention_and_round_trips() {
+        let memory = Memory {
+            meta: EntityMeta::new(
+                "session.scratch",
+                "session.scratch",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::SelfModifying,
+                false,
+            ),
+            retention: Retention::Core,
+            last_consolidated: None,
+            source_entries: vec!["m1".to_string(), "m2".to_string()],
+            facets: DataFacets {
+                plane: Plane::Agent,
+                materialization: Materialization::Materialized,
+                as_of: None,
+                validation: None,
+            },
+        };
+        let resource = memory.to_resource().expect("to_resource");
+        let back: Memory = entity_from_resource(&resource).expect("from_resource");
+        assert_eq!(back, memory);
+
+        // A minimal hand-authored memory (no retention) defaults to ShortTerm.
+        let minimal: Memory = load_typed(
+            r#"{ meta: { name:"m", id:"m", version:"0.1.0",
+                 origin:{tier:"Domain",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 facets: { plane:"agent", materialization:"materialized" } }"#,
+        )
+        .expect("minimal memory should parse");
+        assert_eq!(minimal.retention, Retention::ShortTerm);
+    }
+
+    #[test]
+    fn evaluation_identity_round_trips_and_validates_facets() {
+        let eval = Evaluation {
+            meta: EntityMeta::new(
+                "eval.market",
+                "eval.market",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            ),
+            dataset_id: "golden-market-notes".to_string(),
+            facets: EvalFacets::default(),
+        };
+        let resource = eval.to_resource().expect("to_resource");
+        let back: Evaluation = entity_from_resource(&resource).expect("from_resource");
+        assert_eq!(back, eval);
+
+        // The calibration range guard is now reachable through a registry entity.
+        let mut bad = eval;
+        bad.facets.ops.calibration = Some(5.0);
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn resource_definitions_describe_every_kind() {
+        let defs = resource_definitions();
+        assert_eq!(defs.len(), EntityKind::ALL.len());
+
+        let find = |kind: EntityKind| {
+            defs.iter()
+                .find(|definition| definition.kind == kind)
+                .unwrap_or_else(|| panic!("missing definition: {kind:?}"))
+        };
+
+        // every kind now carries a concrete spec schema.
+        assert!(find(EntityKind::Agent).spec_schema.is_some());
+        assert!(resource_definitions().iter().all(|d| d.spec_schema.is_some()));
+        // facet flags come straight from the kind registry.
+        assert!(find(EntityKind::Agent).autonomy_capable);
+        assert!(!find(EntityKind::Skill).autonomy_capable);
+        assert!(find(EntityKind::Memory).has_data_facets);
+        // self-describing: the meta-schema kind carries its own schema.
+        assert!(find(EntityKind::ResourceDefinition).spec_schema.is_some());
+        assert_eq!(find(EntityKind::Agent).group, "tdw.finx");
+    }
+
+    #[test]
+    fn registry_entity_projects_to_resource() {
+        let card = sample_agent_card();
+        let resource = card
+            .to_resource()
+            .unwrap_or_else(|error| panic!("card should project: {error}"));
+
+        assert_eq!(resource.kind, EntityKind::Agent);
+        assert_eq!(resource.api_version, "tdw.finx/v1");
+        assert_eq!(resource.metadata.id, "market-researcher");
+
+        let spec = resource
+            .spec
+            .as_object()
+            .unwrap_or_else(|| panic!("spec should be an object"));
+        // Payload is present, but the metadata was lifted into the envelope (not duplicated).
+        assert!(spec.contains_key("skills"));
+        assert!(spec.contains_key("content_refs"));
+        assert!(!spec.contains_key("meta"));
+    }
+
+    #[test]
     fn exports_stable_schema_bundle() {
         let bundle = schema_bundle();
         for name in AGENT_SCHEMA_NAMES {
@@ -567,7 +1728,7 @@ mod tests {
         let json = include_str!("../tests/golden/agent_card.json");
         let card = serde_json::from_str::<AgentCard>(json)
             .unwrap_or_else(|error| panic!("agent card fixture should parse: {error}"));
-        assert_eq!(card.agent_id, "market-researcher");
+        assert_eq!(card.meta.id, "market-researcher");
         assert!(card.validate().is_ok());
 
         let encoded = serde_json::to_string(&card)
@@ -585,8 +1746,8 @@ mod tests {
         )
         .unwrap_or_else(|error| panic!("skill fixture should parse: {error}"));
 
-        assert_eq!(skill.skill_id, "research.note");
-        assert_eq!(skill.tags, vec!["research", "mcp"]);
+        assert_eq!(skill.meta.id, "research.note");
+        assert_eq!(skill.meta.tags, vec!["research", "mcp"]);
     }
 
     #[test]
@@ -621,7 +1782,17 @@ mod tests {
     #[test]
     fn validates_workflow_dag_and_rejects_cycles() {
         let workflow = WorkflowDefinition {
-            workflow_id: "research-flow".to_string(),
+            meta: EntityMeta::new(
+                "research-flow",
+                "research-flow",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::Configured,
+                false,
+            ),
             nodes: vec![
                 WorkflowNode {
                     node_id: "retrieve".to_string(),
@@ -659,5 +1830,129 @@ mod tests {
             ..workflow
         };
         assert_eq!(cycle.validate_dag(), Err(WorkflowValidationError::Cycle));
+    }
+
+    #[test]
+    fn minimal_tool_json5_parses_and_defaults() {
+        // Hand-authored minimal tool: only meta + inputSchema. Everything else defaults.
+        let tool = load_typed::<Tool>(
+            r#"{ meta: { name:"t", id:"t", version:"0.1.0", origin:{tier:"Domain",source:"Internal"}, adaptivity:"None", autonomous:false }, input_schema: { type: "object" } }"#,
+        )
+        .unwrap_or_else(|error| panic!("minimal tool should parse: {error}"));
+
+        assert_eq!(tool.effect, ToolEffect::WriteSafe);
+        assert!(!tool.idempotent);
+        assert!(!tool.open_world);
+        assert!(tool.output_schema.is_none());
+    }
+
+    #[test]
+    fn tool_identity_round_trip_through_resource() {
+        let tool = Tool {
+            meta: EntityMeta::new(
+                "search",
+                "search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Search"),
+            input_schema: json!({"type": "object"}),
+            output_schema: Some(json!({"type": "object"})),
+            effect: ToolEffect::Destructive,
+            idempotent: true,
+            open_world: true,
+            implementation: ToolImplementation::Unbound,
+        };
+        let resource = tool.to_resource().expect("to_resource");
+        let back: Tool = entity_from_resource(&resource).expect("entity_from_resource");
+        assert_eq!(back, tool);
+    }
+
+    #[test]
+    fn prompt_identity_round_trip_through_resource() {
+        let prompt = Prompt {
+            meta: EntityMeta::new(
+                "research.prompt",
+                "research.prompt",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            ),
+            template: "Summarize {{ symbol }}".to_string(),
+            arguments: vec![PromptArgument {
+                name: "symbol".to_string(),
+                description: Some("Ticker".to_string()),
+                required: true,
+                default: Some(Reference::Variable("DEFAULT_SYMBOL".to_string())),
+            }],
+        };
+        let resource = prompt.to_resource().expect("to_resource");
+        let back: Prompt = entity_from_resource(&resource).expect("entity_from_resource");
+        assert_eq!(back, prompt);
+    }
+
+    #[test]
+    fn agent_card_identity_round_trip_through_resource() {
+        let card = sample_agent_card();
+        let resource = card.to_resource().expect("to_resource");
+        let back: AgentCard = entity_from_resource(&resource).expect("entity_from_resource");
+        assert_eq!(back, card);
+    }
+
+    #[test]
+    fn knowledge_identity_round_trip_through_resource() {
+        let knowledge = Knowledge {
+            meta: EntityMeta::new(
+                "market-facts",
+                "market-facts",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            ),
+            body: "Equities settle T+1.".to_string(),
+            facets: DataFacets {
+                plane: Plane::Platform,
+                materialization: Materialization::Materialized,
+                as_of: Some("2026-05-31T00:00:00Z".to_string()),
+                validation: Some(ValidationState {
+                    status: ValidationStatus::Ready,
+                    missing_fraction: Some(0.0),
+                    schema_conformant: Some(true),
+                    last_validated: None,
+                }),
+            },
+        };
+        let resource = knowledge.to_resource().expect("to_resource");
+        let back: Knowledge = entity_from_resource(&resource).expect("entity_from_resource");
+        assert_eq!(back, knowledge);
+    }
+
+    #[test]
+    fn data_facets_rejects_out_of_range_missing_fraction() {
+        let facets = DataFacets {
+            plane: Plane::Platform,
+            materialization: Materialization::Materialized,
+            as_of: None,
+            validation: Some(ValidationState {
+                status: ValidationStatus::Draft,
+                missing_fraction: Some(5.0),
+                schema_conformant: None,
+                last_validated: None,
+            }),
+        };
+        assert!(facets.validate().is_err());
     }
 }

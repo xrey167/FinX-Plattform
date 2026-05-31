@@ -37,7 +37,7 @@ impl AgentStore {
     }
 
     pub fn upsert_agent(&mut self, card: AgentCard) {
-        self.agents.insert(card.agent_id.clone(), card);
+        self.agents.insert(card.meta.id.clone(), card);
     }
 
     /// # Errors
@@ -50,12 +50,11 @@ impl AgentStore {
     }
 
     pub fn upsert_gotcha(&mut self, gotcha: Gotcha) {
-        self.gotchas.insert(gotcha.gotcha_id.clone(), gotcha);
+        self.gotchas.insert(gotcha.meta.id.clone(), gotcha);
     }
 
     pub fn upsert_workflow(&mut self, workflow: WorkflowDefinition) {
-        self.workflows
-            .insert(workflow.workflow_id.clone(), workflow);
+        self.workflows.insert(workflow.meta.id.clone(), workflow);
     }
 
     /// # Errors
@@ -119,9 +118,23 @@ impl AgentStore {
 mod tests {
     use super::*;
     use tdw_agent::{
-        EvalCase, EvalRunRequest, GotchaSeverity, WorkflowDefinition, WorkflowEdge, WorkflowNode,
-        sample_agent_card,
+        Adaptivity, EntityMeta, EvalCase, EvalRunRequest, GotchaSeverity, Origin, Source, Tier,
+        WorkflowDefinition, WorkflowEdge, WorkflowNode, sample_agent_card,
     };
+
+    fn meta(name: &str) -> EntityMeta {
+        EntityMeta::new(
+            name,
+            name,
+            "0.1.0",
+            Origin {
+                tier: Tier::Domain,
+                source: Source::Internal,
+            },
+            Adaptivity::None,
+            false,
+        )
+    }
 
     #[test]
     fn persists_agent_card_gotcha_workflow_and_eval_run() {
@@ -131,8 +144,7 @@ mod tests {
         assert_eq!(store.agent("market-researcher"), Some(&card));
 
         let gotcha = Gotcha {
-            gotcha_id: "needs-provenance".to_string(),
-            title: "Needs provenance".to_string(),
+            meta: meta("needs-provenance").with_title("Needs provenance"),
             severity: GotchaSeverity::Warning,
             applies_to: vec!["research.note".to_string()],
             remediation: "Attach content refs.".to_string(),
@@ -142,7 +154,7 @@ mod tests {
         assert_eq!(store.gotcha("needs-provenance"), Some(&gotcha));
 
         let workflow = WorkflowDefinition {
-            workflow_id: "research-flow".to_string(),
+            meta: meta("research-flow"),
             nodes: vec![
                 WorkflowNode {
                     node_id: "retrieve".to_string(),
@@ -190,12 +202,12 @@ mod tests {
     fn checked_store_paths_reject_invalid_agent_workflow_and_eval_run() {
         let mut store = AgentStore::new();
         let mut card = sample_agent_card();
-        card.agent_id = "../agent".to_string();
+        card.meta.base.name = "../agent".to_string();
         assert_eq!(store.try_upsert_agent(card), Err(StoreError::InvalidAgent));
 
         assert_eq!(
             store.try_upsert_workflow(WorkflowDefinition {
-                workflow_id: "research-flow".to_string(),
+                meta: meta("research-flow"),
                 nodes: Vec::new(),
                 edges: vec![WorkflowEdge {
                     from: "missing".to_string(),

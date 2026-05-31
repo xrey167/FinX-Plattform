@@ -48,8 +48,9 @@ use serde_json::{Value, json};
 use tdw_acp::{AcpRequest, AcpServerInfo, validate_request};
 use tdw_actor::{ActorContext, OmcSpawn};
 use tdw_agent::{
-    EvalCase, EvalRunRequest, WorkflowDefinition, WorkflowEdge, WorkflowNode, gotcha_seed,
-    parse_slash_command_invocation, sample_agent_card, schema_bundle,
+    Adaptivity, EntityMeta, EvalCase, EvalRunRequest, McpEntity, McpPrompt, McpTool, Origin,
+    Registry, Source, Tier, WorkflowDefinition, WorkflowEdge, WorkflowNode, gotcha_seed,
+    parse_slash_command_invocation, project_to_mcp, sample_agent_card, schema_bundle,
 };
 use tdw_agent_store::AgentStore;
 use tdw_app_client::{AppClient, ClientInfo};
@@ -422,7 +423,17 @@ pub fn agent_tool_sample() -> Result<Value> {
     }
 
     let workflow = WorkflowDefinition {
-        workflow_id: "research-flow".to_string(),
+        meta: EntityMeta::new(
+            "research-flow",
+            "research-flow",
+            "0.1.0",
+            Origin {
+                tier: Tier::Domain,
+                source: Source::Internal,
+            },
+            Adaptivity::Configured,
+            false,
+        ),
         nodes: vec![
             WorkflowNode {
                 node_id: "retrieve".to_string(),
@@ -447,7 +458,7 @@ pub fn agent_tool_sample() -> Result<Value> {
     let eval = EvalRunner::run(
         EvalRunRequest {
             run_id: "eval-1".to_string(),
-            agent_id: card.agent_id.clone(),
+            agent_id: card.meta.id.clone(),
             dataset_id: "golden-market-notes".to_string(),
             cases: vec![EvalCase {
                 case_id: "case-1".to_string(),
@@ -461,7 +472,7 @@ pub fn agent_tool_sample() -> Result<Value> {
         .map_err(|error| Error::Provider(error.to_string()))?;
 
     Ok(json!({
-        "agent_id": card.agent_id,
+        "agent_id": card.meta.id,
         "schemas": agent_schema_names(),
         "tools": mcp_agent_tools(),
         "workflow_order": plan.ordered_node_ids,
@@ -469,6 +480,39 @@ pub fn agent_tool_sample() -> Result<Value> {
         "slash_command": command,
         "storage_mappings": store.storage_mappings(),
     }))
+}
+
+/// Project every MCP-exposable `tool` resource in `registry` onto its MCP wire form.
+///
+/// Iterates the registry, runs [`project_to_mcp`] on each resource, and collects the
+/// [`McpEntity::Tool`] variants. Resources that fail to project (a `serde_json::Error`)
+/// or that are not tools are skipped silently — this is a best-effort surface for
+/// `tools/list`, not a validation pass.
+#[must_use]
+pub fn registry_mcp_tools(registry: &Registry) -> Vec<McpTool> {
+    registry
+        .iter()
+        .filter_map(|resource| match project_to_mcp(resource) {
+            Ok(Some(McpEntity::Tool(tool))) => Some(tool),
+            Ok(Some(McpEntity::Prompt(_)) | None) | Err(_) => None,
+        })
+        .collect()
+}
+
+/// Project every MCP-exposable `prompt` resource in `registry` onto its MCP wire form.
+///
+/// Iterates the registry, runs [`project_to_mcp`] on each resource, and collects the
+/// [`McpEntity::Prompt`] variants. Resources that fail to project or that are not prompts
+/// are skipped silently.
+#[must_use]
+pub fn registry_mcp_prompts(registry: &Registry) -> Vec<McpPrompt> {
+    registry
+        .iter()
+        .filter_map(|resource| match project_to_mcp(resource) {
+            Ok(Some(McpEntity::Prompt(prompt))) => Some(prompt),
+            Ok(Some(McpEntity::Tool(_)) | None) | Err(_) => None,
+        })
+        .collect()
 }
 
 #[must_use]
@@ -1267,6 +1311,72 @@ mod tests {
                 .as_array()
                 .is_some_and(|schemas| schemas.len() >= 4)
         );
+    }
+
+    #[test]
+    fn registry_mcp_bridge_collects_tools_and_prompts() {
+        use tdw_agent::{
+            Prompt, PromptArgument, RegistryEntity, Tool, ToolEffect, ToolImplementation,
+        };
+
+        let tool = Tool {
+            meta: EntityMeta::new(
+                "search",
+                "search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Search"),
+            input_schema: json!({"type": "object"}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: ToolImplementation::Unbound,
+        };
+        let prompt = Prompt {
+            meta: EntityMeta::new(
+                "research.prompt",
+                "research.prompt",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Research Prompt"),
+            template: "Summarize {{ symbol }}".to_string(),
+            arguments: vec![PromptArgument {
+                name: "symbol".to_string(),
+                description: Some("Ticker".to_string()),
+                required: true,
+                default: None,
+            }],
+        };
+
+        let registry = Registry::from_resources([
+            tool.to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+            prompt
+                .to_resource()
+                .unwrap_or_else(|error| panic!("prompt resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        let tools = registry_mcp_tools(&registry);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].base.name, "search");
+
+        let prompts = registry_mcp_prompts(&registry);
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].base.name, "research.prompt");
     }
 
     #[test]

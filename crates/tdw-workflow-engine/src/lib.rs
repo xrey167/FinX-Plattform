@@ -18,7 +18,7 @@ impl WorkflowEngine {
     /// Returns an error variant if the underlying operation fails.
     pub fn compile(workflow: &WorkflowDefinition) -> Result<ExecutionPlan, AgentContractError> {
         Ok(ExecutionPlan {
-            workflow_id: workflow.workflow_id.clone(),
+            workflow_id: workflow.meta.id.clone(),
             ordered_node_ids: validate_workflow_contract(workflow)?,
         })
     }
@@ -27,12 +27,29 @@ impl WorkflowEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tdw_agent::{WorkflowDefinition, WorkflowEdge, WorkflowNode};
+    use tdw_agent::{
+        Adaptivity, EntityMeta, Origin, Source, Tier, WorkflowDefinition, WorkflowEdge,
+        WorkflowNode,
+    };
+
+    fn workflow_meta(name: &str) -> EntityMeta {
+        EntityMeta::new(
+            name,
+            name,
+            "0.1.0",
+            Origin {
+                tier: Tier::Domain,
+                source: Source::Internal,
+            },
+            Adaptivity::Configured,
+            false,
+        )
+    }
 
     #[test]
     fn compiles_dag_to_execution_plan() {
         let workflow = WorkflowDefinition {
-            workflow_id: "research-flow".to_string(),
+            meta: workflow_meta("research-flow"),
             nodes: vec![
                 WorkflowNode {
                     node_id: "retrieve".to_string(),
@@ -59,14 +76,14 @@ mod tests {
     #[test]
     fn compile_rejects_invalid_workflow_identifiers() {
         let workflow = WorkflowDefinition {
-            workflow_id: "../research".to_string(),
+            meta: workflow_meta("../research"),
             nodes: Vec::new(),
             edges: Vec::new(),
         };
 
         assert!(matches!(
             WorkflowEngine::compile(&workflow),
-            Err(AgentContractError::InvalidIdentifier("workflow_id", _))
+            Err(AgentContractError::InvalidIdentifier("workflow_name", _))
         ));
     }
 }

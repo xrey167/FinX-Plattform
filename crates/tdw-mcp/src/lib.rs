@@ -2,11 +2,13 @@
 
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use tdw_agent::Registry;
 use tdw_app_client::{
     DEFAULT_DAEMON_TCP_ADDR, DaemonClient, DaemonClientConfig, DaemonClientError, DaemonSubmission,
 };
@@ -76,6 +78,18 @@ pub struct McpServer {
     client_info: Option<Value>,
     cancelled_requests: Vec<CancelledRequest>,
     daemon: DaemonToolRuntime,
+    /// Optional `tdw-agent` registry whose `tool` resources are appended to the hardcoded
+    /// `tools/list` catalog. `None` keeps only the built-in tools.
+    registry: Option<Registry>,
+    /// Cached projection of the attached registry's `tool` resources, computed ONCE at
+    /// attach time in [`McpServer::set_registry`]. Already deduped against built-in names
+    /// (built-ins win) with `notExecutable` baked in, so the hot paths (`tools/list`,
+    /// `tools/call`) consult this vec instead of re-projecting the whole registry per
+    /// request. Empty when no registry is attached.
+    registry_descriptors: Vec<ToolDescriptor>,
+    /// Executes bound registry tools (resolves each tool's `implementation` binding). Used
+    /// in `call_tool` for listed registry tools before the built-in `execute_tool` path.
+    executor: tdw_tool_exec::ToolExecutor,
 }
 
 impl Default for McpServer {
@@ -85,6 +99,9 @@ impl Default for McpServer {
             client_info: None,
             cancelled_requests: Vec::new(),
             daemon: DaemonToolRuntime::from_env(),
+            registry: None,
+            registry_descriptors: Vec::new(),
+            executor: tdw_tool_exec::ToolExecutor::new(),
         }
     }
 }
@@ -96,13 +113,51 @@ impl McpServer {
     }
 
     #[must_use]
-    pub const fn with_daemon_config(config: DaemonClientConfig) -> Self {
+    pub fn with_daemon_config(config: DaemonClientConfig) -> Self {
         Self {
             initialized: false,
             client_info: None,
             cancelled_requests: Vec::new(),
             daemon: DaemonToolRuntime::configured(config),
+            registry: None,
+            registry_descriptors: Vec::new(),
+            executor: tdw_tool_exec::ToolExecutor::new(),
         }
+    }
+
+    /// Attach a `tdw-agent` [`Registry`]; its `tool` resources are exposed via `tools/list`
+    /// in addition to the built-in tools. Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.set_registry(registry);
+        self
+    }
+
+    /// Replace the registry-tool [`tdw_tool_exec::ToolExecutor`] (e.g. to supply an explicit
+    /// [`tdw_tool_exec::CommandPolicy`] instead of the env-derived default). Consumes and
+    /// returns `self` for builder use.
+    #[must_use]
+    pub fn with_executor(mut self, executor: tdw_tool_exec::ToolExecutor) -> Self {
+        self.executor = executor;
+        self
+    }
+
+    /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
+    /// exposed via `tools/list`.
+    ///
+    /// This is the single place the registry-tool projection is computed: the registry is
+    /// projected ONCE here (deduped against built-in names, built-ins win, with
+    /// `notExecutable` baked in) and cached in `registry_descriptors`. The hot paths
+    /// (`tools/list`, `tools/call`) then consult the cache instead of re-projecting per
+    /// request. Calling this again refreshes the cache for the new registry.
+    pub fn set_registry(&mut self, registry: Registry) {
+        let builtin_names: std::collections::HashSet<String> =
+            tool_descriptors().into_iter().map(|tool| tool.name).collect();
+        self.registry_descriptors = registry_tool_descriptors(&registry)
+            .into_iter()
+            .filter(|tool| !builtin_names.contains(&tool.name))
+            .collect();
+        self.registry = Some(registry);
     }
 
     #[must_use]
@@ -118,6 +173,21 @@ impl McpServer {
     #[must_use]
     pub fn cancelled_requests(&self) -> &[CancelledRequest] {
         &self.cancelled_requests
+    }
+
+    /// The full `tools/list` catalog: the built-in [`tool_descriptors`] plus, when a
+    /// registry is attached, the descriptors projected from its `tool` resources.
+    ///
+    /// Built-ins always win on name collisions: a registry tool whose `name` equals a
+    /// built-in name is skipped so the catalog never emits duplicate descriptors and
+    /// `tools/call` keeps dispatching to the built-in.
+    fn all_tool_descriptors(&self) -> Vec<ToolDescriptor> {
+        let mut descriptors = tool_descriptors();
+        // `registry_descriptors` is already deduped against built-in names at attach time
+        // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
+        // and never emits duplicate descriptors. Empty when no registry is attached.
+        descriptors.extend(self.registry_descriptors.iter().cloned());
+        descriptors
     }
 
     pub fn handle_json_rpc_line(&mut self, line: &str) -> Vec<String> {
@@ -174,10 +244,7 @@ impl McpServer {
         match inbound.method.as_str() {
             "initialize" => vec![self.initialize(&id, &inbound.params)],
             "ping" => vec![success_message(&id, &json!({}))],
-            "tools/list" => vec![success_message(
-                &id,
-                &json!({ "tools": tool_descriptors() }),
-            )],
+            "tools/list" => vec![success_message(&id, &json!({ "tools": self.all_tool_descriptors() }))],
             "tools/call" => self.call_tool(&id, &inbound.params),
             "resources/list" => vec![success_message(
                 &id,
@@ -255,6 +322,54 @@ impl McpServer {
         }
 
         let progress_token = progress_token(params);
+
+        // Listed registry tools (not built-ins) are dispatched through the tool-execution
+        // backend, which resolves each tool's `implementation` binding. `Unbound` tools fall
+        // through to the existing `-32601` "not yet executable" path below; an execution
+        // failure (the tool ran but errored) is surfaced as an `isError` tool result.
+        if let Some(registry) = self.registry.as_ref()
+            && self.is_listed_registry_tool(name)
+        {
+            match self.executor.execute(registry, name, &arguments) {
+                Ok(outcome) => {
+                    return vec![success_message(id, &tool_result(&outcome.structured))];
+                }
+                Err(tdw_tool_exec::ExecError::Unbound) => {
+                    return vec![error_message(
+                        JsonRpcProblem::new(
+                            id.clone(),
+                            -32601,
+                            format!("registry tool not yet executable: {name}"),
+                        )
+                        .with_data(json!({ "tool": name })),
+                    )];
+                }
+                Err(other) => {
+                    // Do not leak the raw executor error to the client: map it to a generic
+                    // category message and log the detail server-side (decision 3).
+                    eprintln!("tdw-mcp: registry tool {name} error: {other}");
+                    let category = match other {
+                        tdw_tool_exec::ExecError::NotPermitted(_) => {
+                            "registry tool execution not permitted"
+                        }
+                        tdw_tool_exec::ExecError::BadArguments(_) => {
+                            "invalid registry tool definition"
+                        }
+                        tdw_tool_exec::ExecError::ToolNotFound(_)
+                        | tdw_tool_exec::ExecError::HandlerNotFound(_) => {
+                            "registry tool not available"
+                        }
+                        tdw_tool_exec::ExecError::NotYetSupported(_) => {
+                            "registry tool not yet executable"
+                        }
+                        tdw_tool_exec::ExecError::Backend(_)
+                        | tdw_tool_exec::ExecError::Unbound => "registry tool execution failed",
+                    };
+                    return vec![success_message(id, &tool_error_result(category))];
+                }
+            }
+        }
+
         let result = execute_tool(&self.daemon, name, &arguments);
         match result {
             Ok(ToolExecution {
@@ -265,15 +380,54 @@ impl McpServer {
                 messages.push(success_message(id, &tool_result(&structured)));
                 messages
             }
-            Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                problem
-                    .with_id(id.clone())
-                    .with_data(json!({ "tool": name })),
-            )],
+            Err(ToolFailure::Protocol(problem)) => {
+                // A name that is unknown to `execute_tool` but IS a listed registry tool
+                // (and not a built-in) is stubbed-but-listed, not truly unknown. Distinguish
+                // it with -32601 (method not found) instead of the generic -32602.
+                //
+                // EXECUTION GAP (intentionally deferred): registry tools are *listed*
+                // truthfully via `tools/list` but are NOT executable here. Running one
+                // requires an execution backend keyed off the tool's `implementation`/origin
+                // — e.g. a proxy to a sub-MCP server, a bound Rust fn, or an HTTP endpoint —
+                // and no such backend exists in this crate. Until one is wired up we return a
+                // precise, non-misleading not-implemented error rather than pretending to
+                // dispatch. This keeps the surface a "functional packet": tools are listed
+                // honestly and calls fail honestly. See `registry_tool_descriptors`.
+                if problem.code == -32602 && self.is_listed_registry_tool(name) {
+                    return vec![error_message(
+                        JsonRpcProblem::new(
+                            id.clone(),
+                            -32601,
+                            format!("registry tool not yet executable: {name}"),
+                        )
+                        .with_data(json!({ "tool": name })),
+                    )];
+                }
+                vec![error_message(
+                    problem
+                        .with_id(id.clone())
+                        .with_data(json!({ "tool": name })),
+                )]
+            }
             Err(ToolFailure::Execution(message)) => {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// True when `name` is exposed by the attached registry's `tool` resources and is NOT a
+    /// built-in tool. Built-ins are checked against [`tool_descriptors`] so a registry tool
+    /// that collides with a built-in (and is therefore deduped out of `tools/list`) is not
+    /// treated as a listed registry tool.
+    fn is_listed_registry_tool(&self, name: &str) -> bool {
+        // `registry_descriptors` already excludes any registry tool whose name collides with
+        // a built-in (deduped at attach time, built-ins win), so membership here is exactly
+        // "exposed by the registry AND not a built-in" — the original semantics, without
+        // re-projecting the registry per call. Empty (returns false) when no registry is
+        // attached.
+        self.registry_descriptors
+            .iter()
+            .any(|tool| tool.name == name)
     }
 
     fn read_resource(id: &Value, params: &Value) -> Value {
@@ -341,7 +495,13 @@ impl McpServer {
 #[must_use]
 pub fn run_stdio_json_rpc() -> i32 {
     let stdin = std::io::stdin();
-    let mut server = McpServer::new();
+    let mut server = match attach_env_registry(McpServer::new()) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("tdw-mcp registry configuration error: {error}");
+            return 2;
+        }
+    };
     for line in stdin.lock().lines() {
         match line {
             Ok(line) if line.trim().is_empty() => {}
@@ -410,6 +570,86 @@ pub fn mcp_tool_catalog() -> Vec<String> {
         .into_iter()
         .map(|tool| tool.name)
         .collect()
+}
+
+/// Environment variable naming the directory of `tdw-agent` registry definitions to load and
+/// attach to every server entrypoint. Unset → no registry is attached (built-in tools only).
+pub const REGISTRY_DIR_ENV: &str = "TDW_AGENT_REGISTRY_DIR";
+
+/// Failure loading a `tdw-agent` registry from a configured directory.
+///
+/// Wraps [`tdw_agent::LoadError`] with the offending directory so a misconfigured
+/// [`REGISTRY_DIR_ENV`] surfaces a precise, actionable message instead of being silently
+/// ignored.
+#[derive(Debug)]
+pub struct RegistryConfigError {
+    dir: String,
+    source: tdw_agent::LoadError,
+}
+
+impl std::fmt::Display for RegistryConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to load tdw-agent registry from {}: {}",
+            self.dir, self.source
+        )
+    }
+}
+
+impl std::error::Error for RegistryConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// Load a `tdw-agent` [`Registry`] from `dir` (a directory of `*.json5` definitions).
+///
+/// Thin wrapper over [`Registry::load_dir`] that attaches `dir` to any failure for a clear
+/// diagnostic.
+///
+/// # Errors
+///
+/// Returns [`RegistryConfigError`] if the directory cannot be read or any definition is
+/// invalid (see [`tdw_agent::LoadError`]).
+pub fn registry_from_dir(dir: &Path) -> Result<Registry, RegistryConfigError> {
+    Registry::load_dir(dir).map_err(|source| RegistryConfigError {
+        dir: dir.display().to_string(),
+        source,
+    })
+}
+
+/// Resolve an optional registry from [`REGISTRY_DIR_ENV`].
+///
+/// - Unset (or empty) → `Ok(None)`: behavior is byte-for-byte unchanged (built-in tools only).
+/// - Set → load that directory and return `Ok(Some(registry))`.
+/// - Set but loading fails → `Err(..)`: a misconfiguration surfaces rather than being silently
+///   ignored.
+///
+/// # Errors
+///
+/// Returns [`RegistryConfigError`] when the variable is set but the directory cannot be loaded.
+pub fn registry_from_env() -> Result<Option<Registry>, RegistryConfigError> {
+    match non_empty_env(REGISTRY_DIR_ENV) {
+        Some(dir) => registry_from_dir(Path::new(&dir)).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Attach the [`registry_from_env`] registry to `server` when [`REGISTRY_DIR_ENV`] is set.
+///
+/// On success returns `server` unchanged when the variable is unset, or with the loaded
+/// registry attached when it is set. Used by every server-construction entrypoint so the
+/// registry→MCP `tools/list` surface is reachable from a running server.
+///
+/// # Errors
+///
+/// Returns [`RegistryConfigError`] when the variable is set but the directory cannot be loaded.
+fn attach_env_registry(mut server: McpServer) -> Result<McpServer, RegistryConfigError> {
+    if let Some(registry) = registry_from_env()? {
+        server.set_registry(registry);
+    }
+    Ok(server)
 }
 
 #[derive(Clone, Debug)]
@@ -654,7 +894,13 @@ pub fn run_streamable_http(bind: &str) -> i32 {
     };
     eprintln!("tdw-mcp Streamable HTTP listening on http://{bind}{STREAMABLE_HTTP_PATH}");
 
-    let server = Arc::new(Mutex::new(McpServer::new()));
+    let server = match attach_env_registry(McpServer::new()) {
+        Ok(server) => Arc::new(Mutex::new(server)),
+        Err(error) => {
+            eprintln!("tdw-mcp registry configuration error: {error}");
+            return 2;
+        }
+    };
     let config = Arc::new(streamable_http_config_from_env());
     for accepted in listener.incoming() {
         match accepted {
@@ -687,7 +933,13 @@ pub fn run_streamable_http(bind: &str) -> i32 {
 
 #[must_use]
 pub fn run_streamable_http_smoke() -> i32 {
-    let mut server = McpServer::new();
+    let mut server = match attach_env_registry(McpServer::new()) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("tdw-mcp registry configuration error: {error}");
+            return 2;
+        }
+    };
     let initialize = StreamableHttpRequest::new(
         "POST",
         STREAMABLE_HTTP_PATH,
@@ -1394,6 +1646,96 @@ fn tool_descriptors() -> Vec<ToolDescriptor> {
             }),
         ),
     ]
+}
+
+/// Convert a `tdw-agent` registry's `tool` resources into tdw-mcp [`ToolDescriptor`]s for
+/// `tools/list`.
+///
+/// Each registry [`tdw_agent::McpTool`] maps as: `name` = `base.name`; `title` =
+/// `base.title` (falling back to `base.name`); `description` = `base.description` (falling
+/// back to the title); `inputSchema`/`outputSchema` are carried through verbatim; the
+/// behavioral hints come from the tool's MCP annotations.
+///
+/// Note: this only surfaces registry tools in `tools/list`. `tools/call` dispatch for
+/// registry-backed tools is intentionally OUT OF SCOPE — `execute_tool` does not know how
+/// to run them. Rather than the generic `-32602 "unknown tool"`, calling a listed-but-
+/// unexecutable registry tool returns the distinct `-32601 "registry tool not yet
+/// executable"` (see [`McpServer::is_listed_registry_tool`]); truly-unknown names still
+/// get `-32602` until a dispatch path is wired up.
+///
+/// Why execution is deferred: actually running a registry tool requires an execution backend
+/// keyed off the tool's `implementation`/origin — concretely one of (a) a proxy that forwards
+/// the call to a sub-MCP server, (b) a bound Rust function, or (c) an HTTP endpoint. None of
+/// these exist in this crate yet, so wiring one in is left to a follow-up. Listing tools
+/// without an executor is deliberate: the surface stays a "functional packet" where tools are
+/// advertised truthfully and calls return a precise not-implemented error.
+///
+/// Protocol-version skew: tdw-agent's MCP adapter targets revision `2025-11-25`, while this
+/// server negotiates [`MCP_PROTOCOL_VERSION`] (`2025-06-18`). The projected [`ToolDescriptor`]
+/// only emits fields common to both revisions — name/title/description/inputSchema/
+/// outputSchema plus the four boolean annotation hints (read-only/destructive/idempotent/
+/// open-world) — and omits `icons` and other 11-25-only fields, so the projection stays
+/// wire-safe under the older server protocol.
+#[must_use]
+pub(crate) fn registry_tool_descriptors(registry: &Registry) -> Vec<ToolDescriptor> {
+    tdw_service_api::registry_mcp_tools(registry)
+        .into_iter()
+        .map(|mcp_tool| {
+            let title = mcp_tool.display_name().to_string();
+            let description = mcp_tool
+                .base
+                .description
+                .clone()
+                .unwrap_or_else(|| title.clone());
+            let annotations = mcp_tool.annotations.as_ref();
+            // Tools whose `implementation` cannot run in this build are listed but not
+            // runnable. Surface that to clients via a `notExecutable` hint so the catalog
+            // stays truthful (decision 4).
+            let not_executable = registry_tool_not_executable(registry, &mcp_tool.base.name);
+            ToolDescriptor {
+                name: mcp_tool.base.name.clone(),
+                title,
+                description,
+                input_schema: mcp_tool.input_schema.clone(),
+                output_schema: mcp_tool.output_schema.clone(),
+                annotations: json!({
+                    "readOnlyHint": annotations
+                        .and_then(|hints| hints.read_only_hint)
+                        .unwrap_or(false),
+                    "destructiveHint": annotations
+                        .and_then(|hints| hints.destructive_hint)
+                        .unwrap_or(false),
+                    "idempotentHint": annotations
+                        .and_then(|hints| hints.idempotent_hint)
+                        .unwrap_or(false),
+                    "openWorldHint": annotations
+                        .and_then(|hints| hints.open_world_hint)
+                        .unwrap_or(false),
+                    "notExecutable": not_executable,
+                }),
+            }
+        })
+        .collect()
+}
+
+/// True when the registry `tool` named `name` is *not* runnable in this build.
+///
+/// Runnable implementations are `Builtin` and `Command { background: false }`. Everything
+/// else (`Unbound`, `Pty`, `Wasm`, `Ref`, `Http`, `Mcp`, and `Command { background: true }`)
+/// is listed but not executable, so it is surfaced with `notExecutable: true`. A missing
+/// tool or one that fails to re-type is treated as executable (it is either absent or carries
+/// a concrete binding the listing already reflects).
+fn registry_tool_not_executable(registry: &Registry, name: &str) -> bool {
+    registry
+        .get(tdw_agent::EntityKind::Tool, name)
+        .and_then(|resource| tdw_agent::entity_from_resource::<tdw_agent::Tool>(resource).ok())
+        .is_some_and(|tool| {
+            !matches!(
+                tool.implementation,
+                tdw_agent::ToolImplementation::Builtin { .. }
+                    | tdw_agent::ToolImplementation::Command { background: false, .. }
+            )
+        })
 }
 
 fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
@@ -2197,6 +2539,426 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_includes_registry_tools_alongside_builtins() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, RegistryEntity, Registry, Source, Tier, Tool,
+            ToolEffect,
+        };
+
+        let registry_tool = Tool {
+            meta: EntityMeta::new(
+                "registry.search",
+                "registry.search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Registry Search")
+            .with_description("Search exposed via the tdw-agent registry."),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: tdw_agent::ToolImplementation::Unbound,
+        };
+        let registry = Registry::from_resources([
+            registry_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        let mut server = McpServer::new().with_registry(registry);
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = response["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+
+        // Built-ins remain present.
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "tdw.equity.historical")
+        );
+        // The registry tool is appended.
+        let registry_descriptor = tools
+            .iter()
+            .find(|tool| tool["name"] == "registry.search")
+            .unwrap_or_else(|| panic!("registry tool should be listed"));
+        assert_eq!(registry_descriptor["title"], "Registry Search");
+        assert!(registry_descriptor["inputSchema"].is_object());
+        // Total = built-ins + the one registry tool.
+        assert_eq!(tools.len(), mcp_tool_catalog().len() + 1);
+    }
+
+    #[test]
+    fn registry_descriptor_cache_is_consistent_and_refreshes() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, RegistryEntity, Registry, Source, Tier, Tool,
+            ToolEffect,
+        };
+
+        let make_registry = |name: &str| {
+            let tool = Tool {
+                meta: EntityMeta::new(
+                    name,
+                    name,
+                    "0.1.0",
+                    Origin {
+                        tier: Tier::Domain,
+                        source: Source::Internal,
+                    },
+                    Adaptivity::None,
+                    false,
+                )
+                .with_title("Cached Registry Tool")
+                .with_description("Tool exercising the attach-time descriptor cache."),
+                input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+                output_schema: None,
+                effect: ToolEffect::ReadOnly,
+                idempotent: true,
+                open_world: false,
+                implementation: tdw_agent::ToolImplementation::Unbound,
+            };
+            Registry::from_resources([
+                tool.to_resource()
+                    .unwrap_or_else(|error| panic!("tool resource: {error}")),
+            ])
+            .unwrap_or_else(|error| panic!("registry should build: {error}"))
+        };
+
+        let mut server = McpServer::new();
+        server.set_registry(make_registry("registry.alpha"));
+
+        // The cache feeds both hot paths: the registry tool is listed and recognized.
+        assert!(
+            server
+                .all_tool_descriptors()
+                .iter()
+                .any(|tool| tool.name == "registry.alpha")
+        );
+        assert!(server.is_listed_registry_tool("registry.alpha"));
+        // A name that is not in the registry is not listed.
+        assert!(!server.is_listed_registry_tool("registry.beta"));
+
+        // A second `set_registry` refreshes the cache for the new registry.
+        server.set_registry(make_registry("registry.beta"));
+        assert!(
+            server
+                .all_tool_descriptors()
+                .iter()
+                .any(|tool| tool.name == "registry.beta")
+        );
+        assert!(server.is_listed_registry_tool("registry.beta"));
+        // The previous registry's tool is gone from both the listing and the membership check.
+        assert!(
+            !server
+                .all_tool_descriptors()
+                .iter()
+                .any(|tool| tool.name == "registry.alpha")
+        );
+        assert!(!server.is_listed_registry_tool("registry.alpha"));
+    }
+
+    #[test]
+    fn tools_list_dedups_registry_tool_colliding_with_builtin() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
+        };
+
+        use tdw_agent::RegistryEntity;
+
+        // Registry tool intentionally collides with a built-in name.
+        let colliding = Tool {
+            meta: EntityMeta::new(
+                "tdw.agent.sample",
+                "tdw.agent.sample",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Shadow Agent Sample")
+            .with_description("Registry tool colliding with a built-in name."),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: tdw_agent::ToolImplementation::Unbound,
+        };
+        let registry = Registry::from_resources([
+            colliding
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        let mut server = McpServer::new().with_registry(registry);
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = response["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+
+        // The colliding name appears exactly once...
+        let occurrences = tools
+            .iter()
+            .filter(|tool| tool["name"] == "tdw.agent.sample")
+            .count();
+        assert_eq!(occurrences, 1);
+        // ...and it is the built-in (title from tool_descriptors, not the registry title).
+        let descriptor = tools
+            .iter()
+            .find(|tool| tool["name"] == "tdw.agent.sample")
+            .unwrap_or_else(|| panic!("colliding tool should be listed once"));
+        assert_eq!(descriptor["title"], "Agent Surface Evidence");
+        // No net add for the colliding name: total equals the built-in count.
+        assert_eq!(tools.len(), mcp_tool_catalog().len());
+    }
+
+    #[test]
+    fn tools_call_registry_tool_returns_method_not_found_not_unknown() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
+        };
+
+        use tdw_agent::RegistryEntity;
+
+        let registry_tool = Tool {
+            meta: EntityMeta::new(
+                "registry.search",
+                "registry.search",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Registry Search")
+            .with_description("Search exposed via the tdw-agent registry."),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: tdw_agent::ToolImplementation::Unbound,
+        };
+        let registry = Registry::from_resources([
+            registry_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        let mut server = McpServer::new().with_registry(registry);
+        initialize(&mut server);
+
+        // A listed-but-stubbed registry tool yields -32601 (method not found).
+        let listed = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"registry.search","arguments":{}}}"#,
+            )[0],
+        );
+        assert_eq!(listed["error"]["code"], -32601);
+        assert!(
+            listed["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("registry.search"))
+        );
+
+        // A genuinely-unknown name still yields -32602 (invalid params / unknown tool).
+        let unknown = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.does.not.exist","arguments":{}}}"#,
+            )[0],
+        );
+        assert_eq!(unknown["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn tools_call_executes_bound_command_registry_tool() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
+            ToolImplementation,
+        };
+
+        use tdw_agent::RegistryEntity;
+
+        let command_tool = Tool {
+            meta: EntityMeta::new(
+                "registry.echo",
+                "registry.echo",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::None,
+                false,
+            )
+            .with_title("Registry Echo")
+            .with_description("Runs a captured command via the tool-execution backend."),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+            output_schema: None,
+            effect: ToolEffect::ReadOnly,
+            idempotent: true,
+            open_world: false,
+            implementation: ToolImplementation::Command {
+                command: "cmd".to_string(),
+                args: vec!["/c".to_string(), "echo".to_string(), "hello".to_string()],
+                background: false,
+            },
+        };
+        let registry = Registry::from_resources([
+            command_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        // The executor denies command execution unless the command is allow-listed. Inject an
+        // explicit `CommandPolicy` (race-free, no process-global env mutation) instead of
+        // setting `TDW_TOOL_EXEC_ALLOWED_COMMANDS`.
+        let executor = tdw_tool_exec::ToolExecutor::new().with_command_policy(
+            tdw_tool_exec::CommandPolicy::new(
+                Some(vec!["cmd".to_string()]),
+                std::time::Duration::from_secs(30),
+            ),
+        );
+        let mut server = McpServer::new()
+            .with_registry(registry)
+            .with_executor(executor);
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"registry.echo","arguments":{}}}"#,
+            )[0],
+        );
+        // The bound tool actually runs (no -32601) and returns the captured output.
+        assert!(response.get("error").is_none());
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(response["result"]["structuredContent"]["exitCode"], 0);
+        assert!(
+            response["result"]["structuredContent"]["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hello")
+        );
+    }
+
+    #[test]
+    fn unbound_registry_tool_is_listed_not_executable_and_calls_yield_method_not_found() {
+        use tdw_agent::{
+            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
+            ToolImplementation,
+        };
+
+        use tdw_agent::RegistryEntity;
+
+        let make_tool = |name: &str, implementation: ToolImplementation| -> Tool {
+            Tool {
+                meta: EntityMeta::new(
+                    name,
+                    name,
+                    "0.1.0",
+                    Origin {
+                        tier: Tier::Domain,
+                        source: Source::Internal,
+                    },
+                    Adaptivity::None,
+                    false,
+                )
+                .with_title(name)
+                .with_description("registry tool: listed."),
+                input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+                output_schema: None,
+                effect: ToolEffect::ReadOnly,
+                idempotent: true,
+                open_world: false,
+                implementation,
+            }
+        };
+
+        let unbound_tool = make_tool("registry.stub", ToolImplementation::Unbound);
+        let pty_tool = make_tool(
+            "registry.pty",
+            ToolImplementation::Pty {
+                command: "bash".to_string(),
+                args: Vec::new(),
+            },
+        );
+        let command_tool = make_tool(
+            "registry.cmd",
+            ToolImplementation::Command {
+                command: "cmd".to_string(),
+                args: Vec::new(),
+                background: false,
+            },
+        );
+        let registry = Registry::from_resources([
+            unbound_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+            pty_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+            command_tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}")),
+        ])
+        .unwrap_or_else(|error| panic!("registry should build: {error}"));
+
+        let mut server = McpServer::new().with_registry(registry);
+        initialize(&mut server);
+
+        // tools/list marks the unbound and pty tools not-executable, but the runnable
+        // foreground Command tool executable.
+        let listed = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = listed["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+        let find = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("tool {name} should be listed"))
+        };
+        let descriptor = find("registry.stub");
+        assert_eq!(descriptor["annotations"]["notExecutable"], true);
+        assert_eq!(find("registry.pty")["annotations"]["notExecutable"], true);
+        assert_eq!(find("registry.cmd")["annotations"]["notExecutable"], false);
+
+        // tools/call on the unbound tool still yields -32601.
+        let called = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"registry.stub","arguments":{}}}"#,
+            )[0],
+        );
+        assert_eq!(called["error"]["code"], -32601);
+    }
+
+    #[test]
     fn tools_call_fetches_equity_historical_structured_content() {
         let mut server = McpServer::new();
         initialize(&mut server);
@@ -2822,5 +3584,81 @@ mod tests {
         );
         assert_eq!(invalid["id"], 11);
         assert_eq!(invalid["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn registry_from_dir_attaches_tools_to_tools_list() {
+        // Real filesystem: write one `tool` *.json5, load it via `Registry::load_dir`, attach
+        // it to a server, and confirm `tools/list` exposes it alongside the built-ins.
+        let dir = std::env::temp_dir().join(format!("tdw_mcp_registry_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("mkdir: {error}"));
+        std::fs::write(
+            dir.join("search.json5"),
+            r#"{ apiVersion:"tdw.finx/v1", kind:"tool",
+                 metadata:{ name:"registry.dir.search", id:"registry.dir.search", version:"0.1.0",
+                   origin:{tier:"Domain",source:"Internal"}, adaptivity:"None", autonomous:false,
+                   title:"Registry Dir Search" },
+                 spec:{ input_schema:{ type:"object" } } }"#,
+        )
+        .unwrap_or_else(|error| panic!("write tool: {error}"));
+
+        let registry =
+            registry_from_dir(&dir).unwrap_or_else(|error| panic!("registry should load: {error}"));
+        let mut server = McpServer::new().with_registry(registry);
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = response["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "tdw.equity.historical")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == "registry.dir.search"),
+            "registry tool loaded from dir should be listed"
+        );
+        assert_eq!(tools.len(), mcp_tool_catalog().len() + 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn registry_from_dir_surfaces_load_errors() {
+        // A directory that does not exist is a misconfiguration and must surface, not be
+        // silently ignored.
+        let missing = std::env::temp_dir().join(format!(
+            "tdw_mcp_registry_missing_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&missing);
+        let error = registry_from_dir(&missing)
+            .err()
+            .unwrap_or_else(|| panic!("loading a missing dir should fail"));
+        assert!(error.to_string().contains("failed to load tdw-agent registry"));
+    }
+
+    #[test]
+    fn registry_from_env_unset_returns_none() {
+        // The dir-attach test covers the set path deterministically; here we only assert the
+        // unset path so a parallel test that sets the var cannot race us. This is best-effort:
+        // if some other test in the binary has the var set, treat that as the set path.
+        match std::env::var(REGISTRY_DIR_ENV) {
+            Err(_) => {
+                let resolved = registry_from_env()
+                    .unwrap_or_else(|error| panic!("unset env should not error: {error}"));
+                assert!(resolved.is_none(), "unset env must yield no registry");
+            }
+            Ok(_) => {
+                // The var is set in this process; the unset invariant is not testable here.
+            }
+        }
     }
 }

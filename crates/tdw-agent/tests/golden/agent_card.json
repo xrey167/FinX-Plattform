@@ -1,13 +1,27 @@
 {
-  "agent_id": "market-researcher",
-  "name": "Market Researcher",
-  "version": "0.1.0",
-  "description": "Generates evidence-backed market research notes.",
+  "meta": {
+    "name": "market-researcher",
+    "title": "Market Researcher",
+    "description": "Generates evidence-backed market research notes.",
+    "id": "market-researcher",
+    "version": "0.1.0",
+    "origin": { "tier": "Domain", "source": "Internal" },
+    "adaptivity": "Learning",
+    "autonomous": true
+  },
   "skills": [
     {
-      "skill_id": "research.note",
-      "name": "Research Note",
-      "description": "Draft a research note from retrieved content.",
+      "meta": {
+        "name": "research.note",
+        "title": "Research Note",
+        "description": "Draft a research note from retrieved content.",
+        "id": "research.note",
+        "version": "0.1.0",
+        "origin": { "tier": "Domain", "source": "Internal" },
+        "adaptivity": "Configured",
+        "autonomous": false,
+        "tags": ["research", "mcp"]
+      },
       "input_schema": {
         "type": "object",
         "required": ["symbol"]
@@ -15,8 +29,7 @@
       "output_schema": {
         "type": "object",
         "required": ["note"]
-      },
-      "tags": ["research", "mcp"]
+      }
     }
   ],
   "content_refs": [
