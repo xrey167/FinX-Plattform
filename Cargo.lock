@@ -3933,6 +3933,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-adanos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-akshare"
 version = "0.1.0"
 dependencies = [
@@ -4049,6 +4065,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-ccdata"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-coingecko"
 version = "0.1.0"
 dependencies = [
@@ -4066,6 +4098,22 @@ dependencies = [
 
 [[package]]
 name = "tdw-provider-databento"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-deribit"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -4123,6 +4171,22 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+]
+
+[[package]]
+name = "tdw-provider-finra"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4253,6 +4317,22 @@ dependencies = [
 
 [[package]]
 name = "tdw-provider-sec"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-seeking-alpha"
 version = "0.1.0"
 dependencies = [
  "async-trait",
