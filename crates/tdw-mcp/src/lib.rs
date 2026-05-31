@@ -151,8 +151,10 @@ impl McpServer {
     /// (`tools/list`, `tools/call`) then consult the cache instead of re-projecting per
     /// request. Calling this again refreshes the cache for the new registry.
     pub fn set_registry(&mut self, registry: Registry) {
-        let builtin_names: std::collections::HashSet<String> =
-            tool_descriptors().into_iter().map(|tool| tool.name).collect();
+        let builtin_names: std::collections::HashSet<String> = tool_descriptors()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
         self.registry_descriptors = registry_tool_descriptors(&registry)
             .into_iter()
             .filter(|tool| !builtin_names.contains(&tool.name))
@@ -253,7 +255,10 @@ impl McpServer {
         match inbound.method.as_str() {
             "initialize" => vec![self.initialize(&id, &inbound.params)],
             "ping" => vec![success_message(&id, &json!({}))],
-            "tools/list" => vec![success_message(&id, &json!({ "tools": self.all_tool_descriptors() }))],
+            "tools/list" => vec![success_message(
+                &id,
+                &json!({ "tools": self.all_tool_descriptors() }),
+            )],
             "tools/call" => self.call_tool(&id, &inbound.params),
             "resources/list" => vec![success_message(
                 &id,
@@ -1778,7 +1783,10 @@ fn registry_tool_not_executable(registry: &Registry, name: &str) -> bool {
             !matches!(
                 tool.implementation,
                 tdw_agent::ToolImplementation::Builtin { .. }
-                    | tdw_agent::ToolImplementation::Command { background: false, .. }
+                    | tdw_agent::ToolImplementation::Command {
+                        background: false,
+                        ..
+                    }
             )
         })
 }
@@ -2474,6 +2482,24 @@ mod tests {
             .unwrap_or_else(|error| panic!("response should be json: {error}; {message}"))
     }
 
+    /// `(command, args)` for a shell that runs `script`, portable across CI runners.
+    /// On Windows: `cmd /c <script>`; on Unix: `sh -c "<script>"`.
+    fn shell_command(script: &str) -> (String, Vec<String>) {
+        if cfg!(windows) {
+            (
+                "cmd".to_string(),
+                vec!["/c".to_string(), script.to_string()],
+            )
+        } else {
+            ("sh".to_string(), vec!["-c".to_string(), script.to_string()])
+        }
+    }
+
+    /// The shell binary name, for the executor allow-list.
+    fn shell_bin() -> &'static str {
+        if cfg!(windows) { "cmd" } else { "sh" }
+    }
+
     fn initialize(server: &mut McpServer) -> Value {
         let messages = server.handle_json_rpc_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}"#,
@@ -2586,7 +2612,7 @@ mod tests {
     #[test]
     fn tools_list_includes_registry_tools_alongside_builtins() {
         use tdw_agent::{
-            Adaptivity, EntityMeta, Origin, RegistryEntity, Registry, Source, Tier, Tool,
+            Adaptivity, EntityMeta, Origin, Registry, RegistryEntity, Source, Tier, Tool,
             ToolEffect,
         };
 
@@ -2611,11 +2637,9 @@ mod tests {
             open_world: false,
             implementation: tdw_agent::ToolImplementation::Unbound,
         };
-        let registry = Registry::from_resources([
-            registry_tool
-                .to_resource()
-                .unwrap_or_else(|error| panic!("tool resource: {error}")),
-        ])
+        let registry = Registry::from_resources([registry_tool
+            .to_resource()
+            .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
         let mut server = McpServer::new().with_registry(registry);
@@ -2648,7 +2672,7 @@ mod tests {
     #[test]
     fn registry_descriptor_cache_is_consistent_and_refreshes() {
         use tdw_agent::{
-            Adaptivity, EntityMeta, Origin, RegistryEntity, Registry, Source, Tier, Tool,
+            Adaptivity, EntityMeta, Origin, Registry, RegistryEntity, Source, Tier, Tool,
             ToolEffect,
         };
 
@@ -2674,10 +2698,9 @@ mod tests {
                 open_world: false,
                 implementation: tdw_agent::ToolImplementation::Unbound,
             };
-            Registry::from_resources([
-                tool.to_resource()
-                    .unwrap_or_else(|error| panic!("tool resource: {error}")),
-            ])
+            Registry::from_resources([tool
+                .to_resource()
+                .unwrap_or_else(|error| panic!("tool resource: {error}"))])
             .unwrap_or_else(|error| panic!("registry should build: {error}"))
         };
 
@@ -2716,9 +2739,7 @@ mod tests {
 
     #[test]
     fn tools_list_dedups_registry_tool_colliding_with_builtin() {
-        use tdw_agent::{
-            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
-        };
+        use tdw_agent::{Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect};
 
         use tdw_agent::RegistryEntity;
 
@@ -2744,11 +2765,9 @@ mod tests {
             open_world: false,
             implementation: tdw_agent::ToolImplementation::Unbound,
         };
-        let registry = Registry::from_resources([
-            colliding
-                .to_resource()
-                .unwrap_or_else(|error| panic!("tool resource: {error}")),
-        ])
+        let registry = Registry::from_resources([colliding
+            .to_resource()
+            .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
         let mut server = McpServer::new().with_registry(registry);
@@ -2779,9 +2798,7 @@ mod tests {
 
     #[test]
     fn tools_call_registry_tool_returns_method_not_found_not_unknown() {
-        use tdw_agent::{
-            Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect,
-        };
+        use tdw_agent::{Adaptivity, EntityMeta, Origin, Registry, Source, Tier, Tool, ToolEffect};
 
         use tdw_agent::RegistryEntity;
 
@@ -2806,11 +2823,9 @@ mod tests {
             open_world: false,
             implementation: tdw_agent::ToolImplementation::Unbound,
         };
-        let registry = Registry::from_resources([
-            registry_tool
-                .to_resource()
-                .unwrap_or_else(|error| panic!("tool resource: {error}")),
-        ])
+        let registry = Registry::from_resources([registry_tool
+            .to_resource()
+            .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
         let mut server = McpServer::new().with_registry(registry);
@@ -2866,17 +2881,18 @@ mod tests {
             effect: ToolEffect::ReadOnly,
             idempotent: true,
             open_world: false,
-            implementation: ToolImplementation::Command {
-                command: "cmd".to_string(),
-                args: vec!["/c".to_string(), "echo".to_string(), "hello".to_string()],
-                background: false,
+            implementation: {
+                let (command, args) = shell_command("echo hello");
+                ToolImplementation::Command {
+                    command,
+                    args,
+                    background: false,
+                }
             },
         };
-        let registry = Registry::from_resources([
-            command_tool
-                .to_resource()
-                .unwrap_or_else(|error| panic!("tool resource: {error}")),
-        ])
+        let registry = Registry::from_resources([command_tool
+            .to_resource()
+            .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
         // The executor denies command execution unless the command is allow-listed. Inject an
@@ -2884,7 +2900,7 @@ mod tests {
         // setting `TDW_TOOL_EXEC_ALLOWED_COMMANDS`.
         let executor = tdw_tool_exec::ToolExecutor::new().with_command_policy(
             tdw_tool_exec::CommandPolicy::new(
-                Some(vec!["cmd".to_string()]),
+                Some(vec![shell_bin().to_string()]),
                 std::time::Duration::from_secs(30),
             ),
         );
@@ -2954,7 +2970,7 @@ mod tests {
         let command_tool = make_tool(
             "registry.cmd",
             ToolImplementation::Command {
-                command: "cmd".to_string(),
+                command: shell_bin().to_string(),
                 args: Vec::new(),
                 background: false,
             },
@@ -3679,15 +3695,17 @@ mod tests {
     fn registry_from_dir_surfaces_load_errors() {
         // A directory that does not exist is a misconfiguration and must surface, not be
         // silently ignored.
-        let missing = std::env::temp_dir().join(format!(
-            "tdw_mcp_registry_missing_{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("tdw_mcp_registry_missing_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&missing);
         let error = registry_from_dir(&missing)
             .err()
             .unwrap_or_else(|| panic!("loading a missing dir should fail"));
-        assert!(error.to_string().contains("failed to load tdw-agent registry"));
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load tdw-agent registry")
+        );
     }
 
     #[test]
