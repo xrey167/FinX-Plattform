@@ -4081,6 +4081,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-ecb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-eia"
 version = "0.1.0"
 dependencies = [
@@ -4141,6 +4157,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-geckoterminal"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-glassnode"
 version = "0.1.0"
 dependencies = [
@@ -4173,6 +4205,22 @@ dependencies = [
 
 [[package]]
 name = "tdw-provider-nasdaq"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-oecd"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -4236,6 +4284,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-tmx"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-tradier"
 version = "0.1.0"
 dependencies = [
@@ -4253,6 +4317,22 @@ dependencies = [
 
 [[package]]
 name = "tdw-provider-trading-economics"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-velodata"
 version = "0.1.0"
 dependencies = [
  "async-trait",
