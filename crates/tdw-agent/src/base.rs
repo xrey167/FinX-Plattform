@@ -12,7 +12,10 @@ use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+<<<<<<< HEAD
 use thiserror::Error;
+=======
+>>>>>>> 3f431c2ac43ea24d5ba20299fa15a9343ffc8ba3
 use validator::Validate;
 
 use crate::kind::EntityKind;
@@ -124,6 +127,7 @@ pub enum Adaptivity {
     SelfModifying,
 }
 
+<<<<<<< HEAD
 /// The feedback gate's minimum adaptivity: an entity must be at least [`Adaptivity::Learning`]
 /// to receive eval-driven mutations. A `None`/`Configured` entity is static or merely
 /// parameterized, so applying learned feedback to it would be a contract violation.
@@ -165,6 +169,8 @@ pub fn ensure_adaptive_for_feedback(meta: &EntityMeta) -> Result<(), AdaptivityE
     }
 }
 
+=======
+>>>>>>> 3f431c2ac43ea24d5ba20299fa15a9343ffc8ba3
 /// Human-memory-inspired retention tier for the `memory` kind. Ordinal: shorter-lived
 /// tiers sort before longer-lived ones. Grounds on the `.remember/` layout
 /// (working → short → mid → long → core/forever).

@@ -3,7 +3,6 @@
 /.claude/*
 !/.claude/commands/
 /.codex/
-/.mcp.json
 /.env
 /.env.*
 !.env.example

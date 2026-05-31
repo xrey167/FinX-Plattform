@@ -3542,7 +3542,10 @@ dependencies = [
 name = "tdw-backend"
 version = "0.1.0"
 dependencies = [
+<<<<<<< HEAD
  "chrono",
+=======
+>>>>>>> 3f431c2ac43ea24d5ba20299fa15a9343ffc8ba3
  "serde_json",
  "tdw-agent",
  "tdw-agent-store",
@@ -3553,17 +3556,23 @@ dependencies = [
  "tdw-config",
  "tdw-core",
  "tdw-domain",
+<<<<<<< HEAD
  "tdw-embed",
  "tdw-embed-google",
  "tdw-embed-local",
  "tdw-embed-openai",
+=======
+>>>>>>> 3f431c2ac43ea24d5ba20299fa15a9343ffc8ba3
  "tdw-eval-runner",
  "tdw-event",
  "tdw-feature-store",
  "tdw-hooks",
  "tdw-kg",
  "tdw-knowledge",
+<<<<<<< HEAD
  "tdw-llm",
+=======
+>>>>>>> 3f431c2ac43ea24d5ba20299fa15a9343ffc8ba3
  "tdw-mcp",
  "tdw-outbox",
  "tdw-protocol",
@@ -3969,6 +3978,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-databento"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-fileset"
 version = "0.1.0"
 dependencies = [
@@ -3979,6 +4004,22 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+]
+
+[[package]]
+name = "tdw-provider-fmp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -4013,6 +4054,38 @@ dependencies = [
 
 [[package]]
 name = "tdw-provider-polygon"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-sec"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-tiingo"
 version = "0.1.0"
 dependencies = [
  "async-trait",
