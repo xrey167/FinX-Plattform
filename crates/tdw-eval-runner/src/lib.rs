@@ -22,9 +22,12 @@ use tdw_llm::{ChatMessage, ChatRequest, LanguageModel, MessageRole};
 /// (and real clients) never truncate the canned/echoed answer used for scoring.
 const MAX_OUTPUT_TOKENS: u32 = 1024;
 
-/// Minimum `pass_rate` for a `success` status. A run with at least one passing case is a
-/// success; an all-fail run (or an empty case set) is `failed`.
-const PASS_RATE_SUCCESS_THRESHOLD: f64 = 0.0;
+/// Minimum `pass_rate` for a `success` status: at least half the cases must pass.
+/// Below this the run is `failed`. Aligned with the feedback disable threshold
+/// (`tdw-backend` `FEEDBACK_DISABLE_BELOW = 0.5`), so a `success` run is exactly
+/// one whose skills are not disabled. (The previous `0.0` made any single passing
+/// case — out of however many — a "success", which the audit flagged as hollow.)
+const PASS_RATE_SUCCESS_THRESHOLD: f64 = 0.5;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EvalRunOutcome {
@@ -96,7 +99,7 @@ impl EvalRunner {
                 metric_value: pass_rate,
             },
         ];
-        let status = if pass_rate > PASS_RATE_SUCCESS_THRESHOLD {
+        let status = if pass_rate >= PASS_RATE_SUCCESS_THRESHOLD {
             "success"
         } else {
             "failed"
