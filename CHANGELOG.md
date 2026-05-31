@@ -12,6 +12,70 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.9.0] - 2026-05-31
+
+Ten additional data providers completing the gap-analysis coverage sweep
+(waves 4 and 5). All follow the canonical `tdw-provider-polygon` pattern:
+offline `lib.rs` with validation and mock fetcher, feature-gated
+`http_fetcher.rs` with real HTTP + serde deserialization, and cassette +
+live integration tests gated by `TDW_*_LIVE=1`.
+
+### Added
+
+- **OECD provider** (`tdw-provider-oecd`, #130). SDMX-JSON endpoint for
+  international economic statistics; no API key required.
+- **Velodata provider** (`tdw-provider-velodata`, #130). Crypto derivatives
+  analytics — funding rates, liquidations, and open interest across
+  Binance/Bybit/OKEx/Hyperliquid (`TDW_VELODATA_API_KEY`).
+- **ECB provider** (`tdw-provider-ecb`, #130). ECB Statistical Data Warehouse
+  — EUR exchange rates and €STR interest rates; no API key required.
+- **TMX provider** (`tdw-provider-tmx`, #130). Toronto Stock Exchange equity
+  quotes and MX options chain; no API key required.
+- **GeckoTerminal provider** (`tdw-provider-geckoterminal`, #130). DeFi/DEX
+  on-chain pool data — OHLCV, liquidity, token metrics; no API key required.
+- **CCData provider** (`tdw-provider-ccdata`, #131). CryptoCompare daily OHLCV
+  and asset metadata (`TDW_CCDATA_API_KEY`).
+- **Adanos provider** (`tdw-provider-adanos`, #131). Social sentiment aggregator
+  covering Reddit, X, news, and Polymarket events (`TDW_ADANOS_API_KEY`).
+- **FINRA provider** (`tdw-provider-finra`, #131). FINRA short interest and
+  weekly OTC market summary; public API, no auth required.
+- **Seeking Alpha provider** (`tdw-provider-seeking-alpha`, #131). Analyst
+  articles and quant/author ratings via RapidAPI
+  (`TDW_SEEKING_ALPHA_API_KEY`).
+- **Deribit provider** (`tdw-provider-deribit`, #131). Crypto options and
+  futures — instrument listing, order book with Greeks, and perpetual funding
+  rate history; public endpoints, no auth required.
+
+## [0.8.0] - 2026-05-31
+
+Production auth, embeddable backend, agent learning, and the first fifteen
+data providers (waves 1–3). Thirteen user-visible runtime/provider changes
+since v0.7.0, so this is a `MINOR` release.
+
+### Added
+
+- **Production OIDC policy** (#116, #119). `TDW_OIDC_*` env vars wire an
+  auth-backed policy when `TDW_PROFILE=prod`; observable via a `/healthz`-style
+  endpoint. Validation is structural (claim/JWKS consistency), not
+  cryptographic.
+- **Postgres + Clickhouse MCP servers** (#120). Project-scoped `.mcp.json`
+  wires `postgres-mcp` (Pro, read-only) and `mcp-clickhouse` via
+  `uvx --python 3.13` so Claude can query live local backends directly.
+- **Unified embeddable backend** (`tdw-backend`, #121). Library + binary facade
+  over the full warehouse stack; dual sync/async API for embedding or running
+  standalone.
+- **Durable agent learning** (`tdw-agent-learning`, #122). Knowledge index,
+  memory-consolidation loop, and eval feedback cycle with adaptivity gate.
+- **Data providers — wave 1** (#123–#127). Databento (CME Globex futures tick
+  data), FMP (fundamentals + OHLCV), SEC EDGAR (filings, XBRL), Tiingo (OHLCV
+  + news), CoinGecko (crypto market cap / dominance).
+- **Data providers — wave 2** (#128). Alpha Vantage, CBOE (options/VIX),
+  Benzinga (news + earnings calendar), NASDAQ Data Link, AkShare (Chinese
+  A-share + HK markets).
+- **Data providers — wave 3** (#129). Tradier (equities + options chains), EIA
+  (US energy spot prices), Glassnode (on-chain MVRV/LTH/NUPL), Trading
+  Economics (global macro calendar), BLS (US CPI + employment).
+
 ## [0.7.0] - 2026-05-30
 
 Daemon hardening and durability follow-ups. The commits in `v0.6.0..HEAD`
