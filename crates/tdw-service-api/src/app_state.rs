@@ -634,13 +634,25 @@ impl std::fmt::Display for OidcPolicyError {
 /// attaches a policy. Any production attach failure is returned alongside the
 /// (absent) policy so the caller can surface the specific cause at boot.
 fn build_policy(config: &TdwConfig) -> (Option<PolicyEnforcementConfig>, Option<OidcPolicyError>) {
+    // TDW_DAEMON_OPEN_POLICY=1 opts in to the local-dev policy regardless of
+    // TDW_PROFILE, for operator environments that don't yet have OIDC wired.
+    if std::env::var("TDW_DAEMON_OPEN_POLICY").as_deref() == Ok("1") {
+        return build_local_policy(config);
+    }
     if matches!(config.profile.as_str(), "prod" | "production") {
         return match build_prod_policy_from_env() {
             Ok(policy) => (policy, None),
             Err(error) => (None, Some(error)),
         };
     }
+    build_local_policy(config)
+}
 
+/// Synthesize the local-dev policy from `config`. Used by non-prod profiles
+/// and by the `TDW_DAEMON_OPEN_POLICY=1` escape hatch.
+fn build_local_policy(
+    config: &TdwConfig,
+) -> (Option<PolicyEnforcementConfig>, Option<OidcPolicyError>) {
     let roles = match config.permissions.default_action {
         PermissionAction::Allow | PermissionAction::Ask => {
             vec!["analyst".to_string(), "udf_runner".to_string()]
