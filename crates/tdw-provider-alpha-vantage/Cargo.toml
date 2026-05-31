@@ -1,0 +1,36 @@
+[package]
+name = "tdw-provider-alpha-vantage"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+# Enables the real Alpha Vantage HTTP fetcher (reqwest). Off by default so
+# workspace tests stay offline; live calls are additionally gated by
+# TDW_ALPHA_VANTAGE_LIVE=1 and TDW_ALPHA_VANTAGE_API_KEY.
+http = [
+    "dep:async-trait",
+    "dep:bytes",
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tdw-core",
+    "dep:tdw-domain",
+    "dep:tokio",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+tdw-core = { workspace = true, optional = true }
+tdw-domain = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[lints]
+workspace = true
