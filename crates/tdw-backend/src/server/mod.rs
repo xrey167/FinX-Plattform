@@ -274,12 +274,26 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     );
 
     let transport = spawn_transport(config, handle, events_rx, cancel.clone()).await?;
+
+    // Phase B — the standalone daemon also runs the memory-consolidation loop, so
+    // a daemon-only deployment consolidates exactly like `Backend::serve` does.
+    let memory = std::sync::Arc::new(tokio::sync::Mutex::new(crate::data::build_memory_store()));
+    let consolidation_task = tdw_agent_store::spawn_consolidation_scheduler(
+        memory,
+        crate::data::consolidation_tick(),
+        cancel.clone(),
+    );
+
     println!(
         "tdw-backend: daemon up. transport={:?} addr={}. ctrl-c to exit.",
         config.daemon.transport, transport.bound_addr
     );
 
     serve(service_loop, relay, cancel.clone()).await?;
+    // The scheduler observes the same token; abort if it lingers so the daemon
+    // teardown stays bounded.
+    consolidation_task.abort();
+    let _ = consolidation_task.await;
     let _ = transport.join.await;
     Ok(())
 }

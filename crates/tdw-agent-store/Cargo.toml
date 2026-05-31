@@ -7,7 +7,14 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
+# Phase B — RFC3339 age arithmetic + the live consolidation scheduler's wall clock.
+chrono = { workspace = true }
+# Phase B — the periodic consolidation scheduler task + cooperative shutdown,
+# mirroring the `spawn_inmemory_relay` shape in tdw-app-server.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 [lints]
 workspace = true

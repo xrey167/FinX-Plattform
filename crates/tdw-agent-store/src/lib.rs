@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 
+mod memory;
+
+pub use memory::{
+    MemoryStore, MemoryStoreError, age_days, consolidate_at, spawn_consolidation_scheduler,
+};
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

@@ -8,6 +8,8 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use tdw_agent::{ConsolidationAction, Memory};
+use tdw_agent_store::{MemoryStore, consolidate_at, spawn_consolidation_scheduler};
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
@@ -41,6 +43,8 @@ struct DaemonHandle {
     submission: SubmissionHandle,
     /// The `serve(service_loop, relay, ..)` driver task.
     serve_task: tokio::task::JoinHandle<()>,
+    /// The periodic memory-consolidation scheduler task (Phase B).
+    consolidation_task: tokio::task::JoinHandle<()>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -56,6 +60,12 @@ pub struct Backend {
     /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
     /// guard is acquired per-call and never held across unrelated awaits.
     index: Arc<Mutex<KnowledgeIndex>>,
+    /// The agent memory store (Phase B). Held behind a [`tokio::sync::Mutex`] so
+    /// the live consolidation scheduler and the [`upsert_memory`](Self::upsert_memory)
+    /// / [`consolidate_now`](Self::consolidate_now) surface methods share one store.
+    /// Loaded from `TDW_MEMORY_DIR` when set (round-tripping to `*.json5`), else
+    /// purely in-memory.
+    memory: Arc<Mutex<MemoryStore>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -87,6 +97,7 @@ impl Backend {
             state,
             runner,
             index,
+            memory: Arc::new(Mutex::new(build_memory_store())),
             daemon: None,
         })
     }
@@ -103,6 +114,7 @@ impl Backend {
             state,
             runner,
             index,
+            memory: Arc::new(Mutex::new(build_memory_store())),
             daemon: None,
         }
     }
@@ -245,10 +257,19 @@ impl Backend {
             }
         });
 
+        // Phase B — co-spawn the memory-consolidation scheduler on the same
+        // cancellation token, mirroring the relay's lifecycle.
+        let consolidation_task = spawn_consolidation_scheduler(
+            self.memory.clone(),
+            consolidation_tick(),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
             serve_task,
+            consolidation_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -288,11 +309,59 @@ impl Backend {
         daemon.cancel.cancel();
         // The serve task cancels the relay internally and returns promptly.
         let _ = daemon.serve_task.await;
+        // The consolidation scheduler observes the same token and breaks on the
+        // next select; abort if it lingers so shutdown stays bounded.
+        daemon.consolidation_task.abort();
+        let _ = daemon.consolidation_task.await;
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
         daemon.transport_task.abort();
         let _ = daemon.transport_task.await;
         Ok(())
+    }
+
+    // --- Agent memory (Phase B) ---------------------------------------------
+
+    /// The shared memory store handle (cloned `Arc`). The live consolidation
+    /// scheduler and the surface methods below all lock this same store.
+    #[must_use]
+    pub fn memory_store(&self) -> Arc<Mutex<MemoryStore>> {
+        Arc::clone(&self.memory)
+    }
+
+    /// Upsert a [`Memory`] into the store, stamping the current time as its
+    /// `last_consolidated` anchor when none is set (so it ages from insertion).
+    /// Persists to `*.json5` when the store has a backing dir.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Memory`] if the backing file cannot be written.
+    pub async fn upsert_memory(&self, memory: Memory) -> BackendResult<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut store = self.memory.lock().await;
+        store
+            .upsert_at(memory, &now)
+            .map_err(|error| BackendError::Memory(error.to_string()))?;
+        Ok(())
+    }
+
+    /// A snapshot of every stored [`Memory`].
+    pub async fn list_memories(&self) -> Vec<Memory> {
+        let store = self.memory.lock().await;
+        store.memories().cloned().collect()
+    }
+
+    /// Run one consolidation pass over the store at the current time, applying and
+    /// persisting tier changes, and return the actions applied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Memory`] if persisting a promotion or deleting an
+    /// expired memory's file fails.
+    pub async fn consolidate_now(&self) -> BackendResult<Vec<ConsolidationAction>> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut store = self.memory.lock().await;
+        consolidate_at(&mut store, &now).map_err(|error| BackendError::Memory(error.to_string()))
     }
 
     // --- Typed fetch / stream ----------------------------------------------
@@ -479,6 +548,42 @@ fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
         }
     }
     Ok(Arc::new(HashEmbeddingProvider::default()))
+}
+
+/// Build the agent [`MemoryStore`]: load `*.json5` files from `TDW_MEMORY_DIR`
+/// when that env var names a usable directory (so tier changes persist across
+/// restarts), otherwise an empty in-memory-only store. A load failure is logged
+/// and degraded to an in-memory store so the daemon still boots.
+pub(crate) fn build_memory_store() -> MemoryStore {
+    let Some(dir) = std::env::var("TDW_MEMORY_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return MemoryStore::new();
+    };
+    match MemoryStore::load_dir(std::path::Path::new(&dir)) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!(
+                "tdw-backend: TDW_MEMORY_DIR load failed ({dir}): {error}; using an in-memory store"
+            );
+            MemoryStore::new()
+        }
+    }
+}
+
+/// The consolidation scheduler tick, from `TDW_CONSOLIDATION_TICK_SECS`
+/// (default 3600s = hourly). A zero/unparseable value falls back to the default
+/// so the scheduler never busy-spins.
+pub(crate) fn consolidation_tick() -> std::time::Duration {
+    const DEFAULT_SECS: u64 = 3600;
+    let secs = std::env::var("TDW_CONSOLIDATION_TICK_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
 }
 
 #[cfg(test)]
@@ -751,6 +856,104 @@ mod tests {
 
         // Shutdown is idempotent when not serving.
         backend.shutdown().await.expect("second shutdown is a no-op");
+    }
+
+    // --- Phase B: agent memory consolidation --------------------------------
+
+    fn sample_memory(name: &str, retention: tdw_agent::Retention) -> Memory {
+        use tdw_agent::{Adaptivity, DataFacets, EntityMeta, Materialization, Origin, Plane, Source, Tier};
+        Memory {
+            meta: EntityMeta::new(
+                name,
+                name,
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::SelfModifying,
+                false,
+            ),
+            retention,
+            last_consolidated: None,
+            source_entries: Vec::new(),
+            facets: DataFacets {
+                plane: Plane::Agent,
+                materialization: Materialization::Materialized,
+                as_of: None,
+                validation: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn upsert_memory_then_list_returns_it() {
+        let backend = Backend::in_memory_for_tests().await;
+        backend
+            .upsert_memory(sample_memory("note", tdw_agent::Retention::ShortTerm))
+            .await
+            .expect("upsert");
+
+        let listed = backend.list_memories().await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].meta.base.name, "note");
+        // upsert stamped a last_consolidated anchor so the memory ages from now.
+        assert!(
+            listed[0].last_consolidated.is_some(),
+            "upsert stamps the consolidation anchor"
+        );
+    }
+
+    #[tokio::test]
+    async fn consolidate_now_applies_to_the_store() {
+        let backend = Backend::in_memory_for_tests().await;
+        // A Working buffer (ttl 0) expires on the first consolidation pass.
+        backend
+            .upsert_memory(sample_memory("buf", tdw_agent::Retention::Working))
+            .await
+            .expect("upsert");
+
+        let actions = backend.consolidate_now().await.expect("consolidate");
+        assert_eq!(actions.len(), 1, "the working buffer produces one action");
+        assert!(
+            backend.list_memories().await.is_empty(),
+            "consolidate_now expires the working buffer"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_runs_consolidation_scheduler_then_shuts_down_cleanly() {
+        use std::time::Duration;
+
+        // We assert the scheduler *lifecycle* (it spawns under `serve` and is
+        // aborted/awaited cleanly under `shutdown`) plus that the shared store is
+        // not deadlocked while it runs — not its tick timing (the default hourly
+        // tick never fires in-test, which is fine: deterministic apply is covered
+        // by `consolidate_now` and the store's own unit tests).
+        let mut cfg = BackendConfig::default();
+        cfg.tdw.daemon.transport = tdw_config::DaemonTransport::Tcp;
+        cfg.tdw.daemon.tcp_bind = Some("127.0.0.1:0".to_string());
+
+        let mut backend = Backend::in_memory_for_tests().await;
+        // Seed a memory before serving; the scheduler shares the same store.
+        backend
+            .upsert_memory(sample_memory("seed", tdw_agent::Retention::ShortTerm))
+            .await
+            .expect("seed upsert");
+
+        backend.serve(&cfg).await.expect("serve should start");
+        assert!(backend.bound_addr().is_some(), "daemon bound an address");
+
+        // The scheduler is live and shares the store: a manual consolidate_now
+        // still works while it runs (proving no deadlock on the shared mutex).
+        let _ = backend.consolidate_now().await.expect("manual consolidate");
+
+        // Shutdown is bounded and aborts/awaits the scheduler without hanging.
+        tokio::time::timeout(Duration::from_secs(3), backend.shutdown())
+            .await
+            .expect("shutdown must not hang")
+            .expect("shutdown returns Ok");
+        assert!(backend.bound_addr().is_none(), "handle cleared after shutdown");
     }
 
     /// Poll a [`ProgressStream`] to readiness using a no-op waker. The runtime's

@@ -53,6 +53,8 @@ tdw-outbox = { path = "../tdw-outbox" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync", "time"] }
+# Phase B — the live consolidation scheduler's wall clock for `consolidate_now`.
+chrono = { workspace = true }
 
 [features]
 default = []
