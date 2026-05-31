@@ -2,10 +2,10 @@
 
 use bytes::Bytes;
 use tdw_core::{Credentials, Fetcher};
+use tdw_provider_databento::DatabentoTimeseriesQuery;
 use tdw_provider_databento::http_fetcher::{
     DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher, DatabentoMetadataQuery,
 };
-use tdw_provider_databento::DatabentoTimeseriesQuery;
 
 // ---------------------------------------------------------------------------
 // Cassette tests — parse inline JSON without any network call
@@ -44,9 +44,7 @@ fn cassette_parse_timeseries_response() {
 
 #[test]
 fn cassette_parse_metadata_response() {
-    let raw = Bytes::from_static(
-        br#"{"result":["GLBX.MDP3","XNAS.ITCH","OPRA.PILLAR"]}"#,
-    );
+    let raw = Bytes::from_static(br#"{"result":["GLBX.MDP3","XNAS.ITCH","OPRA.PILLAR"]}"#);
     let fetcher = DatabentoMetadataFetcher::default();
     let query = DatabentoMetadataQuery::default();
 
@@ -126,5 +124,8 @@ async fn live_metadata_returns_datasets_when_env_var_set() {
     let datasets = fetcher
         .transform_data(&query, result.expect("already checked"))
         .expect("transform_data should succeed on live metadata");
-    assert!(!datasets.is_empty(), "expected at least one dataset from Databento");
+    assert!(
+        !datasets.is_empty(),
+        "expected at least one dataset from Databento"
+    );
 }

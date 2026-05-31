@@ -80,15 +80,11 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
         let dataset = params
             .get("dataset")
             .and_then(Value::as_str)
-            .ok_or_else(|| {
-                Error::InvalidQuery("databento dataset must be a string".to_string())
-            })?;
+            .ok_or_else(|| Error::InvalidQuery("databento dataset must be a string".to_string()))?;
         let symbols: Vec<String> = params
             .get("symbols")
             .and_then(Value::as_array)
-            .ok_or_else(|| {
-                Error::InvalidQuery("databento symbols must be an array".to_string())
-            })?
+            .ok_or_else(|| Error::InvalidQuery("databento symbols must be an array".to_string()))?
             .iter()
             .map(|v| {
                 v.as_str()
@@ -204,20 +200,18 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
 // ---------------------------------------------------------------------------
 
 /// Query type for the metadata endpoint.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DatabentoMetadataQuery {
     /// Opaque marker; the datasets endpoint takes no real parameters.
     pub _placeholder: Option<String>,
 }
 
-impl Default for DatabentoMetadataQuery {
-    fn default() -> Self {
-        Self { _placeholder: None }
-    }
-}
-
 /// Response row: a single dataset identifier string.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct DatabentoDataset {
     pub id: String,
 }

@@ -59,18 +59,17 @@ impl DatabentoTimeseriesQuery {
     ///
     /// Returns an error when `dataset` is blank, `symbols` is empty, or
     /// either date is not in `YYYY-MM-DD` format.
-    pub fn new(
-        dataset: &str,
-        symbols: Vec<String>,
-        start: &str,
-        end: &str,
-    ) -> Result<Self> {
+    pub fn new(dataset: &str, symbols: Vec<String>, start: &str, end: &str) -> Result<Self> {
         let dataset = dataset.trim();
         if dataset.is_empty() {
-            return Err(DatabentoError::Provider("dataset must not be empty".to_string()));
+            return Err(DatabentoError::Provider(
+                "dataset must not be empty".to_string(),
+            ));
         }
         if symbols.is_empty() {
-            return Err(DatabentoError::Provider("symbols must not be empty".to_string()));
+            return Err(DatabentoError::Provider(
+                "symbols must not be empty".to_string(),
+            ));
         }
         for sym in &symbols {
             if sym.trim().is_empty() {
@@ -120,15 +119,21 @@ mod tests {
 
     #[test]
     fn historical_query_normalises_symbol() {
-        let query = DatabentoHistoricalQuery::new("esh5")
-            .unwrap_or_else(|e| panic!("should build: {e}"));
+        let query =
+            DatabentoHistoricalQuery::new("esh5").unwrap_or_else(|e| panic!("should build: {e}"));
         assert_eq!(query.symbol, "ESH5");
     }
 
     #[test]
     fn historical_query_rejects_empty_symbol() {
-        assert_eq!(DatabentoHistoricalQuery::new(""), Err(DatabentoError::EmptySymbol));
-        assert_eq!(DatabentoHistoricalQuery::new("   "), Err(DatabentoError::EmptySymbol));
+        assert_eq!(
+            DatabentoHistoricalQuery::new(""),
+            Err(DatabentoError::EmptySymbol)
+        );
+        assert_eq!(
+            DatabentoHistoricalQuery::new("   "),
+            Err(DatabentoError::EmptySymbol)
+        );
     }
 
     #[test]
@@ -148,19 +153,14 @@ mod tests {
 
     #[test]
     fn timeseries_query_rejects_empty_dataset() {
-        let result = DatabentoTimeseriesQuery::new(
-            "",
-            vec!["ESH5".to_string()],
-            "2024-01-01",
-            "2024-01-31",
-        );
+        let result =
+            DatabentoTimeseriesQuery::new("", vec!["ESH5".to_string()], "2024-01-01", "2024-01-31");
         assert!(result.is_err());
     }
 
     #[test]
     fn timeseries_query_rejects_empty_symbols() {
-        let result =
-            DatabentoTimeseriesQuery::new("GLBX.MDP3", vec![], "2024-01-01", "2024-01-31");
+        let result = DatabentoTimeseriesQuery::new("GLBX.MDP3", vec![], "2024-01-01", "2024-01-31");
         assert!(result.is_err());
     }
 
