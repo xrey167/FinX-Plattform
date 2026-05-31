@@ -1492,7 +1492,7 @@ impl Default for ServeConfig {
             worker_id: "tdw-worker".to_string(),
             lease_ttl_ms: DEFAULT_LEASE_TTL_MS,
             poll_interval_ms: 500,
-            max_concurrent: 1,
+            max_concurrent: 4,
         }
     }
 }
@@ -1785,7 +1785,16 @@ mod serve_tests {
             .await
             .expect("enqueue b");
 
-        let runner = WorkerRunner::new(queue, LoggingAckHandler, ServeConfig::default());
+        // max_concurrent: 1 keeps this test serial so the single in-memory
+        // SQLite connection isn't raced by concurrent leases.
+        let runner = WorkerRunner::new(
+            queue,
+            LoggingAckHandler,
+            ServeConfig {
+                max_concurrent: 1,
+                ..ServeConfig::default()
+            },
+        );
         let report = runner.run_until_idle().await.expect("run");
 
         assert_eq!(report.processed, 2);
