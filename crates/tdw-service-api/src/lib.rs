@@ -70,7 +70,7 @@ use tdw_domain::{EquityHistoricalData, ResearchNote};
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_entity_resolver::{manual_merge_decision, resolve_symbol};
-use tdw_eval_runner::EvalRunner;
+use tdw_eval_runner::{EvalRunner, StubLanguageModel};
 use tdw_event::{EventEnvelope, event_schema_bundle};
 use tdw_exec::try_run_headless;
 use tdw_feature_store::FeatureStore;
@@ -256,10 +256,11 @@ model = "unset"
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
-pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> {
+pub async fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> {
     let embedder = HashEmbeddingProvider::default();
     let embedding = embedder
         .embed(&format!("{} {}", note.title, note.body))
+        .await
         .map_err(|error| Error::Provider(error.to_string()))?;
     let vector = InMemoryVectorEngine::default();
     let lexical = InMemoryLexicalEngine::default();
@@ -271,41 +272,50 @@ pub fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvidence> 
         "tags": note.tags,
     });
 
-    block_on(vector.upsert(
-        "research_note__local_hash",
-        vec![VectorPoint {
-            id: note.id.clone(),
-            vector: embedding.vector.clone(),
-            payload: payload.clone(),
-        }],
-    ))?;
-    block_on(lexical.index(
-        "research_note",
-        vec![LexicalDoc {
-            id: note.id.clone(),
-            body: note.body.clone(),
-            fields: payload,
-        }],
-    ))?;
+    vector
+        .upsert(
+            "research_note__local_hash",
+            vec![VectorPoint {
+                id: note.id.clone(),
+                vector: embedding.vector.clone(),
+                payload: payload.clone(),
+            }],
+        )
+        .await?;
+    lexical
+        .index(
+            "research_note",
+            vec![LexicalDoc {
+                id: note.id.clone(),
+                body: note.body.clone(),
+                fields: payload,
+            }],
+        )
+        .await?;
     let serialized =
         serde_json::to_vec(&note).map_err(|error| Error::Storage(error.to_string()))?;
-    block_on(blob.put_object(&blob_key, Bytes::from(serialized), "application/json"))?;
+    blob.put_object(&blob_key, Bytes::from(serialized), "application/json")
+        .await?;
 
-    let vector_hits = block_on(vector.search_knn(
-        "research_note__local_hash",
-        VectorQuery {
-            vector: embedding.vector,
-            top_k: 1,
-        },
-    ))?;
-    let lexical_hits = block_on(lexical.search_text(
-        "research_note",
-        TextQuery {
-            text: "Fixture".to_string(),
-            top_k: 1,
-        },
-    ))?;
-    let blob_bytes = block_on(blob.get_object(&blob_key))?.len();
+    let vector_hits = vector
+        .search_knn(
+            "research_note__local_hash",
+            VectorQuery {
+                vector: embedding.vector,
+                top_k: 1,
+            },
+        )
+        .await?;
+    let lexical_hits = lexical
+        .search_text(
+            "research_note",
+            TextQuery {
+                text: "Fixture".to_string(),
+                top_k: 1,
+            },
+        )
+        .await?;
+    let blob_bytes = blob.get_object(&blob_key).await?.len();
 
     Ok(ResearchIndexEvidence {
         note_id: note.id,
@@ -455,7 +465,9 @@ pub fn agent_tool_sample() -> Result<Value> {
         WorkflowEngine::compile(&workflow).map_err(|error| Error::Provider(error.to_string()))?;
     store.upsert_workflow(workflow);
 
-    let eval = EvalRunner::run(
+    // Inject the deterministic offline stub so this sample never reaches the network.
+    let eval_runner = EvalRunner::new(Arc::new(StubLanguageModel));
+    let eval = eval_runner.run(
         EvalRunRequest {
             run_id: "eval-1".to_string(),
             agent_id: card.meta.id.clone(),
@@ -1272,14 +1284,15 @@ mod tests {
         assert_eq!(runtime.hook_backend().calls, vec!["mcp:local.udf_audit"]);
     }
 
-    #[test]
-    fn research_note_indexes_across_retrieval_stores() {
+    #[tokio::test]
+    async fn research_note_indexes_across_retrieval_stores() {
         let evidence = index_research_note(ResearchNote {
             id: "note-1".to_string(),
             title: "Macro note".to_string(),
             body: "Fixture note for deterministic tests.".to_string(),
             tags: vec!["macro".to_string()],
         })
+        .await
         .unwrap_or_else(|error| panic!("indexing should succeed: {error}"));
 
         assert_eq!(evidence.note_id, "note-1");

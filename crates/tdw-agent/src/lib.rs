@@ -19,8 +19,9 @@ pub mod resource;
 pub mod watch;
 
 pub use base::{
-    Adaptivity, BaseMetadata, EntityMeta, Icon, Origin, Reference, Retention, Source, Tier,
-    ToolEffect, ToolImplementation,
+    Adaptivity, AdaptivityError, BaseMetadata, EntityMeta, FEEDBACK_MIN_ADAPTIVITY, Icon, Origin,
+    Reference, Retention, Source, Tier, ToolEffect, ToolImplementation,
+    ensure_adaptive_for_feedback,
 };
 pub use consolidate::{ConsolidationAction, consolidation_plan};
 pub use facets::{
@@ -81,12 +82,70 @@ pub struct ContentRef {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+/// Eval-driven quality state attached to a skill once it has received feedback.
+///
+/// Defaults to "never evaluated" (all-`None`/zero). Mutated only through
+/// [`AgentSkill::apply_eval_feedback`], which is gated by the [`Adaptivity`] axis — a
+/// `None`/`Configured` skill never accrues quality state. The field is additive and skipped
+/// when absent, so existing golden fixtures serialize byte-identically.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillQuality {
+    /// How many eval runs have fed back into this skill.
+    pub runs: u32,
+    /// The most recent run's aggregate pass rate (`0.0..=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass_rate: Option<f64>,
+    /// The score from the most recent eval (currently the same as `pass_rate`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_eval_score: Option<f64>,
+    /// Whether the latest run disabled this skill (pass rate fell below the threshold).
+    pub disabled: bool,
+    /// When the last eval feedback was applied (RFC 3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_eval: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentSkill {
     #[validate(nested)]
     pub meta: EntityMeta,
     pub input_schema: Value,
     pub output_schema: Value,
+    /// Eval-driven quality state, present only after gated feedback has been applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub quality: Option<SkillQuality>,
+}
+
+impl AgentSkill {
+    /// Apply one eval run's `pass_rate` to this skill's quality state, GATED by the
+    /// [`Adaptivity`] axis: only a skill whose `meta.adaptivity >= Adaptivity::Learning`
+    /// may accrue feedback. Increments the run count, records the pass rate / score /
+    /// timestamp, and disables the skill when `pass_rate < disable_below`.
+    ///
+    /// `now` (RFC 3339) is injected so the mutation is deterministic; the live path passes
+    /// `chrono::Utc::now().to_rfc3339()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdaptivityError::NotLearning`] (leaving `quality` untouched) when the
+    /// skill's adaptivity is below [`Adaptivity::Learning`].
+    pub fn apply_eval_feedback(
+        &mut self,
+        pass_rate: f64,
+        now: &str,
+        disable_below: f64,
+    ) -> Result<(), base::AdaptivityError> {
+        base::ensure_adaptive_for_feedback(&self.meta)?;
+        let quality = self.quality.get_or_insert_with(SkillQuality::default);
+        quality.runs = quality.runs.saturating_add(1);
+        quality.pass_rate = Some(pass_rate);
+        quality.last_eval_score = Some(pass_rate);
+        quality.last_eval = Some(now.to_string());
+        quality.disabled = pass_rate < disable_below;
+        Ok(())
+    }
 }
 
 /// A canonical tool definition (the `tool` kind), MCP-agnostic. Projects to an MCP
@@ -146,7 +205,7 @@ pub struct Prompt {
     pub arguments: Vec<PromptArgument>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentCard {
     #[validate(nested)]
     pub meta: EntityMeta,
@@ -1098,6 +1157,7 @@ pub fn parse_skill_manifest(input: &str) -> Result<AgentSkill, AgentParseError> 
         meta,
         input_schema: json!({"type": "object"}),
         output_schema: json!({"type": "object"}),
+        quality: None,
     })
 }
 
@@ -1341,6 +1401,7 @@ pub fn sample_agent_card() -> AgentCard {
             .with_tags(vec!["research".to_string(), "mcp".to_string()]),
             input_schema: json!({"type": "object", "required": ["symbol"]}),
             output_schema: json!({"type": "object", "required": ["note"]}),
+            quality: None,
         }],
         content_refs: vec![ContentRef {
             uri: "tdw://docs/research-template".to_string(),
@@ -1940,6 +2001,96 @@ mod tests {
         let resource = knowledge.to_resource().expect("to_resource");
         let back: Knowledge = entity_from_resource(&resource).expect("entity_from_resource");
         assert_eq!(back, knowledge);
+    }
+
+    fn skill_with_adaptivity(adaptivity: Adaptivity) -> AgentSkill {
+        AgentSkill {
+            meta: EntityMeta::new(
+                "research.note",
+                "research.note",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                adaptivity,
+                false,
+            ),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+            quality: None,
+        }
+    }
+
+    #[test]
+    fn apply_eval_feedback_updates_learning_skill_and_increments_runs() {
+        let mut skill = skill_with_adaptivity(Adaptivity::Learning);
+        skill
+            .apply_eval_feedback(0.9, "2026-05-31T00:00:00+00:00", 0.5)
+            .expect("learning skill accepts feedback");
+        let quality = skill.quality.as_ref().expect("quality set");
+        assert_eq!(quality.runs, 1);
+        assert_eq!(quality.pass_rate, Some(0.9));
+        assert_eq!(quality.last_eval_score, Some(0.9));
+        assert!(!quality.disabled);
+        assert_eq!(
+            quality.last_eval.as_deref(),
+            Some("2026-05-31T00:00:00+00:00")
+        );
+
+        // A second run increments the run count.
+        skill
+            .apply_eval_feedback(0.8, "2026-06-01T00:00:00+00:00", 0.5)
+            .expect("second feedback");
+        assert_eq!(skill.quality.as_ref().expect("quality").runs, 2);
+    }
+
+    #[test]
+    fn apply_eval_feedback_disables_skill_below_threshold() {
+        let mut skill = skill_with_adaptivity(Adaptivity::Learning);
+        skill
+            .apply_eval_feedback(0.2, "2026-05-31T00:00:00+00:00", 0.5)
+            .expect("learning skill accepts feedback");
+        assert!(skill.quality.as_ref().expect("quality").disabled);
+    }
+
+    #[test]
+    fn apply_eval_feedback_gate_rejects_configured_skill_and_leaves_quality_none() {
+        let mut skill = skill_with_adaptivity(Adaptivity::Configured);
+        let result = skill.apply_eval_feedback(0.9, "2026-05-31T00:00:00+00:00", 0.5);
+        assert_eq!(
+            result,
+            Err(AdaptivityError::NotLearning {
+                name: "research.note".to_string(),
+                adaptivity: Adaptivity::Configured,
+            })
+        );
+        assert!(skill.quality.is_none());
+    }
+
+    #[test]
+    fn ensure_adaptive_for_feedback_gates_on_learning() {
+        let learning = skill_with_adaptivity(Adaptivity::Learning);
+        assert!(ensure_adaptive_for_feedback(&learning.meta).is_ok());
+        let self_modifying = skill_with_adaptivity(Adaptivity::SelfModifying);
+        assert!(ensure_adaptive_for_feedback(&self_modifying.meta).is_ok());
+        let none = skill_with_adaptivity(Adaptivity::None);
+        assert!(ensure_adaptive_for_feedback(&none.meta).is_err());
+    }
+
+    #[test]
+    fn skill_quality_is_omitted_when_none_in_golden() {
+        // The additive `quality` field defaults to None and is skipped on serialize, so the
+        // golden agent card round-trips byte-identically (no `quality` key appears).
+        let json = include_str!("../tests/golden/agent_card.json");
+        let card = serde_json::from_str::<AgentCard>(json).expect("golden parses");
+        assert!(card.skills.iter().all(|skill| skill.quality.is_none()));
+        let encoded = serde_json::to_value(&card).expect("serialize");
+        let skill = &encoded["skills"][0];
+        assert!(
+            skill.get("quality").is_none(),
+            "quality must be omitted when None"
+        );
     }
 
     #[test]

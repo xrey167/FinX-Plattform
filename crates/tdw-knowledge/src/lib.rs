@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tdw_core::{VectorEngine, VectorPoint, VectorQuery};
@@ -55,15 +57,64 @@ pub struct SyntaxSummary {
     pub symbols: Vec<SymbolRef>,
 }
 
-#[derive(Default)]
 pub struct KnowledgeIndex {
-    embedder: HashEmbeddingProvider,
-    vectors: InMemoryVectorEngine,
+    embedder: Arc<dyn EmbeddingProvider>,
+    vectors: Arc<dyn VectorEngine>,
     graph: KnowledgeGraph,
     tags: TagStore,
+    /// The vector collection, namespaced by the embedder's `model_id` so two
+    /// embedders of different dimension (e.g. the 8-dim hash vs a 1536-dim
+    /// OpenAI model) never share — and silently corrupt — one collection.
+    collection: String,
+}
+
+/// Build the per-embedder collection name: `tdw_knowledge__<model>` with the
+/// model id sanitized to `[A-Za-z0-9_]` so it is a safe collection identifier.
+///
+/// Sanitization is not injective (e.g. `text-embedding-3` and `text_embedding_3`
+/// collapse to one name). That is acceptable here: the only harmful collision is
+/// two models of *different* vector dimension sharing a collection, which the
+/// backing engine's dimension guard
+/// (`QdrantHttpEngine::ensure_collection`) rejects loudly rather than corrupting.
+fn collection_name(model_id: &str) -> String {
+    let safe: String = model_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("tdw_knowledge__{safe}")
+}
+
+impl Default for KnowledgeIndex {
+    /// Build a fully offline, deterministic index over the hash embedder and an
+    /// in-process vector engine, preserving the original default behavior.
+    fn default() -> Self {
+        Self::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        )
+    }
 }
 
 impl KnowledgeIndex {
+    /// Build a `KnowledgeIndex` over an injected embedder and vector engine.
+    ///
+    /// This is the durability/backends seam: callers pass a shared
+    /// [`VectorEngine`] (e.g. the daemon's `AppState.vector`, which may be a
+    /// real Qdrant engine) so indexed knowledge persists across the engine the
+    /// rest of the daemon uses. The knowledge graph and tag store remain
+    /// in-process (`Default`).
+    #[must_use]
+    pub fn new(embedder: Arc<dyn EmbeddingProvider>, vectors: Arc<dyn VectorEngine>) -> Self {
+        let collection = collection_name(embedder.model_id());
+        Self {
+            embedder,
+            vectors,
+            graph: KnowledgeGraph::default(),
+            tags: TagStore::default(),
+            collection,
+        }
+    }
+
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
@@ -72,6 +123,7 @@ impl KnowledgeIndex {
         let embedding = self
             .embedder
             .embed(&document.body)
+            .await
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
         self.graph.upsert_entity(document.entity.clone());
         self.graph.add_relationship(Relationship {
@@ -100,7 +152,7 @@ impl KnowledgeIndex {
         }
         self.vectors
             .upsert(
-                "tdw_knowledge",
+                &self.collection,
                 vec![VectorPoint {
                     id: document.id,
                     vector: embedding.vector,
@@ -122,11 +174,12 @@ impl KnowledgeIndex {
         let embedding = self
             .embedder
             .embed(query)
+            .await
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
         let hits = self
             .vectors
             .search_knn(
-                "tdw_knowledge",
+                &self.collection,
                 VectorQuery {
                     vector: embedding.vector,
                     top_k,
@@ -295,17 +348,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn new_injects_custom_embedder_and_vector_engine() {
+        // Proves the injection seam: an index built over an explicitly supplied
+        // embedder + vector engine (here the same offline defaults, but passed
+        // in via `new` rather than synthesized by `default`) indexes and
+        // searches end to end.
+        let mut index = KnowledgeIndex::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        );
+        index
+            .index_document(KnowledgeDocument {
+                id: "doc-inject".to_string(),
+                body: "AAPL equity momentum research".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec!["AAPL".to_string()],
+                },
+                tags: vec!["asset:equity".to_string()],
+            })
+            .await
+            .unwrap_or_else(|error| panic!("injected index should index: {error}"));
+
+        let hits = index
+            .search("AAPL momentum", 1)
+            .await
+            .unwrap_or_else(|error| panic!("injected index should search: {error}"));
+        assert_eq!(hits[0].id, "doc-inject");
+        assert_eq!(hits[0].entity_id, "instrument:AAPL");
+    }
+
+    #[tokio::test]
     async fn search_rejects_malformed_vector_payloads() {
         let index = KnowledgeIndex::default();
         let vector = index
             .embedder
             .embed("AAPL")
+            .await
             .unwrap_or_else(|error| panic!("embedding should succeed: {error}"))
             .vector;
         index
             .vectors
             .upsert(
-                "tdw_knowledge",
+                &index.collection,
                 vec![VectorPoint {
                     id: "bad-payload".to_string(),
                     vector,
@@ -323,6 +410,24 @@ mod tests {
             error,
             KnowledgeError::InvalidPayloadField("entity_id")
         ));
+    }
+
+    #[test]
+    fn collection_name_is_namespaced_and_sanitized_per_model() {
+        // Embedders of different dimension must map to DIFFERENT collections so
+        // they never share — and silently corrupt — one vector collection.
+        assert_eq!(
+            collection_name("local-hash-8"),
+            "tdw_knowledge__local_hash_8"
+        );
+        assert_eq!(
+            collection_name("text-embedding-3-small"),
+            "tdw_knowledge__text_embedding_3_small"
+        );
+        assert_ne!(
+            collection_name("local-hash-8"),
+            collection_name("text-embedding-3-small")
+        );
     }
 
     #[tokio::test]

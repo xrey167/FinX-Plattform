@@ -283,12 +283,37 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     );
 
     let transport = spawn_transport(config, handle, events_rx, cancel.clone()).await?;
+
+    // Phase B — a standalone daemon's only memory surface is the persisted file
+    // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
+    // `Backend` API — `upsert_memory` — which the binary does not expose, since
+    // there is no memory `Op` on the transport). So consolidation here ages the
+    // on-disk `*.json5` memories in place; spawn the scheduler ONLY when such a
+    // dir is configured, otherwise it would tick over an empty, unreachable store.
+    let consolidation_task = if crate::data::memory_dir_configured() {
+        let memory =
+            std::sync::Arc::new(tokio::sync::Mutex::new(crate::data::build_memory_store()));
+        Some(tdw_agent_store::spawn_consolidation_scheduler(
+            memory,
+            crate::data::consolidation_tick(),
+            cancel.clone(),
+        ))
+    } else {
+        None
+    };
+
     println!(
         "tdw-backend: daemon up. transport={:?} addr={}. ctrl-c to exit.",
         config.daemon.transport, transport.bound_addr
     );
 
     serve(service_loop, relay, cancel.clone()).await?;
+    // The scheduler observes the same token; abort if it lingers so the daemon
+    // teardown stays bounded.
+    if let Some(task) = consolidation_task {
+        task.abort();
+        let _ = task.await;
+    }
     let _ = transport.join.await;
     Ok(())
 }

@@ -28,11 +28,26 @@ tdw-app-client = { path = "../tdw-app-client" }
 # Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# Phase C1 — the eval runner now executes cases through a `LanguageModel`; the
+# backend injects the deterministic offline `StubLanguageModel` by default so
+# `run_eval` never hits the network.
+tdw-llm = { path = "../tdw-llm" }
 # Phase 3 — the knowledge group: sync KG/tags/features + the async knowledge index.
 tdw-kg = { path = "../tdw-kg" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+# Phase A1 — the hash embedder injected into the shared knowledge index so it
+# rides on `AppState.vector` (durable when that is a real Qdrant engine).
+tdw-embed = { path = "../tdw-embed" }
+tdw-embed-local = { path = "../tdw-embed-local" }
+# Phase A2 — the real OpenAI HTTP embedder, only when the `openai` feature is on
+# (it forwards the dependency's `http` feature, which pulls reqwest). Off by
+# default so the default backend build stays fully offline.
+tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
+# Phase A2 — the real Google/Gemini HTTP embedder, only when the `google` feature
+# is on (forwards the dependency's `http` feature). Off by default.
+tdw-embed-google = { path = "../tdw-embed-google", optional = true }
 # Phase 4 — the auth/hooks/policy/events group. `tdw-bus`/`tdw-outbox` are named
 # only to type the event-spine accessors (`AppState.bus` / `AppState.outbox`),
 # which `tdw-service-api` does not re-export.
@@ -45,9 +60,19 @@ tdw-outbox = { path = "../tdw-outbox" }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync", "time"] }
+# Phase B — the live consolidation scheduler's wall clock for `consolidate_now`.
+chrono = { workspace = true }
 
 [features]
 default = []
+## Compile the real OpenAI HTTP embedder selector arm. Forwards the
+## `tdw-embed-openai/http` feature (reqwest). Off by default so the default
+## backend build pulls no HTTP embedder and `select_embedder` always returns the
+## deterministic hash embedder.
+openai = ["dep:tdw-embed-openai", "tdw-embed-openai/http"]
+## Compile the real Google/Gemini HTTP embedder selector arm. Forwards
+## `tdw-embed-google/http` (reqwest). Off by default.
+google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
 ## Forward the daemon transport features to `tdw-app-server`/`server::spawn_transport`
 ## so a `tdw-backend` build (lib or binary) can serve UDS/HTTP, exactly as the
 ## `tdw-service` binary's features did. `transport-tcp` is always on via the
