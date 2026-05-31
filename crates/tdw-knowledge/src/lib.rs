@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tdw_core::{VectorEngine, VectorPoint, VectorQuery};
@@ -55,15 +57,42 @@ pub struct SyntaxSummary {
     pub symbols: Vec<SymbolRef>,
 }
 
-#[derive(Default)]
 pub struct KnowledgeIndex {
-    embedder: HashEmbeddingProvider,
-    vectors: InMemoryVectorEngine,
+    embedder: Arc<dyn EmbeddingProvider>,
+    vectors: Arc<dyn VectorEngine>,
     graph: KnowledgeGraph,
     tags: TagStore,
 }
 
+impl Default for KnowledgeIndex {
+    /// Build a fully offline, deterministic index over the hash embedder and an
+    /// in-process vector engine, preserving the original default behavior.
+    fn default() -> Self {
+        Self::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        )
+    }
+}
+
 impl KnowledgeIndex {
+    /// Build a `KnowledgeIndex` over an injected embedder and vector engine.
+    ///
+    /// This is the durability/backends seam: callers pass a shared
+    /// [`VectorEngine`] (e.g. the daemon's `AppState.vector`, which may be a
+    /// real Qdrant engine) so indexed knowledge persists across the engine the
+    /// rest of the daemon uses. The knowledge graph and tag store remain
+    /// in-process (`Default`).
+    #[must_use]
+    pub fn new(embedder: Arc<dyn EmbeddingProvider>, vectors: Arc<dyn VectorEngine>) -> Self {
+        Self {
+            embedder,
+            vectors,
+            graph: KnowledgeGraph::default(),
+            tags: TagStore::default(),
+        }
+    }
+
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
@@ -292,6 +321,39 @@ mod tests {
             index.active_tags("instrument:AAPL", "2026-05-22"),
             vec!["asset:equity".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn new_injects_custom_embedder_and_vector_engine() {
+        // Proves the injection seam: an index built over an explicitly supplied
+        // embedder + vector engine (here the same offline defaults, but passed
+        // in via `new` rather than synthesized by `default`) indexes and
+        // searches end to end.
+        let mut index = KnowledgeIndex::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        );
+        index
+            .index_document(KnowledgeDocument {
+                id: "doc-inject".to_string(),
+                body: "AAPL equity momentum research".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec!["AAPL".to_string()],
+                },
+                tags: vec!["asset:equity".to_string()],
+            })
+            .await
+            .unwrap_or_else(|error| panic!("injected index should index: {error}"));
+
+        let hits = index
+            .search("AAPL momentum", 1)
+            .await
+            .unwrap_or_else(|error| panic!("injected index should search: {error}"));
+        assert_eq!(hits[0].id, "doc-inject");
+        assert_eq!(hits[0].entity_id, "instrument:AAPL");
     }
 
     #[tokio::test]

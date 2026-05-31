@@ -11,6 +11,7 @@ use serde_json::Value;
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
+use tdw_embed_local::HashEmbeddingProvider;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
 use tokio::sync::Mutex;
@@ -77,7 +78,10 @@ impl Backend {
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
         let runner = CommandRunner::default();
-        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        let index = Arc::new(Mutex::new(KnowledgeIndex::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            state.vector.clone(),
+        )));
         Ok(Self {
             state,
             runner,
@@ -90,7 +94,10 @@ impl Backend {
     pub async fn in_memory_for_tests() -> Self {
         let state = AppState::in_memory_for_tests().await;
         let runner = CommandRunner::default();
-        let index = Arc::new(Mutex::new(KnowledgeIndex::default()));
+        let index = Arc::new(Mutex::new(KnowledgeIndex::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            state.vector.clone(),
+        )));
         Self {
             state,
             runner,

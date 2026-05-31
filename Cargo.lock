@@ -3513,6 +3513,7 @@ dependencies = [
  "tdw-config",
  "tdw-core",
  "tdw-domain",
+ "tdw-embed-local",
  "tdw-eval-runner",
  "tdw-event",
  "tdw-feature-store",

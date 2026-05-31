@@ -216,7 +216,7 @@ impl AppState {
             olap: select_olap_engine()?,
             relational: Arc::new(PostgresRecordingEngine::default()),
             blob,
-            vector: Arc::new(InMemoryVectorEngine::default()),
+            vector: select_vector_engine()?,
             lexical: Arc::new(InMemoryLexicalEngine::default()),
             registry: Arc::new(default_registry()?),
             bus: Arc::new(Mutex::new(EventBus::new(DEFAULT_BUS_CAPACITY))),
@@ -288,6 +288,26 @@ impl AppState {
     ) -> Result<Self> {
         let engine = tdw_storage_clickhouse::ClickHouseHttpEngine::new(endpoint, user, password)?;
         self.olap = std::sync::Arc::new(engine);
+        Ok(self)
+    }
+
+    /// Replace the vector engine with a real [`QdrantHttpEngine`] talking to
+    /// `endpoint` (e.g. `http://127.0.0.1:6333`) over the Qdrant HTTP
+    /// interface. This is what makes the knowledge index (built over
+    /// `AppState.vector`) land on a live Qdrant instead of the in-memory
+    /// engine, so indexed knowledge persists across restarts.
+    ///
+    /// Only available when the `real-qdrant` feature is enabled (which activates
+    /// `tdw-storage-qdrant/qdrant`); the method is absent on default builds so
+    /// the offline workspace test set still compiles cleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the endpoint URL cannot be parsed.
+    #[cfg(feature = "real-qdrant")]
+    pub fn with_real_qdrant(mut self, endpoint: &str, api_key: Option<String>) -> Result<Self> {
+        let engine = tdw_storage_qdrant::QdrantHttpEngine::new(endpoint, api_key)?;
+        self.vector = std::sync::Arc::new(engine);
         Ok(self)
     }
 
@@ -500,6 +520,32 @@ fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
         }
     }
     Ok(Arc::new(ClickHouseRecordingEngine::default()))
+}
+
+/// Select the vector engine. With the `real-qdrant` feature enabled and
+/// `TDW_QDRANT_URL` set, the daemon talks to a live Qdrant over HTTP (so the
+/// knowledge index built over `AppState.vector` persists for real); otherwise
+/// the offline `InMemoryVectorEngine` is used. `TDW_QDRANT_API_KEY` is optional
+/// (default: no API key).
+///
+/// # Errors
+///
+/// Returns an error if `TDW_QDRANT_URL` is set but cannot be parsed.
+// Real Err path exists behind `real-qdrant` (QdrantHttpEngine::new(..)?); only
+// looks unwrappable in the default build, so keep the Result and the allow.
+#[allow(clippy::unnecessary_wraps)]
+fn select_vector_engine() -> Result<Arc<dyn VectorEngine>> {
+    #[cfg(feature = "real-qdrant")]
+    {
+        if let Ok(url) = std::env::var("TDW_QDRANT_URL")
+            && !url.trim().is_empty()
+        {
+            let api_key = std::env::var("TDW_QDRANT_API_KEY").ok();
+            let engine = tdw_storage_qdrant::QdrantHttpEngine::new(&url, api_key)?;
+            return Ok(Arc::new(engine));
+        }
+    }
+    Ok(Arc::new(InMemoryVectorEngine::default()))
 }
 
 /// Build the daemon's session + rollout stores.

@@ -33,6 +33,9 @@ tdw-kg = { path = "../tdw-kg" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+# Phase A1 — the hash embedder injected into the shared knowledge index so it
+# rides on `AppState.vector` (durable when that is a real Qdrant engine).
+tdw-embed-local = { path = "../tdw-embed-local" }
 # Phase 4 — the auth/hooks/policy/events group. `tdw-bus`/`tdw-outbox` are named
 # only to type the event-spine accessors (`AppState.bus` / `AppState.outbox`),
 # which `tdw-service-api` does not re-export.
