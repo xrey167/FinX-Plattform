@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "postgres": {
+      "command": "uvx",
+      "args": ["--python", "3.13", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://tdw:tdw@localhost:5432/tdw"
+      }
+    },
+    "clickhouse": {
+      "command": "uvx",
+      "args": ["--python", "3.13", "mcp-clickhouse"],
+      "env": {
+        "CLICKHOUSE_HOST": "localhost",
+        "CLICKHOUSE_PORT": "8123",
+        "CLICKHOUSE_USER": "tdw",
+        "CLICKHOUSE_PASSWORD": "tdw",
+        "CLICKHOUSE_SECURE": "false"
+      }
+    }
+  }
+}
