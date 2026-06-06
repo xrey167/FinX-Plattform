@@ -69,7 +69,9 @@ Configuration (override only when the user says so):
    ```
 4. Execute the items in the worktree — delegate per item type:
    - lint-debt: fix the lint family across the listed crates; no blanket
-     `#[allow]` without justification comments.
+     `#[allow]` without justification comments. After any `clippy --fix`,
+     REVERT generated files (`*.gen.rs`, e.g. `tdw-proto/src/finance.gen.rs`)
+     — hand-edits there are lost on regeneration (lesson: batch-002).
    - test-gaps: characterization/unit tests beside code or under `tests/`,
      following `docs/development-workflow.md` TDD guidance.
    - provider-wiring: follow the established pattern — provider crate `http`
@@ -87,6 +89,12 @@ Configuration (override only when the user says so):
    ```
    If you touched `tdw-udf-wasm`, `tdw-sandbox`, or `tdw-service-api`, ALSO
    build the `wasmi`/`udf-wasm` feature combos (CI default matrix skips them).
+   If you touched DOC COMMENTS in a schema-bearing crate (`tdw-agent`,
+   `tdw-event`, `tdw-protocol`, `tdw-config`), ALSO run
+   `cargo run -p xtask -- schema-sync` (and the matching
+   `events|protocol|config schema-check`) and commit the regenerated
+   `docs/schemas/**` — CI's lint job diffs them and fails on stale copies
+   (lesson: batch-002 / PR #146).
 6. Write the batch ledger file `.batch/ledger/batch-<bucket>-<NNN>.md` in the
    SAME branch. It must start with the fold-back front-matter:
    ```text

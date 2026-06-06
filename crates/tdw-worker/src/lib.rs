@@ -1849,7 +1849,7 @@ mod serve_tests {
     }
 
     /// In-memory `ServeQueue` for runner-logic tests: hands out a fixed set of
-    /// jobs then reports empty. Avoids the SQLite test backend's write-lock
+    /// jobs then reports empty. Avoids the `SQLite` test backend's write-lock
     /// contention, which would otherwise serialize concurrent completions and
     /// mask the runner's parallelism.
     struct MockQueue {
