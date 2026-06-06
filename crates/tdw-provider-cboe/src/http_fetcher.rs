@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{
     BASE_URL, CboeIndexQuery, CboeOptionsQuery, CboeProviderError, index_request_path,
@@ -68,33 +68,11 @@ use crate::{CboeIndexQuote, CboeOptionContract};
 // Options fetcher
 // ---------------------------------------------------------------------------
 
-/// Production CBOE delayed options chain fetcher.
-#[derive(Clone, Debug)]
-pub struct CboeHttpOptionsFetcher {
-    base_url: String,
-}
-
-impl Default for CboeHttpOptionsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl CboeHttpOptionsFetcher {
-    /// Override the CBOE base URL (useful for testing against a local mock).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `cboe` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production CBOE delayed options chain fetcher.
+    pub CboeHttpOptionsFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
@@ -115,7 +93,7 @@ impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
     async fn extract_data(&self, query: &CboeOptionsQuery, _creds: &Credentials) -> Result<Bytes> {
         let path =
             options_request_path(&query.symbol).map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
@@ -174,33 +152,11 @@ impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
 // Index fetcher
 // ---------------------------------------------------------------------------
 
-/// Production CBOE US-index quote fetcher.
-#[derive(Clone, Debug)]
-pub struct CboeHttpIndexFetcher {
-    base_url: String,
-}
-
-impl Default for CboeHttpIndexFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl CboeHttpIndexFetcher {
-    /// Override the CBOE base URL (useful for testing against a local mock).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `cboe` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production CBOE US-index quote fetcher.
+    pub CboeHttpIndexFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
@@ -218,7 +174,7 @@ impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
 
     async fn extract_data(&self, query: &CboeIndexQuery, _creds: &Credentials) -> Result<Bytes> {
         let path = index_request_path(&query.index).map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
             .user_agent(USER_AGENT)

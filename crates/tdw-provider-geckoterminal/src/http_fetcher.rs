@@ -11,7 +11,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{ACCEPT_HEADER, BASE_URL, DexPool, GeckoTerminalPoolQuery};
 
@@ -82,35 +82,15 @@ struct GeckoListEnvelope {
 // Fetcher impl
 // ---------------------------------------------------------------------------
 
-/// Production GeckoTerminal pool fetcher.
-///
-/// Uses the public GeckoTerminal REST API; no API key is required.
-#[derive(Clone, Debug)]
-pub struct GeckoTerminalHttpFetcher {
-    base_url: String,
-}
-
-impl Default for GeckoTerminalHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production GeckoTerminal pool fetcher.
+    ///
+    /// Uses the public GeckoTerminal REST API; no API key is required.
+    pub GeckoTerminalHttpFetcher,
+    BASE_URL
+);
 
 impl GeckoTerminalHttpFetcher {
-    /// Override the GeckoTerminal API base URL (useful for tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `geckoterminal` provider
-    /// name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-
     fn build_client() -> Result<Client> {
         Client::builder()
             .user_agent(USER_AGENT)
@@ -148,7 +128,7 @@ impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
     ) -> Result<Bytes> {
         let url = format!(
             "{}/networks/{}/pools/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.network,
             query.pool_address,
         );

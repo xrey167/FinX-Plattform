@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::EquityHistoricalData;
 
 use crate::{TmxBatchQuoteQuery, TmxQuote, TmxQuoteQuery, parse_quote_response, validate_symbol};
@@ -73,40 +73,17 @@ fn quotes_to_domain(quotes: Vec<TmxQuote>) -> Vec<EquityHistoricalData> {
 
 // ── single-symbol fetcher ──────────────────────────────────────────────────
 
-/// Production TMX single-symbol equity quote fetcher.
-///
-/// Maps to the `/quotes/getquote?listId=TSX&type=EQUITY&symbol={sym}`
-/// endpoint. Output rows carry the domain type
-/// [`tdw_domain::EquityHistoricalData`] so the fetcher integrates with
-/// the existing `tdw-core` registry without introducing a new domain
-/// model.
-#[derive(Clone, Debug)]
-pub struct TmxHttpQuoteFetcher {
-    base_url: String,
-}
-
-impl Default for TmxHttpQuoteFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TmxHttpQuoteFetcher {
-    /// Override the TMX base URL. Useful for pointing the fetcher at a
-    /// cassette server during integration tests.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the `tmx` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production TMX single-symbol equity quote fetcher.
+    ///
+    /// Maps to the `/quotes/getquote?listId=TSX&type=EQUITY&symbol={sym}`
+    /// endpoint. Output rows carry the domain type
+    /// [`tdw_domain::EquityHistoricalData`] so the fetcher integrates with
+    /// the existing `tdw-core` registry without introducing a new domain
+    /// model.
+    pub TmxHttpQuoteFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TmxQuoteQuery, EquityHistoricalData> for TmxHttpQuoteFetcher {
@@ -120,7 +97,8 @@ impl Fetcher<TmxQuoteQuery, EquityHistoricalData> for TmxHttpQuoteFetcher {
     async fn extract_data(&self, query: &TmxQuoteQuery, _creds: &Credentials) -> Result<Bytes> {
         let url = format!(
             "{}/quotes/getquote?listId=TSX&type=EQUITY&symbol={}",
-            self.base_url, query.symbol
+            self.base_url(),
+            query.symbol
         );
         let client = build_client()?;
         get_bytes(&client, &url).await
@@ -139,38 +117,15 @@ impl Fetcher<TmxQuoteQuery, EquityHistoricalData> for TmxHttpQuoteFetcher {
 
 // ── batch fetcher ──────────────────────────────────────────────────────────
 
-/// Production TMX batch equity quote fetcher (up to 10 symbols).
-///
-/// Maps to the
-/// `/quotes/getsquote?listId=TSX&type=EQUITY&symbols={s1},{s2},...`
-/// endpoint.
-#[derive(Clone, Debug)]
-pub struct TmxHttpBatchQuoteFetcher {
-    base_url: String,
-}
-
-impl Default for TmxHttpBatchQuoteFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TmxHttpBatchQuoteFetcher {
-    /// Override the TMX base URL. Useful for pointing the fetcher at a
-    /// cassette server during integration tests.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the `tmx` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production TMX batch equity quote fetcher (up to 10 symbols).
+    ///
+    /// Maps to the
+    /// `/quotes/getsquote?listId=TSX&type=EQUITY&symbols={s1},{s2},...`
+    /// endpoint.
+    pub TmxHttpBatchQuoteFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TmxBatchQuoteQuery, EquityHistoricalData> for TmxHttpBatchQuoteFetcher {
@@ -190,7 +145,8 @@ impl Fetcher<TmxBatchQuoteQuery, EquityHistoricalData> for TmxHttpBatchQuoteFetc
         let symbols = query.symbols.join(",");
         let url = format!(
             "{}/quotes/getsquote?listId=TSX&type=EQUITY&symbols={}",
-            self.base_url, symbols
+            self.base_url(),
+            symbols
         );
         let client = build_client()?;
         get_bytes(&client, &url).await

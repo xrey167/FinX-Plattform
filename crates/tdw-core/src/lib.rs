@@ -356,6 +356,68 @@ impl RegistryEntry {
     }
 }
 
+/// Generate the canonical base-URL-only HTTP fetcher scaffolding.
+///
+/// Many `tdw-provider-*` HTTP fetchers share an identical shape: a struct with
+/// a single `base_url: String` field, a [`Default`] impl seeded from the
+/// provider's `BASE_URL` constant, a `with_base_url` builder, a private
+/// `base_url()` accessor, and a `registry_entry()` helper. This macro expands
+/// to exactly that scaffolding so each provider only needs to write its
+/// per-provider [`Fetcher`] impl (`transform_query`/`extract_data`/
+/// `transform_data`).
+///
+/// The macro references [`RegistryEntry`] via `$crate`, so callers need no
+/// extra import. `Self::PROVIDER`/`Self::ENDPOINT` in the generated
+/// `registry_entry()` resolve against the [`Fetcher`] impl the provider writes
+/// separately, so this macro must be invoked in the same module as that impl.
+///
+/// # Example
+///
+/// ```ignore
+/// const BASE_URL: &str = "https://api.example.com";
+/// tdw_core::provider_fetcher_struct!(pub ExampleHttpFetcher, BASE_URL);
+/// // ... then write `impl Fetcher<Q, D> for ExampleHttpFetcher { ... }`
+/// // and read the URL inside `extract_data` via `self.base_url()`.
+/// ```
+#[macro_export]
+macro_rules! provider_fetcher_struct {
+    ($(#[$meta:meta])* $vis:vis $name:ident, $base_url:expr $(,)?) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug)]
+        $vis struct $name {
+            base_url: String,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self {
+                    base_url: $base_url.to_string(),
+                }
+            }
+        }
+
+        impl $name {
+            /// Override the base URL (useful for testing against a mock server).
+            #[must_use]
+            pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+                self.base_url = base_url.into();
+                self
+            }
+
+            /// Registry entry advertised under this provider's canonical name.
+            #[must_use]
+            pub fn registry_entry() -> $crate::RegistryEntry {
+                $crate::RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+            }
+
+            #[allow(dead_code)]
+            pub(crate) fn base_url(&self) -> &str {
+                &self.base_url
+            }
+        }
+    };
+}
+
 #[cfg(feature = "inventory-registration")]
 inventory::collect!(RegistryEntry);
 
@@ -542,5 +604,41 @@ mod tests {
             .unwrap_or_else(|error| panic!("inventory registry should load: {error}"));
 
         assert!(registry.contains("inventory", "equity_historical", ProviderKind::Fetcher));
+    }
+
+    crate::provider_fetcher_struct!(MacroDummyFetcher, "https://example.test");
+
+    #[async_trait]
+    impl Fetcher<Query, Row> for MacroDummyFetcher {
+        const PROVIDER: &'static str = "x";
+        const ENDPOINT: &'static str = "y";
+
+        fn transform_query(_params: Value) -> Result<Query> {
+            Ok(Query {
+                symbol: "X".to_string(),
+            })
+        }
+
+        async fn extract_data(&self, _query: &Query, _creds: &Credentials) -> Result<Bytes> {
+            Ok(Bytes::from(self.base_url().to_string()))
+        }
+
+        fn transform_data(&self, _query: &Query, _raw: Bytes) -> Result<Vec<Row>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn provider_fetcher_struct_macro_generates_canonical_scaffolding() {
+        let fetcher = MacroDummyFetcher::default();
+        assert_eq!(fetcher.base_url(), "https://example.test");
+
+        let overridden = MacroDummyFetcher::default().with_base_url("https://override.test");
+        assert_eq!(overridden.base_url(), "https://override.test");
+
+        assert_eq!(
+            MacroDummyFetcher::registry_entry(),
+            RegistryEntry::fetcher("x", "y")
+        );
     }
 }

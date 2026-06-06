@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{BASE_URL, PolygonAggregatesQuery, aggregates_request};
@@ -18,33 +18,11 @@ use crate::{BASE_URL, PolygonAggregatesQuery, aggregates_request};
 const API_KEY_ENV: &str = "POLYGON_API_KEY";
 const USER_AGENT: &str = "tdw-provider-polygon/0.1";
 
-/// Production Polygon aggregate-bars fetcher.
-#[derive(Clone, Debug)]
-pub struct PolygonHttpAggregatesFetcher {
-    base_url: String,
-}
-
-impl Default for PolygonHttpAggregatesFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl PolygonHttpAggregatesFetcher {
-    /// Override the Polygon base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `polygon`
-    /// provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Polygon aggregate-bars fetcher.
+    pub PolygonHttpAggregatesFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct PolygonEnvelope {
@@ -129,7 +107,7 @@ impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFet
             })?;
         let endpoint = format!(
             "{}/v2/aggs/ticker/{}/range/1/day/{}/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.ticker,
             query.from,
             query.to

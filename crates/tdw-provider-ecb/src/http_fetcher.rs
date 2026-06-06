@@ -10,39 +10,17 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{BASE_URL, EcbDataQuery, EcbObservation, parse_ecb_value};
 
 const USER_AGENT: &str = "tdw-provider-ecb/0.1";
 
-/// Production ECB SDW data fetcher.
-#[derive(Clone, Debug)]
-pub struct EcbHttpDataFetcher {
-    base_url: String,
-}
-
-impl Default for EcbHttpDataFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl EcbHttpDataFetcher {
-    /// Override the ECB base URL (useful for testing against a local mock
-    /// server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `ecb` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production ECB SDW data fetcher.
+    pub EcbHttpDataFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<EcbDataQuery, EcbObservation> for EcbHttpDataFetcher {
@@ -73,7 +51,7 @@ impl Fetcher<EcbDataQuery, EcbObservation> for EcbHttpDataFetcher {
     async fn extract_data(&self, query: &EcbDataQuery, _creds: &Credentials) -> Result<Bytes> {
         let endpoint = format!(
             "{}/data/{}/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.flow,
             query.key,
         );

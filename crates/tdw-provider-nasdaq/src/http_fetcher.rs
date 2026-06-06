@@ -12,39 +12,18 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{BASE_URL, NasdaqDataRow, NasdaqDatasetQuery, dataset_request};
 
 const API_KEY_ENV: &str = "TDW_NASDAQ_API_KEY";
 const USER_AGENT: &str = "tdw-provider-nasdaq/0.1";
 
-/// Production NASDAQ Data Link dataset fetcher.
-#[derive(Clone, Debug)]
-pub struct NasdaqHttpDatasetFetcher {
-    base_url: String,
-}
-
-impl Default for NasdaqHttpDatasetFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl NasdaqHttpDatasetFetcher {
-    /// Override the NASDAQ Data Link base URL (useful in tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `nasdaq` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production NASDAQ Data Link dataset fetcher.
+    pub NasdaqHttpDatasetFetcher,
+    BASE_URL
+);
 
 /// Top-level API envelope for the dataset data endpoint.
 #[derive(Deserialize)]
@@ -121,7 +100,7 @@ impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
 
         let endpoint = format!(
             "{}/datasets/{}/{}/data",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.database,
             query.dataset,
         );
