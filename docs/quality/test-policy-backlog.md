@@ -27,18 +27,24 @@ floors are considered).
 
 - Scope: `tdw-core`, `tdw-protocol`, `tdw-app-client`, `tdw-mcp`, and
   `tdw-worker`.
-- Implementation: the nightly `mutation-smoke` job runs `cargo mutants` for each
-  scoped crate into `mutants.out/<crate>` (each step is `continue-on-error` so a
-  survivor never fails the run yet), then `cargo run -p xtask -- mutation report
-  mutants.out` aggregates every per-crate `outcomes.json` into a single
+- Implementation: the `mutation-baseline` job in
+  `.github/workflows/test-policy.yml` (weekly cron + `workflow_dispatch`, not a
+  PR gate) runs `cargo mutants` for each scoped crate into `mutants.out/<crate>`
+  with a bounded `--timeout 120` per mutant (each step is `continue-on-error` so
+  a survivor never fails the run yet), then `cargo run -p xtask -- mutation
+  report mutants.out` aggregates every per-crate `outcomes.json` into a single
   `mutation-summary.json`. Both the summary and the raw `outcomes.json` files are
-  uploaded as the `mutation-summary` CI artifact via `actions/upload-artifact@v4`.
-  A `mutation-summary` quality gate (nightly, not phase-exit) is recorded in
-  `phase-exit-gates.json`.
+  uploaded as the `mutation-summary` CI artifact via `actions/upload-artifact`.
+  The pre-existing nightly `mutation-smoke` job (`.github/workflows/nightly.yml`)
+  runs the same sweep; a `mutation-summary` quality gate (scheduled, not
+  phase-exit) is recorded in `phase-exit-gates.json`.
 - Summary contents: per crate `runtimeSecs`, `total`, `killed`, `survivors`,
   `timeouts`, and `other`; top-level `scoredFloorEnforced: false`.
 - Acceptance: CI artifact includes runtime, killed mutants, survivors, and
-  timeout count per crate for at least seven consecutive nightly runs.
+  timeout count per crate for at least seven consecutive scheduled runs.
+- Evidence: `.github/workflows/test-policy.yml` (`mutation-baseline` job),
+  `.github/workflows/nightly.yml` (`mutation-smoke` job), and
+  `xtask/src/main.rs` (`mutation report`).
 - Deferred: score-floor enforcement stays off until the seven-run baseline
   exists.
 
@@ -137,10 +143,11 @@ nightly CI job) reuses the same shims under `cargo +nightly fuzz`.
   `fuzz/corpus/<target>/`; runtime crash reproducers and the generated corpus are
   git-ignored. Build/run a single target with `cargo +nightly fuzz run <target>`
   from the `fuzz/` directory. The `fuzz-smoke` job in
-  `.github/workflows/nightly.yml` installs nightly + cargo-fuzz and runs each
-  target for a bounded smoke budget (`-runs=10000 -max_total_time=30`), uploading
-  `fuzz/artifacts/**` on failure. It is non-blocking and is not a required PR
-  check (not wired into `ci.yml`).
+  `.github/workflows/test-policy.yml` (weekly cron + `workflow_dispatch`; the
+  pre-existing nightly `.github/workflows/nightly.yml` runs the same job)
+  installs nightly + cargo-fuzz and runs each target for a bounded smoke budget
+  (`-runs=10000 -max_total_time=30`), uploading `fuzz/artifacts/**` on failure.
+  It is non-blocking and is not a required PR check (not wired into `ci.yml`).
 
 - Scope:
   - `protocol_op_event_json` for `tdw-protocol` `OpEnvelope`, `EventMsg`, and
@@ -156,6 +163,11 @@ nightly CI job) reuses the same shims under `cargo +nightly fuzz`.
   with committed seed corpora.
 - Acceptance: each harness runs for a short smoke budget locally and records
   crash reproducers as artifacts instead of panicking in default `cargo test`.
+- Evidence: `fuzz/` (cargo-fuzz crate, six targets + seed corpora, excluded from
+  the stable workspace), the `__fuzz_*` shims in `tdw-protocol`/`tdw-config`/
+  `tdw-mcp`/`tdw-app-client`/`tdw-exec`, the per-crate `tests/fuzz_replay.rs`
+  corpus-replay harnesses, and the `fuzz-smoke` job in
+  `.github/workflows/test-policy.yml` (and `.github/workflows/nightly.yml`).
 
 ### TEST-POLICY-005: Add Pre-Release Fuzz And Loom Recipe
 
@@ -173,11 +185,16 @@ Status: implemented.
   summary and returns a non-zero exit if either suite fails. It is a manual
   release-candidate step, not a phase-exit quality gate, so it is intentionally
   absent from `phase-exit-gates.json`.
-- Implementation: documented in `docs/release.md` under "Pre-release Fuzz & Loom
-  Check", with a checklist step in the release cut steps. Long-duration,
-  coverage-guided fuzzing stays the nightly `fuzz-smoke` CI job
-  (`.github/workflows/nightly.yml`) and the manual `cargo +nightly fuzz run
-  <target>` path, referenced from the same docs section.
-- Acceptance: met. `docs/release.md` names the command and its expected
+- Implementation: the recipe lives in
+  `docs/quality/pre-release-fuzz-loom.md` (exact stable + nightly commands) and
+  is linked from the `docs/release.md` release-cut checklist (step 4).
+  Long-duration, coverage-guided fuzzing stays the scheduled `fuzz-smoke` CI job
+  (`.github/workflows/test-policy.yml`, mirrored in
+  `.github/workflows/nightly.yml`) and the manual `cargo +nightly fuzz run
+  <target>` path, referenced from the same recipe doc.
+- Evidence: `docs/quality/pre-release-fuzz-loom.md`, `docs/release.md`
+  (checklist link), `xtask/src/main.rs` (`prerelease_check`), and `justfile`
+  (`prerelease-check`).
+- Acceptance: met. The recipe names the command and its expected
   output/artifacts; release readiness cannot claim fuzz/loom evidence without
   the green command output.

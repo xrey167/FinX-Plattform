@@ -2,7 +2,9 @@
 
 A Rust workspace for a trading data warehouse — event-sourced, provider-agnostic, designed to make market data, agent workflows, and storage layers composable without locking into any one vendor.
 
-**Status:** pre-1.0, actively built. APIs change between tranches. No release tags yet.
+**Status:** release-candidate track. The latest published tag is `v0.10.0`;
+this branch prepares the `v1.0.0` readiness gate. APIs should now change only
+through explicit migration notes and SemVer-compatible release planning.
 
 ---
 

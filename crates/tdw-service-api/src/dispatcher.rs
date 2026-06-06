@@ -17,13 +17,12 @@ use tdw_core::{Error, Result};
 use tdw_hooks::SystemHookHandlerBackend;
 use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
-use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
 use tdw_sandbox::{LocalUdfSandbox, SandboxRuntime, UdfRequest};
 
 use crate::{
-    AppState, PolicyEnforcementConfig, ServiceEndpoint, enforce_request_path_with_backend,
-    mask_json_response,
+    AppState, PolicyEnforcementConfig, SelectedYahooEquityHistoricalFetcher, ServiceEndpoint,
+    enforce_request_path_with_backend, mask_json_response,
 };
 
 #[async_trait]
@@ -225,7 +224,11 @@ async fn dispatch_ingest(
         }
         let object = match provider {
             "fileset" => runner.run(&FilesetEquityHistoricalFetcher, params).await?,
-            "yahoo" => runner.run(&YahooEquityHistoricalFetcher, params).await?,
+            "yahoo" => {
+                runner
+                    .run(&SelectedYahooEquityHistoricalFetcher::default(), params)
+                    .await?
+            }
             _ => unreachable!("provider/endpoint validated above"),
         };
         // Per-(op, symbol) dedup token: stable across retries of the same op
