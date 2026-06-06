@@ -12,6 +12,21 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [1.0.0] - 2026-06-07
+
+### Added
+
+- Release 1.0 readiness hardening: Yahoo's real HTTP fetcher is now selectable
+  through `tdw-service-api`'s provider feature set and included in
+  `all-http-providers`.
+- Deterministic coverage for the `tdw-bootstrap`, `tdw-cli`, and `tdw-proto`
+  crates so the batch backlog no longer treats them as untested leaf binaries.
+
+### Changed
+
+- Updated release-facing README status text to reflect the existing tag history
+  and the active `v1.0.0` readiness branch.
+
 ## [0.10.0] - 2026-06-06
 
 Protobuf market-data types and full data-provider wiring: every standalone
