@@ -6,12 +6,8 @@
 //! the live integration tests are additionally gated by `TDW_EIA_LIVE=1` so
 //! unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     API_KEY_ENV, BASE_URL, EiaNaturalGasQuery, EiaNaturalGasRecord, EiaSpotPriceQuery,
@@ -19,25 +15,6 @@ use crate::{
 };
 
 const USER_AGENT: &str = "tdw-provider-eia/0.1";
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-fn read_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Provider(format!("eia api key env {API_KEY_ENV} must be set")))
-}
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("eia build client: {e}")))
-}
 
 // ---------------------------------------------------------------------------
 // Serde shapes for /petroleum/pri/spt/data/
@@ -118,8 +95,8 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
     }
 
     async fn extract_data(&self, query: &EiaSpotPriceQuery, _creds: &Credentials) -> Result<Bytes> {
-        let api_key = read_api_key()?;
-        let client = build_client()?;
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "eia")?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "eia build client")?;
         let endpoint = format!(
             "{}/petroleum/pri/spt/data/",
             self.base_url().trim_end_matches('/')
@@ -217,8 +194,8 @@ impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetch
         query: &EiaNaturalGasQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = read_api_key()?;
-        let client = build_client()?;
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "eia")?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "eia build client")?;
         let endpoint = format!(
             "{}/natural-gas/pri/sum/data/",
             self.base_url().trim_end_matches('/')

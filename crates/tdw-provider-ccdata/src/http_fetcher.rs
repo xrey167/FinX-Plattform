@@ -5,12 +5,8 @@
 //! Live calls require `TDW_CCDATA_API_KEY`; the live integration test is
 //! additionally gated by `TDW_CCDATA_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, BASE_URL, CCDataAssetQuery, CCDataError, CCDataOhlcvQuery};
@@ -54,13 +50,6 @@ impl CCDataHttpFetcher {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
             .ok_or_else(|| Error::Provider(CCDataError::MissingApiKey.to_string()))
-    }
-
-    fn build_client() -> Result<Client> {
-        Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("ccdata client build: {e}")))
     }
 }
 
@@ -162,7 +151,7 @@ impl Fetcher<CCDataOhlcvQuery, MarketDataBar> for CCDataHttpFetcher {
     async fn extract_data(&self, query: &CCDataOhlcvQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = Self::read_api_key()?;
         let url = format!("{}/spot/v1/historical/days", self.base_url);
-        let client = Self::build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "ccdata client build")?;
         let response = client
             .get(&url)
             .header("authorization", format!("Apikey {api_key}"))
@@ -254,13 +243,6 @@ impl CCDataAssetHttpFetcher {
             .filter(|v| !v.is_empty())
             .ok_or_else(|| Error::Provider(CCDataError::MissingApiKey.to_string()))
     }
-
-    fn build_client() -> Result<Client> {
-        Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("ccdata client build: {e}")))
-    }
 }
 
 /// Domain model for a single CCData asset metadata row.
@@ -294,7 +276,7 @@ impl Fetcher<CCDataAssetQuery, CCDataAssetRow> for CCDataAssetHttpFetcher {
     async fn extract_data(&self, query: &CCDataAssetQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = Self::read_api_key()?;
         let url = format!("{}/asset/v1/data/by/symbol", self.effective_base_url());
-        let client = Self::build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "ccdata client build")?;
         let response = client
             .get(&url)
             .header("authorization", format!("Apikey {api_key}"))

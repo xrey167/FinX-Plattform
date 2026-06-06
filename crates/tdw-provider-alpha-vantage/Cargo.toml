@@ -18,6 +18,7 @@ http = [
     "dep:tdw-core",
     "dep:tdw-domain",
     "dep:tokio",
+    "tdw-core/http",
 ]
 
 [dependencies]

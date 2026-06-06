@@ -9,14 +9,10 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::time::Duration;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 use tokio::time::sleep;
 
@@ -94,7 +90,7 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
             query.padded_cik(),
         );
 
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
         let response = client
             .get(&url)
             .send()
@@ -247,7 +243,7 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
             cik_query.padded_cik(),
         );
 
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
         let response = client
             .get(&url)
             .send()
@@ -328,15 +324,6 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         Ok(rows)
     }
-}
-
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("sec http client build: {e}")))
 }
 
 // ── Inline unit tests for transform_data (no network) ────────────────────────
