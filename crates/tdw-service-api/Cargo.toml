@@ -103,6 +103,11 @@ provider-trading-economics = [
 ]
 provider-velodata = ["dep:tdw-provider-velodata", "tdw-provider-velodata/http"]
 
+## Yahoo is already a non-optional dependency (its offline equity-historical
+## fetcher stays wired unconditionally via `fetch_equity_historical`); this
+## feature only turns on its live `http` fetcher and registers it.
+provider-yahoo = ["tdw-provider-yahoo/http"]
+
 ## Binance is already a non-optional dependency (its offline ws default and
 ## fixture path stay wired); this feature only turns on its `http` ticker-price
 ## fetcher and registers it.
@@ -141,6 +146,7 @@ all-http-providers = [
     "provider-tradier",
     "provider-trading-economics",
     "provider-velodata",
+    "provider-yahoo",
     "provider-binance-http",
 ]
 

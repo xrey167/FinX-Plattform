@@ -161,6 +161,8 @@ use tdw_provider_velodata::{
 };
 use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo")]
+use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -297,6 +299,8 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(VelodataHttpLiquidationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-velodata")]
     registry.register(VelodataHttpOiFetcher::registry_entry())?;
+    #[cfg(feature = "provider-yahoo")]
+    registry.register(YahooHttpEquityHistoricalFetcher::registry_entry())?;
     #[cfg(feature = "provider-binance-http")]
     registry.register(BinanceHttpTickerPriceFetcher::registry_entry())?;
     Ok(registry)
@@ -1325,6 +1329,7 @@ mod tests {
         feature = "provider-tradier",
         feature = "provider-trading-economics",
         feature = "provider-velodata",
+        feature = "provider-yahoo",
         feature = "provider-binance-http",
     )))]
     #[test]
