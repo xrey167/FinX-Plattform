@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_polygon::{PolygonAggregatesQuery, PolygonHttpAggregatesFetcher};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> PolygonAggregatesQuery {
     PolygonHttpAggregatesFetcher::transform_query(json!({
@@ -25,41 +26,37 @@ fn sample_query() -> PolygonAggregatesQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "ticker": "MSFT",
-            "queryCount": 2,
-            "resultsCount": 2,
-            "adjusted": true,
-            "status": "OK",
-            "request_id": "test-cassette",
-            "count": 2,
-            "results": [
-                {
-                    "v": 25258600.0,
-                    "vw": 370.12,
-                    "o": 373.86,
-                    "c": 370.87,
-                    "h": 375.90,
-                    "l": 366.77,
-                    "t": 1704153600000i64,
-                    "n": 567890
-                },
-                {
-                    "v": 23083500.0,
-                    "vw": 368.40,
-                    "o": 369.01,
-                    "c": 367.94,
-                    "h": 373.26,
-                    "l": 366.09,
-                    "t": 1704240000000i64,
-                    "n": 456789
-                }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "ticker": "MSFT",
+        "queryCount": 2,
+        "resultsCount": 2,
+        "adjusted": true,
+        "status": "OK",
+        "request_id": "test-cassette",
+        "count": 2,
+        "results": [
+            {
+                "v": 25258600.0,
+                "vw": 370.12,
+                "o": 373.86,
+                "c": 370.87,
+                "h": 375.90,
+                "l": 366.77,
+                "t": 1704153600000i64,
+                "n": 567890
+            },
+            {
+                "v": 23083500.0,
+                "vw": 368.40,
+                "o": 369.01,
+                "c": 367.94,
+                "h": 373.26,
+                "l": 366.09,
+                "t": 1704240000000i64,
+                "n": 456789
+            }
+        ]
+    })
 }
 
 #[test]
@@ -84,14 +81,10 @@ fn cassette_replay_decodes_polygon_aggregates_into_market_bars() {
 fn cassette_replay_surfaces_polygon_error_envelope() {
     let fetcher = PolygonHttpAggregatesFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "status": "ERROR",
-            "error": "API key invalid"
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "status": "ERROR",
+        "error": "API key invalid"
+    });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -128,13 +121,7 @@ async fn live_polygon_returns_recent_bars_when_env_vars_set() {
 
     let fetcher = PolygonHttpAggregatesFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

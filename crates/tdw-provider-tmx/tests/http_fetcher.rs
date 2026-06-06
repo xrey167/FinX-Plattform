@@ -17,6 +17,7 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
+use tdw_provider_testkit::live_fetch_nonempty;
 use tdw_provider_tmx::http_fetcher::{
     TmxHttpBatchQuoteFetcher, TmxHttpQuoteFetcher, cassette_bytes,
 };
@@ -124,13 +125,7 @@ async fn live_tmx_single_quote_returns_row_when_env_var_set() {
 
     let fetcher = TmxHttpQuoteFetcher::default();
     let query = single_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

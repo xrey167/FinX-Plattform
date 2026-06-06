@@ -8,8 +8,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_glassnode::{GlassnodeHttpFetcher, GlassnodeMetric, GlassnodeMetricQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn btc_mvrv_query() -> GlassnodeMetricQuery {
     GlassnodeMetricQuery::new("BTC", GlassnodeMetric::MvrvZScore, "24h")
@@ -17,15 +18,11 @@ fn btc_mvrv_query() -> GlassnodeMetricQuery {
 }
 
 fn mvrv_cassette() -> Bytes {
-    Bytes::from(
-        json!([
-            {"t": 1704067200, "v": 1.72},
-            {"t": 1704153600, "v": 1.85},
-            {"t": 1704240000, "v": 1.91}
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {"t": 1704067200, "v": 1.72},
+        {"t": 1704153600, "v": 1.85},
+        {"t": 1704240000, "v": 1.91}
+    ])
 }
 
 #[test]
@@ -50,13 +47,9 @@ fn cassette_decodes_lth_supply_points() {
     let f = GlassnodeHttpFetcher::new();
     let q = GlassnodeMetricQuery::new("BTC", GlassnodeMetric::LthSupply, "24h")
         .unwrap_or_else(|e| panic!("query must build: {e}"));
-    let raw = Bytes::from(
-        json!([
-            {"t": 1704153600, "v": 14_250_000.5}
-        ])
-        .to_string()
-        .into_bytes(),
-    );
+    let raw = cassette_bytes!([
+        {"t": 1704153600, "v": 14_250_000.5}
+    ]);
     let rows = f
         .transform_data(&q, raw)
         .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
@@ -70,13 +63,9 @@ fn cassette_decodes_nupl_points() {
     let f = GlassnodeHttpFetcher::new();
     let q = GlassnodeMetricQuery::new("BTC", GlassnodeMetric::Nupl, "24h")
         .unwrap_or_else(|e| panic!("query must build: {e}"));
-    let raw = Bytes::from(
-        json!([
-            {"t": 1704153600, "v": 0.42}
-        ])
-        .to_string()
-        .into_bytes(),
-    );
+    let raw = cassette_bytes!([
+        {"t": 1704153600, "v": 0.42}
+    ]);
     let rows = f
         .transform_data(&q, raw)
         .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
@@ -134,13 +123,7 @@ async fn live_glassnode_returns_data_points_when_env_vars_set() {
 
     let f = GlassnodeHttpFetcher::new();
     let q = btc_mvrv_query();
-    let raw = f
-        .extract_data(&q, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = f
-        .transform_data(&q, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(f, q);
 
     assert!(
         !rows.is_empty(),

@@ -11,9 +11,10 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_geckoterminal::http_fetcher::{fetch_trending_raw, parse_pool_list};
 use tdw_provider_geckoterminal::{GeckoTerminalHttpFetcher, GeckoTerminalPoolQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -31,67 +32,59 @@ fn sample_query() -> GeckoTerminalPoolQuery {
 }
 
 fn pool_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "data": {
-                "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
-                "type": "pool",
-                "attributes": {
-                    "name": "USDC/WETH 0.05%",
-                    "base_token_price_usd": "1.0001",
-                    "quote_token_price_usd": "3125.50",
-                    "base_token_price_quote_token": "0.00032",
-                    "quote_token_price_base_token": "3125.50",
-                    "pool_created_at": "2021-05-04T00:00:00Z",
-                    "reserve_in_usd": "125000000.5",
-                    "fdv_usd": "0",
-                    "volume_usd": {
-                        "h24": "85000000.0",
-                        "h6": "22000000.0",
-                        "h1": "4500000.0"
-                    },
-                    "price_change_percentage": {
-                        "h24": "-0.25",
-                        "h6": "0.10",
-                        "h1": "0.05"
-                    }
+    cassette_bytes!({
+        "data": {
+            "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
+            "type": "pool",
+            "attributes": {
+                "name": "USDC/WETH 0.05%",
+                "base_token_price_usd": "1.0001",
+                "quote_token_price_usd": "3125.50",
+                "base_token_price_quote_token": "0.00032",
+                "quote_token_price_base_token": "3125.50",
+                "pool_created_at": "2021-05-04T00:00:00Z",
+                "reserve_in_usd": "125000000.5",
+                "fdv_usd": "0",
+                "volume_usd": {
+                    "h24": "85000000.0",
+                    "h6": "22000000.0",
+                    "h1": "4500000.0"
+                },
+                "price_change_percentage": {
+                    "h24": "-0.25",
+                    "h6": "0.10",
+                    "h1": "0.05"
                 }
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn trending_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "data": [
-                {
-                    "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
-                    "type": "pool",
-                    "attributes": {
-                        "name": "TOKEN/WETH",
-                        "volume_usd": {
-                            "h24": "12000000"
-                        }
-                    }
-                },
-                {
-                    "id": "eth_0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-                    "type": "pool",
-                    "attributes": {
-                        "name": "USDC/ETH",
-                        "volume_usd": {
-                            "h24": "5000000"
-                        }
+    cassette_bytes!({
+        "data": [
+            {
+                "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
+                "type": "pool",
+                "attributes": {
+                    "name": "TOKEN/WETH",
+                    "volume_usd": {
+                        "h24": "12000000"
                     }
                 }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+            },
+            {
+                "id": "eth_0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "type": "pool",
+                "attributes": {
+                    "name": "USDC/ETH",
+                    "volume_usd": {
+                        "h24": "5000000"
+                    }
+                }
+            }
+        ]
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -179,19 +172,15 @@ fn cassette_replay_decodes_pool_into_dex_pool() {
 fn cassette_replay_handles_missing_optional_fields() {
     let fetcher = GeckoTerminalHttpFetcher::default();
     let query = sample_query();
-    let minimal = Bytes::from(
-        json!({
-            "data": {
-                "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
-                "type": "pool",
-                "attributes": {
-                    "name": "MINIMAL/POOL"
-                }
+    let minimal = cassette_bytes!({
+        "data": {
+            "id": "eth_0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
+            "type": "pool",
+            "attributes": {
+                "name": "MINIMAL/POOL"
             }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+        }
+    });
     let rows = fetcher
         .transform_data(&query, minimal)
         .unwrap_or_else(|e| panic!("transform_data must handle minimal payload: {e}"));
@@ -238,7 +227,7 @@ fn cassette_parse_pool_list_decodes_trending_response() {
 
 #[test]
 fn cassette_parse_pool_list_returns_empty_for_empty_data() {
-    let empty = Bytes::from(json!({"data": []}).to_string().into_bytes());
+    let empty = cassette_bytes!({"data": []});
     let pools =
         parse_pool_list(empty, "eth").unwrap_or_else(|e| panic!("empty data must succeed: {e}"));
 
@@ -258,13 +247,7 @@ async fn live_geckoterminal_returns_pool_when_env_var_set() {
 
     let fetcher = GeckoTerminalHttpFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert_eq!(rows.len(), 1, "expected exactly one pool");
     assert_eq!(rows[0].network, "eth");

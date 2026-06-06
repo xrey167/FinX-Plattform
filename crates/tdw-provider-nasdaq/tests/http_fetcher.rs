@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_nasdaq::{NasdaqDatasetQuery, NasdaqHttpDatasetFetcher};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> NasdaqDatasetQuery {
     NasdaqHttpDatasetFetcher::transform_query(json!({
@@ -24,27 +25,23 @@ fn sample_query() -> NasdaqDatasetQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "dataset_data": {
-                "id": 9775687,
-                "dataset_code": "AAPL",
-                "database_code": "WIKI",
-                "start_date": "2024-01-02",
-                "end_date": "2024-01-05",
-                "column_names": ["Date", "Open", "High", "Low", "Close", "Volume"],
-                "frequency": "daily",
-                "data": [
-                    ["2024-01-02", 185.6, 186.1, 184.4, 185.2, 55000000],
-                    ["2024-01-03", 184.0, 185.5, 183.1, 184.8, 48000000],
-                    ["2024-01-04", 183.9, 185.0, 182.7, 184.1, 52000000],
-                    ["2024-01-05", 184.5, 186.3, 184.0, 185.9, 61000000]
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "dataset_data": {
+            "id": 9775687,
+            "dataset_code": "AAPL",
+            "database_code": "WIKI",
+            "start_date": "2024-01-02",
+            "end_date": "2024-01-05",
+            "column_names": ["Date", "Open", "High", "Low", "Close", "Volume"],
+            "frequency": "daily",
+            "data": [
+                ["2024-01-02", 185.6, 186.1, 184.4, 185.2, 55000000],
+                ["2024-01-03", 184.0, 185.5, 183.1, 184.8, 48000000],
+                ["2024-01-04", 183.9, 185.0, 182.7, 184.1, 52000000],
+                ["2024-01-05", 184.5, 186.3, 184.0, 185.9, 61000000]
+            ]
+        }
+    })
 }
 
 #[test]
@@ -76,16 +73,12 @@ fn cassette_replay_decodes_nasdaq_dataset_into_rows() {
 fn cassette_replay_surfaces_nasdaq_error_envelope() {
     let fetcher = NasdaqHttpDatasetFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "quandl_error": {
-                "code": "QEAx01",
-                "message": "You have submitted an incorrect Quandl code."
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "quandl_error": {
+            "code": "QEAx01",
+            "message": "You have submitted an incorrect Quandl code."
+        }
+    });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -98,7 +91,7 @@ fn cassette_replay_surfaces_nasdaq_error_envelope() {
 fn cassette_replay_errors_on_missing_dataset_data() {
     let fetcher = NasdaqHttpDatasetFetcher::default();
     let query = sample_query();
-    let empty = Bytes::from(json!({}).to_string().into_bytes());
+    let empty = cassette_bytes!({});
     let err = fetcher
         .transform_data(&query, empty)
         .expect_err("missing dataset_data must be an error");
@@ -175,13 +168,7 @@ async fn live_nasdaq_returns_data_when_env_var_set() {
     }))
     .unwrap_or_else(|error| panic!("query should transform: {error}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

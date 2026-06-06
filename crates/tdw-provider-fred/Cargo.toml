@@ -27,5 +27,8 @@ tokio = { workspace = true, optional = true }
 name = "basic"
 required-features = ["http"]
 
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
 [lints]
 workspace = true
