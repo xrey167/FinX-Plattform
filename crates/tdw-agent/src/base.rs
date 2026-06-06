@@ -190,23 +190,23 @@ impl Retention {
     #[must_use]
     pub fn ttl_days(self) -> Option<u32> {
         match self {
-            Retention::Working => Some(0),
-            Retention::ShortTerm => Some(1),
-            Retention::MidTerm => Some(7),
-            Retention::LongTerm => Some(90),
-            Retention::Core => None,
+            Self::Working => Some(0),
+            Self::ShortTerm => Some(1),
+            Self::MidTerm => Some(7),
+            Self::LongTerm => Some(90),
+            Self::Core => None,
         }
     }
 
     /// The next longer-lived tier a surviving memory consolidates into. `Core` is the
     /// fixpoint (consolidating a `Core` memory leaves it `Core`).
     #[must_use]
-    pub fn next(self) -> Retention {
+    pub fn next(self) -> Self {
         match self {
-            Retention::Working => Retention::ShortTerm,
-            Retention::ShortTerm => Retention::MidTerm,
-            Retention::MidTerm => Retention::LongTerm,
-            Retention::LongTerm | Retention::Core => Retention::Core,
+            Self::Working => Self::ShortTerm,
+            Self::ShortTerm => Self::MidTerm,
+            Self::MidTerm => Self::LongTerm,
+            Self::LongTerm | Self::Core => Self::Core,
         }
     }
 }
@@ -243,13 +243,13 @@ impl Reference {
     #[must_use]
     pub fn source(&self) -> Source {
         match self {
-            Reference::Git(_) | Reference::Http(_) | Reference::Connector(_) => Source::External,
-            Reference::Literal(_)
-            | Reference::Variable(_)
-            | Reference::File(_)
+            Self::Git(_) | Self::Http(_) | Self::Connector(_) => Source::External,
+            Self::Literal(_)
+            | Self::Variable(_)
+            | Self::File(_)
             // Secrets resolve through a platform-mediated `secretstore`, so the reference
             // is `Internal` even if the backing vault is an external provider.
-            | Reference::Secret(_) => Source::Internal,
+            | Self::Secret(_) => Source::Internal,
         }
     }
 }

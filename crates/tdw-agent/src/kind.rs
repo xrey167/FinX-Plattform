@@ -91,99 +91,99 @@ pub enum EntityKind {
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order.
-    pub const ALL: [EntityKind; 43] = [
-        EntityKind::Agent,
-        EntityKind::Personality,
-        EntityKind::Prompt,
-        EntityKind::PromptTemplate,
-        EntityKind::Template,
-        EntityKind::Instruction,
-        EntityKind::Context,
-        EntityKind::Config,
-        EntityKind::Primitive,
-        EntityKind::EnvironmentVariable,
-        EntityKind::Tool,
-        EntityKind::Function,
-        EntityKind::McpServer,
-        EntityKind::McpTool,
-        EntityKind::Connector,
-        EntityKind::Webhook,
-        EntityKind::Workflow,
-        EntityKind::Task,
-        EntityKind::Skill,
-        EntityKind::Command,
-        EntityKind::Hook,
-        EntityKind::AgentRouter,
-        EntityKind::ToolRouter,
-        EntityKind::Knowledge,
-        EntityKind::Document,
-        EntityKind::RagPipeline,
-        EntityKind::KnowledgeGraph,
-        EntityKind::Memory,
-        EntityKind::FeatureStore,
-        EntityKind::Feature,
-        EntityKind::FeatureList,
-        EntityKind::Guardrail,
-        EntityKind::Rule,
-        EntityKind::Evaluation,
-        EntityKind::Plugin,
-        EntityKind::ErrorPolicy,
-        EntityKind::Gotcha,
-        EntityKind::Network,
-        EntityKind::Compute,
-        EntityKind::DataStore,
-        EntityKind::SecretStore,
-        EntityKind::Observability,
-        EntityKind::ResourceDefinition,
+    pub const ALL: [Self; 43] = [
+        Self::Agent,
+        Self::Personality,
+        Self::Prompt,
+        Self::PromptTemplate,
+        Self::Template,
+        Self::Instruction,
+        Self::Context,
+        Self::Config,
+        Self::Primitive,
+        Self::EnvironmentVariable,
+        Self::Tool,
+        Self::Function,
+        Self::McpServer,
+        Self::McpTool,
+        Self::Connector,
+        Self::Webhook,
+        Self::Workflow,
+        Self::Task,
+        Self::Skill,
+        Self::Command,
+        Self::Hook,
+        Self::AgentRouter,
+        Self::ToolRouter,
+        Self::Knowledge,
+        Self::Document,
+        Self::RagPipeline,
+        Self::KnowledgeGraph,
+        Self::Memory,
+        Self::FeatureStore,
+        Self::Feature,
+        Self::FeatureList,
+        Self::Guardrail,
+        Self::Rule,
+        Self::Evaluation,
+        Self::Plugin,
+        Self::ErrorPolicy,
+        Self::Gotcha,
+        Self::Network,
+        Self::Compute,
+        Self::DataStore,
+        Self::SecretStore,
+        Self::Observability,
+        Self::ResourceDefinition,
     ];
 
     /// The manifest group this kind belongs to.
     #[must_use]
     pub fn group(self) -> Group {
         match self {
-            EntityKind::Agent
-            | EntityKind::Personality
-            | EntityKind::Prompt
-            | EntityKind::PromptTemplate
-            | EntityKind::Template
-            | EntityKind::Instruction
-            | EntityKind::Context
-            | EntityKind::Config
-            | EntityKind::Primitive
-            | EntityKind::EnvironmentVariable => Group::Core,
-            EntityKind::Tool
-            | EntityKind::Function
-            | EntityKind::McpServer
-            | EntityKind::McpTool
-            | EntityKind::Connector
-            | EntityKind::Webhook => Group::Tools,
-            EntityKind::Workflow
-            | EntityKind::Task
-            | EntityKind::Skill
-            | EntityKind::Command
-            | EntityKind::Hook
-            | EntityKind::AgentRouter
-            | EntityKind::ToolRouter => Group::Orchestration,
-            EntityKind::Knowledge
-            | EntityKind::Document
-            | EntityKind::RagPipeline
-            | EntityKind::KnowledgeGraph
-            | EntityKind::Memory
-            | EntityKind::FeatureStore
-            | EntityKind::Feature
-            | EntityKind::FeatureList => Group::Knowledge,
-            EntityKind::Guardrail
-            | EntityKind::Rule
-            | EntityKind::Evaluation
-            | EntityKind::Plugin
-            | EntityKind::ErrorPolicy
-            | EntityKind::Gotcha => Group::Governance,
-            EntityKind::Network
-            | EntityKind::Compute
-            | EntityKind::DataStore
-            | EntityKind::SecretStore
-            | EntityKind::Observability => Group::Infra,
-            EntityKind::ResourceDefinition => Group::Meta,
+            Self::Agent
+            | Self::Personality
+            | Self::Prompt
+            | Self::PromptTemplate
+            | Self::Template
+            | Self::Instruction
+            | Self::Context
+            | Self::Config
+            | Self::Primitive
+            | Self::EnvironmentVariable => Group::Core,
+            Self::Tool
+            | Self::Function
+            | Self::McpServer
+            | Self::McpTool
+            | Self::Connector
+            | Self::Webhook => Group::Tools,
+            Self::Workflow
+            | Self::Task
+            | Self::Skill
+            | Self::Command
+            | Self::Hook
+            | Self::AgentRouter
+            | Self::ToolRouter => Group::Orchestration,
+            Self::Knowledge
+            | Self::Document
+            | Self::RagPipeline
+            | Self::KnowledgeGraph
+            | Self::Memory
+            | Self::FeatureStore
+            | Self::Feature
+            | Self::FeatureList => Group::Knowledge,
+            Self::Guardrail
+            | Self::Rule
+            | Self::Evaluation
+            | Self::Plugin
+            | Self::ErrorPolicy
+            | Self::Gotcha => Group::Governance,
+            Self::Network
+            | Self::Compute
+            | Self::DataStore
+            | Self::SecretStore
+            | Self::Observability => Group::Infra,
+            Self::ResourceDefinition => Group::Meta,
         }
     }
 
@@ -193,14 +193,14 @@ impl EntityKind {
     pub fn is_data_kind(self) -> bool {
         matches!(
             self,
-            EntityKind::Knowledge
-                | EntityKind::Document
-                | EntityKind::RagPipeline
-                | EntityKind::KnowledgeGraph
-                | EntityKind::Memory
-                | EntityKind::FeatureStore
-                | EntityKind::Feature
-                | EntityKind::FeatureList
+            Self::Knowledge
+                | Self::Document
+                | Self::RagPipeline
+                | Self::KnowledgeGraph
+                | Self::Memory
+                | Self::FeatureStore
+                | Self::Feature
+                | Self::FeatureList
         )
     }
 
@@ -208,7 +208,7 @@ impl EntityKind {
     /// the cleanest validation that autonomy is an agent property, not an Origin axis.
     #[must_use]
     pub fn is_autonomy_capable(self) -> bool {
-        matches!(self, EntityKind::Agent)
+        matches!(self, Self::Agent)
     }
 }
 
