@@ -740,6 +740,47 @@ impl SqliteWorkerQueue {
         .await?;
         Ok(())
     }
+
+    /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
+    /// attempt counter so the serve loop picks it up again. Returns
+    /// [`WorkerQueueError::UnknownJob`] if the job does not exist and
+    /// [`WorkerQueueError::InvalidJob`] if it is not currently dead-lettered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn replay_dead_letter(&self, job_id: &str) -> Result<()> {
+        let Some(status) = self.job_status(job_id).await? else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+        if status != WorkerJobStatus::DeadLettered {
+            return Err(WorkerQueueError::InvalidJob(format!(
+                "job {job_id} is {status:?}, not DeadLettered",
+            )));
+        }
+        let now_ms = unix_epoch_millis()?;
+        sqlx::query(
+            r"
+            update worker_jobs
+            set status = ?1,
+                attempts = 0,
+                not_before_ms = ?2,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = null,
+                dead_lettered_at_ms = null,
+                completed_at_ms = null,
+                updated_at_ms = ?2
+            where job_id = ?3
+            ",
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[cfg(feature = "postgres")]
@@ -1100,6 +1141,47 @@ impl PgWorkerQueue {
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .bind(error)
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
+    /// attempt counter so the serve loop picks it up again. Returns
+    /// [`WorkerQueueError::UnknownJob`] if the job does not exist and
+    /// [`WorkerQueueError::InvalidJob`] if it is not currently dead-lettered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn replay_dead_letter(&self, job_id: &str) -> Result<()> {
+        let Some(status) = self.job_status(job_id).await? else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+        if status != WorkerJobStatus::DeadLettered {
+            return Err(WorkerQueueError::InvalidJob(format!(
+                "job {job_id} is {status:?}, not DeadLettered",
+            )));
+        }
+        let now_ms = unix_epoch_millis()?;
+        sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                attempts = 0,
+                not_before_ms = $2,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = null,
+                dead_lettered_at_ms = null,
+                completed_at_ms = null,
+                updated_at_ms = $2
+            where job_id = $3
+            "#,
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
         .execute(&self.pool)
@@ -2245,5 +2327,76 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("dead letters: {error}"));
         assert_eq!(letters[0].last_error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_replay_dead_letter_requeues_with_reset_attempts() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("connect: {error}"));
+        let mut job = test_job("job-replay");
+        job.max_attempts = 1;
+        queue
+            .enqueue(job)
+            .await
+            .unwrap_or_else(|error| panic!("enqueue: {error}"));
+        queue
+            .lease_next("worker-1")
+            .await
+            .unwrap_or_else(|error| panic!("lease: {error}"))
+            .expect("lease present");
+        let status = queue
+            .fail("job-replay", "boom", 0)
+            .await
+            .unwrap_or_else(|error| panic!("fail: {error}"));
+        assert_eq!(status, WorkerJobStatus::DeadLettered);
+
+        queue
+            .replay_dead_letter("job-replay")
+            .await
+            .unwrap_or_else(|error| panic!("replay: {error}"));
+
+        // Job is pending again with no dead-letter rows and a reset counter.
+        assert_eq!(
+            queue
+                .job_status("job-replay")
+                .await
+                .unwrap_or_else(|error| panic!("status: {error}")),
+            Some(WorkerJobStatus::Pending)
+        );
+        assert!(
+            queue
+                .dead_letters()
+                .await
+                .unwrap_or_else(|error| panic!("dead letters: {error}"))
+                .is_empty()
+        );
+        let release = queue
+            .lease_next("worker-2")
+            .await
+            .unwrap_or_else(|error| panic!("re-lease: {error}"))
+            .expect("re-lease present");
+        assert_eq!(release.job_id, "job-replay");
+        assert_eq!(release.attempt, 1, "attempt counter reset to a fresh lease");
+    }
+
+    #[tokio::test]
+    async fn sqlite_replay_dead_letter_rejects_unknown_and_live_jobs() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("connect: {error}"));
+        assert!(matches!(
+            queue.replay_dead_letter("missing").await,
+            Err(WorkerQueueError::UnknownJob(_))
+        ));
+
+        queue
+            .enqueue(test_job("job-live"))
+            .await
+            .unwrap_or_else(|error| panic!("enqueue: {error}"));
+        assert!(matches!(
+            queue.replay_dead_letter("job-live").await,
+            Err(WorkerQueueError::InvalidJob(_))
+        ));
     }
 }
