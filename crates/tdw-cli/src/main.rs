@@ -155,3 +155,46 @@ async fn read_frame(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> 
     stream.read_exact(&mut buf).await?;
     Ok(Some(buf))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn connect_and_run_writes_shutdown_envelope_and_reads_event() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept client");
+            let bytes = read_frame(&mut stream)
+                .await
+                .expect("read frame")
+                .expect("client frame");
+            let envelope: OpEnvelope =
+                serde_json::from_slice(&bytes).expect("client envelope should decode");
+            assert!(matches!(envelope.op, Op::Shutdown));
+
+            let event = EventMsg::Completed {
+                op_id: envelope.op_id,
+                summary: Some("ok".to_string()),
+                result: Some(serde_json::json!({ "ok": true })),
+            };
+            let json = serde_json::to_vec(&event).expect("serialize event");
+            let len = u32::try_from(json.len()).expect("event len").to_be_bytes();
+            stream.write_all(&len).await.expect("write len");
+            stream.write_all(&json).await.expect("write body");
+        });
+
+        let events = connect_and_run(addr, Op::Shutdown)
+            .await
+            .expect("connect_and_run should succeed");
+        server.await.expect("server task");
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], EventMsg::Completed { .. }));
+    }
+}
