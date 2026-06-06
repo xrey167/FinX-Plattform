@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! CCData (formerly CryptoCompare) market-data provider for the TDW platform.
+//! `CCData` (formerly `CryptoCompare`) market-data provider for the TDW platform.
 //!
 //! # Authentication
 //!
@@ -25,20 +25,20 @@ use thiserror::Error;
 /// Provider identifier used in registry entries and error messages.
 pub const PROVIDER_ID: &str = "ccdata";
 
-/// Base URL for the CCData REST API.
+/// Base URL for the `CCData` REST API.
 pub const BASE_URL: &str = "https://data-api.ccdata.io";
 
-/// Environment variable that holds the CCData API key.
+/// Environment variable that holds the `CCData` API key.
 pub const API_KEY_ENV: &str = "TDW_CCDATA_API_KEY";
 
-/// Convenience type alias for fallible CCData operations.
+/// Convenience type alias for fallible `CCData` operations.
 pub type Result<T> = std::result::Result<T, CCDataError>;
 
 // ---------------------------------------------------------------------------
 // Query types
 // ---------------------------------------------------------------------------
 
-/// Query parameters for the CCData daily OHLCV endpoint.
+/// Query parameters for the `CCData` daily OHLCV endpoint.
 ///
 /// Maps to:
 /// `GET /spot/v1/historical/days?market=ccix&instrument={instrument}&limit={limit}`
@@ -86,7 +86,7 @@ impl CCDataOhlcvQuery {
     }
 }
 
-/// Query parameters for the CCData asset metadata endpoint.
+/// Query parameters for the `CCData` asset metadata endpoint.
 ///
 /// Maps to:
 /// `GET /asset/v1/data/by/symbol?asset_symbol={symbol}`
@@ -124,7 +124,7 @@ impl CCDataAssetQuery {
 // Error type
 // ---------------------------------------------------------------------------
 
-/// Errors produced by the CCData provider.
+/// Errors produced by the `CCData` provider.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CCDataError {
     /// The market string was empty or whitespace-only.
@@ -139,7 +139,7 @@ pub enum CCDataError {
     #[error("ccdata asset symbol must not be empty")]
     EmptySymbol,
 
-    /// The symbol contains characters not accepted by CCData.
+    /// The symbol contains characters not accepted by `CCData`.
     #[error("ccdata asset symbol contains unsupported characters")]
     InvalidSymbol,
 
@@ -156,7 +156,7 @@ pub enum CCDataError {
 // Mock / offline data
 // ---------------------------------------------------------------------------
 
-/// Returns a minimal stub OHLCV JSON response matching the CCData shape for
+/// Returns a minimal stub OHLCV JSON response matching the `CCData` shape for
 /// offline testing.
 #[must_use]
 pub fn stub_ohlcv_response(instrument: &str) -> String {
@@ -165,7 +165,7 @@ pub fn stub_ohlcv_response(instrument: &str) -> String {
     )
 }
 
-/// Returns a minimal stub asset metadata JSON response matching the CCData
+/// Returns a minimal stub asset metadata JSON response matching the `CCData`
 /// shape for offline testing.
 #[must_use]
 pub fn stub_asset_response(symbol: &str) -> String {

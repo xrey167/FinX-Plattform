@@ -64,7 +64,7 @@ pub struct KnowledgeIndex {
     tags: TagStore,
     /// The vector collection, namespaced by the embedder's `model_id` so two
     /// embedders of different dimension (e.g. the 8-dim hash vs a 1536-dim
-    /// OpenAI model) never share — and silently corrupt — one collection.
+    /// `OpenAI` model) never share — and silently corrupt — one collection.
     collection: String,
 }
 

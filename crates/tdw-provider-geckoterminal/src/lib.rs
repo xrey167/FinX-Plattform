@@ -92,10 +92,10 @@ impl GeckoTerminalTokenPoolsQuery {
 // Data model
 // ---------------------------------------------------------------------------
 
-/// A single DEX pool record returned by GeckoTerminal.
+/// A single DEX pool record returned by `GeckoTerminal`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DexPool {
-    /// GeckoTerminal composite id, e.g. `"eth_0x88e6a0…"`.
+    /// `GeckoTerminal` composite id, e.g. `"eth_0x88e6a0…"`.
     pub id: String,
     /// Human-readable name, e.g. `"USDC/WETH 0.05%"`.
     pub name: String,

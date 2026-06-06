@@ -6,7 +6,7 @@
 //! (`src/http_fetcher.rs`). The crate compiles and tests correctly
 //! without network access by default.
 //!
-//! Auth uses RapidAPI headers:
+//! Auth uses `RapidAPI` headers:
 //! - `x-rapidapi-key: {TDW_SEEKING_ALPHA_API_KEY}`
 //! - `x-rapidapi-host: seeking-alpha.p.rapidapi.com`
 

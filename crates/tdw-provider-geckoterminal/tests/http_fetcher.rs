@@ -1,8 +1,8 @@
-//! Tests for the real GeckoTerminal HTTP fetcher.
+//! Tests for the real `GeckoTerminal` HTTP fetcher.
 //!
 //! Gated by `--features http` (no reqwest dep otherwise).
 //!
-//! Cassette tests always run under the feature and parse recorded GeckoTerminal
+//! Cassette tests always run under the feature and parse recorded `GeckoTerminal`
 //! response shapes. The live test is additionally gated by
 //! `TDW_GECKOTERMINAL_LIVE=1` and requires a network connection (no API key
 //! needed).

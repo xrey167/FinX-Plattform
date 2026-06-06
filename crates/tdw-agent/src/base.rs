@@ -1,4 +1,4 @@
-//! The canonical FinX entity model — pure Rust, MCP-agnostic.
+//! The canonical `FinX` entity model — pure Rust, MCP-agnostic.
 //!
 //! These types are *ours*: identity/display ([`BaseMetadata`], [`Icon`]), classification
 //! ([`Origin`], [`Adaptivity`]), value sourcing ([`Reference`]), and the shared
@@ -281,7 +281,7 @@ pub enum ToolImplementation {
         /// Run detached as a background job rather than capture-and-return.
         background: bool,
     },
-    /// An interactive terminal session (ConPTY via `portable-pty`).
+    /// An interactive terminal session (`ConPTY` via `portable-pty`).
     Pty {
         /// The shell/program to launch.
         command: String,
@@ -317,7 +317,7 @@ pub enum ToolImplementation {
 /// The shared metadata envelope embedded by every entity kind (the CRD `metadata`).
 ///
 /// Carries [`BaseMetadata`] (flattened, so `name`/`title`/… sit at the top level) plus the
-/// FinX classification and a forward-compatible `_meta` bag for unknown fields.
+/// `FinX` classification and a forward-compatible `_meta` bag for unknown fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct EntityMeta {
     /// Identity & display metadata.
