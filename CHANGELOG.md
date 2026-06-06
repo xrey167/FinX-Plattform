@@ -12,6 +12,47 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 _Nothing yet._
 
+## [0.10.0] - 2026-06-06
+
+Protobuf market-data types and full data-provider wiring: every standalone
+`tdw-provider-*` crate is now registrable in the service dispatcher behind
+per-provider feature gates, with the default build still fully offline.
+
+### Added
+
+- **`tdw-proto` crate** (#139). Protobuf bindings for the core market-data
+  types — `OhlcvBar`, `Tick`, `PriceLevel`, `OrderBookSnapshot`, and the
+  `MarketDataEnvelope` `oneof` wrapper — generated from
+  `proto/market_data.proto`. The generated bindings are vendored
+  (`src/finance.gen.rs`) so the crate builds with no system `protoc` and no
+  build-time codegen; the runtime depends only on upstream `prost`.
+- **All 30 standalone data providers wired into the dispatcher** (#140, #141).
+  `tdw-service-api::default_registry()` can now register every
+  `tdw-provider-*` crate behind a per-provider cargo feature
+  (`provider-<name>`) plus an `all-http-providers` aggregate. With no features
+  the default registry stays offline and registers exactly 3 providers
+  (fileset, yahoo, mock-ws); `all-http-providers` registers 50 distinct
+  `(provider, endpoint)` entries. Seven providers (adanos, benzinga, cboe,
+  deribit, eia, glassnode, seeking-alpha) were converted to the canonical
+  `tdw_core::Fetcher` trait. The CI lint job now clippy- and test-checks the
+  `all-http-providers` feature so the wired registry cannot silently regress.
+- **`TDW_DAEMON_OPEN_POLICY` escape hatch and a worker concurrency default of
+  4** (#133).
+
+### Changed
+
+- Dependency bumps: `ratatui` 0.30.0 → 0.30.1 (#137), `aws-config`
+  1.8.17 → 1.8.18 (#135), `aws-sdk-s3` 1.134.0 → 1.135.0 (#138), `chrono`
+  0.4.44 → 0.4.45 (#136), and the `docker/build-push-action` GitHub Action
+  6 → 7 (#134).
+
+### Fixed
+
+- `tdw-provider-tiingo` did not compile under `--features http`
+  (`TiingoNewsArticle` lacked the `Serialize`/`Deserialize`/`JsonSchema`
+  derives required by `DataModel`); fixed and now covered by the new
+  `all-http-providers` CI checks (#141).
+
 ## [0.9.0] - 2026-05-31
 
 Ten additional data providers completing the gap-analysis coverage sweep
@@ -370,7 +411,10 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...v0.5.0
