@@ -134,8 +134,9 @@ those deep runs are uploaded as CI artifacts on failure.
    confirm every user-visible change is captured under the new version section
    in [`CHANGELOG.md`](../CHANGELOG.md), and date that section. The `MINOR` vs
    `PATCH` choice must match the change set per the policy above.
-4. Run `cargo run -p xtask -- prerelease-check`; confirm the loom relay model
-   and fuzz-smoke corpus replay are green (`prerelease-check: PASS`).
+4. Run the [pre-release fuzz & loom recipe](quality/pre-release-fuzz-loom.md):
+   `cargo run -p xtask -- prerelease-check`; confirm the loom relay model and
+   fuzz-smoke corpus replay are green (`prerelease-check: PASS`).
 5. Create and push the tag:
 
    ```powershell
