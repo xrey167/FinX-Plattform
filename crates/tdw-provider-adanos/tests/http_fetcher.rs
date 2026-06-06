@@ -8,9 +8,10 @@
 
 #![cfg(feature = "http")]
 
+use tdw_core::{Credentials, Fetcher};
 use tdw_provider_adanos::{
-    AdanosPolymarketQuery, AdanosPolymarketResult, AdanosProviderError, AdanosSentimentQuery,
-    AdanosSentimentResult, AdanosTrendingQuery, AdanosTrendingResult,
+    AdanosPolymarketQuery, AdanosPolymarketResult, AdanosSentimentQuery, AdanosSentimentResult,
+    AdanosTrendingQuery, AdanosTrendingResult,
     http_fetcher::{
         AdanosPolymarketHttpFetcher, AdanosSentimentHttpFetcher, AdanosTrendingHttpFetcher,
     },
@@ -182,14 +183,16 @@ async fn missing_api_key_returns_error_without_network_call() {
     }
 
     let fetcher = AdanosSentimentHttpFetcher::default();
-    let query =
-        AdanosSentimentQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
+    let creds = Credentials::default();
     let err = fetcher
-        .fetch(&query)
+        .fetch(serde_json::json!({ "ticker": "AAPL" }), &creds)
         .await
         .expect_err("missing key must return error");
 
-    assert_eq!(err, AdanosProviderError::MissingApiKey);
+    assert!(
+        err.to_string().contains("TDW_ADANOS_API_KEY"),
+        "missing-key error should mention the env var, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -204,15 +207,20 @@ async fn live_adanos_sentiment_returns_data_when_env_var_set() {
     }
 
     let fetcher = AdanosSentimentHttpFetcher::default();
-    let query =
-        AdanosSentimentQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
+    let creds = Credentials::default();
     let result = fetcher
-        .fetch(&query)
+        .fetch(serde_json::json!({ "ticker": "AAPL" }), &creds)
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
-    assert_eq!(result.ticker, "AAPL");
-    assert!(!result.trend.is_empty(), "trend must be non-empty");
+    assert_eq!(result.provider, "adanos");
+    assert_eq!(result.endpoint, "sentiment");
+    let row = result
+        .rows
+        .first()
+        .expect("live response must include a row");
+    assert_eq!(row.ticker, "AAPL");
+    assert!(!row.trend.is_empty(), "trend must be non-empty");
 }
 
 #[tokio::test]
@@ -223,14 +231,15 @@ async fn live_adanos_trending_returns_data_when_env_var_set() {
     }
 
     let fetcher = AdanosTrendingHttpFetcher::default();
-    let query = AdanosTrendingQuery::new(10).unwrap_or_else(|e| panic!("query must build: {e}"));
+    let creds = Credentials::default();
     let result = fetcher
-        .fetch(&query)
+        .fetch(serde_json::json!({ "limit": 10 }), &creds)
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
+    assert_eq!(result.endpoint, "trending");
     assert!(
-        !result.trending.is_empty(),
+        !result.rows.is_empty(),
         "live response must include at least one trending stock"
     );
 }
@@ -243,14 +252,15 @@ async fn live_adanos_polymarket_returns_data_when_env_var_set() {
     }
 
     let fetcher = AdanosPolymarketHttpFetcher::default();
-    let query = AdanosPolymarketQuery::new(5).unwrap_or_else(|e| panic!("query must build: {e}"));
+    let creds = Credentials::default();
     let result = fetcher
-        .fetch(&query)
+        .fetch(serde_json::json!({ "limit": 5 }), &creds)
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
+    assert_eq!(result.endpoint, "polymarket");
     assert!(
-        !result.events.is_empty(),
+        !result.rows.is_empty(),
         "live response must include at least one polymarket event"
     );
 }

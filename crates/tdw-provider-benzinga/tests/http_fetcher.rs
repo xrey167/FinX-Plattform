@@ -8,9 +8,9 @@
 
 #![cfg(feature = "http")]
 
+use tdw_core::{Credentials, Fetcher};
 use tdw_provider_benzinga::{
     BenzingaEarningsItem, BenzingaEarningsQuery, BenzingaNewsItem, BenzingaNewsQuery,
-    BenzingaProviderError,
     http_fetcher::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher},
 };
 
@@ -147,11 +147,14 @@ async fn missing_api_key_returns_error_without_network_call() {
     let query =
         BenzingaNewsQuery::new("AAPL", 5).unwrap_or_else(|e| panic!("query must build: {e}"));
     let err = fetcher
-        .fetch(&query)
+        .extract_data(&query, &Credentials::default())
         .await
         .expect_err("missing key must return error");
 
-    assert_eq!(err, BenzingaProviderError::MissingApiKey);
+    assert!(
+        err.to_string().contains("TDW_BENZINGA_API_KEY"),
+        "missing-key error should mention the env var, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -168,13 +171,16 @@ async fn live_benzinga_news_returns_data_when_env_var_set() {
     let fetcher = BenzingaNewsHttpFetcher::default();
     let query =
         BenzingaNewsQuery::new("AAPL", 5).unwrap_or_else(|e| panic!("query must build: {e}"));
-    let items = fetcher
-        .fetch(&query)
+    let obbject = fetcher
+        .fetch(
+            serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
+            &Credentials::default(),
+        )
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
     assert!(
-        !items.is_empty(),
+        !obbject.rows.is_empty(),
         "live response must include at least one article"
     );
 }
@@ -189,13 +195,16 @@ async fn live_benzinga_earnings_returns_data_when_env_var_set() {
     let fetcher = BenzingaEarningsHttpFetcher::default();
     let query = BenzingaEarningsQuery::new("AAPL", "2024-01-01", "2024-12-31")
         .unwrap_or_else(|e| panic!("query must build: {e}"));
-    let items = fetcher
-        .fetch(&query)
+    let obbject = fetcher
+        .fetch(
+            serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
+            &Credentials::default(),
+        )
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
     assert!(
-        !items.is_empty(),
+        !obbject.rows.is_empty(),
         "live response must include at least one earnings row"
     );
 }

@@ -192,7 +192,7 @@ pub fn mock_fetch_polymarket(query: &AdanosPolymarketQuery) -> Result<AdanosPoly
 // ---------------------------------------------------------------------------
 
 /// Source-level sentiment scores from the `/sentiment/stocks/{ticker}` response.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosSentimentSources {
     pub reddit: f64,
     pub twitter: f64,
@@ -200,7 +200,7 @@ pub struct AdanosSentimentSources {
 }
 
 /// Per-source mention counts from the `/sentiment/stocks/{ticker}` response.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosMentions {
     pub reddit: u64,
     pub twitter: u64,
@@ -208,7 +208,7 @@ pub struct AdanosMentions {
 }
 
 /// Full sentiment result for a single ticker.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosSentimentResult {
     pub ticker: String,
     pub timestamp: i64,
@@ -222,7 +222,7 @@ pub struct AdanosSentimentResult {
 }
 
 /// A single entry from the `/trending/stocks` response.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosTrendingItem {
     pub ticker: String,
     #[serde(rename = "buzzScore")]
@@ -233,14 +233,14 @@ pub struct AdanosTrendingItem {
 }
 
 /// Full trending result from `/trending/stocks`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosTrendingResult {
     pub timestamp: i64,
     pub trending: Vec<AdanosTrendingItem>,
 }
 
 /// A single Polymarket event from the `/polymarket/events` response.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosPolymarketEvent {
     pub id: String,
     pub title: String,
@@ -251,7 +251,7 @@ pub struct AdanosPolymarketEvent {
 }
 
 /// Full Polymarket result from `/polymarket/events`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AdanosPolymarketResult {
     pub events: Vec<AdanosPolymarketEvent>,
 }

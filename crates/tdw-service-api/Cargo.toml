@@ -58,17 +58,22 @@ ws = ["tdw-provider-binance/ws"]
 ## Each pulls its provider crate (optional dep) plus that crate's `http` feature.
 ## None are enabled by default, so the default build stays offline and
 ## `default_registry()` keeps registering exactly the 3 offline providers.
+provider-adanos = ["dep:tdw-provider-adanos", "tdw-provider-adanos/http"]
 provider-akshare = ["dep:tdw-provider-akshare", "tdw-provider-akshare/http"]
 provider-alpaca = ["dep:tdw-provider-alpaca", "tdw-provider-alpaca/http"]
 provider-alpha-vantage = [
     "dep:tdw-provider-alpha-vantage",
     "tdw-provider-alpha-vantage/http",
 ]
+provider-benzinga = ["dep:tdw-provider-benzinga", "tdw-provider-benzinga/http"]
 provider-bls = ["dep:tdw-provider-bls", "tdw-provider-bls/http"]
+provider-cboe = ["dep:tdw-provider-cboe", "tdw-provider-cboe/http"]
 provider-ccdata = ["dep:tdw-provider-ccdata", "tdw-provider-ccdata/http"]
 provider-coingecko = ["dep:tdw-provider-coingecko", "tdw-provider-coingecko/http"]
 provider-databento = ["dep:tdw-provider-databento", "tdw-provider-databento/http"]
+provider-deribit = ["dep:tdw-provider-deribit", "tdw-provider-deribit/http"]
 provider-ecb = ["dep:tdw-provider-ecb", "tdw-provider-ecb/http"]
+provider-eia = ["dep:tdw-provider-eia", "tdw-provider-eia/http"]
 provider-finra = ["dep:tdw-provider-finra", "tdw-provider-finra/http"]
 provider-fmp = ["dep:tdw-provider-fmp", "tdw-provider-fmp/http"]
 provider-fred = ["dep:tdw-provider-fred", "tdw-provider-fred/http"]
@@ -76,6 +81,7 @@ provider-geckoterminal = [
     "dep:tdw-provider-geckoterminal",
     "tdw-provider-geckoterminal/http",
 ]
+provider-glassnode = ["dep:tdw-provider-glassnode", "tdw-provider-glassnode/http"]
 provider-huggingface = [
     "dep:tdw-provider-huggingface",
     "tdw-provider-huggingface/http",
@@ -84,6 +90,10 @@ provider-nasdaq = ["dep:tdw-provider-nasdaq", "tdw-provider-nasdaq/http"]
 provider-oecd = ["dep:tdw-provider-oecd", "tdw-provider-oecd/http"]
 provider-polygon = ["dep:tdw-provider-polygon", "tdw-provider-polygon/http"]
 provider-sec = ["dep:tdw-provider-sec", "tdw-provider-sec/http"]
+provider-seeking-alpha = [
+    "dep:tdw-provider-seeking-alpha",
+    "tdw-provider-seeking-alpha/http",
+]
 provider-tiingo = ["dep:tdw-provider-tiingo", "tdw-provider-tiingo/http"]
 provider-tmx = ["dep:tdw-provider-tmx", "tdw-provider-tmx/http"]
 provider-tradier = ["dep:tdw-provider-tradier", "tdw-provider-tradier/http"]
@@ -102,23 +112,30 @@ provider-binance-http = ["tdw-provider-binance/http"]
 ## — with no features `default_registry()` still returns only the 3 offline
 ## providers; this only adds the live HTTP fetchers when explicitly enabled.
 all-http-providers = [
+    "provider-adanos",
     "provider-akshare",
     "provider-alpaca",
     "provider-alpha-vantage",
+    "provider-benzinga",
     "provider-bls",
+    "provider-cboe",
     "provider-ccdata",
     "provider-coingecko",
     "provider-databento",
+    "provider-deribit",
     "provider-ecb",
+    "provider-eia",
     "provider-finra",
     "provider-fmp",
     "provider-fred",
     "provider-geckoterminal",
+    "provider-glassnode",
     "provider-huggingface",
     "provider-nasdaq",
     "provider-oecd",
     "provider-polygon",
     "provider-sec",
+    "provider-seeking-alpha",
     "provider-tiingo",
     "provider-tmx",
     "provider-tradier",
@@ -165,25 +182,32 @@ tdw-llm-openai-compat = { workspace = true }
 tdw-mask = { path = "../tdw-mask" }
 tdw-outbox = { path = "../tdw-outbox" }
 tdw-pipe = { path = "../tdw-pipe" }
+tdw-provider-adanos = { path = "../tdw-provider-adanos", optional = true }
 tdw-provider-akshare = { path = "../tdw-provider-akshare", optional = true }
 tdw-provider-alpaca = { path = "../tdw-provider-alpaca", optional = true }
 tdw-provider-alpha-vantage = { path = "../tdw-provider-alpha-vantage", optional = true }
+tdw-provider-benzinga = { path = "../tdw-provider-benzinga", optional = true }
 tdw-provider-binance = { path = "../tdw-provider-binance" }
 tdw-provider-bls = { path = "../tdw-provider-bls", optional = true }
+tdw-provider-cboe = { path = "../tdw-provider-cboe", optional = true }
 tdw-provider-ccdata = { path = "../tdw-provider-ccdata", optional = true }
 tdw-provider-coingecko = { path = "../tdw-provider-coingecko", optional = true }
 tdw-provider-databento = { path = "../tdw-provider-databento", optional = true }
+tdw-provider-deribit = { path = "../tdw-provider-deribit", optional = true }
 tdw-provider-ecb = { path = "../tdw-provider-ecb", optional = true }
+tdw-provider-eia = { path = "../tdw-provider-eia", optional = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-finra = { path = "../tdw-provider-finra", optional = true }
 tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
+tdw-provider-glassnode = { path = "../tdw-provider-glassnode", optional = true }
 tdw-provider-huggingface = { path = "../tdw-provider-huggingface", optional = true }
 tdw-provider-nasdaq = { path = "../tdw-provider-nasdaq", optional = true }
 tdw-provider-oecd = { path = "../tdw-provider-oecd", optional = true }
 tdw-provider-polygon = { path = "../tdw-provider-polygon", optional = true }
 tdw-provider-sec = { path = "../tdw-provider-sec", optional = true }
+tdw-provider-seeking-alpha = { path = "../tdw-provider-seeking-alpha", optional = true }
 tdw-provider-tiingo = { path = "../tdw-provider-tiingo", optional = true }
 tdw-provider-tmx = { path = "../tdw-provider-tmx", optional = true }
 tdw-provider-tradier = { path = "../tdw-provider-tradier", optional = true }

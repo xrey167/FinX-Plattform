@@ -105,7 +105,7 @@ impl SeekingAlphaRatingsQuery {
 // ---------------------------------------------------------------------------
 
 /// A single analyst article returned by `/analysis/v2/list`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SeekingAlphaArticle {
     pub id: String,
     pub title: String,
@@ -115,7 +115,7 @@ pub struct SeekingAlphaArticle {
 }
 
 /// Ratings snapshot returned by `/symbols/v1/summary`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SeekingAlphaRatings {
     pub ticker: String,
     pub quant_rating: f64,
