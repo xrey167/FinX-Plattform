@@ -10,7 +10,35 @@ for compatible fixes, docs, CI-only changes, and packaging repairs.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Cryptographic OIDC verification** in `tdw-auth-oidc`. New `verify_jwt` /
+  `verify_jwt_strict` verify a compact JWT's signature against supplied
+  verifying keys (RS256/ES256, resolved by `kid`) and enforce
+  `exp`/`nbf`/`iat` (60s clock-skew leeway), issuer, and audience — failing
+  closed on any error. The `none` pseudo-algorithm and HMAC tokens are rejected
+  (alg-confusion / `alg:none` defence). Built on `jsonwebtoken` (default `ring`
+  backend, already a vetted transitive dependency). The existing structural
+  claim/JWKS checks remain as a pre-filter. Remote JWKS fetch stays out of
+  scope: verifying keys are supplied from the configured JWKS.
+
+### Changed
+
+- **Constant-time bearer-token comparison** on the MCP Streamable HTTP layer.
+  `TDW_MCP_HTTP_TOKEN` validation now compares tokens via `subtle`'s
+  `ConstantTimeEq` over fixed-width digests instead of `==`, removing the
+  timing side channel (and not leaking token length).
+- **Safe daemon TCP defaults.** The daemon TCP transport already defaults to
+  loopback (`127.0.0.1:7878`) when `TDW_DAEMON_TCP_BIND` is unset; it now logs a
+  prominent `SECURITY WARNING` at startup when bound to a non-loopback address
+  with no auth-backed policy attached.
+- **Partial OIDC config is now a hard startup error.** A partially-configured
+  `prod`/`production` boot (some but not all `TDW_OIDC_*` set, or invalid
+  JWKS/claims) makes the daemon **refuse to start**, with a diagnostic listing
+  every missing variable. A fully-unset OIDC config keeps the existing
+  fail-closed (starts, dispatches return `Failed`) behavior. `OidcPolicyError`
+  gained `MissingEnvVars(Vec<&'static str>)` (replacing the single-var
+  `MissingEnvVar`).
 
 ## [1.0.0] - 2026-06-07
 

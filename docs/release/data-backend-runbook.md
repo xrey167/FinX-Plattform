@@ -53,6 +53,36 @@ live up` fails fast if it is unset. Set a strong, unique value in `.env`
 without it. Front it with a TLS/OAuth reverse proxy per
 [`mcp-remote-deployment.md`](mcp-remote-deployment.md) for any non-local use.
 
+### Daemon TCP transport — bind safely
+
+The daemon's TCP transport (`TDW_DAEMON_TCP_BIND`) **defaults to loopback**
+(`127.0.0.1:7878`) when the variable is unset, so an out-of-the-box run is not
+reachable off-host. Binding a routable address is an **explicit opt-in**.
+
+- **Safe default**: leave `TDW_DAEMON_TCP_BIND` unset (or set `127.0.0.1:7878`).
+  Anything that needs the daemon (the MCP server, workers) reaches it over the
+  loopback/compose network.
+- **Container / cross-host**: the `live` compose stack sets
+  `TDW_DAEMON_TCP_BIND=0.0.0.0:7878` so sibling containers can reach it, but the
+  port is **internal-only** (not host-published) and the compose network is the
+  trust boundary. Do **not** publish `7878` to the host or a routable interface.
+- **Prominent warning**: when the daemon binds a **non-loopback** address with
+  **no auth-backed policy attached**, it logs a `SECURITY WARNING` to stderr at
+  startup (the daemon's transport is unauthenticated plaintext — any host that
+  can reach the port can drive it).
+
+If you must expose the daemon beyond loopback, protect it with one of:
+
+- **Ingress auth policy**: configure `TDW_OIDC_*` (see
+  [`production-auth-oidc.md`](production-auth-oidc.md)) so dispatches require a
+  verified token; cryptographic JWT verification (RS256/ES256 signature + claim
+  checks) is enforced by `tdw-auth-oidc`.
+- **mTLS**: terminate mutual-TLS at a sidecar/proxy in front of `7878` so only
+  clients presenting a trusted client certificate reach the daemon.
+- **Reverse proxy**: front the daemon with a TLS/OAuth reverse proxy (as for the
+  MCP server) and keep the daemon itself bound to loopback inside the trust
+  boundary.
+
 ## Verify the bootstrap
 
 Tail the bootstrap logs:
