@@ -7,45 +7,42 @@
 //! `TDW_EIA_API_KEY`.
 
 use bytes::Bytes;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_eia::{
     EiaCommodity, EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher, EiaNaturalGasQuery,
     EiaSpotPriceQuery,
 };
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Spot-price cassette
 // ---------------------------------------------------------------------------
 
 fn spot_price_cassette() -> Bytes {
-    Bytes::from(
-        serde_json::json!({
-            "response": {
-                "data": [
-                    {
-                        "period": "2024-01-02",
-                        "product-name": "Crude Oil WTI",
-                        "value": "72.36",
-                        "units": "Dollars per Barrel"
-                    },
-                    {
-                        "period": "2024-01-01",
-                        "product-name": "Crude Oil WTI",
-                        "value": ".",
-                        "units": "Dollars per Barrel"
-                    },
-                    {
-                        "period": "2023-12-29",
-                        "product-name": "Crude Oil Brent",
-                        "value": "77.59",
-                        "units": "Dollars per Barrel"
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "response": {
+            "data": [
+                {
+                    "period": "2024-01-02",
+                    "product-name": "Crude Oil WTI",
+                    "value": "72.36",
+                    "units": "Dollars per Barrel"
+                },
+                {
+                    "period": "2024-01-01",
+                    "product-name": "Crude Oil WTI",
+                    "value": ".",
+                    "units": "Dollars per Barrel"
+                },
+                {
+                    "period": "2023-12-29",
+                    "product-name": "Crude Oil Brent",
+                    "value": "77.59",
+                    "units": "Dollars per Barrel"
+                }
+            ]
+        }
+    })
 }
 
 fn spot_price_query() -> EiaSpotPriceQuery {
@@ -80,22 +77,18 @@ fn cassette_spot_price_rejects_bad_json() {
 #[test]
 fn cassette_spot_price_rejects_non_numeric_value() {
     let fetcher = EiaHttpSpotPriceFetcher::default();
-    let bad = Bytes::from(
-        serde_json::json!({
-            "response": {
-                "data": [
-                    {
-                        "period": "2024-01-02",
-                        "product-name": "Crude Oil WTI",
-                        "value": "N/A",
-                        "units": "Dollars per Barrel"
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let bad = cassette_bytes!({
+        "response": {
+            "data": [
+                {
+                    "period": "2024-01-02",
+                    "product-name": "Crude Oil WTI",
+                    "value": "N/A",
+                    "units": "Dollars per Barrel"
+                }
+            ]
+        }
+    });
     fetcher
         .transform_data(&spot_price_query(), bad)
         .expect_err("non-numeric value must be rejected");
@@ -123,34 +116,30 @@ fn spot_price_transform_query_validates_and_rejects_bad_length() {
 // ---------------------------------------------------------------------------
 
 fn natural_gas_cassette() -> Bytes {
-    Bytes::from(
-        serde_json::json!({
-            "response": {
-                "data": [
-                    {
-                        "period": "2024-01",
-                        "series-description": "Henry Hub Natural Gas Spot Price",
-                        "value": "2.53",
-                        "units": "Dollars per Million Btu"
-                    },
-                    {
-                        "period": "2023-12",
-                        "series-description": "Henry Hub Natural Gas Spot Price",
-                        "value": ".",
-                        "units": "Dollars per Million Btu"
-                    },
-                    {
-                        "period": "2023-11",
-                        "series-description": "Henry Hub Natural Gas Spot Price",
-                        "value": "3.12",
-                        "units": "Dollars per Million Btu"
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "response": {
+            "data": [
+                {
+                    "period": "2024-01",
+                    "series-description": "Henry Hub Natural Gas Spot Price",
+                    "value": "2.53",
+                    "units": "Dollars per Million Btu"
+                },
+                {
+                    "period": "2023-12",
+                    "series-description": "Henry Hub Natural Gas Spot Price",
+                    "value": ".",
+                    "units": "Dollars per Million Btu"
+                },
+                {
+                    "period": "2023-11",
+                    "series-description": "Henry Hub Natural Gas Spot Price",
+                    "value": "3.12",
+                    "units": "Dollars per Million Btu"
+                }
+            ]
+        }
+    })
 }
 
 fn natural_gas_query() -> EiaNaturalGasQuery {
@@ -208,13 +197,7 @@ async fn live_eia_spot_price_returns_records_when_env_vars_set() {
     let query = EiaSpotPriceQuery::new(EiaCommodity::CrudeOilWti, 5)
         .unwrap_or_else(|e| panic!("query must construct: {e}"));
     let fetcher = EiaHttpSpotPriceFetcher::default();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let records = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let records = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !records.is_empty(),
@@ -231,13 +214,7 @@ async fn live_eia_natural_gas_returns_records_when_env_vars_set() {
 
     let query = EiaNaturalGasQuery::new(5).unwrap_or_else(|e| panic!("query must construct: {e}"));
     let fetcher = EiaHttpNaturalGasFetcher::default();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let records = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let records = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !records.is_empty(),

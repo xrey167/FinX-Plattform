@@ -3990,6 +3990,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4006,6 +4007,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4022,6 +4024,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4056,6 +4059,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -4074,6 +4078,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4090,6 +4095,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4106,6 +4112,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4154,6 +4161,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4170,6 +4178,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4186,6 +4195,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4231,6 +4241,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4246,6 +4257,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4262,6 +4274,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4278,6 +4291,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4293,6 +4307,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4309,6 +4324,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4325,6 +4341,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4341,6 +4358,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4357,6 +4375,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4378,6 +4397,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-testkit"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde_json",
+ "tdw-core",
+]
+
+[[package]]
 name = "tdw-provider-tiingo"
 version = "0.1.0"
 dependencies = [
@@ -4389,6 +4417,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4405,6 +4434,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4421,6 +4451,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4437,6 +4468,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4453,6 +4485,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4498,6 +4531,7 @@ dependencies = [
  "tdw-core",
  "tdw-domain",
  "tdw-provider-fileset",
+ "tdw-provider-testkit",
  "tokio",
 ]
 

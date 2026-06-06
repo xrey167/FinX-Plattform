@@ -10,65 +10,58 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_fmp::{
     FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
     FmpStatement,
 };
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
 // ---------------------------------------------------------------------------
 
 fn historical_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "symbol": "AAPL",
-            "historical": [
-                {
-                    "date": "2024-01-02",
-                    "open": 185.6,
-                    "high": 186.1,
-                    "low": 184.4,
-                    "close": 185.2,
-                    "volume": 55000000.0
-                },
-                {
-                    "date": "2024-01-03",
-                    "open": 184.2,
-                    "high": 185.9,
-                    "low": 183.1,
-                    "close": 184.8,
-                    "volume": 48000000.0
-                }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "symbol": "AAPL",
+        "historical": [
+            {
+                "date": "2024-01-02",
+                "open": 185.6,
+                "high": 186.1,
+                "low": 184.4,
+                "close": 185.2,
+                "volume": 55000000.0
+            },
+            {
+                "date": "2024-01-03",
+                "open": 184.2,
+                "high": 185.9,
+                "low": 183.1,
+                "close": 184.8,
+                "volume": 48000000.0
+            }
+        ]
+    })
 }
 
 fn income_cassette() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "date": "2024-09-28",
-                "symbol": "AAPL",
-                "revenue": 391035000000_i64,
-                "grossProfit": 180683000000_i64,
-                "netIncome": 93736000000_i64
-            },
-            {
-                "date": "2023-09-30",
-                "symbol": "AAPL",
-                "revenue": 383285000000_i64,
-                "grossProfit": 169148000000_i64,
-                "netIncome": 96995000000_i64
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "date": "2024-09-28",
+            "symbol": "AAPL",
+            "revenue": 391035000000_i64,
+            "grossProfit": 180683000000_i64,
+            "netIncome": 93736000000_i64
+        },
+        {
+            "date": "2023-09-30",
+            "symbol": "AAPL",
+            "revenue": 383285000000_i64,
+            "grossProfit": 169148000000_i64,
+            "netIncome": 96995000000_i64
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -150,11 +143,7 @@ fn income_transform_query_rejects_unknown_statement() {
 fn empty_historical_response_produces_empty_vec() {
     let fetcher = FmpHttpHistoricalFetcher::default();
     let query = FmpHistoricalQuery::new("AAPL").unwrap_or_else(|e| panic!("query: {e}"));
-    let raw = Bytes::from(
-        json!({"symbol": "AAPL", "historical": []})
-            .to_string()
-            .into_bytes(),
-    );
+    let raw = cassette_bytes!({"symbol": "AAPL", "historical": []});
 
     let rows = fetcher
         .transform_data(&query, raw)
@@ -191,13 +180,7 @@ async fn live_fmp_historical_returns_data_when_env_var_set() {
     let query = FmpHttpHistoricalFetcher::transform_query(json!({"symbol": "AAPL"}))
         .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -217,13 +200,7 @@ async fn live_fmp_income_returns_data_when_env_var_set() {
     let query = FmpFundamentalsQuery::new("AAPL", FmpStatement::Income, 3)
         .unwrap_or_else(|e| panic!("query: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

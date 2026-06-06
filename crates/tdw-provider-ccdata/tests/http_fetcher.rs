@@ -10,10 +10,11 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_ccdata::{
     CCDataHttpFetcher, CCDataOhlcvQuery, stub_asset_response, stub_ohlcv_response,
 };
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
@@ -29,55 +30,47 @@ fn ohlcv_query() -> CCDataOhlcvQuery {
 }
 
 fn ohlcv_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "Data": {
-                "TimeFrom": 1704067200,
-                "TimeTo": 1704153600,
-                "Instrument": "BTC-USD",
-                "Entries": [
-                    {
-                        "TIMESTAMP": 1704153600,
-                        "OPEN": 44000.0,
-                        "HIGH": 46000.0,
-                        "LOW": 43000.0,
-                        "CLOSE": 45500.0,
-                        "VOLUME": 920000.0,
-                        "QUOTE_VOLUME": 41860000000.0
-                    },
-                    {
-                        "TIMESTAMP": 1704067200,
-                        "OPEN": 42000.0,
-                        "HIGH": 45000.0,
-                        "LOW": 41500.0,
-                        "CLOSE": 44000.0,
-                        "VOLUME": 850000.0,
-                        "QUOTE_VOLUME": 37400000000.0
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "Data": {
+            "TimeFrom": 1704067200,
+            "TimeTo": 1704153600,
+            "Instrument": "BTC-USD",
+            "Entries": [
+                {
+                    "TIMESTAMP": 1704153600,
+                    "OPEN": 44000.0,
+                    "HIGH": 46000.0,
+                    "LOW": 43000.0,
+                    "CLOSE": 45500.0,
+                    "VOLUME": 920000.0,
+                    "QUOTE_VOLUME": 41860000000.0
+                },
+                {
+                    "TIMESTAMP": 1704067200,
+                    "OPEN": 42000.0,
+                    "HIGH": 45000.0,
+                    "LOW": 41500.0,
+                    "CLOSE": 44000.0,
+                    "VOLUME": 850000.0,
+                    "QUOTE_VOLUME": 37400000000.0
+                }
+            ]
+        }
+    })
 }
 
 fn asset_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "Data": {
-                "ID": 1182,
-                "SYMBOL": "BTC",
-                "NAME": "Bitcoin",
-                "ASSET_TYPE": "BLOCKCHAIN",
-                "LAUNCH_DATE": 1230940800,
-                "CIRCULATING_SUPPLY": 19500000.0,
-                "MARKET_CAP_USD": 858000000000.0
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "Data": {
+            "ID": 1182,
+            "SYMBOL": "BTC",
+            "NAME": "Bitcoin",
+            "ASSET_TYPE": "BLOCKCHAIN",
+            "LAUNCH_DATE": 1230940800,
+            "CIRCULATING_SUPPLY": 19500000.0,
+            "MARKET_CAP_USD": 858000000000.0
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -145,25 +138,21 @@ fn transform_data_uses_query_instrument_when_response_field_is_empty() {
     let fetcher = CCDataHttpFetcher::default();
     let query = ohlcv_query();
     // Construct a cassette without the Instrument field.
-    let raw = Bytes::from(
-        json!({
-            "Data": {
-                "TimeFrom": 1704067200,
-                "TimeTo": 1704067200,
-                "Entries": [{
-                    "TIMESTAMP": 1704067200,
-                    "OPEN": 42000.0,
-                    "HIGH": 45000.0,
-                    "LOW": 41500.0,
-                    "CLOSE": 44000.0,
-                    "VOLUME": 850000.0,
-                    "QUOTE_VOLUME": 37400000000.0
-                }]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let raw = cassette_bytes!({
+        "Data": {
+            "TimeFrom": 1704067200,
+            "TimeTo": 1704067200,
+            "Entries": [{
+                "TIMESTAMP": 1704067200,
+                "OPEN": 42000.0,
+                "HIGH": 45000.0,
+                "LOW": 41500.0,
+                "CLOSE": 44000.0,
+                "VOLUME": 850000.0,
+                "QUOTE_VOLUME": 37400000000.0
+            }]
+        }
+    });
     let rows = fetcher
         .transform_data(&query, raw)
         .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
@@ -257,13 +246,7 @@ async fn live_ccdata_ohlcv_returns_data_when_env_var_set() {
     let fetcher = CCDataHttpFetcher::default();
     let query = CCDataOhlcvQuery::new("ccix", "BTC-USD", 5)
         .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

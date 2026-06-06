@@ -14,65 +14,58 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
 use tdw_provider_sec::{SecFilingsHttpFetcher, SecFilingsQuery, SecXbrlHttpFetcher};
+use tdw_provider_testkit::cassette_bytes;
 
 // ── Cassette helpers ──────────────────────────────────────────────────────────
 
 fn cassette_submissions() -> Bytes {
-    Bytes::from(
-        json!({
-            "cik": "320193",
-            "name": "Apple Inc.",
-            "filings": {
-                "recent": {
-                    "accessionNumber": [
-                        "0000320193-24-000123",
-                        "0000320193-23-000106"
-                    ],
-                    "form": ["10-K", "10-Q"],
-                    "filingDate": ["2024-10-01", "2023-08-04"]
-                }
+    cassette_bytes!({
+        "cik": "320193",
+        "name": "Apple Inc.",
+        "filings": {
+            "recent": {
+                "accessionNumber": [
+                    "0000320193-24-000123",
+                    "0000320193-23-000106"
+                ],
+                "form": ["10-K", "10-Q"],
+                "filingDate": ["2024-10-01", "2023-08-04"]
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn cassette_xbrl() -> Bytes {
-    Bytes::from(
-        json!({
-            "cik": 320193,
-            "entityName": "Apple Inc.",
-            "facts": {
-                "us-gaap": {
-                    "Revenue": {
-                        "label": "Revenue",
-                        "units": {
-                            "USD": [
-                                {
-                                    "end": "2024-09-28",
-                                    "val": 391035000000.0_f64,
-                                    "form": "10-K"
-                                },
-                                {
-                                    "end": "2023-09-30",
-                                    "val": 383285000000.0_f64,
-                                    "form": "10-K"
-                                },
-                                {
-                                    "end": "2024-03-30",
-                                    "val": 90753000000.0_f64,
-                                    "form": "10-Q"
-                                }
-                            ]
-                        }
+    cassette_bytes!({
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "Revenue": {
+                    "label": "Revenue",
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2024-09-28",
+                                "val": 391035000000.0_f64,
+                                "form": "10-K"
+                            },
+                            {
+                                "end": "2023-09-30",
+                                "val": 383285000000.0_f64,
+                                "form": "10-K"
+                            },
+                            {
+                                "end": "2024-03-30",
+                                "val": 90753000000.0_f64,
+                                "form": "10-Q"
+                            }
+                        ]
                     }
                 }
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 // ── Cassette tests (always run with --features http) ─────────────────────────

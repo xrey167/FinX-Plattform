@@ -11,6 +11,7 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_tiingo::{
     TiingoHistoricalQuery, TiingoHttpHistoricalFetcher, TiingoHttpNewsFetcher, TiingoNewsQuery,
 };
@@ -30,60 +31,52 @@ fn news_query() -> TiingoNewsQuery {
 }
 
 fn historical_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "date": "2024-01-02T00:00:00+00:00",
-                "open": 185.6,
-                "high": 186.1,
-                "low": 184.4,
-                "close": 185.2,
-                "volume": 55000000.0,
-                "adjClose": 185.2,
-                "adjHigh": 186.1,
-                "adjLow": 184.4,
-                "adjOpen": 185.6,
-                "adjVolume": 55000000.0,
-                "divCash": 0.0,
-                "splitFactor": 1.0
-            },
-            {
-                "date": "2024-01-03T00:00:00+00:00",
-                "open": 184.2,
-                "high": 185.9,
-                "low": 183.1,
-                "close": 184.7,
-                "volume": 48000000.0,
-                "adjClose": 184.7,
-                "adjHigh": 185.9,
-                "adjLow": 183.1,
-                "adjOpen": 184.2,
-                "adjVolume": 48000000.0,
-                "divCash": 0.0,
-                "splitFactor": 1.0
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "date": "2024-01-02T00:00:00+00:00",
+            "open": 185.6,
+            "high": 186.1,
+            "low": 184.4,
+            "close": 185.2,
+            "volume": 55000000.0,
+            "adjClose": 185.2,
+            "adjHigh": 186.1,
+            "adjLow": 184.4,
+            "adjOpen": 185.6,
+            "adjVolume": 55000000.0,
+            "divCash": 0.0,
+            "splitFactor": 1.0
+        },
+        {
+            "date": "2024-01-03T00:00:00+00:00",
+            "open": 184.2,
+            "high": 185.9,
+            "low": 183.1,
+            "close": 184.7,
+            "volume": 48000000.0,
+            "adjClose": 184.7,
+            "adjHigh": 185.9,
+            "adjLow": 183.1,
+            "adjOpen": 184.2,
+            "adjVolume": 48000000.0,
+            "divCash": 0.0,
+            "splitFactor": 1.0
+        }
+    ])
 }
 
 fn news_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "id": 123,
-                "title": "Apple reports record quarter",
-                "publishedDate": "2024-01-02T09:00:00+00:00",
-                "url": "https://example.com/apple-record-quarter",
-                "source": "Reuters",
-                "tickers": ["AAPL"],
-                "tags": ["earnings"]
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "id": 123,
+            "title": "Apple reports record quarter",
+            "publishedDate": "2024-01-02T09:00:00+00:00",
+            "url": "https://example.com/apple-record-quarter",
+            "source": "Reuters",
+            "tickers": ["AAPL"],
+            "tags": ["earnings"]
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -206,13 +199,7 @@ async fn live_historical_returns_data_when_env_var_set() {
 
     let fetcher = TiingoHttpHistoricalFetcher::default();
     let query = historical_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

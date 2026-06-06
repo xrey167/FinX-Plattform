@@ -7,7 +7,8 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_tradier::{
     TradierHttpOptionsFetcher, TradierHttpQuoteFetcher, TradierOptionsQuery, TradierQuoteQuery,
 };
@@ -30,49 +31,41 @@ fn options_query() -> TradierOptionsQuery {
 }
 
 fn quote_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "quotes": {
-                "quote": {
-                    "symbol": "AAPL",
-                    "last": 185.20,
-                    "bid": 185.15,
-                    "ask": 185.25,
-                    "volume": 55000000,
-                    "open": 184.50,
-                    "high": 186.10,
-                    "low": 184.20,
-                    "close": 185.20,
-                    "change": -0.50
-                }
+    cassette_bytes!({
+        "quotes": {
+            "quote": {
+                "symbol": "AAPL",
+                "last": 185.20,
+                "bid": 185.15,
+                "ask": 185.25,
+                "volume": 55000000,
+                "open": 184.50,
+                "high": 186.10,
+                "low": 184.20,
+                "close": 185.20,
+                "change": -0.50
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn options_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "options": {
-                "option": [
-                    {
-                        "symbol": "AAPL240119C00180000",
-                        "option_type": "call",
-                        "strike": 180.0,
-                        "bid": 5.10,
-                        "ask": 5.30,
-                        "open_interest": 12500,
-                        "volume": 850,
-                        "expiration_date": "2024-01-19"
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "options": {
+            "option": [
+                {
+                    "symbol": "AAPL240119C00180000",
+                    "option_type": "call",
+                    "strike": 180.0,
+                    "bid": 5.10,
+                    "ask": 5.30,
+                    "open_interest": 12500,
+                    "volume": 850,
+                    "expiration_date": "2024-01-19"
+                }
+            ]
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -153,13 +146,7 @@ async fn live_tradier_quote_returns_data_when_env_vars_set() {
 
     let fetcher = TradierHttpQuoteFetcher::default();
     let query = quote_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -177,13 +164,7 @@ async fn live_tradier_options_chain_returns_data_when_env_vars_set() {
 
     let fetcher = TradierHttpOptionsFetcher::default();
     let query = options_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

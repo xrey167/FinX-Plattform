@@ -18,8 +18,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 
 fn sample_query() -> tdw_provider_fileset::EquityHistoricalQuery {
@@ -31,28 +32,24 @@ fn sample_query() -> tdw_provider_fileset::EquityHistoricalQuery {
 /// daily bars including one bar with all-null fields (Yahoo emits this
 /// when the requested range overlaps an open session).
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "chart": {
-                "result": [{
-                    "meta": { "symbol": "AAPL", "currency": "USD" },
-                    "timestamp": [1_700_006_400, 1_700_092_800, 1_700_179_200],
-                    "indicators": {
-                        "quote": [{
-                            "open":   [180.0, 182.5, null],
-                            "high":   [183.2, 184.0, null],
-                            "low":    [179.5, 181.8, null],
-                            "close":  [182.4, 183.6, null],
-                            "volume": [50_123_400i64, 45_678_900i64, null]
-                        }]
-                    }
-                }],
-                "error": null
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "chart": {
+            "result": [{
+                "meta": { "symbol": "AAPL", "currency": "USD" },
+                "timestamp": [1_700_006_400, 1_700_092_800, 1_700_179_200],
+                "indicators": {
+                    "quote": [{
+                        "open":   [180.0, 182.5, null],
+                        "high":   [183.2, 184.0, null],
+                        "low":    [179.5, 181.8, null],
+                        "close":  [182.4, 183.6, null],
+                        "volume": [50_123_400i64, 45_678_900i64, null]
+                    }]
+                }
+            }],
+            "error": null
+        }
+    })
 }
 
 #[test]
@@ -78,11 +75,7 @@ fn cassette_replay_decodes_yahoo_chart_envelope_and_skips_null_bars() {
 fn cassette_replay_surfaces_yahoo_error_envelope() {
     let fetcher = YahooHttpEquityHistoricalFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({ "chart": { "result": [], "error": { "code": "Not Found" } } })
-            .to_string()
-            .into_bytes(),
-    );
+    let envelope = cassette_bytes!({ "chart": { "result": [], "error": { "code": "Not Found" } } });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -98,13 +91,7 @@ async fn live_yahoo_returns_recent_bars_when_env_var_set() {
 
     let fetcher = YahooHttpEquityHistoricalFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
