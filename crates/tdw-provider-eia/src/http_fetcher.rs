@@ -1,16 +1,21 @@
 #![cfg(feature = "http")]
 //! Real EIA HTTP fetchers for spot-price and natural-gas endpoints.
 //!
-//! Both fetchers are gated by the `http` Cargo feature. Live calls
-//! require `TDW_EIA_API_KEY`; the live integration tests are additionally
-//! gated by `TDW_EIA_LIVE=1` so unattended CI stays offline.
+//! Both fetchers implement the canonical [`tdw_core::Fetcher`] trait and are
+//! gated by the `http` Cargo feature. Live calls require `TDW_EIA_API_KEY`;
+//! the live integration tests are additionally gated by `TDW_EIA_LIVE=1` so
+//! unattended CI stays offline.
 
+use async_trait::async_trait;
+use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
+use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 
 use crate::{
-    API_KEY_ENV, BASE_URL, EiaNaturalGasQuery, EiaNaturalGasRecord, EiaProviderError,
-    EiaSpotPriceQuery, EiaSpotPriceRecord, Result,
+    API_KEY_ENV, BASE_URL, EiaNaturalGasQuery, EiaNaturalGasRecord, EiaSpotPriceQuery,
+    EiaSpotPriceRecord, PROVIDER_ID,
 };
 
 const USER_AGENT: &str = "tdw-provider-eia/0.1";
@@ -24,14 +29,14 @@ fn read_api_key() -> Result<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .ok_or(EiaProviderError::MissingApiKey)
+        .ok_or_else(|| Error::Provider(format!("eia api key env {API_KEY_ENV} must be set")))
 }
 
 fn build_client() -> Result<Client> {
     Client::builder()
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| EiaProviderError::Provider(format!("eia build client: {e}")))
+        .map_err(|e| Error::Provider(format!("eia build client: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -110,18 +115,32 @@ impl Default for EiaHttpSpotPriceFetcher {
 
 impl EiaHttpSpotPriceFetcher {
     /// Override the EIA base URL (useful for tests / staging).
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
-    /// Fetch and decode spot-price records for the given query.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EiaProviderError`] on missing API key, HTTP failure, or
-    /// parse failure.
-    pub async fn fetch(&self, query: &EiaSpotPriceQuery) -> Result<Vec<EiaSpotPriceRecord>> {
+    /// Registry entry advertised under the canonical `eia` provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
+}
+
+#[async_trait]
+impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher {
+    const PROVIDER: &'static str = PROVIDER_ID;
+    const ENDPOINT: &'static str = "spot_price";
+
+    fn transform_query(params: Value) -> Result<EiaSpotPriceQuery> {
+        let query: EiaSpotPriceQuery = serde_json::from_value(params)
+            .map_err(|e| Error::InvalidQuery(format!("eia spot-price query: {e}")))?;
+        EiaSpotPriceQuery::new(query.commodity, query.length)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &EiaSpotPriceQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
         let endpoint = format!(
@@ -141,65 +160,56 @@ impl EiaHttpSpotPriceFetcher {
             .query(&params)
             .send()
             .await
-            .map_err(|e| EiaProviderError::Provider(format!("eia spot-price request: {e}")))?;
+            .map_err(|e| Error::Provider(format!("eia spot-price request: {e}")))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<unreadable body>".to_string());
-            return Err(EiaProviderError::Provider(format!(
+            return Err(Error::Provider(format!(
                 "eia spot-price returned {status}: {body}"
             )));
         }
-        let raw_bytes = response
+        response
             .bytes()
             .await
-            .map_err(|e| EiaProviderError::Provider(format!("eia spot-price read body: {e}")))?;
-        parse_spot_price_bytes(&raw_bytes)
+            .map_err(|e| Error::Provider(format!("eia spot-price read body: {e}")))
     }
 
-    /// Decode a raw JSON byte slice into spot-price records.
-    ///
-    /// Exposed separately so cassette tests can call it without HTTP.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EiaProviderError::Provider`] on JSON parse failures or
-    /// non-numeric value strings.
-    pub fn parse_bytes(&self, raw: &[u8]) -> Result<Vec<EiaSpotPriceRecord>> {
-        parse_spot_price_bytes(raw)
-    }
-}
-
-fn parse_spot_price_bytes(raw: &[u8]) -> Result<Vec<EiaSpotPriceRecord>> {
-    let envelope: EiaSpotPriceEnvelope = serde_json::from_slice(raw)
-        .map_err(|e| EiaProviderError::Provider(format!("eia spot-price parse_json: {e}")))?;
-    let mut records = Vec::with_capacity(envelope.response.data.len());
-    for row in envelope.response.data {
-        if row.period.is_empty() {
-            return Err(EiaProviderError::Provider(
-                "eia spot-price row missing period".to_string(),
-            ));
+    fn transform_data(
+        &self,
+        _query: &EiaSpotPriceQuery,
+        raw: Bytes,
+    ) -> Result<Vec<EiaSpotPriceRecord>> {
+        let envelope: EiaSpotPriceEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("eia spot-price parse_json: {e}")))?;
+        let mut records = Vec::with_capacity(envelope.response.data.len());
+        for row in envelope.response.data {
+            if row.period.is_empty() {
+                return Err(Error::Provider(
+                    "eia spot-price row missing period".to_string(),
+                ));
+            }
+            let raw_value = row.value.trim();
+            if raw_value.is_empty() || raw_value == "." {
+                continue;
+            }
+            let value = raw_value.parse::<f64>().map_err(|e| {
+                Error::Provider(format!(
+                    "eia spot-price value parse failed for {}: {e}",
+                    row.period
+                ))
+            })?;
+            records.push(EiaSpotPriceRecord {
+                period: row.period,
+                product_name: row.product_name,
+                value,
+                units: row.units,
+            });
         }
-        let raw_value = row.value.trim();
-        if raw_value.is_empty() || raw_value == "." {
-            continue;
-        }
-        let value = raw_value.parse::<f64>().map_err(|e| {
-            EiaProviderError::Provider(format!(
-                "eia spot-price value parse failed for {}: {e}",
-                row.period
-            ))
-        })?;
-        records.push(EiaSpotPriceRecord {
-            period: row.period,
-            product_name: row.product_name,
-            value,
-            units: row.units,
-        });
+        Ok(records)
     }
-    Ok(records)
 }
 
 // ---------------------------------------------------------------------------
@@ -224,18 +234,35 @@ impl Default for EiaHttpNaturalGasFetcher {
 
 impl EiaHttpNaturalGasFetcher {
     /// Override the EIA base URL.
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
-    /// Fetch and decode natural-gas price records.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EiaProviderError`] on missing API key, HTTP failure, or
-    /// parse failure.
-    pub async fn fetch(&self, query: &EiaNaturalGasQuery) -> Result<Vec<EiaNaturalGasRecord>> {
+    /// Registry entry advertised under the canonical `eia` provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
+}
+
+#[async_trait]
+impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetcher {
+    const PROVIDER: &'static str = PROVIDER_ID;
+    const ENDPOINT: &'static str = "natural_gas";
+
+    fn transform_query(params: Value) -> Result<EiaNaturalGasQuery> {
+        let query: EiaNaturalGasQuery = serde_json::from_value(params)
+            .map_err(|e| Error::InvalidQuery(format!("eia natural-gas query: {e}")))?;
+        EiaNaturalGasQuery::new(query.length).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &EiaNaturalGasQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
         let endpoint = format!(
@@ -253,63 +280,54 @@ impl EiaHttpNaturalGasFetcher {
             .query(&params)
             .send()
             .await
-            .map_err(|e| EiaProviderError::Provider(format!("eia natural-gas request: {e}")))?;
+            .map_err(|e| Error::Provider(format!("eia natural-gas request: {e}")))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "<unreadable body>".to_string());
-            return Err(EiaProviderError::Provider(format!(
+            return Err(Error::Provider(format!(
                 "eia natural-gas returned {status}: {body}"
             )));
         }
-        let raw_bytes = response
+        response
             .bytes()
             .await
-            .map_err(|e| EiaProviderError::Provider(format!("eia natural-gas read body: {e}")))?;
-        parse_natural_gas_bytes(&raw_bytes)
+            .map_err(|e| Error::Provider(format!("eia natural-gas read body: {e}")))
     }
 
-    /// Decode a raw JSON byte slice into natural-gas records.
-    ///
-    /// Exposed separately so cassette tests can call it without HTTP.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EiaProviderError::Provider`] on JSON parse failures or
-    /// non-numeric value strings.
-    pub fn parse_bytes(&self, raw: &[u8]) -> Result<Vec<EiaNaturalGasRecord>> {
-        parse_natural_gas_bytes(raw)
-    }
-}
-
-fn parse_natural_gas_bytes(raw: &[u8]) -> Result<Vec<EiaNaturalGasRecord>> {
-    let envelope: EiaNaturalGasEnvelope = serde_json::from_slice(raw)
-        .map_err(|e| EiaProviderError::Provider(format!("eia natural-gas parse_json: {e}")))?;
-    let mut records = Vec::with_capacity(envelope.response.data.len());
-    for row in envelope.response.data {
-        if row.period.is_empty() {
-            return Err(EiaProviderError::Provider(
-                "eia natural-gas row missing period".to_string(),
-            ));
+    fn transform_data(
+        &self,
+        _query: &EiaNaturalGasQuery,
+        raw: Bytes,
+    ) -> Result<Vec<EiaNaturalGasRecord>> {
+        let envelope: EiaNaturalGasEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("eia natural-gas parse_json: {e}")))?;
+        let mut records = Vec::with_capacity(envelope.response.data.len());
+        for row in envelope.response.data {
+            if row.period.is_empty() {
+                return Err(Error::Provider(
+                    "eia natural-gas row missing period".to_string(),
+                ));
+            }
+            let raw_value = row.value.trim();
+            if raw_value.is_empty() || raw_value == "." {
+                continue;
+            }
+            let value = raw_value.parse::<f64>().map_err(|e| {
+                Error::Provider(format!(
+                    "eia natural-gas value parse failed for {}: {e}",
+                    row.period
+                ))
+            })?;
+            records.push(EiaNaturalGasRecord {
+                period: row.period,
+                series_description: row.series_description,
+                value,
+                units: row.units,
+            });
         }
-        let raw_value = row.value.trim();
-        if raw_value.is_empty() || raw_value == "." {
-            continue;
-        }
-        let value = raw_value.parse::<f64>().map_err(|e| {
-            EiaProviderError::Provider(format!(
-                "eia natural-gas value parse failed for {}: {e}",
-                row.period
-            ))
-        })?;
-        records.push(EiaNaturalGasRecord {
-            period: row.period,
-            series_description: row.series_description,
-            value,
-            units: row.units,
-        });
+        Ok(records)
     }
-    Ok(records)
 }

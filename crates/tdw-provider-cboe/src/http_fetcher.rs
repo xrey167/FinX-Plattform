@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 
 use crate::{
     BASE_URL, CboeIndexQuery, CboeOptionsQuery, CboeProviderError, index_request_path,
@@ -88,12 +88,18 @@ impl CboeHttpOptionsFetcher {
         self.base_url = base_url.into();
         self
     }
+
+    /// Registry entry advertised under the canonical `cboe` provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
 }
 
 #[async_trait]
 impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
     const PROVIDER: &'static str = "cboe";
-    const ENDPOINT: &'static str = "delayed_quotes_options";
+    const ENDPOINT: &'static str = "options";
 
     fn transform_query(params: Value) -> Result<CboeOptionsQuery> {
         let symbol = params
@@ -188,12 +194,18 @@ impl CboeHttpIndexFetcher {
         self.base_url = base_url.into();
         self
     }
+
+    /// Registry entry advertised under the canonical `cboe` provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
 }
 
 #[async_trait]
 impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
     const PROVIDER: &'static str = "cboe";
-    const ENDPOINT: &'static str = "us_indices_quotes";
+    const ENDPOINT: &'static str = "index_quotes";
 
     fn transform_query(params: Value) -> Result<CboeIndexQuery> {
         let index = params

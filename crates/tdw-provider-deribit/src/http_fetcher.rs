@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 
 use crate::{
     BASE_URL, DeribitFundingQuery, DeribitFundingRecord, DeribitGreeks, DeribitInstrument,
@@ -89,6 +89,12 @@ impl DeribitHttpInstrumentsFetcher {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
+    }
+
+    /// Registry entry for the canonical `deribit` / `instruments` slot.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
     }
 }
 
@@ -193,6 +199,12 @@ impl DeribitHttpOrderBookFetcher {
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
+    }
+
+    /// Registry entry for the canonical `deribit` / `order_book` slot.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
     }
 }
 
@@ -303,12 +315,18 @@ impl DeribitHttpFundingFetcher {
         self.base_url = base_url.into();
         self
     }
+
+    /// Registry entry for the canonical `deribit` / `funding_rate` slot.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
 }
 
 #[async_trait]
 impl Fetcher<DeribitFundingQuery, DeribitFundingRecord> for DeribitHttpFundingFetcher {
     const PROVIDER: &'static str = "deribit";
-    const ENDPOINT: &'static str = "funding_rate_history";
+    const ENDPOINT: &'static str = "funding_rate";
 
     fn transform_query(params: Value) -> Result<DeribitFundingQuery> {
         let instrument_name = params

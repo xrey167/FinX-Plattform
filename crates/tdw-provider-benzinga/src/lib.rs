@@ -147,7 +147,7 @@ pub fn stub_fetch_earnings(query: &BenzingaEarningsQuery) -> Result<Vec<Benzinga
 // ---------------------------------------------------------------------------
 
 /// A single news article from the Benzinga `/news` response.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BenzingaNewsItem {
     pub id: String,
     pub title: String,
@@ -161,7 +161,7 @@ pub struct BenzingaNewsItem {
 }
 
 /// A single row from the Benzinga `/calendar/earnings` response.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BenzingaEarningsItem {
     pub id: String,
     pub date: String,
