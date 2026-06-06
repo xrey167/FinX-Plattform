@@ -23,7 +23,7 @@ async-trait = "0.1.89"
 prost = "0.14"
 tdw-proto = { path = "crates/tdw-proto" }
 base64 = "0.22"
-chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 bytes = "1.11.0"
 futures-core = "0.3.31"
 schemars = "1.2.1"
