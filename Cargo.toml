@@ -20,6 +20,8 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 async-trait = "0.1.89"
+prost = "0.14"
+tdw-proto = { path = "crates/tdw-proto" }
 base64 = "0.22"
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
 bytes = "1.11.0"

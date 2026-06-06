@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package tdw.finance;
+
+// ── OHLCV candlestick bar ───────────────────────────────────────────────────
+
+message OhlcvBar {
+  string symbol    = 1;  // e.g. "AAPL", "BTC-USD"
+  string provider  = 2;  // e.g. "polygon", "binance"
+  string timeframe = 3;  // e.g. "1m", "5m", "1h", "1d"
+
+  int64  ts_ns  = 4;  // bar open time, nanoseconds since Unix epoch (UTC)
+
+  double open   = 5;
+  double high   = 6;
+  double low    = 7;
+  double close  = 8;
+  double volume = 9;
+
+  double vwap        = 10;  // volume-weighted average (0 = not provided)
+  uint64 trade_count = 11;
+}
+
+// ── Individual trade tick ───────────────────────────────────────────────────
+
+enum TradeSide {
+  TRADE_SIDE_UNKNOWN = 0;
+  TRADE_SIDE_BUY     = 1;
+  TRADE_SIDE_SELL    = 2;
+}
+
+message Tick {
+  string symbol   = 1;
+  string provider = 2;
+
+  int64     ts_ns    = 3;  // nanoseconds since Unix epoch (UTC)
+  double    price    = 4;
+  double    size     = 5;
+  TradeSide side     = 6;
+  string    trade_id = 7;  // exchange-assigned trade ID (empty if not provided)
+}
+
+// ── Order book snapshot ─────────────────────────────────────────────────────
+
+message PriceLevel {
+  double price    = 1;
+  double quantity = 2;
+}
+
+message OrderBookSnapshot {
+  string symbol   = 1;
+  string provider = 2;
+
+  int64  ts_ns    = 3;  // nanoseconds since Unix epoch (UTC)
+
+  repeated PriceLevel bids = 4;
+  repeated PriceLevel asks = 5;
+
+  uint64 sequence = 6;  // exchange sequence number for ordering
+}
+
+// ── Envelope — wraps any market data type on the bus ───────────────────────
+
+message MarketDataEnvelope {
+  string provider      = 1;
+  string symbol        = 2;
+  string ingestion_id  = 3;  // ULID of the ingest op
+
+  int64  received_at_ns = 4;  // nanoseconds since Unix epoch (UTC)
+
+  oneof payload {
+    OhlcvBar          bar        = 10;
+    Tick              tick       = 11;
+    OrderBookSnapshot order_book = 12;
+  }
+}

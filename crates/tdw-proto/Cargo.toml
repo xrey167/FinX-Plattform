@@ -1,0 +1,17 @@
+[package]
+name = "tdw-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+# Runtime only: derives (`::prost::Message`/`Oneof`/`Enumeration`) and encoding
+# for the vendored bindings in `src/finance.gen.rs`. No build-time `prost-build`
+# or system `protoc` — the generated code is committed.
+prost = { workspace = true }
+
+[lints]
+workspace = true
