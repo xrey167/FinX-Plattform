@@ -162,6 +162,7 @@ docker compose --profile live down -v
 
 ## See also
 
+- `docs/release/secrets-and-tls.md` - systemd/Kubernetes secret injection, TLS, and `TDW_MCP_HTTP_TOKEN` rotation.
 - `docs/quality/production-storage-transports.md` - per-backend
   recipes and the full G010 status table.
 - `docs/quality/production-transport-status.md` - workspace-wide

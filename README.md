@@ -83,7 +83,13 @@ cargo test --workspace
 cargo run -p xtask -- clean-room-audit
 ```
 
-Local infra (Postgres, ClickHouse, optionally Qdrant / Meilisearch / MinIO / Redis) comes up via Docker Compose profiles — see [`docs/docker.md`](docs/docker.md).
+Local infra (Postgres, ClickHouse, optionally Qdrant / Meilisearch / MinIO / Redis) comes up via Docker Compose profiles — see [`docs/docker.md`](docs/docker.md). Before the first `live` bring-up, run the idempotent setup helper to create `.env` and a random MCP token:
+
+```powershell
+.\scripts\compose-setup.ps1   # or: ./scripts/compose-setup.sh
+```
+
+Every environment variable is documented in [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md).
 
 ## Repository layout
 
