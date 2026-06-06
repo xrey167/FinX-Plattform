@@ -9,12 +9,8 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{

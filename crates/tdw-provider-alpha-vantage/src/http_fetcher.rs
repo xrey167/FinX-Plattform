@@ -6,13 +6,9 @@
 //! integration test is additionally gated by `TDW_ALPHA_VANTAGE_LIVE=1` so
 //! unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
 use std::collections::HashMap;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, AlphaVantageError, AlphaVantageFunction, AlphaVantageQuery, BASE_URL};
@@ -129,10 +125,8 @@ impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
             ("outputsize", "compact".to_string()),
             ("apikey", api_key),
         ];
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("alpha_vantage client build: {e}")))?;
+        let client =
+            tdw_core::http_support::build_client(USER_AGENT, "alpha_vantage client build")?;
         let response = client
             .get(self.base_url())
             .query(&query_params)

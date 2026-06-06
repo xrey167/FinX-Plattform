@@ -6,12 +6,8 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{ACCEPT_HEADER, BASE_URL, DexPool, GeckoTerminalPoolQuery};
 
@@ -90,15 +86,6 @@ tdw_core::provider_fetcher_struct!(
     BASE_URL
 );
 
-impl GeckoTerminalHttpFetcher {
-    fn build_client() -> Result<Client> {
-        Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("geckoterminal client: {e}")))
-    }
-}
-
 #[async_trait]
 impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
     const PROVIDER: &'static str = "geckoterminal";
@@ -132,7 +119,7 @@ impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
             query.network,
             query.pool_address,
         );
-        let client = Self::build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "geckoterminal client")?;
         let response = client
             .get(&url)
             .header("Accept", ACCEPT_HEADER)
@@ -238,7 +225,7 @@ pub async fn fetch_trending_raw(base_url: &str, network: &str) -> Result<Bytes> 
         base_url.trim_end_matches('/'),
         network,
     );
-    let client = GeckoTerminalHttpFetcher::build_client()?;
+    let client = tdw_core::http_support::build_client(USER_AGENT, "geckoterminal client")?;
     let response = client
         .get(&url)
         .header("Accept", ACCEPT_HEADER)
@@ -298,7 +285,7 @@ pub async fn fetch_token_pools_raw(
         network,
         token_address,
     );
-    let client = GeckoTerminalHttpFetcher::build_client()?;
+    let client = tdw_core::http_support::build_client(USER_AGENT, "geckoterminal client")?;
     let response = client
         .get(&url)
         .header("Accept", ACCEPT_HEADER)

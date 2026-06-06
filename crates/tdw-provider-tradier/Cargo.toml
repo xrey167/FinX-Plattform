@@ -13,8 +13,7 @@ http = [
     "dep:reqwest",
     "dep:tdw-core",
     "dep:tdw-domain",
-    "dep:tokio",
-]
+    "dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }

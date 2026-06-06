@@ -5,13 +5,9 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery, TiingoProviderError};
@@ -94,7 +90,7 @@ impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetch
             query.symbol,
         );
         let query_params = [("startDate", "2024-01-01".to_string()), ("token", api_key)];
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "tiingo http client")?;
         let response = client
             .get(&endpoint)
             .query(&query_params)
@@ -184,7 +180,7 @@ impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
         let tickers_param = query.tickers.join(",").to_ascii_lowercase();
         let endpoint = format!("{}/news", self.base_url().trim_end_matches('/'));
         let query_params = [("tickers", tickers_param), ("token", api_key)];
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "tiingo http client")?;
         let response = client
             .get(&endpoint)
             .query(&query_params)
@@ -238,11 +234,4 @@ fn read_api_key() -> Result<String> {
                 TiingoProviderError::Provider(format!("{API_KEY_ENV} not set")).to_string(),
             )
         })
-}
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("tiingo http client: {e}")))
 }

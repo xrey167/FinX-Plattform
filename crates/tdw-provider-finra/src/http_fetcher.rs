@@ -8,11 +8,7 @@
 //!
 //! The FINRA API returns pipe-delimited plain text, not JSON.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     BASE_URL, FinraOtcSummaryQuery, FinraOtcSummaryRecord, FinraShortInterestQuery,

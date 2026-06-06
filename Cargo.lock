@@ -3673,6 +3673,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "inventory",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",

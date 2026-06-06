@@ -7,12 +7,8 @@
 //! integration test is additionally gated by `TDW_NASDAQ_LIVE=1` so
 //! unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{BASE_URL, NasdaqDataRow, NasdaqDatasetQuery, dataset_request};
 

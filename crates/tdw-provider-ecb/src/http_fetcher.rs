@@ -6,11 +6,7 @@
 //! The live integration test is additionally gated by `TDW_ECB_LIVE=1` so
 //! unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{BASE_URL, EcbDataQuery, EcbObservation, parse_ecb_value};
 

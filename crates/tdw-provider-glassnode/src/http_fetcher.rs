@@ -5,12 +5,8 @@
 //! environment and appends it as the `api_key` query parameter. Live
 //! integration tests are additionally gated by `TDW_GLASSNODE_LIVE=1`.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{API_KEY_ENV, BASE_URL, GlassnodeDataPoint, GlassnodeMetric, GlassnodeMetricQuery};
 
