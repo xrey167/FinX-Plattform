@@ -115,7 +115,7 @@ impl Registry {
     ///
     /// Returns [`LoadError::Invariant`] / [`LoadError::Duplicate`] from [`Registry::insert`]
     /// if a merged resource violates an invariant or collides on `(kind, name)`.
-    pub fn merge(&mut self, other: Registry) -> Result<(), LoadError> {
+    pub fn merge(&mut self, other: Self) -> Result<(), LoadError> {
         for by_name in other.entries.into_values() {
             for resource in by_name.into_values() {
                 self.insert(resource)?;
