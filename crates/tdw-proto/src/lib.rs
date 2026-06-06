@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-#![doc = "Generated protobuf bindings for FinX-Finance market data types."]
+#![doc = "Generated protobuf bindings for TDW market data types."]
 
 pub mod finance {
     include!(concat!(env!("OUT_DIR"), "/tdw.finance.rs"));
