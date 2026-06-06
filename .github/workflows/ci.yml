@@ -50,9 +50,15 @@ jobs:
       # default `cargo test --workspace` matrix; lint + test it here so the
       # broadcast fan-out and multi-subscriber path cannot silently break.
       - run: cargo clippy -p tdw-app-server --features transport-http --all-targets -- -D warnings
+      # The live HTTP data providers are wired behind per-provider features plus
+      # the `all-http-providers` aggregate, absent from the default matrix. Lint
+      # + test the aggregate here so a provider or dependency change cannot
+      # silently break the wired registry (the default registry stays offline).
+      - run: cargo clippy -p tdw-service-api --features all-http-providers --all-targets -- -D warnings
       - run: cargo test -p tdw-udf-wasm --features wasmi
       - run: cargo test -p tdw-sandbox --features udf-wasm
       - run: cargo test -p tdw-app-server --features transport-http
+      - run: cargo test -p tdw-service-api --features all-http-providers
       - run: cargo deny check
       - run: cargo run -p xtask -- schema-sync
       - run: git diff --exit-code -- docs/schemas/agent

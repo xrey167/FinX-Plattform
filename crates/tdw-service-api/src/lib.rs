@@ -90,7 +90,57 @@ use tdw_protocol::{
     ActorKind, ActorRef, EventMsg, Op, OpEnvelope, PermissionId, ReplayFrame, SessionId,
     schema_bundle as protocol_schema_bundle,
 };
+#[cfg(feature = "provider-akshare")]
+use tdw_provider_akshare::AkShareHttpFetcher;
+#[cfg(feature = "provider-alpaca")]
+use tdw_provider_alpaca::AlpacaHttpStockBarsFetcher;
+#[cfg(feature = "provider-alpha-vantage")]
+use tdw_provider_alpha_vantage::AlphaVantageHttpFetcher;
+#[cfg(feature = "provider-binance-http")]
+use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
+#[cfg(feature = "provider-bls")]
+use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
+#[cfg(feature = "provider-ccdata")]
+use tdw_provider_ccdata::CCDataHttpFetcher;
+#[cfg(feature = "provider-coingecko")]
+use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
+#[cfg(feature = "provider-databento")]
+use tdw_provider_databento::{DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher};
+#[cfg(feature = "provider-ecb")]
+use tdw_provider_ecb::EcbHttpDataFetcher;
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+#[cfg(feature = "provider-finra")]
+use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
+#[cfg(feature = "provider-fmp")]
+use tdw_provider_fmp::{FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher};
+#[cfg(feature = "provider-fred")]
+use tdw_provider_fred::FredHttpSeriesObservationsFetcher;
+#[cfg(feature = "provider-geckoterminal")]
+use tdw_provider_geckoterminal::GeckoTerminalHttpFetcher;
+#[cfg(feature = "provider-huggingface")]
+use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
+#[cfg(feature = "provider-nasdaq")]
+use tdw_provider_nasdaq::NasdaqHttpDatasetFetcher;
+#[cfg(feature = "provider-oecd")]
+use tdw_provider_oecd::OecdHttpDataFetcher;
+#[cfg(feature = "provider-polygon")]
+use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
+#[cfg(feature = "provider-sec")]
+use tdw_provider_sec::{SecFilingsHttpFetcher, SecXbrlHttpFetcher};
+#[cfg(feature = "provider-tiingo")]
+use tdw_provider_tiingo::{TiingoHttpHistoricalFetcher, TiingoHttpNewsFetcher};
+#[cfg(feature = "provider-tmx")]
+use tdw_provider_tmx::{TmxHttpBatchQuoteFetcher, TmxHttpQuoteFetcher};
+#[cfg(feature = "provider-tradier")]
+use tdw_provider_tradier::{TradierHttpOptionsFetcher, TradierHttpQuoteFetcher};
+#[cfg(feature = "provider-trading-economics")]
+use tdw_provider_trading_economics::{
+    TradingEconomicsHttpCalendarFetcher, TradingEconomicsHttpIndicatorFetcher,
+};
+#[cfg(feature = "provider-velodata")]
+use tdw_provider_velodata::{
+    VelodataHttpFundingFetcher, VelodataHttpLiquidationsFetcher, VelodataHttpOiFetcher,
+};
 use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
@@ -135,6 +185,72 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
     registry.register(YahooEquityHistoricalFetcher::registry_entry())?;
     registry.register(MockEquityStreamer::registry_entry())?;
+    #[cfg(feature = "provider-akshare")]
+    registry.register(AkShareHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-alpaca")]
+    registry.register(AlpacaHttpStockBarsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-alpha-vantage")]
+    registry.register(AlphaVantageHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-bls")]
+    registry.register(BlsHttpTimeSeriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-ccdata")]
+    registry.register(CCDataHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-coingecko")]
+    registry.register(CoinGeckoHttpOhlcFetcher::registry_entry())?;
+    #[cfg(feature = "provider-databento")]
+    registry.register(DatabentoHttpTimeseriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-databento")]
+    registry.register(DatabentoMetadataFetcher::registry_entry())?;
+    #[cfg(feature = "provider-ecb")]
+    registry.register(EcbHttpDataFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finra")]
+    registry.register(FinraOtcSummaryHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finra")]
+    registry.register(FinraShortInterestHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpHistoricalFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpIncomeFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fred")]
+    registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-geckoterminal")]
+    registry.register(GeckoTerminalHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-huggingface")]
+    registry.register(HuggingFaceHttpTextGenerationFetcher::registry_entry())?;
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpDatasetFetcher::registry_entry())?;
+    #[cfg(feature = "provider-oecd")]
+    registry.register(OecdHttpDataFetcher::registry_entry())?;
+    #[cfg(feature = "provider-polygon")]
+    registry.register(PolygonHttpAggregatesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecFilingsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecXbrlHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tiingo")]
+    registry.register(TiingoHttpHistoricalFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tiingo")]
+    registry.register(TiingoHttpNewsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tmx")]
+    registry.register(TmxHttpQuoteFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tmx")]
+    registry.register(TmxHttpBatchQuoteFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tradier")]
+    registry.register(TradierHttpQuoteFetcher::registry_entry())?;
+    #[cfg(feature = "provider-tradier")]
+    registry.register(TradierHttpOptionsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-trading-economics")]
+    registry.register(TradingEconomicsHttpCalendarFetcher::registry_entry())?;
+    #[cfg(feature = "provider-trading-economics")]
+    registry.register(TradingEconomicsHttpIndicatorFetcher::registry_entry())?;
+    #[cfg(feature = "provider-velodata")]
+    registry.register(VelodataHttpFundingFetcher::registry_entry())?;
+    #[cfg(feature = "provider-velodata")]
+    registry.register(VelodataHttpLiquidationsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-velodata")]
+    registry.register(VelodataHttpOiFetcher::registry_entry())?;
+    #[cfg(feature = "provider-binance-http")]
+    registry.register(BinanceHttpTickerPriceFetcher::registry_entry())?;
     Ok(registry)
 }
 
@@ -1124,6 +1240,46 @@ mod tests {
                 .iter()
                 .any(|provider| provider.provider == "mock-ws"
                     && provider.kind == ProviderKind::Streamer)
+        );
+    }
+
+    /// The default (no-feature) build must register exactly the three offline
+    /// providers (fileset, yahoo, mock-ws). Enabling any `provider-*` feature
+    /// only adds live HTTP fetchers on top, so this exact count is asserted only
+    /// when no provider feature is active.
+    #[cfg(not(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-bls",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-ecb",
+        feature = "provider-finra",
+        feature = "provider-fmp",
+        feature = "provider-fred",
+        feature = "provider-geckoterminal",
+        feature = "provider-huggingface",
+        feature = "provider-nasdaq",
+        feature = "provider-oecd",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+        feature = "provider-tmx",
+        feature = "provider-tradier",
+        feature = "provider-trading-economics",
+        feature = "provider-velodata",
+        feature = "provider-binance-http",
+    )))]
+    #[test]
+    fn default_registry_is_offline_only() {
+        let providers =
+            list_providers().unwrap_or_else(|error| panic!("providers should list: {error}"));
+        assert_eq!(
+            providers.len(),
+            3,
+            "default build must register exactly the 3 offline providers"
         );
     }
 
