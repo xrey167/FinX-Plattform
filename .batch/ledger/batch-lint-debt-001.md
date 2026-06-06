@@ -31,7 +31,7 @@ clippy::use_self` reports zero `use_self` warnings.
 
 ## PR
 
-(link added on creation)
+https://github.com/xrey167/FinX-Plattform/pull/143
 
 ## Notes
 
