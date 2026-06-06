@@ -90,7 +90,7 @@
       "type": "object"
     },
     "EntityMeta": {
-      "description": "The shared metadata envelope embedded by every entity kind (the CRD `metadata`).\n\nCarries [`BaseMetadata`] (flattened, so `name`/`title`/… sit at the top level) plus the\nFinX classification and a forward-compatible `_meta` bag for unknown fields.",
+      "description": "The shared metadata envelope embedded by every entity kind (the CRD `metadata`).\n\nCarries [`BaseMetadata`] (flattened, so `name`/`title`/… sit at the top level) plus the\n`FinX` classification and a forward-compatible `_meta` bag for unknown fields.",
       "properties": {
         "_meta": {
           "additionalProperties": true,

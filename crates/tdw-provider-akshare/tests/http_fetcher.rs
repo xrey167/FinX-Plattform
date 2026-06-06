@@ -1,4 +1,4 @@
-//! Tests for the real AkShare historical OHLCV HTTP fetcher.
+//! Tests for the real `AkShare` historical OHLCV HTTP fetcher.
 //!
 //! Gated by `--features http` (no reqwest dep otherwise).
 //!
