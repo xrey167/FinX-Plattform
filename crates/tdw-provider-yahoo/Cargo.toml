@@ -25,5 +25,8 @@ tdw-domain = { workspace = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tokio = { workspace = true, optional = true }
 
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
 [lints]
 workspace = true

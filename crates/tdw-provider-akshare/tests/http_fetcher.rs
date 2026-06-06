@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_akshare::{AkShareHttpFetcher, AkShareMarket, AkShareQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_a_share_query() -> AkShareQuery {
     AkShareHttpFetcher::transform_query(json!({
@@ -34,45 +35,37 @@ fn sample_hk_query() -> AkShareQuery {
 }
 
 fn a_share_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "日期": "2024-01-02",
-                "开盘": 10.5,
-                "收盘": 10.8,
-                "最高": 10.9,
-                "最低": 10.4,
-                "成交量": 8500000.0
-            },
-            {
-                "日期": "2024-01-03",
-                "开盘": 10.8,
-                "收盘": 11.0,
-                "最高": 11.2,
-                "最低": 10.7,
-                "成交量": 9200000.0
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "日期": "2024-01-02",
+            "开盘": 10.5,
+            "收盘": 10.8,
+            "最高": 10.9,
+            "最低": 10.4,
+            "成交量": 8500000.0
+        },
+        {
+            "日期": "2024-01-03",
+            "开盘": 10.8,
+            "收盘": 11.0,
+            "最高": 11.2,
+            "最低": 10.7,
+            "成交量": 9200000.0
+        }
+    ])
 }
 
 fn hk_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "日期": "2024-01-02",
-                "开盘": 310.0,
-                "收盘": 315.0,
-                "最高": 318.0,
-                "最低": 308.0,
-                "成交量": 25000000.0
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "日期": "2024-01-02",
+            "开盘": 310.0,
+            "收盘": 315.0,
+            "最高": 318.0,
+            "最低": 308.0,
+            "成交量": 25000000.0
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -193,13 +186,7 @@ async fn live_akshare_returns_recent_a_share_bars_when_env_var_set() {
 
     let fetcher = AkShareHttpFetcher::default();
     let query = sample_a_share_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
