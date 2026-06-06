@@ -8,12 +8,8 @@
 //! to be set in the environment. Live integration tests are additionally
 //! gated by `TDW_BENZINGA_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     API_KEY_ENV, BASE_URL, BenzingaEarningsItem, BenzingaEarningsQuery, BenzingaNewsItem,
@@ -78,13 +74,6 @@ fn read_api_key() -> Result<String> {
         .ok_or_else(|| Error::Provider(BenzingaProviderError::MissingApiKey.to_string()))
 }
 
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("benzinga client build: {e}")))
-}
-
 fn map_news_item(wire: WireNewsItem) -> BenzingaNewsItem {
     BenzingaNewsItem {
         id: wire.id,
@@ -140,7 +129,7 @@ impl Fetcher<BenzingaNewsQuery, BenzingaNewsItem> for BenzingaNewsHttpFetcher {
 
     async fn extract_data(&self, query: &BenzingaNewsQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = read_api_key()?;
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "benzinga client build")?;
         let endpoint = format!("{}/news", self.base_url().trim_end_matches('/'));
         let response = client
             .get(&endpoint)
@@ -220,7 +209,7 @@ impl Fetcher<BenzingaEarningsQuery, BenzingaEarningsItem> for BenzingaEarningsHt
         _creds: &Credentials,
     ) -> Result<Bytes> {
         let api_key = read_api_key()?;
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "benzinga client build")?;
         let endpoint = format!(
             "{}/calendar/earnings",
             self.base_url().trim_end_matches('/')

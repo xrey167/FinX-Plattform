@@ -7,12 +7,9 @@
 //! rate-limits apply. Live integration tests are additionally gated by
 //! `TDW_BLS_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::{Value, json};
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use serde_json::json;
+use tdw_core::http_support::prelude::*;
 
 use crate::{API_KEY_ENV, BASE_URL, BlsDataPoint, BlsSeriesQuery, parse_bls_response};
 

@@ -8,12 +8,17 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 inventory-registration = ["dep:inventory"]
+# Shared HTTP fetcher scaffolding (prelude re-export + build_client +
+# read_required_key) consumed by `tdw-provider-*` crates. Gated so the default
+# offline build pulls in no reqwest dependency.
+http = ["dep:reqwest"]
 
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures-core = { workspace = true }
 inventory = { version = "0.3.21", optional = true }
+reqwest = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

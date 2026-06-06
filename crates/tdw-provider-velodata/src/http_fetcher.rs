@@ -7,11 +7,7 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     API_KEY_ENV, API_KEY_HEADER, AggregatedLiquidation, AggregatedOi, BASE_URL, FundingRate,

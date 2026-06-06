@@ -16,11 +16,7 @@
 //! `with_base_url` to point them at a local cassette server during
 //! integration tests.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::EquityHistoricalData;
 
 use crate::{TmxBatchQuoteQuery, TmxQuote, TmxQuoteQuery, parse_quote_response, validate_symbol};
@@ -29,13 +25,6 @@ const BASE_URL: &str = "https://app.tmxmoney.com/apphub/quotes/api";
 const USER_AGENT: &str = "tdw-provider-tmx/0.1";
 
 // ── helpers ────────────────────────────────────────────────────────────────
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|error| Error::Provider(format!("tmx client build: {error}")))
-}
 
 async fn get_bytes(client: &Client, url: &str) -> Result<Bytes> {
     let response = client
@@ -100,7 +89,7 @@ impl Fetcher<TmxQuoteQuery, EquityHistoricalData> for TmxHttpQuoteFetcher {
             self.base_url(),
             query.symbol
         );
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "tmx client build")?;
         get_bytes(&client, &url).await
     }
 
@@ -148,7 +137,7 @@ impl Fetcher<TmxBatchQuoteQuery, EquityHistoricalData> for TmxHttpBatchQuoteFetc
             self.base_url(),
             symbols
         );
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "tmx client build")?;
         get_bytes(&client, &url).await
     }
 
