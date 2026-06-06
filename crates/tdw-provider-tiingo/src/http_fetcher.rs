@@ -8,7 +8,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
@@ -46,7 +47,7 @@ struct TiingoNewsItem {
 // ---------------------------------------------------------------------------
 
 /// A single Tiingo news article returned by the news fetcher.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TiingoNewsArticle {
     pub id: u64,
     pub title: String,
