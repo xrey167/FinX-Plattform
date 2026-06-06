@@ -550,7 +550,7 @@ fn select_vector_engine() -> Result<Arc<dyn VectorEngine>> {
 
 /// Build the daemon's session + rollout stores.
 ///
-/// Default (and the only path without the `daemon-postgres` feature): a SQLite
+/// Default (and the only path without the `daemon-postgres` feature): a `SQLite`
 /// session store and a JSONL rollout file, exactly as before. With
 /// `daemon-postgres` built **and** a Postgres URL configured (`TDW_DAEMON_PG_URL`
 /// or `DATABASE_URL`), both stores are Postgres-backed instead so they survive
