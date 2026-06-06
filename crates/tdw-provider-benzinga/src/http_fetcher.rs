@@ -13,7 +13,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{
     API_KEY_ENV, BASE_URL, BenzingaEarningsItem, BenzingaEarningsQuery, BenzingaNewsItem,
@@ -112,33 +112,11 @@ fn map_earnings_item(wire: WireEarningsItem) -> BenzingaEarningsItem {
 // News fetcher
 // ---------------------------------------------------------------------------
 
-/// Fetches news articles from the Benzinga `/news` endpoint.
-#[derive(Clone, Debug)]
-pub struct BenzingaNewsHttpFetcher {
-    base_url: String,
-}
-
-impl Default for BenzingaNewsHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl BenzingaNewsHttpFetcher {
-    /// Override the Benzinga base URL (useful for testing against a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `benzinga` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Fetches news articles from the Benzinga `/news` endpoint.
+    pub BenzingaNewsHttpFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<BenzingaNewsQuery, BenzingaNewsItem> for BenzingaNewsHttpFetcher {
@@ -163,7 +141,7 @@ impl Fetcher<BenzingaNewsQuery, BenzingaNewsItem> for BenzingaNewsHttpFetcher {
     async fn extract_data(&self, query: &BenzingaNewsQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
-        let endpoint = format!("{}/news", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/news", self.base_url().trim_end_matches('/'));
         let response = client
             .get(&endpoint)
             .header("Authorization", format!("Token {api_key}"))
@@ -205,34 +183,12 @@ impl Fetcher<BenzingaNewsQuery, BenzingaNewsItem> for BenzingaNewsHttpFetcher {
 // Earnings fetcher
 // ---------------------------------------------------------------------------
 
-/// Fetches earnings calendar entries from the Benzinga `/calendar/earnings`
-/// endpoint.
-#[derive(Clone, Debug)]
-pub struct BenzingaEarningsHttpFetcher {
-    base_url: String,
-}
-
-impl Default for BenzingaEarningsHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl BenzingaEarningsHttpFetcher {
-    /// Override the Benzinga base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `benzinga` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Fetches earnings calendar entries from the Benzinga `/calendar/earnings`
+    /// endpoint.
+    pub BenzingaEarningsHttpFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<BenzingaEarningsQuery, BenzingaEarningsItem> for BenzingaEarningsHttpFetcher {
@@ -265,7 +221,10 @@ impl Fetcher<BenzingaEarningsQuery, BenzingaEarningsItem> for BenzingaEarningsHt
     ) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
-        let endpoint = format!("{}/calendar/earnings", self.base_url.trim_end_matches('/'));
+        let endpoint = format!(
+            "{}/calendar/earnings",
+            self.base_url().trim_end_matches('/')
+        );
         let response = client
             .get(&endpoint)
             .header("Authorization", format!("Token {api_key}"))

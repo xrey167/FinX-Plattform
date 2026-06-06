@@ -12,42 +12,21 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{API_KEY_ENV, BASE_URL, BlsDataPoint, BlsSeriesQuery, parse_bls_response};
 
 const USER_AGENT: &str = "tdw-provider-bls/0.1";
 
-/// Production BLS `timeseries/data` fetcher.
-///
-/// Submits a POST request to the BLS v2 API and decodes the JSON response
-/// into [`BlsDataPoint`] rows. Use [`BlsHttpTimeSeriesFetcher::default`] for
-/// normal operation; builder methods allow base-URL overriding in tests.
-#[derive(Clone, Debug)]
-pub struct BlsHttpTimeSeriesFetcher {
-    base_url: String,
-}
-
-impl Default for BlsHttpTimeSeriesFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl BlsHttpTimeSeriesFetcher {
-    /// Override the BLS base URL (useful for tests with a local mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `bls` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production BLS `timeseries/data` fetcher.
+    ///
+    /// Submits a POST request to the BLS v2 API and decodes the JSON response
+    /// into [`BlsDataPoint`] rows. Use [`BlsHttpTimeSeriesFetcher::default`] for
+    /// normal operation; builder methods allow base-URL overriding in tests.
+    pub BlsHttpTimeSeriesFetcher,
+    BASE_URL
+);
 
 /// Thin wrapper around the raw BLS JSON envelope used only for deserialization.
 #[derive(Deserialize)]
@@ -102,7 +81,7 @@ impl Fetcher<BlsSeriesQuery, BlsDataPoint> for BlsHttpTimeSeriesFetcher {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
-        let endpoint = format!("{}/timeseries/data/", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/timeseries/data/", self.base_url().trim_end_matches('/'));
 
         let mut body = json!({
             "seriesid": query.series_ids,

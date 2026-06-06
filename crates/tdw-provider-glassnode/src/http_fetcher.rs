@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{API_KEY_ENV, BASE_URL, GlassnodeDataPoint, GlassnodeMetric, GlassnodeMetricQuery};
 
@@ -23,39 +23,17 @@ struct RawPoint {
     v: f64,
 }
 
-/// Production Glassnode metric fetcher.
-#[derive(Clone, Debug)]
-pub struct GlassnodeHttpFetcher {
-    base_url: String,
-}
-
-impl Default for GlassnodeHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Glassnode metric fetcher.
+    pub GlassnodeHttpFetcher,
+    BASE_URL
+);
 
 impl GlassnodeHttpFetcher {
     /// Create a new fetcher pointing at the canonical Glassnode base URL.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Override the base URL (useful for testing against a mock server).
-    #[must_use]
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `glassnode` provider
-    /// name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
     }
 }
 
@@ -101,7 +79,7 @@ impl Fetcher<GlassnodeMetricQuery, GlassnodeDataPoint> for GlassnodeHttpFetcher 
 
         let url = format!(
             "{}{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.metric.api_path()
         );
 

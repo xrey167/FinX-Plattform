@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_HEADER, BASE_URL, CoinGeckoOhlcQuery, ohlc_request};
@@ -18,32 +18,11 @@ use crate::{API_KEY_HEADER, BASE_URL, CoinGeckoOhlcQuery, ohlc_request};
 const API_KEY_ENV: &str = "COINGECKO_API_KEY";
 const USER_AGENT: &str = "tdw-provider-coingecko/0.1";
 
-/// Production CoinGecko OHLC fetcher.
-#[derive(Clone, Debug)]
-pub struct CoinGeckoHttpOhlcFetcher {
-    base_url: String,
-}
-
-impl Default for CoinGeckoHttpOhlcFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl CoinGeckoHttpOhlcFetcher {
-    /// Override the CoinGecko base URL (useful for tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `coingecko` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production CoinGecko OHLC fetcher.
+    pub CoinGeckoHttpOhlcFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
@@ -82,7 +61,7 @@ impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
 
         let endpoint = format!(
             "{}/coins/{}/ohlc?vs_currency={}&days={}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.coin_id,
             query.vs_currency,
             query.days,

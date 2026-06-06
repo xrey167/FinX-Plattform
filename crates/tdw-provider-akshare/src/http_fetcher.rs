@@ -10,7 +10,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{AkShareMarket, AkShareQuery, BASE_URL};
@@ -21,32 +21,11 @@ const USER_AGENT: &str = "tdw-provider-akshare/0.1";
 // Public fetcher struct
 // ---------------------------------------------------------------------------
 
-/// Production AkShare historical-bar fetcher (no API key needed).
-#[derive(Clone, Debug)]
-pub struct AkShareHttpFetcher {
-    base_url: String,
-}
-
-impl Default for AkShareHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl AkShareHttpFetcher {
-    /// Override the AkShare base URL (useful for tests against a local mirror).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `akshare` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production AkShare historical-bar fetcher (no API key needed).
+    pub AkShareHttpFetcher,
+    BASE_URL
+);
 
 // ---------------------------------------------------------------------------
 // Serde response shapes (Chinese field names from the AkShare API)
@@ -110,7 +89,7 @@ impl Fetcher<AkShareQuery, MarketDataBar> for AkShareHttpFetcher {
     async fn extract_data(&self, query: &AkShareQuery, _creds: &Credentials) -> Result<Bytes> {
         let endpoint = format!(
             "{}{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.market.endpoint_path(),
         );
         let body = serde_json::json!({

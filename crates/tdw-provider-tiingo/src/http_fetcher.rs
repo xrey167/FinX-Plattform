@@ -11,7 +11,7 @@ use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery, TiingoProviderError};
@@ -60,32 +60,11 @@ pub struct TiingoNewsArticle {
 // Historical price fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tiingo daily historical price fetcher.
-#[derive(Clone, Debug)]
-pub struct TiingoHttpHistoricalFetcher {
-    base_url: String,
-}
-
-impl Default for TiingoHttpHistoricalFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TiingoHttpHistoricalFetcher {
-    /// Override the Tiingo base URL (useful for tests against a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tiingo` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Tiingo daily historical price fetcher.
+    pub TiingoHttpHistoricalFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetcher {
@@ -111,7 +90,7 @@ impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetch
         let api_key = read_api_key()?;
         let endpoint = format!(
             "{}/daily/{}/prices",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.symbol,
         );
         let query_params = [("startDate", "2024-01-01".to_string()), ("token", api_key)];
@@ -165,32 +144,11 @@ impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetch
 // News fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tiingo news feed fetcher.
-#[derive(Clone, Debug)]
-pub struct TiingoHttpNewsFetcher {
-    base_url: String,
-}
-
-impl Default for TiingoHttpNewsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TiingoHttpNewsFetcher {
-    /// Override the Tiingo base URL (useful for tests against a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tiingo` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Tiingo news feed fetcher.
+    pub TiingoHttpNewsFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
@@ -224,7 +182,7 @@ impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
     async fn extract_data(&self, query: &TiingoNewsQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let tickers_param = query.tickers.join(",").to_ascii_lowercase();
-        let endpoint = format!("{}/news", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/news", self.base_url().trim_end_matches('/'));
         let query_params = [("tickers", tickers_param), ("token", api_key)];
         let client = build_client()?;
         let response = client

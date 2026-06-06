@@ -11,7 +11,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{
     API_KEY_ENV, BASE_URL, EiaNaturalGasQuery, EiaNaturalGasRecord, EiaSpotPriceQuery,
@@ -97,36 +97,13 @@ struct EiaNaturalGasRaw {
 // EiaHttpSpotPriceFetcher
 // ---------------------------------------------------------------------------
 
-/// Production EIA petroleum spot-price fetcher.
-///
-/// Calls `GET /petroleum/pri/spt/data/` with daily frequency.
-#[derive(Clone, Debug)]
-pub struct EiaHttpSpotPriceFetcher {
-    base_url: String,
-}
-
-impl Default for EiaHttpSpotPriceFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl EiaHttpSpotPriceFetcher {
-    /// Override the EIA base URL (useful for tests / staging).
-    #[must_use]
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `eia` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production EIA petroleum spot-price fetcher.
+    ///
+    /// Calls `GET /petroleum/pri/spt/data/` with daily frequency.
+    pub EiaHttpSpotPriceFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher {
@@ -145,7 +122,7 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
         let client = build_client()?;
         let endpoint = format!(
             "{}/petroleum/pri/spt/data/",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let params = [
             ("api_key", api_key),
@@ -216,36 +193,13 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
 // EiaHttpNaturalGasFetcher
 // ---------------------------------------------------------------------------
 
-/// Production EIA natural-gas price fetcher.
-///
-/// Calls `GET /natural-gas/pri/sum/data/` with monthly frequency.
-#[derive(Clone, Debug)]
-pub struct EiaHttpNaturalGasFetcher {
-    base_url: String,
-}
-
-impl Default for EiaHttpNaturalGasFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl EiaHttpNaturalGasFetcher {
-    /// Override the EIA base URL.
-    #[must_use]
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `eia` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production EIA natural-gas price fetcher.
+    ///
+    /// Calls `GET /natural-gas/pri/sum/data/` with monthly frequency.
+    pub EiaHttpNaturalGasFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetcher {
@@ -267,7 +221,7 @@ impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetch
         let client = build_client()?;
         let endpoint = format!(
             "{}/natural-gas/pri/sum/data/",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let params = [
             ("api_key", api_key),

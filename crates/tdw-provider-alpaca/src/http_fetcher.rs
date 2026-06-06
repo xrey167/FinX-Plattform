@@ -13,7 +13,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{
@@ -24,33 +24,11 @@ const API_KEY_ENV: &str = "APCA_API_KEY_ID";
 const API_SECRET_ENV: &str = "APCA_API_SECRET_KEY";
 const USER_AGENT: &str = "tdw-provider-alpaca/0.1";
 
-/// Production Alpaca stock-bars fetcher.
-#[derive(Clone, Debug)]
-pub struct AlpacaHttpStockBarsFetcher {
-    base_url: String,
-}
-
-impl Default for AlpacaHttpStockBarsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl AlpacaHttpStockBarsFetcher {
-    /// Override the Alpaca market data base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `alpaca`
-    /// provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Alpaca stock-bars fetcher.
+    pub AlpacaHttpStockBarsFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct AlpacaEnvelope {
@@ -131,7 +109,7 @@ impl Fetcher<AlpacaStockBarsQuery, MarketDataBar> for AlpacaHttpStockBarsFetcher
                 "alpaca api secret env {API_SECRET_ENV} must be set"
             ))
         })?;
-        let endpoint = format!("{}/v2/stocks/bars", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v2/stocks/bars", self.base_url().trim_end_matches('/'));
         let mut query_params = vec![
             ("symbols", query.symbol.clone()),
             ("timeframe", query.timeframe.clone()),
