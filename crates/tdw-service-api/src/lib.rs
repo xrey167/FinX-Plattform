@@ -90,24 +90,38 @@ use tdw_protocol::{
     ActorKind, ActorRef, EventMsg, Op, OpEnvelope, PermissionId, ReplayFrame, SessionId,
     schema_bundle as protocol_schema_bundle,
 };
+#[cfg(feature = "provider-adanos")]
+use tdw_provider_adanos::{
+    AdanosPolymarketHttpFetcher, AdanosSentimentHttpFetcher, AdanosTrendingHttpFetcher,
+};
 #[cfg(feature = "provider-akshare")]
 use tdw_provider_akshare::AkShareHttpFetcher;
 #[cfg(feature = "provider-alpaca")]
 use tdw_provider_alpaca::AlpacaHttpStockBarsFetcher;
 #[cfg(feature = "provider-alpha-vantage")]
 use tdw_provider_alpha_vantage::AlphaVantageHttpFetcher;
+#[cfg(feature = "provider-benzinga")]
+use tdw_provider_benzinga::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher};
 #[cfg(feature = "provider-binance-http")]
 use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
 #[cfg(feature = "provider-bls")]
 use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
+#[cfg(feature = "provider-cboe")]
+use tdw_provider_cboe::{CboeHttpIndexFetcher, CboeHttpOptionsFetcher};
 #[cfg(feature = "provider-ccdata")]
 use tdw_provider_ccdata::CCDataHttpFetcher;
 #[cfg(feature = "provider-coingecko")]
 use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
 #[cfg(feature = "provider-databento")]
 use tdw_provider_databento::{DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher};
+#[cfg(feature = "provider-deribit")]
+use tdw_provider_deribit::{
+    DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
+};
 #[cfg(feature = "provider-ecb")]
 use tdw_provider_ecb::EcbHttpDataFetcher;
+#[cfg(feature = "provider-eia")]
+use tdw_provider_eia::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 #[cfg(feature = "provider-finra")]
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
@@ -117,6 +131,8 @@ use tdw_provider_fmp::{FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher};
 use tdw_provider_fred::FredHttpSeriesObservationsFetcher;
 #[cfg(feature = "provider-geckoterminal")]
 use tdw_provider_geckoterminal::GeckoTerminalHttpFetcher;
+#[cfg(feature = "provider-glassnode")]
+use tdw_provider_glassnode::GlassnodeHttpFetcher;
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-nasdaq")]
@@ -127,6 +143,8 @@ use tdw_provider_oecd::OecdHttpDataFetcher;
 use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
 use tdw_provider_sec::{SecFilingsHttpFetcher, SecXbrlHttpFetcher};
+#[cfg(feature = "provider-seeking-alpha")]
+use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
 #[cfg(feature = "provider-tiingo")]
 use tdw_provider_tiingo::{TiingoHttpHistoricalFetcher, TiingoHttpNewsFetcher};
 #[cfg(feature = "provider-tmx")]
@@ -185,14 +203,28 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
     registry.register(YahooEquityHistoricalFetcher::registry_entry())?;
     registry.register(MockEquityStreamer::registry_entry())?;
+    #[cfg(feature = "provider-adanos")]
+    registry.register(AdanosSentimentHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-adanos")]
+    registry.register(AdanosTrendingHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-adanos")]
+    registry.register(AdanosPolymarketHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-akshare")]
     registry.register(AkShareHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-alpaca")]
     registry.register(AlpacaHttpStockBarsFetcher::registry_entry())?;
     #[cfg(feature = "provider-alpha-vantage")]
     registry.register(AlphaVantageHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaNewsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaEarningsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-bls")]
     registry.register(BlsHttpTimeSeriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpIndexFetcher::registry_entry())?;
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpOptionsFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
@@ -201,8 +233,18 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(DatabentoHttpTimeseriesFetcher::registry_entry())?;
     #[cfg(feature = "provider-databento")]
     registry.register(DatabentoMetadataFetcher::registry_entry())?;
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpInstrumentsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpOrderBookFetcher::registry_entry())?;
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpFundingFetcher::registry_entry())?;
     #[cfg(feature = "provider-ecb")]
     registry.register(EcbHttpDataFetcher::registry_entry())?;
+    #[cfg(feature = "provider-eia")]
+    registry.register(EiaHttpSpotPriceFetcher::registry_entry())?;
+    #[cfg(feature = "provider-eia")]
+    registry.register(EiaHttpNaturalGasFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
     registry.register(FinraOtcSummaryHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
@@ -215,6 +257,8 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-geckoterminal")]
     registry.register(GeckoTerminalHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-glassnode")]
+    registry.register(GlassnodeHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-huggingface")]
     registry.register(HuggingFaceHttpTextGenerationFetcher::registry_entry())?;
     #[cfg(feature = "provider-nasdaq")]
@@ -227,6 +271,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(SecFilingsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecXbrlHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-seeking-alpha")]
+    registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-seeking-alpha")]
+    registry.register(SeekingAlphaRatingsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-tiingo")]
     registry.register(TiingoHttpHistoricalFetcher::registry_entry())?;
     #[cfg(feature = "provider-tiingo")]
@@ -1248,23 +1296,30 @@ mod tests {
     /// only adds live HTTP fetchers on top, so this exact count is asserted only
     /// when no provider feature is active.
     #[cfg(not(any(
+        feature = "provider-adanos",
         feature = "provider-akshare",
         feature = "provider-alpaca",
         feature = "provider-alpha-vantage",
+        feature = "provider-benzinga",
         feature = "provider-bls",
+        feature = "provider-cboe",
         feature = "provider-ccdata",
         feature = "provider-coingecko",
         feature = "provider-databento",
+        feature = "provider-deribit",
         feature = "provider-ecb",
+        feature = "provider-eia",
         feature = "provider-finra",
         feature = "provider-fmp",
         feature = "provider-fred",
         feature = "provider-geckoterminal",
+        feature = "provider-glassnode",
         feature = "provider-huggingface",
         feature = "provider-nasdaq",
         feature = "provider-oecd",
         feature = "provider-polygon",
         feature = "provider-sec",
+        feature = "provider-seeking-alpha",
         feature = "provider-tiingo",
         feature = "provider-tmx",
         feature = "provider-tradier",

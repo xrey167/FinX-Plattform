@@ -1,18 +1,22 @@
 #![cfg(feature = "http")]
 //! Real Seeking Alpha HTTP fetchers for `/analysis/v2/list` and
-//! `/symbols/v1/summary`.
+//! `/symbols/v1/summary`, implemented against the canonical
+//! [`tdw_core::Fetcher`] trait.
 //!
 //! Gated by the `http` feature. Requires `TDW_SEEKING_ALPHA_API_KEY` to be
 //! set in the environment. Live integration tests are additionally gated by
 //! `TDW_SEEKING_ALPHA_LIVE=1` so unattended CI stays offline.
 
+use async_trait::async_trait;
+use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
+use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 
 use crate::{
-    BASE_URL, RAPIDAPI_HOST, RAPIDAPI_KEY_ENV, Result, SeekingAlphaArticle,
-    SeekingAlphaArticlesQuery, SeekingAlphaProviderError, SeekingAlphaRatings,
-    SeekingAlphaRatingsQuery,
+    BASE_URL, RAPIDAPI_HOST, RAPIDAPI_KEY_ENV, SeekingAlphaArticle, SeekingAlphaArticlesQuery,
+    SeekingAlphaProviderError, SeekingAlphaRatings, SeekingAlphaRatingsQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-seeking-alpha/0.1";
@@ -81,16 +85,34 @@ fn read_api_key() -> Result<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .ok_or(SeekingAlphaProviderError::MissingApiKey)
+        .ok_or_else(|| Error::Provider(SeekingAlphaProviderError::MissingApiKey.to_string()))
 }
 
 fn build_client() -> Result<Client> {
     Client::builder()
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| {
-            SeekingAlphaProviderError::Provider(format!("seeking-alpha client build: {e}"))
-        })
+        .map_err(|e| Error::Provider(format!("seeking-alpha client build: {e}")))
+}
+
+fn map_article(wire: WireArticle) -> SeekingAlphaArticle {
+    SeekingAlphaArticle {
+        id: wire.id,
+        title: wire.attributes.title,
+        publish_on: wire.attributes.publish_on,
+        is_locked_pro: wire.attributes.is_locked_pro,
+        comment_count: wire.attributes.comment_count,
+    }
+}
+
+fn map_ratings(wire: WireRatingsEntry) -> SeekingAlphaRatings {
+    SeekingAlphaRatings {
+        ticker: wire.id,
+        quant_rating: wire.attributes.quant_rating,
+        authors_rating: wire.attributes.authors_rating,
+        sell_side_rating: wire.attributes.sell_side_rating,
+        quant_rating_change: wire.attributes.quant_rating_change,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,23 +135,46 @@ impl Default for SeekingAlphaArticlesHttpFetcher {
 
 impl SeekingAlphaArticlesHttpFetcher {
     /// Override the base URL (useful for testing against a mock server).
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
-    /// Fetch analyst articles for the given query.
-    ///
-    /// Reads `TDW_SEEKING_ALPHA_API_KEY` from the environment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SeekingAlphaProviderError`] on missing key, network failure,
-    /// or a non-2xx HTTP status.
-    pub async fn fetch(
+    /// Registry entry advertised under the canonical `seeking-alpha`
+    /// provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
+}
+
+#[async_trait]
+impl Fetcher<SeekingAlphaArticlesQuery, SeekingAlphaArticle> for SeekingAlphaArticlesHttpFetcher {
+    const PROVIDER: &'static str = crate::PROVIDER_ID;
+    const ENDPOINT: &'static str = "articles";
+
+    fn transform_query(params: Value) -> Result<SeekingAlphaArticlesQuery> {
+        let ticker = params
+            .get("ticker")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("seeking-alpha ticker must be a string".to_string())
+            })?;
+        let size = params.get("size").and_then(Value::as_u64).ok_or_else(|| {
+            Error::InvalidQuery("seeking-alpha size must be an integer".to_string())
+        })?;
+        let size = u32::try_from(size)
+            .map_err(|_| Error::InvalidQuery("seeking-alpha size out of range".to_string()))?;
+        SeekingAlphaArticlesQuery::new(ticker, size)
+            .map_err(|error| Error::InvalidQuery(error.to_string()))
+    }
+
+    async fn extract_data(
         &self,
         query: &SeekingAlphaArticlesQuery,
-    ) -> Result<Vec<SeekingAlphaArticle>> {
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
         let endpoint = format!("{}/analysis/v2/list", self.base_url.trim_end_matches('/'));
@@ -145,33 +190,30 @@ impl SeekingAlphaArticlesHttpFetcher {
             ])
             .send()
             .await
-            .map_err(|e| {
-                SeekingAlphaProviderError::Provider(format!("seeking-alpha articles request: {e}"))
-            })?;
+            .map_err(|e| Error::Provider(format!("seeking-alpha articles request: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(SeekingAlphaProviderError::Provider(format!(
+            return Err(Error::Provider(format!(
                 "seeking-alpha articles returned {status}: {body}"
             )));
         }
 
-        let envelope: WireArticlesEnvelope = response.json().await.map_err(|e| {
-            SeekingAlphaProviderError::Provider(format!("seeking-alpha articles parse: {e}"))
-        })?;
-
-        Ok(envelope.data.into_iter().map(map_article).collect())
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("seeking-alpha articles read body: {e}")))
     }
-}
 
-fn map_article(wire: WireArticle) -> SeekingAlphaArticle {
-    SeekingAlphaArticle {
-        id: wire.id,
-        title: wire.attributes.title,
-        publish_on: wire.attributes.publish_on,
-        is_locked_pro: wire.attributes.is_locked_pro,
-        comment_count: wire.attributes.comment_count,
+    fn transform_data(
+        &self,
+        _query: &SeekingAlphaArticlesQuery,
+        raw: Bytes,
+    ) -> Result<Vec<SeekingAlphaArticle>> {
+        let envelope: WireArticlesEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("seeking-alpha articles parse: {e}")))?;
+        Ok(envelope.data.into_iter().map(map_article).collect())
     }
 }
 
@@ -195,20 +237,41 @@ impl Default for SeekingAlphaRatingsHttpFetcher {
 
 impl SeekingAlphaRatingsHttpFetcher {
     /// Override the base URL (useful for testing against a mock server).
+    #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
-    /// Fetch ratings for the given query.
-    ///
-    /// Reads `TDW_SEEKING_ALPHA_API_KEY` from the environment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SeekingAlphaProviderError`] on missing key, network failure,
-    /// or a non-2xx HTTP status.
-    pub async fn fetch(&self, query: &SeekingAlphaRatingsQuery) -> Result<SeekingAlphaRatings> {
+    /// Registry entry advertised under the canonical `seeking-alpha`
+    /// provider name.
+    #[must_use]
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
+}
+
+#[async_trait]
+impl Fetcher<SeekingAlphaRatingsQuery, SeekingAlphaRatings> for SeekingAlphaRatingsHttpFetcher {
+    const PROVIDER: &'static str = crate::PROVIDER_ID;
+    const ENDPOINT: &'static str = "ratings";
+
+    fn transform_query(params: Value) -> Result<SeekingAlphaRatingsQuery> {
+        let ticker = params
+            .get("ticker")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("seeking-alpha ticker must be a string".to_string())
+            })?;
+        SeekingAlphaRatingsQuery::new(ticker)
+            .map_err(|error| Error::InvalidQuery(error.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &SeekingAlphaRatingsQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
         let api_key = read_api_key()?;
         let client = build_client()?;
         let endpoint = format!("{}/symbols/v1/summary", self.base_url.trim_end_matches('/'));
@@ -220,39 +283,37 @@ impl SeekingAlphaRatingsHttpFetcher {
             .query(&[("symbols", query.ticker.as_str())])
             .send()
             .await
-            .map_err(|e| {
-                SeekingAlphaProviderError::Provider(format!("seeking-alpha ratings request: {e}"))
-            })?;
+            .map_err(|e| Error::Provider(format!("seeking-alpha ratings request: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            return Err(SeekingAlphaProviderError::Provider(format!(
+            return Err(Error::Provider(format!(
                 "seeking-alpha ratings returned {status}: {body}"
             )));
         }
 
-        let envelope: WireRatingsEnvelope = response.json().await.map_err(|e| {
-            SeekingAlphaProviderError::Provider(format!("seeking-alpha ratings parse: {e}"))
-        })?;
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("seeking-alpha ratings read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        query: &SeekingAlphaRatingsQuery,
+        raw: Bytes,
+    ) -> Result<Vec<SeekingAlphaRatings>> {
+        let envelope: WireRatingsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("seeking-alpha ratings parse: {e}")))?;
 
         let entry = envelope.data.into_iter().next().ok_or_else(|| {
-            SeekingAlphaProviderError::Provider(format!(
+            Error::Provider(format!(
                 "seeking-alpha ratings response missing entry for {}",
                 query.ticker
             ))
         })?;
 
-        Ok(map_ratings(entry))
-    }
-}
-
-fn map_ratings(wire: WireRatingsEntry) -> SeekingAlphaRatings {
-    SeekingAlphaRatings {
-        ticker: wire.id,
-        quant_rating: wire.attributes.quant_rating,
-        authors_rating: wire.attributes.authors_rating,
-        sell_side_rating: wire.attributes.sell_side_rating,
-        quant_rating_change: wire.attributes.quant_rating_change,
+        Ok(vec![map_ratings(entry)])
     }
 }

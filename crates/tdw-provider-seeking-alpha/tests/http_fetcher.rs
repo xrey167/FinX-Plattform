@@ -3,13 +3,17 @@
 //! Gated by `--features http` (no reqwest dep otherwise).
 //!
 //! Cassette tests always run under the feature and parse recorded response
-//! shapes inline. The live tests are additionally gated by
-//! `TDW_SEEKING_ALPHA_LIVE=1` and require `TDW_SEEKING_ALPHA_API_KEY`.
+//! shapes through the real `transform_data` path (offline, no network). The
+//! live tests are additionally gated by `TDW_SEEKING_ALPHA_LIVE=1` and require
+//! `TDW_SEEKING_ALPHA_API_KEY`.
 
 #![cfg(feature = "http")]
 
+use bytes::Bytes;
+use serde_json::json;
+use tdw_core::{Credentials, Fetcher};
 use tdw_provider_seeking_alpha::{
-    SeekingAlphaArticlesQuery, SeekingAlphaProviderError, SeekingAlphaRatingsQuery,
+    SeekingAlphaArticlesQuery, SeekingAlphaRatingsQuery,
     http_fetcher::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher},
 };
 
@@ -94,85 +98,103 @@ fn ratings_query_rejects_path_injection() {
 }
 
 // ---------------------------------------------------------------------------
-// Cassette: deserialise articles JSON
+// transform_query
 // ---------------------------------------------------------------------------
 
 #[test]
-fn cassette_articles_deserialises_one_article() {
-    #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
-    struct Envelope {
-        data: Vec<tdw_provider_seeking_alpha::SeekingAlphaArticle>,
-    }
+fn articles_transform_query_builds_validated_query() {
+    let params = json!({ "ticker": "aapl", "size": 5 });
+    let query = SeekingAlphaArticlesHttpFetcher::transform_query(params)
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    assert_eq!(query.ticker, "AAPL");
+    assert_eq!(query.size, 5);
+}
 
-    // The public SeekingAlphaArticle uses snake_case field names; the cassette
-    // envelope matches the wire shape mapped by the http fetcher. Here we
-    // exercise the public struct via a re-mapped cassette to avoid duplicating
-    // deserialization logic.
-    let articles: Vec<tdw_provider_seeking_alpha::SeekingAlphaArticle> =
-        serde_json::from_str::<serde_json::Value>(articles_cassette_json())
-            .expect("cassette must be valid JSON")
-            .get("data")
-            .and_then(|d| d.as_array())
-            .expect("data array must be present")
-            .iter()
-            .map(|entry| {
-                let id = entry["id"].as_str().unwrap_or_default().to_string();
-                let attrs = &entry["attributes"];
-                tdw_provider_seeking_alpha::SeekingAlphaArticle {
-                    id,
-                    title: attrs["title"].as_str().unwrap_or_default().to_string(),
-                    publish_on: attrs["publishOn"].as_str().unwrap_or_default().to_string(),
-                    is_locked_pro: attrs["isLockedPro"].as_bool().unwrap_or_default(),
-                    comment_count: attrs["commentCount"].as_u64().unwrap_or_default() as u32,
-                }
-            })
-            .collect();
+#[test]
+fn articles_transform_query_rejects_bad_size() {
+    let params = json!({ "ticker": "AAPL", "size": 0 });
+    assert!(SeekingAlphaArticlesHttpFetcher::transform_query(params).is_err());
+}
 
-    assert_eq!(articles.len(), 1);
-    assert_eq!(articles[0].id, "abc123");
-    assert_eq!(articles[0].title, "Apple Q1 2024 Earnings: Strong Beat");
-    assert_eq!(articles[0].publish_on, "2024-01-25T20:30:00Z");
-    assert!(!articles[0].is_locked_pro);
-    assert_eq!(articles[0].comment_count, 45);
+#[test]
+fn ratings_transform_query_builds_validated_query() {
+    let params = json!({ "ticker": "msft" });
+    let query = SeekingAlphaRatingsHttpFetcher::transform_query(params)
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    assert_eq!(query.ticker, "MSFT");
 }
 
 // ---------------------------------------------------------------------------
-// Cassette: deserialise ratings JSON
+// transform_data — offline, fixture-driven (no network)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn cassette_ratings_deserialises_one_entry() {
-    let root: serde_json::Value =
-        serde_json::from_str(ratings_cassette_json()).expect("cassette must be valid JSON");
-    let entry = &root["data"][0];
+fn articles_transform_data_parses_one_article() {
+    let fetcher = SeekingAlphaArticlesHttpFetcher::default();
+    let query = SeekingAlphaArticlesQuery::new("AAPL", 5)
+        .unwrap_or_else(|e| panic!("query must build: {e}"));
+    let rows = fetcher
+        .transform_data(
+            &query,
+            Bytes::from_static(articles_cassette_json().as_bytes()),
+        )
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
 
-    let ratings = tdw_provider_seeking_alpha::SeekingAlphaRatings {
-        ticker: entry["id"].as_str().unwrap_or_default().to_string(),
-        quant_rating: entry["attributes"]["quant_rating"]
-            .as_f64()
-            .unwrap_or_default(),
-        authors_rating: entry["attributes"]["authors_rating"]
-            .as_f64()
-            .unwrap_or_default(),
-        sell_side_rating: entry["attributes"]["sell_side_rating"]
-            .as_f64()
-            .unwrap_or_default(),
-        quant_rating_change: entry["attributes"]["quant_rating_change"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "abc123");
+    assert_eq!(rows[0].title, "Apple Q1 2024 Earnings: Strong Beat");
+    assert_eq!(rows[0].publish_on, "2024-01-25T20:30:00Z");
+    assert!(!rows[0].is_locked_pro);
+    assert_eq!(rows[0].comment_count, 45);
+}
 
-    assert_eq!(ratings.ticker, "AAPL");
-    assert_eq!(ratings.quant_rating, 4.12);
-    assert_eq!(ratings.authors_rating, 3.85);
-    assert_eq!(ratings.sell_side_rating, 4.21);
-    assert_eq!(ratings.quant_rating_change, "up");
+#[test]
+fn ratings_transform_data_parses_one_entry() {
+    let fetcher = SeekingAlphaRatingsHttpFetcher::default();
+    let query =
+        SeekingAlphaRatingsQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
+    let rows = fetcher
+        .transform_data(
+            &query,
+            Bytes::from_static(ratings_cassette_json().as_bytes()),
+        )
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].ticker, "AAPL");
+    assert_eq!(rows[0].quant_rating, 4.12);
+    assert_eq!(rows[0].authors_rating, 3.85);
+    assert_eq!(rows[0].sell_side_rating, 4.21);
+    assert_eq!(rows[0].quant_rating_change, "up");
+}
+
+#[test]
+fn ratings_transform_data_errors_on_empty_data() {
+    let fetcher = SeekingAlphaRatingsHttpFetcher::default();
+    let query =
+        SeekingAlphaRatingsQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
+    let result = fetcher.transform_data(&query, Bytes::from_static(br#"{"data":[]}"#));
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
-// Missing API key surfaces SeekingAlphaProviderError::MissingApiKey
+// Registry entries are unique per (provider, endpoint)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn registry_entries_are_distinct() {
+    let articles = SeekingAlphaArticlesHttpFetcher::registry_entry();
+    let ratings = SeekingAlphaRatingsHttpFetcher::registry_entry();
+    assert_eq!(articles.endpoint, "articles");
+    assert_eq!(ratings.endpoint, "ratings");
+    assert_ne!(
+        (articles.provider, articles.endpoint),
+        (ratings.provider, ratings.endpoint)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Missing API key surfaces an error without a network call
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -191,11 +213,11 @@ async fn missing_api_key_returns_error_without_network_call() {
     let query = SeekingAlphaArticlesQuery::new("AAPL", 5)
         .unwrap_or_else(|e| panic!("query must build: {e}"));
     let err = fetcher
-        .fetch(&query)
+        .extract_data(&query, &Credentials::default())
         .await
         .expect_err("missing key must return error");
 
-    assert_eq!(err, SeekingAlphaProviderError::MissingApiKey);
+    assert!(err.to_string().contains("TDW_SEEKING_ALPHA_API_KEY"));
 }
 
 #[tokio::test]
@@ -213,11 +235,11 @@ async fn missing_api_key_returns_error_for_ratings_without_network_call() {
     let query =
         SeekingAlphaRatingsQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
     let err = fetcher
-        .fetch(&query)
+        .extract_data(&query, &Credentials::default())
         .await
         .expect_err("missing key must return error");
 
-    assert_eq!(err, SeekingAlphaProviderError::MissingApiKey);
+    assert!(err.to_string().contains("TDW_SEEKING_ALPHA_API_KEY"));
 }
 
 // ---------------------------------------------------------------------------
@@ -234,15 +256,16 @@ async fn live_seeking_alpha_articles_returns_data_when_env_var_set() {
     }
 
     let fetcher = SeekingAlphaArticlesHttpFetcher::default();
-    let query = SeekingAlphaArticlesQuery::new("AAPL", 5)
-        .unwrap_or_else(|e| panic!("query must build: {e}"));
-    let items = fetcher
-        .fetch(&query)
+    let obbject = fetcher
+        .fetch(
+            json!({ "ticker": "AAPL", "size": 5 }),
+            &Credentials::default(),
+        )
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
     assert!(
-        !items.is_empty(),
+        !obbject.rows.is_empty(),
         "live response must include at least one article"
     );
 }
@@ -257,13 +280,15 @@ async fn live_seeking_alpha_ratings_returns_data_when_env_var_set() {
     }
 
     let fetcher = SeekingAlphaRatingsHttpFetcher::default();
-    let query =
-        SeekingAlphaRatingsQuery::new("AAPL").unwrap_or_else(|e| panic!("query must build: {e}"));
-    let ratings = fetcher
-        .fetch(&query)
+    let obbject = fetcher
+        .fetch(json!({ "ticker": "AAPL" }), &Credentials::default())
         .await
         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
 
-    assert_eq!(ratings.ticker, "AAPL");
-    assert!(ratings.quant_rating > 0.0, "quant_rating must be positive");
+    assert_eq!(obbject.rows.len(), 1);
+    assert_eq!(obbject.rows[0].ticker, "AAPL");
+    assert!(
+        obbject.rows[0].quant_rating > 0.0,
+        "quant_rating must be positive"
+    );
 }
