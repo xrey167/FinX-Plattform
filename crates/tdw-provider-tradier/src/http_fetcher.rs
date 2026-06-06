@@ -12,7 +12,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{EquityHistoricalData, Quote};
 
 use crate::{API_KEY_ENV, BASE_URL, TradierOptionsQuery, TradierQuoteQuery};
@@ -23,33 +23,11 @@ const USER_AGENT: &str = "tdw-provider-tradier/0.1";
 // Quote fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tradier real-time quote fetcher.
-#[derive(Clone, Debug)]
-pub struct TradierHttpQuoteFetcher {
-    base_url: String,
-}
-
-impl Default for TradierHttpQuoteFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TradierHttpQuoteFetcher {
-    /// Override the Tradier base URL (useful for cassette tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tradier` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Tradier real-time quote fetcher.
+    pub TradierHttpQuoteFetcher,
+    BASE_URL
+);
 
 // ---------------------------------------------------------------------------
 // Serde response shapes — Tradier quotes
@@ -103,7 +81,7 @@ impl Fetcher<TradierQuoteQuery, Quote> for TradierHttpQuoteFetcher {
 
     async fn extract_data(&self, query: &TradierQuoteQuery, _creds: &Credentials) -> Result<Bytes> {
         let api_key = read_api_key()?;
-        let url = format!("{}/markets/quotes", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/markets/quotes", self.base_url().trim_end_matches('/'));
         let client = build_client()?;
         let response = client
             .get(&url)
@@ -146,33 +124,11 @@ impl Fetcher<TradierQuoteQuery, Quote> for TradierHttpQuoteFetcher {
 // Options chain fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tradier options chain fetcher.
-#[derive(Clone, Debug)]
-pub struct TradierHttpOptionsFetcher {
-    base_url: String,
-}
-
-impl Default for TradierHttpOptionsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TradierHttpOptionsFetcher {
-    /// Override the Tradier base URL (useful for cassette tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tradier` provider name.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Tradier options chain fetcher.
+    pub TradierHttpOptionsFetcher,
+    BASE_URL
+);
 
 // ---------------------------------------------------------------------------
 // Serde response shapes — Tradier options chain
@@ -239,7 +195,7 @@ impl Fetcher<TradierOptionsQuery, EquityHistoricalData> for TradierHttpOptionsFe
         let api_key = read_api_key()?;
         let url = format!(
             "{}/markets/options/chains",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let client = build_client()?;
         let response = client

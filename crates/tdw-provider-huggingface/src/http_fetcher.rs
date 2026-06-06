@@ -11,7 +11,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{
     AUTH_HEADER, BASE_URL, HuggingFaceTextGeneration, HuggingFaceTextGenerationQuery,
@@ -21,33 +21,11 @@ use crate::{
 const TOKEN_ENVS: [&str; 3] = ["HF_TOKEN", "HUGGINGFACE_API_TOKEN", "HF_API_TOKEN"];
 const USER_AGENT: &str = "tdw-provider-huggingface/0.1";
 
-/// Production HuggingFace text-generation fetcher.
-#[derive(Clone, Debug)]
-pub struct HuggingFaceHttpTextGenerationFetcher {
-    base_url: String,
-}
-
-impl Default for HuggingFaceHttpTextGenerationFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl HuggingFaceHttpTextGenerationFetcher {
-    /// Override the HuggingFace inference base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `huggingface`
-    /// provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production HuggingFace text-generation fetcher.
+    pub HuggingFaceHttpTextGenerationFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct HuggingFaceGeneration {
@@ -115,7 +93,7 @@ impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
         })?;
         let endpoint = format!(
             "{}/models/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.model_id
         );
         let mut body = json!({ "inputs": query.inputs });

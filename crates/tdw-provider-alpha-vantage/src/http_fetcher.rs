@@ -12,48 +12,28 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, AlphaVantageError, AlphaVantageFunction, AlphaVantageQuery, BASE_URL};
 
 const USER_AGENT: &str = "tdw-provider-alpha-vantage/0.1";
 
-/// Production Alpha Vantage HTTP fetcher.
-///
-/// Supports both `TIME_SERIES_DAILY` and `GLOBAL_QUOTE` endpoints.
-/// Auth is read from the `TDW_ALPHA_VANTAGE_API_KEY` environment variable.
-///
-/// # Rate limits
-///
-/// The free-tier Alpha Vantage key allows **25 requests per day**. Use a
-/// paid key or cache responses locally for higher throughput.
-#[derive(Clone, Debug)]
-pub struct AlphaVantageHttpFetcher {
-    base_url: String,
-}
-
-impl Default for AlphaVantageHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Alpha Vantage HTTP fetcher.
+    ///
+    /// Supports both `TIME_SERIES_DAILY` and `GLOBAL_QUOTE` endpoints.
+    /// Auth is read from the `TDW_ALPHA_VANTAGE_API_KEY` environment variable.
+    ///
+    /// # Rate limits
+    ///
+    /// The free-tier Alpha Vantage key allows **25 requests per day**. Use a
+    /// paid key or cache responses locally for higher throughput.
+    pub AlphaVantageHttpFetcher,
+    BASE_URL
+);
 
 impl AlphaVantageHttpFetcher {
-    /// Override the Alpha Vantage base URL (useful in tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `alpha_vantage` provider
-    /// name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-
     fn read_api_key() -> Result<String> {
         std::env::var(API_KEY_ENV)
             .ok()
@@ -154,7 +134,7 @@ impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
             .build()
             .map_err(|e| Error::Provider(format!("alpha_vantage client build: {e}")))?;
         let response = client
-            .get(&self.base_url)
+            .get(self.base_url())
             .query(&query_params)
             .send()
             .await

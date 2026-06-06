@@ -10,39 +10,17 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{BASE_URL, BinanceTickerPrice, BinanceTickerPriceQuery, ticker_price_request};
 
 const USER_AGENT: &str = "tdw-provider-binance/0.1";
 
-/// Production Binance ticker-price fetcher.
-#[derive(Clone, Debug)]
-pub struct BinanceHttpTickerPriceFetcher {
-    base_url: String,
-}
-
-impl Default for BinanceHttpTickerPriceFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl BinanceHttpTickerPriceFetcher {
-    /// Override the Binance base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `binance`
-    /// provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Binance ticker-price fetcher.
+    pub BinanceHttpTickerPriceFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct BinanceTickerPriceEnvelope {
@@ -77,7 +55,7 @@ impl Fetcher<BinanceTickerPriceQuery, BinanceTickerPrice> for BinanceHttpTickerP
         ticker_price_request(&query.symbol).map_err(|error| Error::Provider(error.to_string()))?;
         let endpoint = format!(
             "{}/api/v3/ticker/price",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let query_params = [("symbol", query.symbol.as_str())];
 

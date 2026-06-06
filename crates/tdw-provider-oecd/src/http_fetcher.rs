@@ -12,7 +12,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 
 use crate::{BASE_URL, OecdObservation, OecdQuery, sdmx_data_url};
 
@@ -20,38 +20,19 @@ const USER_AGENT: &str = "tdw-provider-oecd/0.1";
 
 // ── Fetcher struct ────────────────────────────────────────────────────────────
 
-/// Production OECD SDMX-JSON data fetcher.
-///
-/// No authentication is required. The base URL can be overridden for
-/// testing against a local mock server.
-#[derive(Clone, Debug)]
-pub struct OecdHttpDataFetcher {
-    base_url: String,
-}
-
-impl Default for OecdHttpDataFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production OECD SDMX-JSON data fetcher.
+    ///
+    /// No authentication is required. The base URL can be overridden for
+    /// testing against a local mock server.
+    pub OecdHttpDataFetcher,
+    BASE_URL
+);
 
 impl OecdHttpDataFetcher {
-    /// Override the OECD base URL (useful for pointing at a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `oecd` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-
-    /// Build the full request URL from a query, honouring `self.base_url`.
+    /// Build the full request URL from a query, honouring `self.base_url()`.
     fn build_url(&self, query: &OecdQuery) -> Result<String> {
-        let base = self.base_url.trim_end_matches('/');
+        let base = self.base_url().trim_end_matches('/');
         Ok(format!(
             "{}/{}/{}/OECD?startTime={}&endTime={}&contentType=application/json",
             base, query.dataset, query.filter, query.start_time, query.end_time,

@@ -12,7 +12,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Credentials, Error, Fetcher, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use crate::{API_KEY_ENV, BASE_URL, DatabentoTimeseriesQuery};
@@ -23,32 +23,11 @@ const USER_AGENT: &str = "tdw-provider-databento/0.1";
 // Timeseries fetcher  (`/timeseries.get_range`)
 // ---------------------------------------------------------------------------
 
-/// Production Databento timeseries OHLCV fetcher.
-#[derive(Clone, Debug)]
-pub struct DatabentoHttpTimeseriesFetcher {
-    base_url: String,
-}
-
-impl Default for DatabentoHttpTimeseriesFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DatabentoHttpTimeseriesFetcher {
-    /// Override the Databento base URL (useful for testing).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `databento` / `timeseries` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Databento timeseries OHLCV fetcher.
+    pub DatabentoHttpTimeseriesFetcher,
+    BASE_URL
+);
 
 // --- Databento API response types ------------------------------------------
 
@@ -119,7 +98,7 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
 
         let url = format!(
             "{}/timeseries.get_range",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let body = serde_json::json!({
             "dataset": query.dataset,
@@ -216,32 +195,11 @@ pub struct DatabentoDataset {
     pub id: String,
 }
 
-/// Production fetcher for `GET /metadata.list_datasets`.
-#[derive(Clone, Debug)]
-pub struct DatabentoMetadataFetcher {
-    base_url: String,
-}
-
-impl Default for DatabentoMetadataFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DatabentoMetadataFetcher {
-    /// Override the base URL (useful for testing).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `databento` / `metadata` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production fetcher for `GET /metadata.list_datasets`.
+    pub DatabentoMetadataFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct MetadataResponse {
@@ -272,7 +230,7 @@ impl Fetcher<DatabentoMetadataQuery, DatabentoDataset> for DatabentoMetadataFetc
 
         let url = format!(
             "{}/metadata.list_datasets",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
 
         let client = Client::builder()
