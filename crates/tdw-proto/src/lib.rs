@@ -2,7 +2,9 @@
 #![doc = "Generated protobuf bindings for TDW market data types."]
 
 pub mod finance {
-    include!(concat!(env!("OUT_DIR"), "/tdw.finance.rs"));
+    // Vendored prost-build output (see `finance.gen.rs`). Included via a relative
+    // path so the crate needs no build-time codegen or system `protoc`.
+    include!("finance.gen.rs");
 }
 
 pub use finance::{
