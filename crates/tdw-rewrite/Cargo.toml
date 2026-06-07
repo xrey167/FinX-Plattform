@@ -7,5 +7,9 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 
+[[example]]
+name = "tdw_rewrite_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
