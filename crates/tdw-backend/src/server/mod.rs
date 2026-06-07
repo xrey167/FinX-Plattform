@@ -415,3 +415,221 @@ fn exit_code_to_result(code: i32) -> BackendResult<()> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tdw_config::DaemonTransport;
+
+    // -- Step 1: pure-function unit tests -----------------------------------
+
+    #[test]
+    fn resolve_profile_prefers_non_empty_env_over_current() {
+        // (a) Some non-empty -> returns the env value, overriding `current`.
+        let resolved = resolve_profile("dev", Some("service".to_string()));
+        assert_eq!(resolved, "service");
+    }
+
+    #[test]
+    fn resolve_profile_trims_whitespace_padded_env() {
+        // (b) Some('  prod  ') whitespace-padded -> returns trimmed 'prod'.
+        let resolved = resolve_profile("dev", Some("  prod  ".to_string()));
+        assert_eq!(resolved, "prod");
+    }
+
+    #[test]
+    fn resolve_profile_empty_env_falls_through_to_current() {
+        // (c) Some('') empty -> falls through to `current`.
+        let resolved = resolve_profile("dev", Some(String::new()));
+        assert_eq!(resolved, "dev");
+    }
+
+    #[test]
+    fn resolve_profile_all_whitespace_env_falls_through_to_current() {
+        // (d) Some('   ') all-whitespace -> falls through to `current`.
+        let resolved = resolve_profile("dev", Some("   ".to_string()));
+        assert_eq!(resolved, "dev");
+    }
+
+    #[test]
+    fn resolve_profile_none_keeps_current() {
+        // (e) None -> returns `current` unchanged.
+        let resolved = resolve_profile("production", None);
+        assert_eq!(resolved, "production");
+    }
+
+    #[test]
+    fn exit_code_to_result_zero_is_ok() {
+        assert!(exit_code_to_result(0).is_ok());
+    }
+
+    #[test]
+    fn exit_code_to_result_nonzero_is_init_err_naming_the_code() {
+        let err = exit_code_to_result(3).expect_err("non-zero code must be an error");
+        match err {
+            BackendError::Init(msg) => {
+                assert!(
+                    msg.contains("code 3"),
+                    "error message must name the exit code, got: {msg}"
+                );
+            }
+            other => panic!("expected BackendError::Init, got {other:?}"),
+        }
+    }
+
+    // -- Step 2: bind / transport unit tests --------------------------------
+
+    /// Build a `(SubmissionHandle, events_rx, ServiceLoop)` triple from a real
+    /// in-memory `AppState`, returning only the pieces `spawn_transport` needs.
+    /// The `ServiceLoop` is dropped (the transport tests never drive it; they
+    /// only exercise the bind / fail-closed paths and then cancel).
+    async fn transport_inputs() -> (
+        SubmissionHandle,
+        tokio::sync::mpsc::UnboundedReceiver<EventMsg>,
+    ) {
+        let state = AppState::in_memory_for_tests().await;
+        let (handle, events_rx, _service_loop) = service_channel(state.clone(), state);
+        (handle, events_rx)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_transport_tcp_binds_ephemeral_port_then_shuts_down() {
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Tcp;
+        config.daemon.tcp_bind = Some("127.0.0.1:0".to_string());
+
+        let (handle, events_rx) = transport_inputs().await;
+        let cancel = CancellationToken::new();
+
+        let task = spawn_transport(&config, handle, events_rx, cancel.clone())
+            .await
+            .expect("ephemeral TCP bind should succeed");
+
+        // local_addr resolution: the OS assigned a concrete, non-zero port.
+        assert!(
+            task.bound_addr.parse::<SocketAddr>().is_ok(),
+            "bound_addr must be a valid SocketAddr, got: {}",
+            task.bound_addr
+        );
+        assert_ne!(
+            task.bound_addr
+                .rsplit(':')
+                .next()
+                .expect("port segment present"),
+            "0",
+            "ephemeral :0 must resolve to a concrete OS-assigned port"
+        );
+
+        // Hermetic teardown: cancel and join so no task leaks.
+        cancel.cancel();
+        let joined = tokio::time::timeout(std::time::Duration::from_secs(3), task.join)
+            .await
+            .expect("transport task must join promptly after cancel");
+        assert!(joined.is_ok(), "transport task join should not panic");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_transport_tcp_invalid_address_errors() {
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Tcp;
+        config.daemon.tcp_bind = Some("not-an-addr".to_string());
+
+        let (handle, events_rx) = transport_inputs().await;
+        let cancel = CancellationToken::new();
+
+        // `TransportTask` (the Ok type) is not `Debug`, so match rather than
+        // `expect_err` to extract the error without requiring it to format Ok.
+        let result = spawn_transport(&config, handle, events_rx, cancel).await;
+        let msg = match result {
+            Ok(_) => panic!("an unparseable bind address must error, not bind"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("invalid") && msg.contains("not-an-addr"),
+            "error must describe the invalid address, got: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_transport_uds_fails_closed_under_default_features() {
+        // Default features do not compile transport-uds: the stub must fail
+        // closed rather than silently bind a different transport.
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Uds;
+
+        let (handle, events_rx) = transport_inputs().await;
+        let cancel = CancellationToken::new();
+
+        let result = spawn_transport(&config, handle, events_rx, cancel).await;
+        let msg = match result {
+            Ok(_) => panic!("UDS must fail closed without the transport-uds feature"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("not built"),
+            "UDS stub must report a not-built error, got: {msg}"
+        );
+        assert!(
+            msg.contains("transport-uds"),
+            "UDS stub must name the missing transport-uds feature, got: {msg}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_transport_http_fails_closed_under_default_features() {
+        // Default features do not compile transport-http: the stub must fail
+        // closed.
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::HttpSse;
+
+        let (handle, events_rx) = transport_inputs().await;
+        let cancel = CancellationToken::new();
+
+        let result = spawn_transport(&config, handle, events_rx, cancel).await;
+        let msg = match result {
+            Ok(_) => panic!("HTTP/SSE must fail closed without the transport-http feature"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("not built"),
+            "HTTP/SSE stub must report a not-built error, got: {msg}"
+        );
+        assert!(
+            msg.contains("transport-http"),
+            "HTTP/SSE stub must name the missing transport-http feature, got: {msg}"
+        );
+    }
+
+    // -- Step 4: load_config default-branch unit test (TDW_CONFIG unset) -----
+
+    #[tokio::test]
+    async fn load_config_default_branch_applies_daemon_boot_overrides() {
+        // The TDW_CONFIG file-read branch is only taken when TDW_CONFIG is set;
+        // skip the default-branch assertions if a runner happens to set it.
+        if std::env::var("TDW_CONFIG").is_ok() {
+            return;
+        }
+
+        let config = load_config()
+            .await
+            .expect("default-branch load_config must succeed");
+
+        // Default branch sets TCP transport (line 64) ...
+        assert_eq!(config.daemon.transport, DaemonTransport::Tcp);
+        // ... overrides the session store to in-memory (line 76) ...
+        assert_eq!(config.session.sqlite_path, "sqlite::memory:");
+        // ... and always has a concrete tcp_bind (lines 65-67).
+        assert!(config.daemon.tcp_bind.is_some());
+
+        // The exact default bind only holds when TDW_DAEMON_TCP_BIND is unset.
+        if std::env::var("TDW_DAEMON_TCP_BIND").is_err() {
+            assert_eq!(config.daemon.tcp_bind.as_deref(), Some("127.0.0.1:7878"));
+        }
+
+        // The resolved profile is consistent with the resolve_profile contract:
+        // load_config feeds TDW_PROFILE through resolve_profile over the base
+        // profile, so the result equals resolve_profile of that same input.
+        let expected_profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
+        assert_eq!(config.profile, expected_profile);
+    }
+}
