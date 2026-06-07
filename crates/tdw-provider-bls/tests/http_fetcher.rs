@@ -10,9 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_bls::{BlsHttpTimeSeriesFetcher, BlsSeriesQuery};
-use tdw_provider_testkit::cassette_bytes;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> BlsSeriesQuery {
     BlsHttpTimeSeriesFetcher::transform_query(json!({
@@ -220,14 +220,7 @@ async fn live_bls_returns_cpi_data_when_env_vars_set() {
     }))
     .unwrap_or_else(|e| panic!("query must build: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

@@ -60,3 +60,69 @@ macro_rules! live_fetch_nonempty {
             .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"))
     }};
 }
+
+/// Run the live-fetch `extract_data` -> `transform_data` chain using the
+/// `.expect()` panic mechanism and return the decoded rows vec.
+///
+/// Expands to the byte-identical body
+///
+/// ```ignore
+/// {
+///     let raw = $fetcher
+///         .extract_data(&$query, &Credentials::default())
+///         .await
+///         .expect("live extract_data must succeed");
+///     $fetcher
+///         .transform_data(&$query, raw)
+///         .expect("live transform_data must succeed")
+/// }
+/// ```
+///
+/// This is the sibling of [`live_fetch_nonempty!`] for the call sites that use
+/// `.expect("live ... must succeed")` rather than
+/// `unwrap_or_else(|e| panic!(...))`. The two panic mechanisms are kept as
+/// distinct macros so no panic string changes. The expansion evaluates to the
+/// rows vec so the caller can bind it
+/// (`let rows = live_fetch_rows_expect!(fetcher, query);`) and keep its own
+/// per-provider trailing assertions byte-for-byte. Dev-only, no network.
+#[macro_export]
+macro_rules! live_fetch_rows_expect {
+    ($fetcher:expr, $query:expr) => {{
+        let raw = $fetcher
+            .extract_data(&$query, &::tdw_core::Credentials::default())
+            .await
+            .expect("live extract_data must succeed");
+        $fetcher
+            .transform_data(&$query, raw)
+            .expect("live transform_data must succeed")
+    }};
+}
+
+/// Run a live `fetch` and assert the returned object's `rows` are non-empty.
+///
+/// Expands to the byte-identical body
+///
+/// ```ignore
+/// {
+///     let obbject = $fetcher
+///         .fetch($value, &Credentials::default())
+///         .await
+///         .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
+///     assert!(!obbject.rows.is_empty(), $msg);
+/// }
+/// ```
+///
+/// The `fetch` argument (`$value`) and the non-emptiness assertion message
+/// (`$msg`) are forwarded verbatim so each provider keeps its exact literal.
+/// The `"live fetch must succeed: {e}"` panic string is byte-identical at every
+/// call site. Dev-only, no network.
+#[macro_export]
+macro_rules! live_fetch_obbject_nonempty {
+    ($fetcher:expr, $value:expr, $msg:expr) => {{
+        let obbject = $fetcher
+            .fetch($value, &::tdw_core::Credentials::default())
+            .await
+            .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
+        assert!(!obbject.rows.is_empty(), $msg);
+    }};
+}
