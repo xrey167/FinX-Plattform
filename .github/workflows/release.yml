@@ -36,6 +36,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: tdw-worker
             archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: tdw-service
+            archive: tar.gz
+            cross_linker: aarch64-linux-gnu-gcc
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: tdw-cli
+            archive: tar.gz
+            cross_linker: aarch64-linux-gnu-gcc
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: tdw-mcp
+            archive: tar.gz
+            cross_linker: aarch64-linux-gnu-gcc
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: tdw-worker
+            archive: tar.gz
+            cross_linker: aarch64-linux-gnu-gcc
           - os: macos-latest
             target: aarch64-apple-darwin
             binary: tdw-service
@@ -76,7 +96,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}-${{ matrix.binary }}
+      - name: Install cross linker
+        if: matrix.cross_linker != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build binary
+        env:
+          # Point cargo and any `cc`-driven build scripts at the cross linker
+          # when cross-compiling (e.g. aarch64-unknown-linux-gnu on an x86_64
+          # runner). No-op for native targets where `cross_linker` is empty.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross_linker }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.cross_linker }}
         run: cargo build --release --target ${{ matrix.target }} --bin ${{ matrix.binary }}
       - name: Package binary
         shell: pwsh

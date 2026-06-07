@@ -255,6 +255,50 @@ fn report_policy_state(state: &AppState, config: &TdwConfig) {
     }
 }
 
+/// Whether `bind` (a `host:port` socket spec) targets a loopback interface.
+///
+/// Used to decide whether a non-loopback (network-reachable) bind warrants a
+/// prominent security warning. Unparseable/host-only specs are treated as
+/// non-loopback so the warning errs on the side of caution.
+#[must_use]
+pub fn bind_is_loopback(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map_or(bind, |(host, _)| host)
+        .trim_matches(['[', ']']);
+    match host {
+        "localhost" => true,
+        other => other
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+    }
+}
+
+/// Emit a prominent warning when the daemon's TCP transport binds a
+/// non-loopback address while no auth-backed policy is attached.
+///
+/// Exposing the daemon on `0.0.0.0` (or any routable host) without ingress auth
+/// is the highest-risk misconfiguration: any host that can reach the port can
+/// drive the daemon. The safe default is loopback (`127.0.0.1:7878`); operators
+/// who deliberately bind wider must wire a policy (configure `TDW_OIDC_*`) and
+/// front the daemon with a token/mTLS/reverse-proxy layer — see
+/// `docs/release/data-backend-runbook.md`.
+fn warn_on_unauthenticated_nonloopback_bind(config: &TdwConfig, state: &AppState) {
+    if config.daemon.transport != DaemonTransport::Tcp {
+        return;
+    }
+    let bind = config
+        .daemon
+        .tcp_bind
+        .as_deref()
+        .unwrap_or("127.0.0.1:7878");
+    if !bind_is_loopback(bind) && state.policy.is_none() {
+        eprintln!(
+            "tdw-backend: SECURITY WARNING — daemon TCP transport is bound to non-loopback address '{bind}' with no auth-backed policy attached. Any host that can reach this port can drive the daemon. Configure TDW_OIDC_* and front the daemon with a token/mTLS/reverse-proxy layer (see docs/release/data-backend-runbook.md), or bind 127.0.0.1."
+        );
+    }
+}
+
 /// Run the daemon to completion in the current tokio runtime, blocking until
 /// ctrl-c or a dispatched `Shutdown` cancels it.
 ///
@@ -272,6 +316,21 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
         .await
         .map_err(|e| format!("AppState::from_config failed: {e}"))?;
     report_policy_state(&state, config);
+
+    // A *partial* OIDC configuration (some but not all `TDW_OIDC_*` set, or an
+    // invalid JWKS/claims set) is an operator mistake, not a fail-closed default:
+    // refuse to start with the actionable diagnostic rather than silently
+    // running with no auth-backed policy. A fully-unset OIDC config keeps the
+    // existing fail-closed behavior (`policy_attach_error` is `None` there).
+    if let Some(error) = &state.policy_attach_error {
+        return Err(format!(
+            "refusing to start daemon in '{}' profile: {error}; set the listed TDW_OIDC_* variables (or unset all of them to run fail-closed)",
+            config.profile
+        )
+        .into());
+    }
+
+    warn_on_unauthenticated_nonloopback_bind(config, &state);
 
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
     let cancel = CancellationToken::new();
@@ -413,5 +472,27 @@ fn exit_code_to_result(code: i32) -> BackendResult<()> {
         Err(BackendError::Init(format!(
             "embedded MCP loop exited with code {code}"
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_binds_are_recognized() {
+        assert!(bind_is_loopback("127.0.0.1:7878"));
+        assert!(bind_is_loopback("localhost:7878"));
+        assert!(bind_is_loopback("[::1]:7878"));
+        assert!(bind_is_loopback("127.0.0.5:7878"));
+    }
+
+    #[test]
+    fn non_loopback_binds_are_recognized() {
+        assert!(!bind_is_loopback("0.0.0.0:7878"));
+        assert!(!bind_is_loopback("192.168.1.10:7878"));
+        assert!(!bind_is_loopback("[::]:7878"));
+        // A host-only / unparseable spec errs on the side of caution.
+        assert!(!bind_is_loopback("example.com:7878"));
     }
 }

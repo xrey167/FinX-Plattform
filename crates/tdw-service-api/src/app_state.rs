@@ -786,8 +786,10 @@ fn daemon_pg_url() -> Option<String> {
 /// [`tdw_auth_oidc::ClaimValidationError`] from structural validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OidcPolicyError {
-    /// A required `TDW_OIDC_*` variable was unset or blank (the named var).
-    MissingEnvVar(&'static str),
+    /// One or more required `TDW_OIDC_*` variables were unset or blank while at
+    /// least one other was set (a partial misconfiguration). Carries every
+    /// missing variable so the operator can fix the configuration in one pass.
+    MissingEnvVars(Vec<&'static str>),
     /// A `kid:alg` JWKS segment was malformed (missing `:` or an empty side).
     MalformedJwksPair(String),
     /// The same `kid` appeared more than once in the JWKS spec.
@@ -799,7 +801,9 @@ pub enum OidcPolicyError {
 impl std::fmt::Display for OidcPolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingEnvVar(var) => write!(f, "{var} missing"),
+            Self::MissingEnvVars(vars) => {
+                write!(f, "partial OIDC config: missing {}", vars.join(", "))
+            }
             Self::MalformedJwksPair(pair) => write!(f, "malformed JWKS pair: {pair}"),
             Self::DuplicateKid(kid) => write!(f, "duplicate kid in JWKS: {kid}"),
             Self::InvalidClaims(error) => write!(f, "invalid claims: {error:?}"),
@@ -909,8 +913,8 @@ fn build_prod_policy_from_env()
 /// Semantics:
 /// - **all five required vars unset → `Ok(None)`** (deliberately unconfigured,
 ///   fail-closed by design — not an error).
-/// - **some required vars present, others missing → `Err(MissingEnvVar(..))`**
-///   naming the first missing required var (a partial misconfiguration).
+/// - **some required vars present, others missing → `Err(MissingEnvVars(..))`**
+///   naming every missing required var (a partial misconfiguration).
 /// - **all required present but parse/validation fails → `Err(..)`**.
 /// - **all valid → `Ok(Some(policy))`**.
 ///
@@ -931,14 +935,17 @@ fn build_prod_policy_from_lookup(
     }
 
     // Some present, some missing: a partial misconfiguration is an error so the
-    // operator sees which var to set rather than a silent fail-closed.
-    let mut required = Vec::with_capacity(REQUIRED_OIDC_VARS.len());
-    for (key, value) in REQUIRED_OIDC_VARS.iter().zip(resolved) {
-        match value {
-            Some(value) => required.push(value),
-            None => return Err(OidcPolicyError::MissingEnvVar(key)),
-        }
+    // operator sees *every* var to set rather than a silent fail-closed (and so
+    // the daemon can refuse to start — see `run_daemon`).
+    let missing: Vec<&'static str> = REQUIRED_OIDC_VARS
+        .iter()
+        .zip(&resolved)
+        .filter_map(|(key, value)| value.is_none().then_some(*key))
+        .collect();
+    if !missing.is_empty() {
+        return Err(OidcPolicyError::MissingEnvVars(missing));
     }
+    let required: Vec<String> = resolved.into_iter().flatten().collect();
 
     let roles_spec = lookup("TDW_OIDC_ROLES").unwrap_or_default();
     build_prod_policy(
@@ -1415,15 +1422,23 @@ mod tests {
     }
 
     #[test]
-    fn build_prod_policy_from_lookup_partial_config_names_missing_var() {
-        // Issuer + audience present, JWKS (a required var) missing: the wrapper
-        // must surface the first missing required var, not silently fail closed.
+    fn build_prod_policy_from_lookup_partial_config_names_missing_vars() {
+        // Issuer + audience present, the other three required vars missing: the
+        // wrapper must surface *every* missing required var (so the daemon can
+        // refuse to start with a complete diagnostic), not silently fail closed.
         let map = std::collections::HashMap::from([
             ("TDW_OIDC_ISSUER", "https://issuer.example"),
             ("TDW_OIDC_AUDIENCE", "tdw-daemon"),
         ]);
         let result = build_prod_policy_from_lookup(|key| map.get(key).map(ToString::to_string));
-        assert_eq!(result, Err(OidcPolicyError::MissingEnvVar("TDW_OIDC_JWKS")));
+        assert_eq!(
+            result,
+            Err(OidcPolicyError::MissingEnvVars(vec![
+                "TDW_OIDC_JWKS",
+                "TDW_OIDC_SUBJECT",
+                "TDW_OIDC_KID",
+            ]))
+        );
     }
 
     #[test]
