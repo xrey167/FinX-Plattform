@@ -12,6 +12,7 @@ resolves a `tdw-agent` registry tool's implementation and dispatches it.
 | `ToolOutcome` | `{ structured: Value }`. |
 | `ExecError` | `Unbound` / `ToolNotFound` / `HandlerNotFound` / `NotPermitted` / `NotYetSupported` / `Backend` / `BadArguments`. |
 | `validate_command` / `dispatch_command` / `spawn_reader` / `join_reader` (private) | The hardened command path. |
+| `ReceiptLog` / `ToolReceipt` / `ChainStatus` / `ChainBreak` (`src/receipt.rs`) | Opt-in, append-only, hash-chained log of successful executions; `verify` walks the chain. Integrity-not-cryptographic (std `DefaultHasher`). |
 
 ## Dispatch contract
 
@@ -65,3 +66,7 @@ is defended in depth:
   "not yet supported".
 - **No `unwrap` / `dbg!` / `todo!`** (workspace clippy); clean-room (no
   vendor-derived code or branding).
+- **Receipt log is opt-in, append-only, std-hash integrity.** Off by default
+  (zero behavioral change); no removal/mutation API; tamper-EVIDENT, not
+  cryptographic; not `Sync` when enabled (interior mutability keeps
+  `execute(&self, ...)` unchanged).
