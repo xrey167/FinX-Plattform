@@ -22,6 +22,9 @@ use tdw_agent::{EntityKind, Registry, Tool, ToolImplementation, entity_from_reso
 use tdw_tools::{RegisteredTool, ToolDefinition, ToolHandler, ToolRegistry};
 use thiserror::Error;
 
+mod receipt;
+pub use receipt::{ChainBreak, ChainStatus, GENESIS_PREV_HASH, ReceiptLog, ToolReceipt};
+
 /// Env var holding the comma-separated allow-list of bare command names permitted for
 /// `Command` execution. Unset/empty means *deny all* command execution.
 const ALLOWED_COMMANDS_ENV: &str = "TDW_TOOL_EXEC_ALLOWED_COMMANDS";
@@ -144,10 +147,17 @@ impl Default for CommandPolicy {
 ///
 /// Holds an in-process [`ToolRegistry`] for `Builtin` handlers; `Command { background: false }`
 /// runs via a hardened direct [`std::process::Command`] governed by a [`CommandPolicy`].
+///
+/// Optionally records an append-only, hash-chained [`ReceiptLog`] of successful
+/// executions (off by default; opt in via [`ToolExecutor::with_receipts`]). When
+/// recording is enabled the executor is **not** `Sync` and must not be shared across
+/// threads for concurrent `execute` (see [`ReceiptLog`]).
 #[derive(Default)]
 pub struct ToolExecutor {
     builtins: ToolRegistry,
     command_policy: CommandPolicy,
+    /// `None` = receipt recording disabled (default); `Some(log)` = recording.
+    receipts: Option<ReceiptLog>,
 }
 
 impl ToolExecutor {
@@ -162,6 +172,25 @@ impl ToolExecutor {
     pub fn with_command_policy(mut self, policy: CommandPolicy) -> Self {
         self.command_policy = policy;
         self
+    }
+
+    /// Enable the append-only, hash-chained [`ReceiptLog`].
+    ///
+    /// Off by default; calling this is an explicit opt-in. When not enabled there is
+    /// zero behavioral or performance change versus an executor without receipts.
+    ///
+    /// A receipts-enabled executor is **not** `Sync`: do not share it across threads
+    /// for concurrent `execute` (see [`ReceiptLog`]).
+    #[must_use]
+    pub fn with_receipts(mut self) -> Self {
+        self.receipts = Some(ReceiptLog::new());
+        self
+    }
+
+    /// Read-only access to the [`ReceiptLog`], or `None` if recording is disabled.
+    #[must_use]
+    pub fn receipts(&self) -> Option<&ReceiptLog> {
+        self.receipts.as_ref()
     }
 
     /// Register an in-process `Builtin` handler under `name`.
@@ -208,7 +237,7 @@ impl ToolExecutor {
         let tool: Tool = entity_from_resource(resource)
             .map_err(|error| ExecError::BadArguments(error.to_string()))?;
 
-        match tool.implementation {
+        let result = match tool.implementation {
             ToolImplementation::Unbound => Err(ExecError::Unbound),
             ToolImplementation::Builtin { handler } => self.dispatch_builtin(&handler, args),
             ToolImplementation::Command {
@@ -217,9 +246,10 @@ impl ToolExecutor {
                 background,
             } => {
                 if background {
-                    return Err(ExecError::NotYetSupported("background command (Phase 2)"));
+                    Err(ExecError::NotYetSupported("background command (Phase 2)"))
+                } else {
+                    dispatch_command(&self.command_policy, &command, &command_args)
                 }
-                dispatch_command(&self.command_policy, &command, &command_args)
             }
             ToolImplementation::Http { .. } => {
                 Err(ExecError::NotYetSupported("http (needs credential wiring)"))
@@ -232,7 +262,14 @@ impl ToolExecutor {
             ToolImplementation::Ref { .. } => {
                 Err(ExecError::NotYetSupported("ref resolution (Phase 4)"))
             }
+        };
+
+        // Record a receipt only on success and only when opted in. Errors are not
+        // receipts: the chain tracks completed effects, not rejected attempts.
+        if let (Ok(outcome), Some(log)) = (&result, &self.receipts) {
+            log.append(name, args, outcome);
         }
+        result
     }
 
     fn dispatch_builtin(&self, handler: &str, args: &Value) -> Result<ToolOutcome, ExecError> {
