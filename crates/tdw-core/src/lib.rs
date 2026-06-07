@@ -729,4 +729,90 @@ mod tests {
             RegistryEntry::fetcher("x", "y")
         );
     }
+
+    /// Drive a future to completion on the current thread without pulling in an
+    /// async runtime. `tdw-core` has no `tokio`/`futures` (dev-)dependency, so we
+    /// poll with a no-op waker. The mock futures here resolve without yielding to
+    /// any real I/O, so a single poll completes them deterministically.
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => value,
+            Poll::Pending => {
+                panic!("mock future unexpectedly yielded Pending without an executor")
+            }
+        }
+    }
+
+    #[test]
+    fn fetcher_default_fetch_chains_transform_extract_and_wraps_envelope() {
+        // Exercises the Fetcher::fetch DEFAULT method, which chains
+        // transform_query -> extract_data -> transform_data -> OBBject::new.
+        let object =
+            block_on(MockFetcher.fetch(json!({ "symbol": "AAPL" }), &Credentials::default()))
+                .unwrap_or_else(|error| panic!("mock fetch should succeed: {error}"));
+
+        assert_eq!(object.provider, "mock");
+        assert_eq!(object.endpoint, "equity_historical");
+        assert_eq!(object.rows.len(), 1);
+        assert_eq!(object.rows[0].symbol, "AAPL");
+    }
+
+    #[test]
+    fn fetcher_transform_query_rejects_missing_symbol() {
+        // The error branch in the mock's transform_query: a query without a
+        // `symbol` field is an InvalidQuery with the documented message.
+        let error = MockFetcher::transform_query(json!({}))
+            .expect_err("transform_query should reject a query with no symbol");
+
+        match error {
+            Error::InvalidQuery(message) => {
+                assert!(
+                    message.contains("missing symbol"),
+                    "expected 'missing symbol', got: {message}"
+                );
+            }
+            other => panic!("expected InvalidQuery, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn streamer_subscribe_yields_empty_stream_and_checkpoint_is_ok() {
+        // subscribe returns the EmptyStream; draining it via a direct poll
+        // exercises EmptyStream::poll_next and confirms exhaustion (None).
+        let mut stream = block_on(MockStreamer.subscribe(
+            Query {
+                symbol: "AAPL".to_string(),
+            },
+            &Credentials::default(),
+        ))
+        .unwrap_or_else(|error| panic!("subscribe should succeed: {error}"));
+
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        match stream.as_mut().poll_next(&mut cx) {
+            Poll::Ready(item) => assert!(item.is_none(), "empty stream should yield None"),
+            Poll::Pending => panic!("empty stream should be ready immediately"),
+        }
+
+        // Streamer::checkpoint DEFAULT method returns Ok(()).
+        block_on(MockStreamer.checkpoint(0))
+            .unwrap_or_else(|error| panic!("default checkpoint should be Ok: {error}"));
+    }
+
+    #[test]
+    fn macro_dummy_fetcher_default_fetch_reads_base_url_and_yields_empty_rows() {
+        // Drives the macro-generated scaffolding through the Fetcher::fetch
+        // default: transform_query (constant query), extract_data (reads
+        // base_url()), transform_data (returns vec![]).
+        let object =
+            block_on(MacroDummyFetcher::default().fetch(json!({}), &Credentials::default()))
+                .unwrap_or_else(|error| panic!("macro fetch should succeed: {error}"));
+
+        assert_eq!(object.provider, "x");
+        assert_eq!(object.endpoint, "y");
+        assert!(object.rows.is_empty());
+    }
 }

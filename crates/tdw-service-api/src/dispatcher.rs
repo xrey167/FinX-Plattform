@@ -1157,6 +1157,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dispatch_tool_unsupported_tool_returns_provider_error() {
+        // The unsupported-tool branch runs only after the line-282 enforcement
+        // precondition succeeds, so the reused analyst_policy() (which passes
+        // enforcement) is required for the match to be reached at all.
+        let policy = udf_runner_policy();
+        let error = dispatch_tool(&policy, "does.not.exist", &json!({}))
+            .expect_err("an unknown tool name must be rejected");
+
+        match error {
+            Error::Provider(message) => {
+                assert!(
+                    message.contains("unsupported tool: does.not.exist"),
+                    "expected the unsupported-tool contract, got: {message}"
+                );
+            }
+            other => panic!("expected Error::Provider, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tool_udf_run_invalid_arguments_returns_provider_error() {
+        // The udf.run arm is entered (enforcement passes via analyst_policy),
+        // then serde_json::from_value fails on a payload missing UdfRequest's
+        // required fields, hitting the documented invalid-arguments contract.
+        let policy = udf_runner_policy();
+        let error = dispatch_tool(&policy, "udf.run", &json!({}))
+            .expect_err("a malformed udf.run payload must be rejected");
+
+        match error {
+            Error::Provider(message) => {
+                assert!(
+                    message.contains("invalid udf.run arguments"),
+                    "expected the invalid-arguments contract, got: {message}"
+                );
+            }
+            other => panic!("expected Error::Provider, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_tool_udf_run_happy_path_returns_runtime_and_output_envelope() {
+        // A minimal request the LocalUdfSandbox accepts under default features:
+        // the `upper` builtin uppercases its input. This drives the full udf.run
+        // arm body — UdfRequest deserialization, sandbox.run, and the masked
+        // response envelope (evidence/runtime/output).
+        let policy = udf_runner_policy();
+        let arguments = json!({
+            "name": "upper",
+            "runtime": "JavaScript",
+            "source": "builtin",
+            "input": "abc",
+            "allow_network": false,
+            "allow_filesystem": false,
+        });
+
+        let value = dispatch_tool(&policy, "udf.run", &arguments)
+            .unwrap_or_else(|error| panic!("udf.run happy path should succeed: {error}"));
+
+        // The masked envelope carries the principal-scoped evidence plus the
+        // sandbox response. Empty mask_rules leave the payload unchanged.
+        assert_eq!(value["evidence"]["principal"], "alice");
+        assert_eq!(value["evidence"]["endpoint"], "tdw.udf.run");
+        assert_eq!(value["runtime"], "JavaScript");
+        assert_eq!(value["output"], "ABC");
+    }
+
     /// Per-request `WasmLimits` carried in the `udf.run` op payload are parsed
     /// into the `UdfRequest` and plumbed to the WASM runtime. Over-ceiling values
     /// are clamped (never raise the built-in maximum) rather than rejected, so the
