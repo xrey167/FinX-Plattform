@@ -12,5 +12,9 @@ tdw-hooks = { path = "../tdw-hooks" }
 tdw-protocol = { workspace = true }
 thiserror = { workspace = true }
 
+[[example]]
+name = "tdw_tools_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

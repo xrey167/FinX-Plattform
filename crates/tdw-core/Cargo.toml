@@ -19,5 +19,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
+[[example]]
+# Unique target name (per-crate) pointing at the standard examples/basic.rs.
+# A shared `basic` name across crates collides on one output path under a
+# shared target dir; the unique name keeps `examples/basic.rs` collision-free.
+name = "tdw_core_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
