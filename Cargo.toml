@@ -58,6 +58,9 @@ ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 wasmi = "0.31"
+# Transactional SMTP client. Pure-Rust TLS via rustls (no native-tls / OpenSSL
+# build deps) so it compiles on Windows CI without a C toolchain.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "tokio1", "tokio1-rustls-tls", "builder"] }
 
 tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-config = { path = "crates/tdw-config" }
