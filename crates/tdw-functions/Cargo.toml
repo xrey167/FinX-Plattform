@@ -10,18 +10,30 @@ default = []
 # Enables the real Postgres backend (sqlx::PgPool). Off by default so the
 # workspace test set stays offline; the integration test is additionally
 # gated by the env var TDW_POSTGRES_TEST_URL.
-postgres = ["dep:sqlx", "dep:tokio"]
+postgres = ["dep:sqlx", "dep:tokio", "sqlx/postgres"]
+# Enables worker-job bridge (`job.rs`): FunctionJobHandler + enqueue helpers.
+worker = ["dep:tdw-worker", "dep:tdw-protocol", "dep:tokio"]
+# Enables cron-trigger wiring (`cron_wiring.rs`); implies worker.
+cron = ["worker", "dep:tdw-cron"]
+# Enables SQLite-backed step/run stores (`sqlite.rs`).
+sqlite = ["dep:sqlx", "dep:tokio", "sqlx/sqlite"]
 
 [dependencies]
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-sqlx = { workspace = true, features = ["postgres"], optional = true }
+sqlx = { workspace = true, optional = true }
+tdw-cron = { path = "../tdw-cron", optional = true }
+tdw-protocol = { workspace = true, optional = true }
+tdw-worker = { path = "../tdw-worker", optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tdw-protocol = { workspace = true }
+tdw-worker = { path = "../tdw-worker" }
+tdw-cron = { path = "../tdw-cron" }
 
 [lints]
 workspace = true

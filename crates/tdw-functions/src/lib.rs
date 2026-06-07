@@ -1,4 +1,5 @@
-//! Named multi-step function registry with per-step memoization.
+//! Named multi-step function registry with per-step memoization, worker-job
+//! bridge, cron-trigger wiring, and event dispatch.
 //!
 //! # Overview
 //!
@@ -12,18 +13,41 @@
 //! - [`FunctionRegistry`] — registers functions, invokes them, and resumes
 //!   partially-executed runs.
 //! - [`StepStore`] / [`RunStore`] — persistence traits with [`InMemoryStepStore`]
-//!   / [`InMemoryRunStore`] always compiled and [`PgStepStore`] /
-//!   [`PgRunStore`] behind the `postgres` feature.
+//!   / [`InMemoryRunStore`] always compiled, [`PgStepStore`] / [`PgRunStore`]
+//!   behind the `postgres` feature, and [`sqlite::SqliteStepStore`] /
+//!   [`sqlite::SqliteRunStore`] behind the `sqlite` feature.
 //!
 //! # Trigger format
 //!
 //! [`Trigger::Cron`] holds a 5-field cron expression (`min hour dom month
-//! dow`) matching the format used by `tdw-cron`.  Nothing in this sub-PR
-//! consumes triggers — they exist as metadata for callers.
+//! dow`) matching the format used by `tdw-cron`.  [`Trigger::Event`] holds a
+//! named event string matched by [`event_wiring::EventRouter`].
+//!
+//! # Worker-job bridge (`worker` feature)
+//!
+//! [`job::FunctionJobHandler`] implements [`tdw_worker::JobHandler`] so a
+//! [`tdw_worker::WorkerRunner`] can drive the registry.  Each job carries a
+//! [`job::FunctionJob`] serialized into an [`tdw_protocol::Op::ToolCall`]
+//! envelope.  [`job::enqueue_invoke`] builds and enqueues the job.
+//!
+//! # Cron wiring (`cron` feature)
+//!
+//! [`cron_wiring::register_cron_triggers`] walks the registry and registers
+//! a [`tdw_cron::ScheduledTrigger`] for every [`Trigger::Cron`] entry.
+//!
+//! # Event dispatch (`worker` feature)
+//!
+//! [`event_wiring::EventRouter`] maps event names to subscribed function ids
+//! and enqueues jobs via [`event_wiring::EventRouter::dispatch`].  `tdw-event`
+//! has no subscriber/callback surface, so dispatch is explicit (call-site
+//! driven), not automatic.
+//!
+//! # SQLite stores (`sqlite` feature)
+//!
+//! [`sqlite::SqliteStepStore`] and [`sqlite::SqliteRunStore`] use an in-process
+//! SQLite database, suitable for single-node deployments and tests.
 //!
 //! # StepFn / handler shape
-//!
-//! The handler trait is [`StepFn`]:
 //!
 //! ```rust,ignore
 //! #[async_trait]
@@ -59,6 +83,17 @@ pub use trigger::Trigger;
 
 #[cfg(feature = "postgres")]
 pub use pg::{PgRunStore, PgStepStore};
+
+#[cfg(feature = "worker")]
+pub mod event_wiring;
+#[cfg(feature = "worker")]
+pub mod job;
+
+#[cfg(feature = "cron")]
+pub mod cron_wiring;
+
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 
 mod error;
 #[cfg(feature = "postgres")]
@@ -455,5 +490,562 @@ mod tests {
             signing_secret: Some("secret".to_string()),
         };
         assert_eq!(c.clone(), c);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worker-bridge + cron + event tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "worker"))]
+mod worker_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
+    use serde_json::json;
+    use tdw_worker::{InMemoryWorkerQueue, JobHandler, WorkerQueueError};
+
+    use super::{
+        FunctionDef, FunctionRegistry, InMemoryRunStore, InMemoryStepStore, RunStatus, RunStore,
+        StepStore,
+    };
+    use crate::job::{
+        FUNCTIONS_QUEUE, FUNCTIONS_TOOL_NAME, FunctionJob, FunctionJobHandler, JobMode,
+        build_worker_job, enqueue_invoke, extract_function_job,
+    };
+
+    fn simple_def(id: &str) -> FunctionDef {
+        let id = id.to_string();
+        FunctionDef::from_fn(id, vec![], |ctx, _payload| {
+            Box::pin(async move { ctx.step("only", || async { Ok(json!("ok")) }).await })
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // FunctionJob serde round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn function_job_serde_roundtrip() {
+        let job = FunctionJob {
+            function_id: "fn-a".to_string(),
+            run_id: "run-1".to_string(),
+            payload: json!({"x": 1}),
+            mode: JobMode::Invoke,
+        };
+        let value = serde_json::to_value(&job).expect("serialize");
+        let back: FunctionJob = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(back, job);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_worker_job / extract_function_job round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_and_extract_roundtrip() {
+        let func_job = FunctionJob {
+            function_id: "fn-b".to_string(),
+            run_id: "run-2".to_string(),
+            payload: json!(42),
+            mode: JobMode::Resume,
+        };
+        let worker_job = build_worker_job("job-2", &func_job).expect("build");
+        assert_eq!(worker_job.job_id, "job-2");
+        assert_eq!(worker_job.queue, FUNCTIONS_QUEUE);
+
+        let extracted = extract_function_job(&worker_job).expect("extract");
+        assert_eq!(extracted, func_job);
+    }
+
+    #[test]
+    fn extract_wrong_tool_name_errors() {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId, ToolCallId};
+        use tdw_worker::WorkerJob;
+
+        let envelope = OpEnvelope::new(
+            SessionId::new("s").expect("sid"),
+            1,
+            ActorRef {
+                actor_id: "a".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::ToolCall {
+                call_id: ToolCallId::new("c").expect("cid"),
+                tool_name: "wrong.tool".to_string(),
+                arguments: json!({}),
+                permission_id: None,
+            },
+        );
+        let job = WorkerJob {
+            job_id: "j".to_string(),
+            queue: FUNCTIONS_QUEUE.to_string(),
+            envelope,
+            max_attempts: 1,
+            not_before_ms: 0,
+            priority: 0,
+        };
+        let err = extract_function_job(&job).expect_err("should fail");
+        assert!(err.contains(FUNCTIONS_TOOL_NAME), "error: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // enqueue_invoke helper
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enqueue_invoke_inserts_job_with_correct_queue() {
+        let mut queue = InMemoryWorkerQueue::default();
+        let outcome = enqueue_invoke(&mut queue, "fn-c", json!({"data": true}), "run-3", "job-3")
+            .expect("enqueue");
+        assert!(outcome.inserted);
+        assert_eq!(outcome.job_id, "job-3");
+    }
+
+    #[test]
+    fn enqueue_invoke_duplicate_is_dedup() {
+        let mut queue = InMemoryWorkerQueue::default();
+        enqueue_invoke(&mut queue, "fn-c", json!({}), "run-d", "job-d").expect("first");
+        let result = enqueue_invoke(&mut queue, "fn-c", json!({}), "run-d", "job-d");
+        assert!(
+            matches!(result, Err(WorkerQueueError::DuplicateJob(_))),
+            "duplicate must be rejected"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FunctionJobHandler: happy path — invokes function and records Completed
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn handler_invoke_completes_run() {
+        let steps = Arc::new(InMemoryStepStore::new());
+        let runs = Arc::new(InMemoryRunStore::new());
+        let mut reg = FunctionRegistry::with_stores(
+            Arc::clone(&steps) as Arc<dyn StepStore>,
+            Arc::clone(&runs) as Arc<dyn RunStore>,
+        );
+        reg.register(simple_def("fn-handler")).expect("register");
+
+        let handler = FunctionJobHandler::new(Arc::new(reg));
+
+        let func_job = FunctionJob {
+            function_id: "fn-handler".to_string(),
+            run_id: "run-h1".to_string(),
+            payload: json!({}),
+            mode: JobMode::Invoke,
+        };
+        let worker_job = build_worker_job("job-h1", &func_job).expect("build");
+        handler.handle(&worker_job).await.expect("handle ok");
+
+        let record = runs
+            .get_run("run-h1")
+            .await
+            .expect("get_run")
+            .expect("Some");
+        assert_eq!(record.status, RunStatus::Completed);
+    }
+
+    // -----------------------------------------------------------------------
+    // FunctionJobHandler: failure surfaces as job failure; retry resumes and
+    // skips already-memoized steps (counter proves step ran once across 2
+    // handler attempts).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn handler_retry_skips_memoized_steps() {
+        use crate::FunctionError;
+
+        let steps = Arc::new(InMemoryStepStore::new());
+        let runs = Arc::new(InMemoryRunStore::new());
+
+        let attempt = Arc::new(AtomicU32::new(0));
+        let step_counter = Arc::new(AtomicU32::new(0));
+        let attempt_c = Arc::clone(&attempt);
+        let step_c = Arc::clone(&step_counter);
+
+        let mut reg = FunctionRegistry::with_stores(
+            Arc::clone(&steps) as Arc<dyn StepStore>,
+            Arc::clone(&runs) as Arc<dyn RunStore>,
+        );
+
+        reg.register(FunctionDef::from_fn(
+            "fn-retry",
+            vec![],
+            move |ctx, _payload| {
+                let a = Arc::clone(&attempt_c);
+                let sc = Arc::clone(&step_c);
+                Box::pin(async move {
+                    // step-1 memoizes on success
+                    ctx.step("step-1", || {
+                        let scc = Arc::clone(&sc);
+                        async move {
+                            scc.fetch_add(1, Ordering::SeqCst);
+                            Ok(json!("done"))
+                        }
+                    })
+                    .await?;
+
+                    // step-2 fails on the first invocation attempt
+                    let n = a.fetch_add(1, Ordering::SeqCst);
+                    if n == 0 {
+                        return Err(FunctionError::Step {
+                            step: "step-2".to_string(),
+                            message: "transient".to_string(),
+                        });
+                    }
+                    Ok(json!("success"))
+                })
+            },
+        ))
+        .expect("register");
+
+        let handler = FunctionJobHandler::new(Arc::new(reg));
+
+        let func_job = FunctionJob {
+            function_id: "fn-retry".to_string(),
+            run_id: "run-r1".to_string(),
+            payload: json!({}),
+            mode: JobMode::Invoke,
+        };
+        let worker_job = build_worker_job("job-r1", &func_job).expect("build");
+
+        // First attempt — fails at step-2
+        let first = handler.handle(&worker_job).await;
+        assert!(first.is_err(), "first attempt must fail");
+        assert_eq!(step_counter.load(Ordering::SeqCst), 1, "step-1 ran once");
+
+        // Second attempt (Resume) — step-1 memoized, step-2 succeeds
+        let resume_job_payload = FunctionJob {
+            function_id: "fn-retry".to_string(),
+            run_id: "run-r1".to_string(),
+            payload: json!({}),
+            mode: JobMode::Resume,
+        };
+        let resume_worker_job =
+            build_worker_job("job-r1-resume", &resume_job_payload).expect("build");
+        handler
+            .handle(&resume_worker_job)
+            .await
+            .expect("second attempt must succeed");
+
+        // step-1 must NOT have run again (still 1)
+        assert_eq!(
+            step_counter.load(Ordering::SeqCst),
+            1,
+            "step-1 must not re-execute on resume"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "cron"))]
+mod cron_wiring_tests {
+    use tdw_cron::ScheduleRegistry;
+
+    use super::{FunctionDef, FunctionRegistry, Trigger};
+    use crate::cron_wiring::register_cron_triggers;
+
+    fn cron_fn(id: &str, exprs: &[&str]) -> FunctionDef {
+        let triggers = exprs
+            .iter()
+            .map(|e| Trigger::Cron((*e).to_string()))
+            .collect();
+        FunctionDef::from_fn(id.to_string(), triggers, |_ctx, _p| {
+            Box::pin(async { Ok(serde_json::json!("ok")) })
+        })
+    }
+
+    fn event_fn(id: &str, event: &str) -> FunctionDef {
+        FunctionDef::from_fn(
+            id.to_string(),
+            vec![Trigger::Event(event.to_string())],
+            |_ctx, _p| Box::pin(async { Ok(serde_json::json!("ok")) }),
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // registration count
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn register_cron_triggers_count() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(cron_fn("fn-a", &["*/5 * * * *", "0 9 * * MON"]))
+            .expect("register fn-a");
+        reg.register(cron_fn("fn-b", &["0 0 * * *"]))
+            .expect("register fn-b");
+        reg.register(event_fn("fn-c", "price.updated"))
+            .expect("register fn-c");
+
+        let mut schedules = ScheduleRegistry::new();
+        let count = register_cron_triggers(&reg, &mut schedules).expect("register cron triggers");
+
+        assert_eq!(count, 3, "2 from fn-a + 1 from fn-b; event trigger ignored");
+        assert_eq!(schedules.len(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // trigger ids are deterministic
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn trigger_ids_are_deterministic() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(cron_fn("my-fn", &["*/5 * * * *"]))
+            .expect("register");
+
+        let mut schedules = ScheduleRegistry::new();
+        register_cron_triggers(&reg, &mut schedules).expect("register");
+
+        let ids: Vec<_> = schedules.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["my-fn:cron:0"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // bad cron expression returns FunctionError::Trigger
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bad_cron_expression_returns_trigger_error() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(cron_fn("fn-bad", &["not a cron"]))
+            .expect("register");
+
+        let mut schedules = ScheduleRegistry::new();
+        let err = register_cron_triggers(&reg, &mut schedules)
+            .expect_err("should fail on bad expression");
+        assert!(
+            matches!(err, crate::FunctionError::Trigger(_)),
+            "expected Trigger error, got: {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // empty registry → zero triggers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_registry_registers_zero_triggers() {
+        let reg = FunctionRegistry::new();
+        let mut schedules = ScheduleRegistry::new();
+        let count = register_cron_triggers(&reg, &mut schedules).expect("no error");
+        assert_eq!(count, 0);
+        assert!(schedules.is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "worker"))]
+mod event_wiring_tests {
+    use serde_json::json;
+    use tdw_worker::{DurableWorkerQueue, InMemoryWorkerQueue};
+
+    use super::{FunctionDef, FunctionRegistry, Trigger};
+    use crate::event_wiring::EventRouter;
+
+    fn event_fn(id: &str, events: &[&str]) -> FunctionDef {
+        let triggers = events
+            .iter()
+            .map(|e| Trigger::Event((*e).to_string()))
+            .collect();
+        FunctionDef::from_fn(id.to_string(), triggers, |_ctx, _p| {
+            Box::pin(async { Ok(json!("ok")) })
+        })
+    }
+
+    fn cron_fn(id: &str) -> FunctionDef {
+        FunctionDef::from_fn(
+            id.to_string(),
+            vec![Trigger::Cron("*/5 * * * *".to_string())],
+            |_ctx, _p| Box::pin(async { Ok(json!("ok")) }),
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // router dispatches to all and only matching functions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dispatch_routes_to_matching_functions() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(event_fn("fn-price", &["price.updated"]))
+            .expect("reg");
+        reg.register(event_fn("fn-both", &["price.updated", "trade.filled"]))
+            .expect("reg");
+        reg.register(event_fn("fn-trade", &["trade.filled"]))
+            .expect("reg");
+        reg.register(cron_fn("fn-cron")).expect("reg"); // must NOT appear
+
+        let router = EventRouter::from_registry(&reg);
+
+        let subs_price = router.subscribers("price.updated");
+        // Both fn-price and fn-both subscribe — deterministic (BTreeMap) order
+        assert_eq!(subs_price.len(), 2);
+        assert!(subs_price.contains(&"fn-price".to_string()));
+        assert!(subs_price.contains(&"fn-both".to_string()));
+
+        let subs_trade = router.subscribers("trade.filled");
+        assert_eq!(subs_trade.len(), 2);
+        assert!(subs_trade.contains(&"fn-both".to_string()));
+        assert!(subs_trade.contains(&"fn-trade".to_string()));
+    }
+
+    #[test]
+    fn dispatch_unknown_event_enqueues_zero_jobs() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(event_fn("fn-x", &["known.event"]))
+            .expect("reg");
+
+        let router = EventRouter::from_registry(&reg);
+        let mut queue = InMemoryWorkerQueue::default();
+
+        let outcomes = router
+            .dispatch(&mut queue, "unknown.event", json!({}), "seed", 0)
+            .expect("dispatch");
+        assert!(
+            outcomes.is_empty(),
+            "no function subscribes to unknown.event"
+        );
+        assert_eq!(queue.stats().pending, 0);
+    }
+
+    #[test]
+    fn dispatch_enqueues_one_job_per_subscriber() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(event_fn("fn-a", &["data.arrived"]))
+            .expect("reg");
+        reg.register(event_fn("fn-b", &["data.arrived"]))
+            .expect("reg");
+
+        let router = EventRouter::from_registry(&reg);
+        let mut queue = InMemoryWorkerQueue::default();
+
+        let outcomes = router
+            .dispatch(&mut queue, "data.arrived", json!({"key": "v"}), "evt-1", 0)
+            .expect("dispatch");
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|o| o.inserted));
+        assert_eq!(queue.stats().pending, 2);
+    }
+
+    #[test]
+    fn dispatch_run_ids_are_seed_plus_function_id() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(event_fn("fn-x", &["ev"])).expect("reg");
+
+        let router = EventRouter::from_registry(&reg);
+        let mut queue = InMemoryWorkerQueue::default();
+
+        let outcomes = router
+            .dispatch(&mut queue, "ev", json!({}), "my-seed", 0)
+            .expect("dispatch");
+        assert_eq!(outcomes.len(), 1);
+        // job_id = run_id = "my-seed:fn-x"
+        assert_eq!(outcomes[0].job_id, "my-seed:fn-x");
+    }
+
+    #[test]
+    fn router_ignores_cron_triggers() {
+        let mut reg = FunctionRegistry::new();
+        reg.register(cron_fn("fn-cron")).expect("reg");
+
+        let router = EventRouter::from_registry(&reg);
+        // No event routes registered
+        assert!(router.subscribers("any.event").is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::{FunctionDef, FunctionRegistry, RunStatus, RunStore, StepStore};
+    use crate::sqlite::{SqliteRunStore, SqliteStepStore};
+
+    // -----------------------------------------------------------------------
+    // SqliteStepStore: basic put/get/list
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sqlite_step_store_put_get_roundtrip() {
+        let store = SqliteStepStore::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        store.put("r1", "s1", &json!(99)).await.expect("put");
+        let got = store.get("r1", "s1").await.expect("get").expect("Some");
+        assert_eq!(got, json!(99));
+    }
+
+    #[tokio::test]
+    async fn sqlite_step_store_first_write_wins() {
+        let store = SqliteStepStore::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        store.put("r1", "s1", &json!(1)).await.expect("put 1");
+        store.put("r1", "s1", &json!(2)).await.expect("put 2");
+        let got = store.get("r1", "s1").await.expect("get").expect("Some");
+        assert_eq!(got, json!(1), "first write must win");
+    }
+
+    #[tokio::test]
+    async fn sqlite_step_store_list() {
+        let store = SqliteStepStore::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        store.put("r1", "b", &json!("B")).await.expect("b");
+        store.put("r1", "a", &json!("A")).await.expect("a");
+        store.put("r2", "x", &json!("X")).await.expect("x");
+        let mut listed = store.list("r1").await.expect("list");
+        listed.sort_by_key(|(k, _)| k.clone());
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0], ("a".to_string(), json!("A")));
+        assert_eq!(listed[1], ("b".to_string(), json!("B")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Registry with SQLite stores: full invoke round-trip
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn registry_with_sqlite_stores_invoke_completes() {
+        let steps = Arc::new(
+            SqliteStepStore::connect("sqlite::memory:")
+                .await
+                .expect("connect steps"),
+        );
+        let runs = Arc::new(
+            SqliteRunStore::connect("sqlite::memory:")
+                .await
+                .expect("connect runs"),
+        );
+        let mut reg = FunctionRegistry::with_stores(
+            Arc::clone(&steps) as Arc<dyn StepStore>,
+            Arc::clone(&runs) as Arc<dyn RunStore>,
+        );
+        reg.register(FunctionDef::from_fn(
+            "fn-sqlite",
+            vec![],
+            |ctx, _payload| {
+                Box::pin(async move { ctx.step("s1", || async { Ok(json!("done")) }).await })
+            },
+        ))
+        .expect("register");
+
+        let result = reg
+            .invoke("fn-sqlite", json!({}), "run-sq1".to_string(), 0)
+            .await
+            .expect("invoke");
+        assert_eq!(result, json!("done"));
+
+        let record = runs
+            .get_run("run-sq1")
+            .await
+            .expect("get_run")
+            .expect("Some");
+        assert_eq!(record.status, RunStatus::Completed);
     }
 }
