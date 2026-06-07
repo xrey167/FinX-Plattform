@@ -3,6 +3,12 @@
 pub mod fallback;
 pub use fallback::FallbackModel;
 
+pub mod reasoning;
+pub use reasoning::{
+    ReasoningConfig, ReasoningLevel, ReasoningParams, clamp_temperature, parse_directive, resolve,
+    to_params,
+};
+
 use serde::{Deserialize, Serialize};
 use tdw_config::TdwConfig;
 use thiserror::Error;
