@@ -124,9 +124,11 @@ pub enum Adaptivity {
     SelfModifying,
 }
 
-/// The feedback gate's minimum adaptivity: an entity must be at least [`Adaptivity::Learning`]
-/// to receive eval-driven mutations. A `None`/`Configured` entity is static or merely
-/// parameterized, so applying learned feedback to it would be a contract violation.
+/// The feedback gate's minimum adaptivity for eval-driven mutations.
+///
+/// An entity must be at least [`Adaptivity::Learning`] to receive eval-driven mutations.
+/// A `None`/`Configured` entity is static or merely parameterized, so applying learned
+/// feedback to it would be a contract violation.
 pub const FEEDBACK_MIN_ADAPTIVITY: Adaptivity = Adaptivity::Learning;
 
 /// Error returned by [`ensure_adaptive_for_feedback`] when an entity is not adaptive enough
@@ -146,10 +148,10 @@ pub enum AdaptivityError {
     },
 }
 
-/// The Adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >=`
-/// [`Adaptivity::Learning`]. This guards every feedback mutation so that only
-/// `Learning`/`SelfModifying` entities accrue learned state; a `None`/`Configured` entity is
-/// rejected with [`AdaptivityError::NotLearning`].
+/// The adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >= `[`Adaptivity::Learning`].
+///
+/// This guards every feedback mutation so that only `Learning`/`SelfModifying` entities accrue
+/// learned state; a `None`/`Configured` entity is rejected with [`AdaptivityError::NotLearning`].
 ///
 /// # Errors
 ///
@@ -165,9 +167,10 @@ pub fn ensure_adaptive_for_feedback(meta: &EntityMeta) -> Result<(), AdaptivityE
     }
 }
 
-/// Human-memory-inspired retention tier for the `memory` kind. Ordinal: shorter-lived
-/// tiers sort before longer-lived ones. Grounds on the `.remember/` layout
-/// (working → short → mid → long → core/forever).
+/// Human-memory-inspired retention tier for the `memory` kind.
+///
+/// Ordinal: shorter-lived tiers sort before longer-lived ones. Grounds on the `.remember/`
+/// layout (working → short → mid → long → core/forever).
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
