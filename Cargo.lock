@@ -4042,6 +4042,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4227,6 +4228,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4405,6 +4407,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]

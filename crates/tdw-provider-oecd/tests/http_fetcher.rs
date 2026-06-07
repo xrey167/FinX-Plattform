@@ -10,9 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_oecd::{OecdHttpDataFetcher, OecdQuery};
-use tdw_provider_testkit::cassette_bytes;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> OecdQuery {
     OecdHttpDataFetcher::transform_query(json!({
@@ -152,14 +152,7 @@ async fn live_oecd_returns_observations_when_env_var_set() {
     }))
     .unwrap_or_else(|e| panic!("live query must build: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
