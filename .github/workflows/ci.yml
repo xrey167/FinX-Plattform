@@ -215,6 +215,18 @@ jobs:
       - run: cargo test --workspace --features integration
       - run: cargo test --workspace --features property
       - run: docker compose --profile full config
+      - name: Pull G014 compose dependencies
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2 3; do
+            if docker compose --profile full pull postgres clickhouse qdrant meilisearch minio redis; then
+              exit 0
+            fi
+            if [ "$attempt" = 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
       - name: Run G014 dockerized service smoke
         timeout-minutes: 10
         run: docker compose --profile full run --rm --build tdw-service --smoke AAPL
