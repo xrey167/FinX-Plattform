@@ -440,7 +440,8 @@ impl McpServer {
                     // category message and log the detail server-side (decision 3).
                     eprintln!("tdw-mcp: registry tool {name} error: {other}");
                     let category = match other {
-                        tdw_tool_exec::ExecError::NotPermitted(_) => {
+                        tdw_tool_exec::ExecError::NotPermitted(_)
+                        | tdw_tool_exec::ExecError::Blocked { .. } => {
                             "registry tool execution not permitted"
                         }
                         tdw_tool_exec::ExecError::BadArguments(_) => {
