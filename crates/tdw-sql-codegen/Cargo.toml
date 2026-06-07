@@ -10,3 +10,7 @@ tdw-domain = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-sql-codegen-basic"
+path = "examples/basic.rs"

@@ -11,3 +11,7 @@ tdw-stage = { path = "../tdw-stage" }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-pipe-basic"
+path = "examples/basic.rs"
