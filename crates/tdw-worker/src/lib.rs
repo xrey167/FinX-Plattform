@@ -1588,7 +1588,7 @@ enum JobOutcome {
 }
 
 /// Fold a finished job's [`JobOutcome`] into the running [`ServeReport`].
-fn record_outcome(report: &mut ServeReport, outcome: JobOutcome) {
+const fn record_outcome(report: &mut ServeReport, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Completed => report.completed = report.completed.saturating_add(1),
         JobOutcome::Failed { dead_lettered } => {

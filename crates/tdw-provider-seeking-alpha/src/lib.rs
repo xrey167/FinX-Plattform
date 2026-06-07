@@ -187,7 +187,7 @@ fn normalize_ticker(ticker: &str) -> Result<String> {
     Ok(ticker.to_ascii_uppercase())
 }
 
-fn validate_size(size: u32) -> Result<u32> {
+const fn validate_size(size: u32) -> Result<u32> {
     if size == 0 || size > MAX_ARTICLE_SIZE {
         return Err(SeekingAlphaProviderError::InvalidSize);
     }
