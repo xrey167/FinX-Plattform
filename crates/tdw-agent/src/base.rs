@@ -188,7 +188,7 @@ pub enum Retention {
 impl Retention {
     /// Approximate time-to-live in days; `None` means it never expires (`Core`).
     #[must_use]
-    pub fn ttl_days(self) -> Option<u32> {
+    pub const fn ttl_days(self) -> Option<u32> {
         match self {
             Self::Working => Some(0),
             Self::ShortTerm => Some(1),
@@ -201,7 +201,7 @@ impl Retention {
     /// The next longer-lived tier a surviving memory consolidates into. `Core` is the
     /// fixpoint (consolidating a `Core` memory leaves it `Core`).
     #[must_use]
-    pub fn next(self) -> Self {
+    pub const fn next(self) -> Self {
         match self {
             Self::Working => Self::ShortTerm,
             Self::ShortTerm => Self::MidTerm,
@@ -241,7 +241,7 @@ impl Reference {
     /// Git / HTTP / connector references bridge outside the platform ([`Source::External`]);
     /// literals, variables and files are [`Source::Internal`].
     #[must_use]
-    pub fn source(&self) -> Source {
+    pub const fn source(&self) -> Source {
         match self {
             Self::Git(_) | Self::Http(_) | Self::Connector(_) => Source::External,
             Self::Literal(_)

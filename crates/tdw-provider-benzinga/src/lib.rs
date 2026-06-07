@@ -206,7 +206,7 @@ fn normalize_date(date: &str) -> Result<String> {
     Ok(date.to_string())
 }
 
-fn validate_page_size(page_size: u32) -> Result<u32> {
+const fn validate_page_size(page_size: u32) -> Result<u32> {
     if page_size == 0 || page_size > 100 {
         return Err(BenzingaProviderError::InvalidPageSize);
     }
