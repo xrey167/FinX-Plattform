@@ -66,7 +66,7 @@ assert!(config.protocol.replay_enabled);
 tooling.
 
 See [`examples/basic.rs`](examples/basic.rs):
-`cargo run -p tdw-config --example basic`.
+`cargo run -p tdw-config --example tdw_config_basic`.
 
 ## See also
 

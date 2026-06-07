@@ -49,7 +49,7 @@ assert_eq!(object.provider, "fileset");
 a terminal `Done(OBBject)`.
 
 See [`examples/basic.rs`](examples/basic.rs):
-`cargo run -p tdw-runtime --example basic`.
+`cargo run -p tdw-runtime --example tdw_runtime_basic`.
 
 ## See also
 

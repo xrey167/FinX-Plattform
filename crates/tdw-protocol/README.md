@@ -55,7 +55,7 @@ assert!(matches!(event, EventMsg::Completed { .. }));
 `op_envelope`, and `replay_frame` for tooling/codegen.
 
 See [`examples/basic.rs`](examples/basic.rs):
-`cargo run -p tdw-protocol --example basic`.
+`cargo run -p tdw-protocol --example tdw_protocol_basic`.
 
 ## See also
 
