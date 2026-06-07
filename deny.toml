@@ -7,6 +7,19 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin Attack, `rsa` crate, no fixed version exists):
+    # timing sidechannel on RSA PRIVATE-key operations (decryption/signing).
+    # `rsa` enters the tree only via jsonwebtoken's `rust_crypto` backend in
+    # tdw-auth-oidc, which performs exclusively PUBLIC-key signature
+    # VERIFICATION of IdP-issued JWTs — the vulnerable private-key code path
+    # is never exercised. Accepted in preference to: (a) staying on
+    # jsonwebtoken 9.x (real authorization-bypass vuln in the verification
+    # path, dependabot alert #4), or (b) the aws-lc-rs backend (C/CMake/NASM
+    # build deps breaking the Windows CI matrix). Revisit when RustCrypto/RSA
+    # ships the fix (https://github.com/RustCrypto/RSA/issues/626).
+    "RUSTSEC-2023-0071",
+]
 
 [licenses]
 version = 2
