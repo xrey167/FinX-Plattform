@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tdw_core::{Error, Result};
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery, TiingoProviderError};
@@ -25,11 +25,8 @@ const USER_AGENT: &str = "tdw-provider-tiingo/0.1";
 #[derive(Deserialize)]
 struct TiingoDailyPrice {
     date: String,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
+    #[serde(flatten)]
+    ohlcv: Ohlcv,
 }
 
 #[derive(Deserialize)]
@@ -113,12 +110,8 @@ impl ProviderSpec for TiingoHistoricalSpec {
                 venue: "tiingo".to_string(),
                 granularity: TimeGranularity::Day,
                 ts: price.date,
-                open: price.open,
-                high: price.high,
-                low: price.low,
-                close: price.close,
-                volume: price.volume,
                 source: "tiingo".to_string(),
+                ..price.ohlcv.into_bar_template()
             });
         }
         Ok(rows)

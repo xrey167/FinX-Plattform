@@ -133,24 +133,7 @@ pub type CoinGeckoHttpOhlcFetcher = HttpFetcher<CoinGeckoOhlcSpec>;
 
 fn unix_millis_to_iso_timestamp(timestamp_millis: i64) -> String {
     let seconds = timestamp_millis.div_euclid(1_000);
-    let days_since_epoch = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400);
-    let days = days_since_epoch + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    if month <= 2 {
-        year += 1;
-    }
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    tdw_core::date::unix_seconds_to_iso_timestamp(seconds)
 }
 
 #[cfg(test)]
