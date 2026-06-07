@@ -16,6 +16,7 @@ use tdw_provider_seeking_alpha::{
     SeekingAlphaArticlesQuery, SeekingAlphaRatingsQuery,
     http_fetcher::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher},
 };
+use tdw_provider_testkit::live_fetch_obbject_nonempty;
 
 // ---------------------------------------------------------------------------
 // Cassette JSON helpers
@@ -256,16 +257,9 @@ async fn live_seeking_alpha_articles_returns_data_when_env_var_set() {
     }
 
     let fetcher = SeekingAlphaArticlesHttpFetcher::default();
-    let obbject = fetcher
-        .fetch(
-            json!({ "ticker": "AAPL", "size": 5 }),
-            &Credentials::default(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
-
-    assert!(
-        !obbject.rows.is_empty(),
+    live_fetch_obbject_nonempty!(
+        fetcher,
+        json!({ "ticker": "AAPL", "size": 5 }),
         "live response must include at least one article"
     );
 }
