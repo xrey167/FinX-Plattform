@@ -83,10 +83,10 @@ pub async fn load_config() -> Result<TdwConfig, ServerError> {
     Ok(config)
 }
 
-/// Resolve the effective profile: a non-empty `TDW_PROFILE` value overrides
-/// `current`; otherwise `current` is kept. Pure (env read happens at the call
-/// site) so the override precedence is unit-testable without mutating the
-/// process environment.
+/// Resolve the effective profile: `TDW_PROFILE` overrides `current` when non-empty.
+///
+/// Pure (env read happens at the call site) so the override precedence is unit-testable
+/// without mutating the process environment. Otherwise `current` is kept.
 #[must_use]
 pub fn resolve_profile(current: &str, env_profile: Option<String>) -> String {
     match env_profile {
