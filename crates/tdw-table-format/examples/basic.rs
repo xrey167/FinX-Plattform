@@ -1,7 +1,7 @@
 //! Offline table-format manifest round-trip: build an Iceberg `TableManifest`,
 //! validate it, and verify its checksums. No network, no docker.
 //!
-//! Run with: `cargo run -p tdw-table-format --example basic`
+//! Run with: `cargo run -p tdw-table-format --example tdw-table-format-basic`
 
 use tdw_table_format::{TableFile, TableFormat, TableManifest, simple_checksum};
 

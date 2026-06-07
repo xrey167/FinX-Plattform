@@ -1,7 +1,7 @@
 //! Offline `StorageRouter` round-trip: fan one batch out to two recording sinks
 //! and observe the summed receipt. No network, no docker.
 //!
-//! Run with: `cargo run -p tdw-storage-router --example basic`
+//! Run with: `cargo run -p tdw-storage-router --example tdw-storage-router-basic`
 
 use std::sync::Arc;
 

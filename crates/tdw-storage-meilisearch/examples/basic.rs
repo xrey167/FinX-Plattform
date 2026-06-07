@@ -2,7 +2,7 @@
 //! full-text search. No network, no docker — the default in-memory engine is
 //! always available.
 //!
-//! Run with: `cargo run -p tdw-storage-meilisearch --example basic`
+//! Run with: `cargo run -p tdw-storage-meilisearch --example tdw-storage-meilisearch-basic`
 
 use serde_json::json;
 use tdw_core::{LexicalDoc, LexicalEngine, TextQuery};

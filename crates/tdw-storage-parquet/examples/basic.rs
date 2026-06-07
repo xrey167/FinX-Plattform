@@ -1,7 +1,7 @@
 //! Offline Parquet manifest round-trip: build a dataset manifest, read its
 //! totals, and verify its checksums. No network, no docker.
 //!
-//! Run with: `cargo run -p tdw-storage-parquet --example basic`
+//! Run with: `cargo run -p tdw-storage-parquet --example tdw-storage-parquet-basic`
 
 use tdw_storage_parquet::{ParquetDatasetManifest, ParquetFile};
 

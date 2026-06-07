@@ -6,7 +6,7 @@
 //! immediately, so this example drives it with a tiny no-op waker rather than
 //! pulling in a runtime.
 //!
-//! Run with: `cargo run -p tdw-storage-broker --example basic`
+//! Run with: `cargo run -p tdw-storage-broker --example tdw-storage-broker-basic`
 
 use std::future::Future;
 use std::sync::Arc;

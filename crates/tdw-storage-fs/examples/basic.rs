@@ -1,7 +1,7 @@
 //! Offline `LocalBlobEngine` round-trip: write an object to a temp directory and
 //! read it back. No network, no docker.
 //!
-//! Run with: `cargo run -p tdw-storage-fs --example basic`
+//! Run with: `cargo run -p tdw-storage-fs --example tdw-storage-fs-basic`
 
 use bytes::Bytes;
 use tdw_core::BlobEngine;

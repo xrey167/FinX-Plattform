@@ -6,7 +6,7 @@
 //! drives them with a tiny no-op waker instead of pulling in a runtime (tokio is
 //! only a dependency under the `clickhouse` feature).
 //!
-//! Run with: `cargo run -p tdw-storage-clickhouse --example basic`
+//! Run with: `cargo run -p tdw-storage-clickhouse --example tdw-storage-clickhouse-basic`
 
 use std::future::Future;
 use std::sync::Arc;

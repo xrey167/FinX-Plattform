@@ -2,7 +2,7 @@
 //! search. No network, no docker — the default in-memory engine is always
 //! available.
 //!
-//! Run with: `cargo run -p tdw-storage-qdrant --example basic`
+//! Run with: `cargo run -p tdw-storage-qdrant --example tdw-storage-qdrant-basic`
 
 use serde_json::json;
 use tdw_core::{VectorEngine, VectorPoint, VectorQuery};

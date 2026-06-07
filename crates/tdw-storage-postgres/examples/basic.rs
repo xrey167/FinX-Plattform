@@ -5,7 +5,7 @@
 //! drives them with a tiny no-op waker instead of pulling in a runtime (tokio is
 //! only a dependency under the `postgres` feature).
 //!
-//! Run with: `cargo run -p tdw-storage-postgres --example basic`
+//! Run with: `cargo run -p tdw-storage-postgres --example tdw-storage-postgres-basic`
 
 use std::future::Future;
 use std::sync::Arc;

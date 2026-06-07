@@ -1,7 +1,7 @@
 //! Offline `InMemoryS3BlobEngine` round-trip: put an object and get it back.
 //! No network, no docker — the default in-memory engine is always available.
 //!
-//! Run with: `cargo run -p tdw-storage-s3 --example basic`
+//! Run with: `cargo run -p tdw-storage-s3 --example tdw-storage-s3-basic`
 
 use bytes::Bytes;
 use tdw_core::BlobEngine;
