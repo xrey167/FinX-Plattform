@@ -124,12 +124,35 @@ async fn pg_worker_queue_full_surface_roundtrip() {
                 && letter.last_error.as_deref() == Some("lease expired"))
     );
 
+    // Replay re-enqueues the dead-lettered job with a fresh attempt counter.
+    queue
+        .replay_dead_letter(&dead_lease.job_id)
+        .await
+        .unwrap_or_else(|error| panic!("replay dead letter: {error}"));
+    assert_eq!(
+        queue
+            .job_status(&dead_lease.job_id)
+            .await
+            .unwrap_or_else(|error| panic!("status after replay: {error}")),
+        Some(WorkerJobStatus::Pending)
+    );
+    let replayed = queue
+        .lease_next("pg-worker-3")
+        .await
+        .unwrap_or_else(|error| panic!("lease replayed: {error}"))
+        .expect("replayed lease");
+    assert_eq!(replayed.job_id, dead_lease.job_id);
+    assert_eq!(replayed.attempt, 1, "replay resets the attempt counter");
+    assert!(matches!(
+        queue.replay_dead_letter("missing-job-id").await,
+        Err(tdw_worker::WorkerQueueError::UnknownJob(_))
+    ));
+
     let stats = queue
         .stats()
         .await
         .unwrap_or_else(|error| panic!("stats: {error}"));
     assert!(stats.completed >= 1);
-    assert!(stats.dead_lettered >= 1);
 
     cleanup(&queue, &prefix).await;
 }
