@@ -195,6 +195,37 @@ docker compose --profile live down -v
 | `port is already allocated`                            | Another process is using `5432`, `9001`, or `9002`. Stop it or change the port mapping in compose. |
 | `permission denied while connecting to the Docker daemon` | Run with `sudo` on Linux, or add your user to the `docker` group.                                  |
 
+## Op dispatch (daemon)
+
+Once the daemon has an auth-backed policy, `tdw-service-daemon` routes each
+`OpEnvelope` through the secure dispatcher. Three op families are resolved
+dynamically rather than by a hardcoded allow-list:
+
+- **Ingest (`IngestBatch`)** is registry-driven: the `(provider, endpoint)` pair
+  is resolved against the build's ingest dispatch table — every feature-enabled
+  fetcher with a canonical bronze landing table is dispatchable. The offline
+  default build registers exactly the two fixture equity fetchers
+  (`fileset/equity_historical`, `yahoo/equity_historical`), both landing in
+  `raw.equity_historical`. Enabling per-provider features (or the
+  `all-http-providers` aggregate) adds the live OHLC fetchers, which land in
+  `raw.market_data_bar`. An unknown pair returns a structured `Failed` error
+  listing the providers/endpoints this build can ingest, e.g.
+  `unsupported ingest provider/endpoint: nope/equity_historical; available: fileset/equity_historical, yahoo/equity_historical`.
+- **Tool calls (`ToolCall`)** route through the tool registry. `udf.run` is the
+  built-in tool; an unknown tool returns a structured `Failed` error listing the
+  available tool names (`unsupported tool: <name>; available: udf.run`). Policy
+  enforcement runs *before* tool resolution, so an unauthorized caller never
+  reaches a tool (`tdw.udf.run` requires the `udf_runner` role).
+- **WASM UDFs.** The `live` daemon image is built with `--features
+  daemon-postgres,udf-wasm` (see the `tdw-service-daemon` service in
+  `docker-compose.yaml`). With `udf-wasm` on, a `udf.run` call carrying a
+  base64-encoded WASM module in `source` runs on the hardened `wasmi` runtime;
+  without it, the deterministic fixture runtime is used. Per-request
+  `WasmLimits` (`fuel`, `max_memory_bytes`, `max_memories`) in the op payload are
+  plumbed to the runtime and **clamped** to the built-in ceiling — a request may
+  only tighten a limit, never raise it above the safe maximum, so the field is a
+  budget knob rather than a DoS lever.
+
 ## What this does NOT do
 
 - Auto-configure daemon auth. This compose setup does not wire daemon auth, so
