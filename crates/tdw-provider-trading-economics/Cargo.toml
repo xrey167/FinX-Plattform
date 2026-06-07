@@ -30,5 +30,10 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 
+[[test]]
+name = "http_fetcher"
+path = "tests/http_fetcher.rs"
+required-features = ["http"]
+
 [lints]
 workspace = true
