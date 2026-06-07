@@ -1,0 +1,38 @@
+[package]
+name = "tdw-identity"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+[features]
+default = []
+# Enables the real Postgres backend (sqlx::PgPool). Off by default so the
+# workspace test set stays offline; the integration test is additionally
+# gated by the env var TDW_POSTGRES_TEST_URL.
+postgres = ["dep:sqlx", "dep:tokio", "sqlx/postgres"]
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+[dependencies]
+# argon2: pure-Rust Argon2id password hashing (RustCrypto, MIT OR Apache-2.0).
+# NOT optional — password hashing is always available; the crate is pure Rust,
+# no C/CMake deps, and its OsRng is re-exported via password_hash::rand_core.
+# Stable 0.5.x; 0.6.x is still RC as of 2026-06-07.
+argon2 = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sqlx = { workspace = true, features = ["postgres"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true
