@@ -164,6 +164,21 @@ async fn dispatch_get_quote_snapshot(
 /// return an `Err` for any provider, keeping the workspace test set network-free.
 #[allow(unused_variables)] // `symbol` is used only inside the cfg-gated provider block
 async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnapshot> {
+    #[cfg(feature = "provider-finnhub")]
+    if provider == "finnhub" {
+        use crate::FinnhubHttpQuoteSnapshotFetcher;
+        use tdw_runtime::CommandRunner;
+        let runner = CommandRunner::new(crate::default_registry()?);
+        let params = json!({ "symbol": symbol });
+        let object = runner
+            .run(&FinnhubHttpQuoteSnapshotFetcher::default(), params)
+            .await?;
+        return object.rows.into_iter().next().ok_or_else(|| {
+            Error::Provider(format!(
+                "finnhub quote snapshot returned no rows for {symbol}"
+            ))
+        });
+    }
     #[cfg(feature = "provider-fmp")]
     if provider == "fmp" {
         use crate::FmpHttpQuoteSnapshotFetcher;
@@ -185,11 +200,19 @@ async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnaps
 
 /// Comma-separated list of quote-snapshot providers available in this build.
 fn available_quote_snapshot_providers() -> &'static str {
-    #[cfg(feature = "provider-fmp")]
+    #[cfg(all(feature = "provider-finnhub", feature = "provider-fmp"))]
+    {
+        "finnhub, fmp"
+    }
+    #[cfg(all(feature = "provider-finnhub", not(feature = "provider-fmp")))]
+    {
+        "finnhub"
+    }
+    #[cfg(all(not(feature = "provider-finnhub"), feature = "provider-fmp"))]
     {
         "fmp"
     }
-    #[cfg(not(feature = "provider-fmp"))]
+    #[cfg(not(any(feature = "provider-finnhub", feature = "provider-fmp")))]
     {
         "(none — enable a provider-* feature)"
     }
@@ -892,6 +915,7 @@ mod tests {
         feature = "provider-ccdata",
         feature = "provider-coingecko",
         feature = "provider-databento",
+        feature = "provider-finnhub",
         feature = "provider-fmp",
         feature = "provider-polygon",
         feature = "provider-sec",
