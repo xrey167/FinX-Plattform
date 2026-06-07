@@ -47,7 +47,7 @@ The `fixture_rows(symbol)` helper exposes the same canned rows directly.
 ## Example
 
 ```bash
-cargo run -p tdw-provider-fileset --example basic
+cargo run -p tdw-provider-fileset --example tdw-provider-fileset-basic
 ```
 
 ## Configuration

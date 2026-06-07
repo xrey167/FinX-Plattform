@@ -7,7 +7,7 @@
 //!
 //! Run with:
 //! ```bash
-//! cargo run -p tdw-provider-fileset --example basic
+//! cargo run -p tdw-provider-fileset --example tdw-provider-fileset-basic
 //! ```
 
 use bytes::Bytes;
