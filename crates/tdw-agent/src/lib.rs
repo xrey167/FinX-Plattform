@@ -40,9 +40,10 @@ pub use resource::{
 };
 pub use watch::{RegistryWatcher, WatchError};
 
-/// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names. Q8 reclassified
-/// storage to a `resourcedefinition` persistence facet; prefer [`resource_definitions`].
-/// Retained because downstream crates still consume it.
+/// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet; prefer
+/// [`resource_definitions`]. Retained because downstream crates still consume it.
 pub const AGENT_SCHEMA_NAMES: [&str; 9] = [
     "agent_card",
     "agent_skill",
@@ -273,9 +274,11 @@ pub struct EvalMetric {
     pub metric_value: f64,
 }
 
-/// A canonical evaluation definition (the `evaluation` kind): what to evaluate plus the
-/// ML-rigor facets (track A). The runtime DTOs (`EvalRunRequest`/`EvalCase`/`EvalMetric`)
-/// are separate execution-plane types and are not registry entities.
+/// A canonical evaluation definition (the `evaluation` kind).
+///
+/// Captures what to evaluate plus the ML-rigor facets (track A). The runtime DTOs
+/// (`EvalRunRequest`/`EvalCase`/`EvalMetric`) are separate execution-plane types and are
+/// not registry entities.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Evaluation {
     #[validate(nested)]
@@ -329,9 +332,10 @@ pub struct Gotcha {
     pub source_ref: Option<ContentRef>,
 }
 
-/// DEPRECATED (pre-taxonomy): an entity→table mapping. Q8 reclassified storage to a
-/// `resourcedefinition` persistence facet + relation, so this is no longer a first-class
-/// kind. Retained because downstream crates still consume it.
+/// DEPRECATED (pre-taxonomy): an entity→table mapping.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet + relation, so this
+/// is no longer a first-class kind. Retained because downstream crates still consume it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StorageMapping {
     pub entity: String,
@@ -1239,8 +1243,9 @@ pub fn validate_workflow_contract(
     workflow.validate_dag().map_err(AgentContractError::from)
 }
 
-/// DEPRECATED (pre-taxonomy): the legacy seed of entity→table storage mappings. Q8
-/// reclassified storage to a `resourcedefinition` persistence facet + relation. Retained
+/// DEPRECATED (pre-taxonomy): the legacy seed of entity→table storage mappings.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet + relation. Retained
 /// because downstream crates still consume it.
 #[must_use]
 pub fn agent_storage_mappings() -> Vec<StorageMapping> {
@@ -1278,8 +1283,9 @@ pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     ]
 }
 
-/// The self-describing registry: one [`ResourceDefinition`] per classified kind, in
-/// manifest-group order. Kinds with a concrete Rust spec type carry their JSON Schema;
+/// The self-describing registry: one [`ResourceDefinition`] per classified kind.
+///
+/// Ordered by manifest-group. Kinds with a concrete Rust spec type carry their JSON Schema;
 /// `candidate` kinds carry `None` until their spec lands.
 #[must_use]
 pub fn resource_definitions() -> Vec<ResourceDefinition> {
@@ -1346,10 +1352,11 @@ fn spec_schema_for(kind: EntityKind) -> Option<Value> {
     }
 }
 
-/// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle. Q8 reclassified storage to a
-/// `resourcedefinition` persistence facet; prefer [`resource_definitions`] /
-/// [`spec_schema_for`] for the self-describing registry. Retained because downstream crates
-/// still consume it.
+/// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet; prefer
+/// [`resource_definitions`] / [`spec_schema_for`] for the self-describing registry.
+/// Retained because downstream crates still consume it.
 #[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([

@@ -21,7 +21,7 @@ single endpoint. Source of truth: `crates/tdw-mcp/src/lib.rs`.
 | Protocol header | `MCP-Protocol-Version` must equal `2025-06-18` when present; otherwise `400` |
 | Header cap | 16 KiB (`MAX_HTTP_HEADER_BYTES`); otherwise `431` |
 | Body cap | 1 MiB (`MAX_HTTP_BODY_BYTES`); otherwise `413` |
-| Bearer auth | required when `TDW_MCP_HTTP_TOKEN` is set (`Authorization: Bearer <token>`) |
+| Bearer auth | required when `TDW_MCP_HTTP_TOKEN` is set (`Authorization: Bearer <token>`); the token is compared in **constant time** so a wrong token leaks no timing signal |
 | Non-loopback bind | refused (exit code `2`) **unless** `TDW_MCP_HTTP_TOKEN` is set |
 
 Two facts shape the whole topology:

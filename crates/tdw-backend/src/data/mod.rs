@@ -121,7 +121,7 @@ impl Backend {
 
     /// The underlying daemon composition root.
     #[must_use]
-    pub fn app_state(&self) -> &AppState {
+    pub const fn app_state(&self) -> &AppState {
         &self.state
     }
 

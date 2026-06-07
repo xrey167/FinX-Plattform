@@ -82,15 +82,18 @@ G015 request-path binding landed in `tdw-service-api`:
   (`TDW_OIDC_ISSUER`, `TDW_OIDC_AUDIENCE`, `TDW_OIDC_JWKS`, `TDW_OIDC_SUBJECT`,
   `TDW_OIDC_KID`, optional `TDW_OIDC_ROLES`). The pure `build_prod_policy` helper
   parses + validates these inputs via `tdw-auth-oidc::validate_claims_strict` and
-  now returns a typed `Result<_, OidcPolicyError>` (`MissingEnvVar`,
+  now returns a typed `Result<_, OidcPolicyError>` (`MissingEnvVars`,
   `MalformedJwksPair`, `DuplicateKid`, `InvalidClaims`) instead of a bare `None`,
-  so a misconfigured prod boot logs the **specific** cause. The env→policy
+  so a misconfigured prod boot reports the **specific** cause. The env→policy
   wrapper `build_prod_policy_from_lookup` is injectable (tested without mutating
   process env): all-six-unset → `Ok(None)` (intentional fail-closed), partial
-  config → `Err(MissingEnvVar(..))`, all-valid → `Ok(Some(_))`.
-  `AppState::policy_attach_error` carries the cause to the daemon boot log. This
-  validates claim/JWKS structural consistency, not cryptographic signatures —
-  see [`production-auth-oidc`](../../release/production-auth-oidc.md).
+  config → `Err(MissingEnvVars(..))` listing every missing var, all-valid →
+  `Ok(Some(_))`. `AppState::policy_attach_error` carries the cause, and
+  `run_daemon` turns it into a **hard startup error** (the daemon refuses to
+  start on partial/invalid config). This is the structural claim/JWKS pre-filter;
+  cryptographic JWT verification (signature + `exp`/`nbf`/`iat`/iss/aud) lives in
+  `tdw-auth-oidc::verify_jwt` — see
+  [`production-auth-oidc`](../../release/production-auth-oidc.md).
 - Evidence: per-variant `build_prod_policy_*` unit tests assert the exact
   `OidcPolicyError`; `build_prod_policy_from_lookup_*` tests cover the
   unset/partial/valid wrapper semantics; and end-to-end tests prove a prod-built

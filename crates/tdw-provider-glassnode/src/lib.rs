@@ -37,7 +37,7 @@ pub enum GlassnodeMetric {
 impl GlassnodeMetric {
     /// Returns the API path segment for this metric.
     #[must_use]
-    pub fn api_path(&self) -> &'static str {
+    pub const fn api_path(&self) -> &'static str {
         match self {
             Self::MvrvZScore => "/metrics/market/mvrv_z_score",
             Self::LthSupply => "/metrics/supply/lth_sum",
