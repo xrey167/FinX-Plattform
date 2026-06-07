@@ -163,13 +163,15 @@ services:
     # (durable across restarts). Engine selection is driven at runtime by
     # TDW_PROFILE=live (fail-closed at startup if a required TDW_* connection env
     # is missing). Distinct image tag from the `full`-profile tdw-service (which
-    # builds without features).
+    # builds without features). udf-wasm enables the real wasmi UDF runtime for
+    # `udf.run` ToolCalls (per-request WasmLimits); without it the deterministic
+    # fixture runtime is used.
     image: finx-plattform/tdw-service:local-pg
     build:
       context: .
       dockerfile: docker/tdw-service.Dockerfile
       args:
-        FEATURES: real-engines
+        FEATURES: real-engines,udf-wasm
     profiles: ["live"]
     depends_on:
       postgres:
