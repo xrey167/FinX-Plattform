@@ -72,6 +72,7 @@ jobs:
       - run: cargo run -p xtask -- events schema-check
       - run: git diff --exit-code -- docs/schemas/event
       - run: cargo run -p xtask -- quality-gate check
+      - run: cargo run -p xtask -- crate-readiness-check
       - run: cargo run -p xtask -- clean-room-audit
 
   coverage:

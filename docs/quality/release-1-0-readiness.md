@@ -56,8 +56,13 @@ cargo run -p xtask -- clean-room-audit
 Run the release pre-check from `docs/release.md` before cutting `v1.1.0`:
 
 ```powershell
+cargo run -p xtask -- crate-readiness-check
 cargo run -p xtask -- prerelease-check
 ```
+
+`prerelease-check` also runs `crate-readiness-check`, but the standalone command
+is kept explicit here because crate roster drift is a release blocker when the
+matrix or per-crate worksheets fall behind `cargo metadata`.
 
 After merge, confirm `main` CI and CodeQL are green, tag `v1.1.0`, and verify
 the release workflow publishes the binary archives, checksum files, attestations,

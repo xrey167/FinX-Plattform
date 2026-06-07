@@ -82,6 +82,9 @@ quality-gate:
 quality-gate-check:
     cargo run -p xtask -- quality-gate check
 
+crate-readiness-check:
+    cargo run -p xtask -- crate-readiness-check
+
 audit:
     cargo run -p xtask -- clean-room-audit
 
@@ -102,6 +105,7 @@ ci-local:
     cargo run -p xtask -- schema-sync
     cargo run -p xtask -- events schema-check
     cargo run -p xtask -- quality-gate check
+    cargo run -p xtask -- crate-readiness-check
     cargo deny check
     cargo run -p xtask -- clean-room-audit
 
@@ -117,5 +121,6 @@ verify-phase:
     just event-schema-check
     just bench
     just quality-gate-check
+    just crate-readiness-check
     just deny
     just audit
