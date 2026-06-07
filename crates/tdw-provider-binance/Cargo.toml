@@ -32,5 +32,9 @@ time = { version = "0.3", default-features = false, features = ["std", "formatti
 tokio = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
 
+[[example]]
+name = "basic"
+required-features = ["http"]
+
 [lints]
 workspace = true
