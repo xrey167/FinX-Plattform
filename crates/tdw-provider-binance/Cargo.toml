@@ -10,7 +10,7 @@ default = []
 # Enables the real Binance ticker-price HTTP fetcher (reqwest). Off by
 # default so workspace tests stay offline; live calls are additionally
 # gated by TDW_BINANCE_LIVE=1.
-http = ["dep:bytes", "dep:reqwest", "dep:tokio", "tdw-core/http"]
+http = ["dep:bytes", "dep:reqwest", "dep:tokio", "tdw-core/http", "dep:tdw-provider-http", "tdw-provider-http/http"]
 # Enables the live Binance trade websocket subscribe path (tokio-tungstenite).
 # Off by default so the workspace test set stays offline; `decode_trade_frame`,
 # `snapshot` and `registry_entry` are always available without opening a socket.
@@ -27,6 +27,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
+tdw-provider-http = { workspace = true, optional = true }
 thiserror = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing"] }
 tokio = { workspace = true, optional = true }

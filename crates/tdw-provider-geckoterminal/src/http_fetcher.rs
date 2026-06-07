@@ -6,8 +6,11 @@
 
 #![cfg(feature = "http")]
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use tdw_core::http_support::prelude::*;
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{ACCEPT_HEADER, BASE_URL, DexPool, GeckoTerminalPoolQuery};
 
@@ -78,29 +81,35 @@ struct GeckoListEnvelope {
 // Fetcher impl
 // ---------------------------------------------------------------------------
 
-tdw_core::provider_fetcher_struct!(
-    /// Production GeckoTerminal pool fetcher.
-    ///
-    /// Uses the public GeckoTerminal REST API; no API key is required.
-    pub GeckoTerminalHttpFetcher,
-    BASE_URL
-);
+/// Provider specification for the GeckoTerminal pool fetcher.
+///
+/// Uses the public GeckoTerminal REST API; no API key is required.
+pub struct GeckoTerminalPoolSpec;
 
-#[async_trait]
-impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
+impl ProviderSpec for GeckoTerminalPoolSpec {
     const PROVIDER: &'static str = "geckoterminal";
     const ENDPOINT: &'static str = "pool";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
 
-    fn transform_query(params: Value) -> Result<GeckoTerminalPoolQuery> {
+    const CLIENT_ERR: &'static str = "geckoterminal client";
+    const SEND_ERR: &'static str = "geckoterminal extract_data";
+    const RETURNED_ERR: &'static str = "geckoterminal pool returned";
+    const READ_BODY_ERR: &'static str = "geckoterminal read body";
+
+    type Query = GeckoTerminalPoolQuery;
+    type Data = DexPool;
+
+    fn transform_query(params: serde_json::Value) -> Result<GeckoTerminalPoolQuery> {
         let network = params
             .get("network")
-            .and_then(Value::as_str)
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 Error::InvalidQuery("geckoterminal network must be a string".to_string())
             })?;
         let pool_address = params
             .get("pool_address")
-            .and_then(Value::as_str)
+            .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 Error::InvalidQuery("geckoterminal pool_address must be a string".to_string())
             })?;
@@ -108,39 +117,21 @@ impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
             .map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &GeckoTerminalPoolQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let url = format!(
             "{}/networks/{}/pools/{}",
-            self.base_url().trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.network,
             query.pool_address,
         );
-        let client = tdw_core::http_support::build_client(USER_AGENT, "geckoterminal client")?;
-        let response = client
-            .get(&url)
-            .header("Accept", ACCEPT_HEADER)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("geckoterminal extract_data: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "geckoterminal pool returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("geckoterminal read body: {e}")))
+        Ok(client.get(&url).header("Accept", ACCEPT_HEADER))
     }
 
-    fn transform_data(&self, query: &GeckoTerminalPoolQuery, raw: Bytes) -> Result<Vec<DexPool>> {
+    fn transform_data(query: &GeckoTerminalPoolQuery, raw: Bytes) -> Result<Vec<DexPool>> {
         let envelope: GeckoEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("geckoterminal parse_json: {e}")))?;
         Ok(vec![gecko_data_to_pool(
@@ -150,6 +141,11 @@ impl Fetcher<GeckoTerminalPoolQuery, DexPool> for GeckoTerminalHttpFetcher {
         )])
     }
 }
+
+/// Production GeckoTerminal pool fetcher.
+///
+/// Uses the public GeckoTerminal REST API; no API key is required.
+pub type GeckoTerminalHttpFetcher = HttpFetcher<GeckoTerminalPoolSpec>;
 
 // ---------------------------------------------------------------------------
 // Helper: convert a GeckoData record into a DexPool

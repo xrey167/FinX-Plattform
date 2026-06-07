@@ -6,24 +6,36 @@
 //! `x-cg-demo-api-key` header. Live calls are additionally gated by
 //! `TDW_COINGECKO_LIVE=1` so unattended CI stays offline.
 
-use tdw_core::http_support::prelude::*;
+#![cfg(feature = "http")]
+
+use bytes::Bytes;
+use reqwest::Client;
+use serde_json::Value;
+use tdw_core::{Error, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_HEADER, BASE_URL, CoinGeckoOhlcQuery, ohlc_request};
 
 const API_KEY_ENV: &str = "COINGECKO_API_KEY";
 const USER_AGENT: &str = "tdw-provider-coingecko/0.1";
 
-tdw_core::provider_fetcher_struct!(
-    /// Production CoinGecko OHLC fetcher.
-    pub CoinGeckoHttpOhlcFetcher,
-    BASE_URL
-);
+/// Provider specification for the CoinGecko OHLC fetcher.
+pub struct CoinGeckoOhlcSpec;
 
-#[async_trait]
-impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
+impl ProviderSpec for CoinGeckoOhlcSpec {
     const PROVIDER: &'static str = "coingecko";
     const ENDPOINT: &'static str = "ohlc";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "coingecko client";
+    const SEND_ERR: &'static str = "coingecko extract_data";
+    const RETURNED_ERR: &'static str = "coingecko extract_data returned";
+    const READ_BODY_ERR: &'static str = "coingecko read body";
+
+    type Query = CoinGeckoOhlcQuery;
+    type Data = MarketDataBar;
 
     fn transform_query(params: Value) -> Result<CoinGeckoOhlcQuery> {
         let coin_id = params
@@ -47,27 +59,23 @@ impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
             .map_err(|error| Error::InvalidQuery(error.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &CoinGeckoOhlcQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         ohlc_request(&query.coin_id, &query.vs_currency, query.days)
             .map_err(|error| Error::Provider(error.to_string()))?;
 
         let endpoint = format!(
             "{}/coins/{}/ohlc?vs_currency={}&days={}",
-            self.base_url().trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.coin_id,
             query.vs_currency,
             query.days,
         );
 
-        let mut request_builder = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("coingecko client: {error}")))?
-            .get(&endpoint);
+        let mut request_builder = client.get(&endpoint);
 
         if let Ok(api_key) = std::env::var(API_KEY_ENV) {
             let api_key = api_key.trim().to_string();
@@ -76,25 +84,10 @@ impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
             }
         }
 
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("coingecko extract_data: {error}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "coingecko extract_data returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("coingecko read body: {error}")))
+        Ok(request_builder)
     }
 
-    fn transform_data(&self, query: &CoinGeckoOhlcQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
+    fn transform_data(query: &CoinGeckoOhlcQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
         // CoinGecko OHLC response is a JSON array of arrays:
         // [[timestamp_ms, open, high, low, close], ...]
         let rows: Vec<[Value; 5]> = serde_json::from_slice(&raw)
@@ -135,6 +128,9 @@ impl Fetcher<CoinGeckoOhlcQuery, MarketDataBar> for CoinGeckoHttpOhlcFetcher {
     }
 }
 
+/// Production CoinGecko OHLC fetcher.
+pub type CoinGeckoHttpOhlcFetcher = HttpFetcher<CoinGeckoOhlcSpec>;
+
 fn unix_millis_to_iso_timestamp(timestamp_millis: i64) -> String {
     let seconds = timestamp_millis.div_euclid(1_000);
     let days_since_epoch = seconds.div_euclid(86_400);
@@ -159,6 +155,8 @@ fn unix_millis_to_iso_timestamp(timestamp_millis: i64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tdw_core::Fetcher;
+
     use super::*;
 
     #[test]

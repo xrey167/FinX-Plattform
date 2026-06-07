@@ -79,6 +79,7 @@ tdw-runtime = { path = "crates/tdw-runtime" }
 tdw-app-client = { path = "crates/tdw-app-client" }
 tdw-app-server = { path = "crates/tdw-app-server" }
 tdw-provider-fileset = { path = "crates/tdw-provider-fileset" }
+tdw-provider-http = { path = "crates/tdw-provider-http" }
 tdw-provider-ws = { path = "crates/tdw-provider-ws" }
 tdw-storage-broker = { path = "crates/tdw-storage-broker" }
 tdw-storage-fs = { path = "crates/tdw-storage-fs" }

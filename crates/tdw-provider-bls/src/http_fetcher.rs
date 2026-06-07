@@ -7,23 +7,16 @@
 //! rate-limits apply. Live integration tests are additionally gated by
 //! `TDW_BLS_LIVE=1` so unattended CI stays offline.
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use serde_json::json;
-use tdw_core::http_support::prelude::*;
+use serde_json::{Value, json};
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_ENV, BASE_URL, BlsDataPoint, BlsSeriesQuery, parse_bls_response};
 
 const USER_AGENT: &str = "tdw-provider-bls/0.1";
-
-tdw_core::provider_fetcher_struct!(
-    /// Production BLS `timeseries/data` fetcher.
-    ///
-    /// Submits a POST request to the BLS v2 API and decodes the JSON response
-    /// into [`BlsDataPoint`] rows. Use [`BlsHttpTimeSeriesFetcher::default`] for
-    /// normal operation; builder methods allow base-URL overriding in tests.
-    pub BlsHttpTimeSeriesFetcher,
-    BASE_URL
-);
 
 /// Thin wrapper around the raw BLS JSON envelope used only for deserialization.
 #[derive(Deserialize)]
@@ -37,10 +30,27 @@ struct BlsEnvelope {
     message: Vec<String>,
 }
 
-#[async_trait]
-impl Fetcher<BlsSeriesQuery, BlsDataPoint> for BlsHttpTimeSeriesFetcher {
+/// Provider specification for the BLS `timeseries/data` fetcher.
+///
+/// Submits a POST request to the BLS v2 API and decodes the JSON response
+/// into [`BlsDataPoint`] rows. Use [`BlsHttpTimeSeriesFetcher::default`] for
+/// normal operation; builder methods allow base-URL overriding in tests.
+pub struct BlsTimeSeriesSpec;
+
+impl ProviderSpec for BlsTimeSeriesSpec {
     const PROVIDER: &'static str = "bls";
     const ENDPOINT: &'static str = "timeseries_data";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "bls client build";
+    const SEND_ERR: &'static str = "bls extract_data send";
+    const RETURNED_ERR: &'static str = "bls extract_data returned";
+    const READ_BODY_ERR: &'static str = "bls read body";
+    const UNREADABLE_BODY: Option<&'static str> = Some("<unreadable body>");
+
+    type Query = BlsSeriesQuery;
+    type Data = BlsDataPoint;
 
     fn transform_query(params: Value) -> Result<BlsSeriesQuery> {
         let series_ids: Vec<String> = params
@@ -72,13 +82,17 @@ impl Fetcher<BlsSeriesQuery, BlsDataPoint> for BlsHttpTimeSeriesFetcher {
             .map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &BlsSeriesQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &BlsSeriesQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let api_key = std::env::var(API_KEY_ENV)
             .ok()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
 
-        let endpoint = format!("{}/timeseries/data/", self.base_url().trim_end_matches('/'));
+        let endpoint = format!("{}/timeseries/data/", base_url.trim_end_matches('/'));
 
         let mut body = json!({
             "seriesid": query.series_ids,
@@ -90,36 +104,10 @@ impl Fetcher<BlsSeriesQuery, BlsDataPoint> for BlsHttpTimeSeriesFetcher {
             body["registrationkey"] = Value::String(key);
         }
 
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("bls client build: {e}")))?;
-
-        let response = client
-            .post(&endpoint)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("bls extract_data send: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| String::from("<unreadable body>"));
-            return Err(Error::Provider(format!(
-                "bls extract_data returned {status}: {text}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("bls read body: {e}")))
+        Ok(client.post(&endpoint).json(&body))
     }
 
-    fn transform_data(&self, _query: &BlsSeriesQuery, raw: Bytes) -> Result<Vec<BlsDataPoint>> {
+    fn transform_data(_query: &BlsSeriesQuery, raw: Bytes) -> Result<Vec<BlsDataPoint>> {
         let body: Value = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("bls parse json: {e}")))?;
 
@@ -146,6 +134,9 @@ impl Fetcher<BlsSeriesQuery, BlsDataPoint> for BlsHttpTimeSeriesFetcher {
         parse_bls_response(&body).map_err(|e| Error::Provider(e.to_string()))
     }
 }
+
+/// Production BLS `timeseries/data` fetcher.
+pub type BlsHttpTimeSeriesFetcher = HttpFetcher<BlsTimeSeriesSpec>;
 
 // Silence unused-import warning for BlsEnvelope.status when not used.
 impl BlsEnvelope {
