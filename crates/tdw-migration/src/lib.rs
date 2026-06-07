@@ -118,6 +118,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "trading_calendar",
             sql: include_str!("../../../migrations/postgres/20260528_0003_trading_calendar.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0001",
+            name: "price_alerts",
+            sql: include_str!("../../../migrations/postgres/20260607_0001_price_alerts.sql"),
+        },
     ]
 }
 

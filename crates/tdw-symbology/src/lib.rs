@@ -1,6 +1,6 @@
 //! Ticker-symbology normalization utilities.
 //!
-//! This crate provides two mapping functions over dot-suffix ticker symbols
+//! This crate provides mapping and normalization functions over dot-suffix ticker symbols
 //! (e.g. `AAPL`, `RY.TO`, `SHEL.L`):
 //!
 //! - [`exchange_label`] — maps a ticker's dot-suffix to a human-readable
@@ -14,6 +14,9 @@
 //!   Inputs are normalised (trim + uppercase) before matching.  Tickers with
 //!   no suffix, or with a suffix not in the table, are returned uppercase and
 //!   bare (US-style, no prefix), e.g. `"aapl"` → `"AAPL"`.
+//!
+//! - [`normalize_symbol`] — canonical trim + ASCII-uppercase normalization
+//!   shared by alerting/watchlist storage.
 
 #![forbid(unsafe_code)]
 
@@ -112,7 +115,7 @@ pub fn exchange_label(suffix: &str) -> Option<&'static str> {
 /// ```
 #[must_use]
 pub fn vendor_symbol(symbol: &str) -> String {
-    let normalised = symbol.trim().to_ascii_uppercase();
+    let normalised = normalize_symbol(symbol);
     if normalised.is_empty() {
         return String::new();
     }
@@ -182,6 +185,27 @@ fn vendor_prefix(suffix: &str) -> Option<&'static str> {
         ".WA" => Some("GPW"),
         _ => None,
     }
+}
+
+/// Normalize a raw ticker symbol for consistent storage and comparison.
+///
+/// The canonical form is the input with leading/trailing whitespace stripped
+/// and all ASCII letters converted to uppercase. Non-ASCII characters are
+/// preserved as-is (they are unusual in ticker symbols but should not be
+/// silently dropped).
+///
+/// # Examples
+///
+/// ```
+/// use tdw_symbology::normalize_symbol;
+///
+/// assert_eq!(normalize_symbol("aapl"), "AAPL");
+/// assert_eq!(normalize_symbol("  BTC-USD  "), "BTC-USD");
+/// assert_eq!(normalize_symbol("ETH/USDT"), "ETH/USDT");
+/// ```
+#[must_use]
+pub fn normalize_symbol(raw: &str) -> String {
+    raw.trim().to_ascii_uppercase()
 }
 
 #[cfg(test)]
@@ -337,5 +361,55 @@ mod tests {
         assert_eq!(vendor_symbol("247540.KQ"), "KOSDAQ:247540");
         // ".SZ" (Shenzhen) must not be confused with ".S" + "Z".
         assert_eq!(vendor_symbol("000858.SZ"), "SZSE:000858");
+    }
+
+    #[test]
+    fn lowercase_is_uppercased() {
+        assert_eq!(normalize_symbol("aapl"), "AAPL");
+    }
+
+    #[test]
+    fn already_normalized_is_unchanged() {
+        assert_eq!(normalize_symbol("AAPL"), "AAPL");
+    }
+
+    #[test]
+    fn leading_and_trailing_whitespace_stripped() {
+        assert_eq!(normalize_symbol("  btc  "), "BTC");
+    }
+
+    #[test]
+    fn leading_whitespace_only_stripped() {
+        assert_eq!(normalize_symbol("   eth"), "ETH");
+    }
+
+    #[test]
+    fn trailing_whitespace_only_stripped() {
+        assert_eq!(normalize_symbol("eth   "), "ETH");
+    }
+
+    #[test]
+    fn mixed_case_with_separator() {
+        assert_eq!(normalize_symbol("btc-usd"), "BTC-USD");
+    }
+
+    #[test]
+    fn slash_separator_preserved() {
+        assert_eq!(normalize_symbol("eth/usdt"), "ETH/USDT");
+    }
+
+    #[test]
+    fn empty_string_returns_empty() {
+        assert_eq!(normalize_symbol(""), "");
+    }
+
+    #[test]
+    fn whitespace_only_returns_empty() {
+        assert_eq!(normalize_symbol("   "), "");
+    }
+
+    #[test]
+    fn digits_preserved() {
+        assert_eq!(normalize_symbol("sp500"), "SP500");
     }
 }
