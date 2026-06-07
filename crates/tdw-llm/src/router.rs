@@ -383,11 +383,8 @@ mod tests {
         assert_eq!(chain[0].model_id(), "m1");
         assert_eq!(chain[1].model_id(), "m2");
 
-        // Feed the chain into a FallbackModel (primary + secondary).
-        let mut iter = chain.into_iter();
-        let primary = iter.next().expect("primary present");
-        let secondary = iter.next().expect("secondary present");
-        let fallback = crate::FallbackModel::new(primary, secondary);
+        // Feed the chain into a FallbackModel.
+        let fallback = crate::FallbackModel::new(chain).expect("non-empty fallback chain");
         assert_eq!(fallback.model_id(), "m1");
     }
 
