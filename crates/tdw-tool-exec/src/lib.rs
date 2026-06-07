@@ -33,6 +33,9 @@ const ALLOWED_COMMANDS_ENV: &str = "TDW_TOOL_EXEC_ALLOWED_COMMANDS";
 const AUTONOMY_ENV: &str = "TDW_TOOL_EXEC_AUTONOMY";
 /// Env var overriding the command execution timeout, in whole seconds.
 const TIMEOUT_SECS_ENV: &str = "TDW_TOOL_EXEC_TIMEOUT_SECS";
+/// Env var toggling opt-in argument validation against the tool's `input_schema`.
+/// `"1"`/`"true"`/`"on"`/`"yes"` => validate; anything else (incl. unset) => off.
+const VALIDATE_ARGS_ENV: &str = "TDW_TOOL_EXEC_VALIDATE_ARGS";
 /// Default command execution timeout when [`TIMEOUT_SECS_ENV`] is unset/unparsable.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// How often the timeout loop polls the child process for exit.
@@ -78,6 +81,16 @@ pub enum ExecError {
         effect: &'static str,
         /// The active autonomy level (`full` | `supervised` | `read-only`).
         level: &'static str,
+    },
+    /// The request arguments did not satisfy the tool's declared `input_schema`. Surfaced
+    /// before dispatch; a visible, recoverable validation observation, never a panic. The MCP
+    /// layer can map this to an invalid-params (`-32602`) style code.
+    #[error("invalid arguments for tool {tool}: {reason}")]
+    InvalidArguments {
+        /// The name of the tool whose arguments failed validation.
+        tool: String,
+        /// A human-readable description of the first constraint that failed.
+        reason: String,
     },
 }
 
@@ -234,6 +247,54 @@ impl Default for CommandPolicy {
     }
 }
 
+/// Opt-in toggle for validating request `args` against the resolved tool's declared
+/// `input_schema` *before* dispatch.
+///
+/// Default is [`SchemaValidation::Off`] (behavior-preserving): an executor that does not opt
+/// in dispatches exactly as before. The production default is [`SchemaValidation::from_env`],
+/// which reads `TDW_TOOL_EXEC_VALIDATE_ARGS`. Embedders may opt in explicitly via
+/// [`ToolExecutor::with_arg_validation`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SchemaValidation {
+    /// Do not validate args (behavior-preserving default).
+    #[default]
+    Off,
+    /// Validate args against `input_schema`; reject mismatches with
+    /// [`ExecError::InvalidArguments`].
+    On,
+}
+
+impl SchemaValidation {
+    /// Stable string form (`"off"` / `"on"`), for logging/diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+
+    /// Resolve from `TDW_TOOL_EXEC_VALIDATE_ARGS` (the production default).
+    ///
+    /// `"1"`/`"true"`/`"on"`/`"yes"` (case-insensitive) => [`Self::On`]; anything else,
+    /// including unset, => [`Self::Off`].
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var(VALIDATE_ARGS_ENV)
+            .ok()
+            .map_or(Self::Off, |raw| Self::parse(&raw))
+    }
+
+    /// Parse a raw string into a mode (factored out for env-free testing).
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "on" | "yes" => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
 /// Resolves a registry `tool`'s implementation binding and dispatches it to a backend.
 ///
 /// Holds an in-process [`ToolRegistry`] for `Builtin` handlers; `Command { background: false }`
@@ -241,6 +302,11 @@ impl Default for CommandPolicy {
 ///
 /// The [`AutonomyLevel`] gate (default [`AutonomyLevel::Full`]) is consulted before dispatch and
 /// refuses tools whose declared [`ToolEffect`] risk exceeds the level.
+///
+/// When [`SchemaValidation::On`] (via [`ToolExecutor::with_arg_validation`] or the
+/// `TDW_TOOL_EXEC_VALIDATE_ARGS` env default), request `args` are checked against the resolved
+/// tool's `input_schema` *before* dispatch; a mismatch returns
+/// [`ExecError::InvalidArguments`] rather than reaching the backend.
 ///
 /// Optionally records an append-only, hash-chained [`ReceiptLog`] of successful
 /// executions (off by default; opt in via [`ToolExecutor::with_receipts`]). When
@@ -250,6 +316,7 @@ pub struct ToolExecutor {
     builtins: ToolRegistry,
     command_policy: CommandPolicy,
     autonomy: AutonomyLevel,
+    validate: SchemaValidation,
     /// `None` = receipt recording disabled (default); `Some(log)` = recording.
     receipts: Option<ReceiptLog>,
 }
@@ -262,6 +329,7 @@ impl Default for ToolExecutor {
             // Production default: read the level from the environment (defaults to `Full`
             // when unset), mirroring `CommandPolicy::from_env`.
             autonomy: AutonomyLevel::from_env(),
+            validate: SchemaValidation::from_env(),
             receipts: None,
         }
     }
@@ -310,6 +378,18 @@ impl ToolExecutor {
         self.receipts.as_ref()
     }
 
+    /// Opt into (or out of) pre-dispatch argument validation against the tool's
+    /// `input_schema`.
+    ///
+    /// Defaults to the env-derived [`SchemaValidation::from_env`]; [`SchemaValidation::On`]
+    /// makes [`Self::execute`] reject argument/schema mismatches with
+    /// [`ExecError::InvalidArguments`] before any backend runs.
+    #[must_use]
+    pub const fn with_arg_validation(mut self, mode: SchemaValidation) -> Self {
+        self.validate = mode;
+        self
+    }
+
     /// Register an in-process `Builtin` handler under `name`.
     ///
     /// `name` is used both as the registered tool name and the permission pattern; it must
@@ -338,11 +418,14 @@ impl ToolExecutor {
     /// # Errors
     ///
     /// Returns [`ExecError::ToolNotFound`] if no `tool` named `name` is registered,
-    /// [`ExecError::Unbound`] for an unbound tool, [`ExecError::NotYetSupported`] for a
-    /// deferred variant, [`ExecError::NotPermitted`] for a command rejected by policy,
+    /// [`ExecError::Unbound`] for an unbound tool, [`ExecError::InvalidArguments`] when
+    /// argument validation is enabled (see [`Self::with_arg_validation`]) and `args` do not
+    /// satisfy the tool's `input_schema`, [`ExecError::NotYetSupported`] for a deferred
+    /// variant, [`ExecError::NotPermitted`] for a command rejected by policy,
     /// [`ExecError::BadArguments`] for a malformed tool resource or command,
     /// [`ExecError::Blocked`] when the tool's declared effect exceeds the configured
-    /// [`AutonomyLevel`], or [`ExecError::Backend`] for a process failure.
+    /// [`AutonomyLevel`], or
+    /// [`ExecError::Backend`] for a process failure.
     pub fn execute(
         &self,
         registry: &Registry,
@@ -363,6 +446,15 @@ impl ToolExecutor {
                 tool: name.to_string(),
                 effect: effect_label(tool.effect),
                 level: self.autonomy.as_str(),
+            });
+        }
+
+        if matches!(self.validate, SchemaValidation::On)
+            && let Err(reason) = validate_args(&tool.input_schema, args)
+        {
+            return Err(ExecError::InvalidArguments {
+                tool: name.to_string(),
+                reason,
             });
         }
 
@@ -410,6 +502,131 @@ impl ToolExecutor {
             .call(args.clone())
             .map_err(|error| ExecError::Backend(error.to_string()))?;
         Ok(ToolOutcome { structured })
+    }
+}
+
+/// Validate `args` against a JSON-Schema-ish `schema`. Supports a pragmatic subset:
+/// root/object `type`, `required: [..]`, and per-property `type` from `properties`.
+/// Unknown keywords and absent constraints are ignored (lenient by design). Never panics.
+fn validate_args(schema: &Value, args: &Value) -> Result<(), String> {
+    // If schema is not an object (e.g. `true`/null/missing), accept (nothing to check).
+    let Some(schema_obj) = schema.as_object() else {
+        return Ok(());
+    };
+    // Root `type` check (default "object" per Tool contract: root must be an object).
+    let root_type = schema_obj.get("type");
+    check_type_spec(root_type, "object", args).map_err(|message| format!("root: {message}"))?;
+    // Only object arguments have required/properties semantics. Compound schemas like
+    // `["object", "null"]` are accepted for null and validated for objects.
+    if type_spec_includes(root_type, "object", true) && args.is_object() {
+        let obj = args
+            .as_object()
+            .ok_or_else(|| "expected object arguments".to_string())?;
+        // Required fields present (and non-null).
+        if let Some(req) = schema_obj.get("required").and_then(Value::as_array) {
+            for field in req.iter().filter_map(Value::as_str) {
+                match obj.get(field) {
+                    None | Some(Value::Null) => {
+                        return Err(format!("missing required field: {field}"));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        // Per-property type checks for present keys only (extra keys allowed: open-world).
+        if let Some(props) = schema_obj.get("properties").and_then(Value::as_object) {
+            for (key, pschema) in props {
+                if let Some(actual) = obj.get(key)
+                    && let Some(expected) = pschema.as_object().and_then(|p| p.get("type"))
+                {
+                    check_type_spec(Some(expected), "object", actual)
+                        .map_err(|message| format!("field {key}: {message}"))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_type_spec(
+    expected: Option<&Value>,
+    default_type: &'static str,
+    value: &Value,
+) -> Result<(), String> {
+    match expected {
+        None => check_type(default_type, value),
+        Some(Value::String(expected)) => check_type(expected, value),
+        Some(Value::Array(types)) => {
+            let names = types.iter().filter_map(Value::as_str);
+            if names
+                .clone()
+                .any(|expected| check_type(expected, value).is_ok())
+            {
+                Ok(())
+            } else if let Some(first) = names.into_iter().next() {
+                check_type(first, value)
+            } else {
+                Ok(())
+            }
+        }
+        // Unknown/compound forms are accepted leniently.
+        Some(_) => Ok(()),
+    }
+}
+
+fn type_spec_includes(
+    expected: Option<&Value>,
+    needle: &'static str,
+    default_when_absent: bool,
+) -> bool {
+    match expected {
+        None => default_when_absent,
+        Some(Value::String(expected)) => expected == needle,
+        Some(Value::Array(types)) => types.iter().filter_map(Value::as_str).any(|t| t == needle),
+        Some(_) => false,
+    }
+}
+
+/// Single-keyword type predicate over the JSON-Schema primitive type names.
+/// `integer` => JSON number that is i64/u64 (no fractional part). `number` => any JSON number.
+/// Unknown type names are accepted (lenient). Never panics.
+fn check_type(expected: &str, value: &Value) -> Result<(), String> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => {
+            value.is_i64()
+                || value.is_u64()
+                || value
+                    .as_f64()
+                    .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
+        }
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        // Unknown/compound (e.g. type arrays) => don't reject.
+        _ => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected {expected}, got {}",
+            json_type_name(value)
+        ))
+    }
+}
+
+/// Short JSON type name for error messages.
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -614,6 +831,19 @@ mod tests {
     ) -> Tool {
         let mut tool = tool_with_impl(name, implementation);
         tool.effect = effect;
+        tool
+    }
+
+    /// Build a `Builtin` tool whose `input_schema` is `schema`, dispatching to `handler`.
+    /// Used to prove the pre-dispatch arg-validation gate against a chosen schema.
+    fn tool_with_schema(name: &str, schema: Value, handler: &str) -> Tool {
+        let mut tool = tool_with_impl(
+            name,
+            ToolImplementation::Builtin {
+                handler: handler.to_string(),
+            },
+        );
+        tool.input_schema = schema;
         tool
     }
 
@@ -1027,5 +1257,282 @@ mod tests {
             .execute(&registry, "tool.exec.nope", &serde_json::json!({}))
             .expect_err("unknown tool must error");
         assert!(matches!(error, ExecError::ToolNotFound(name) if name == "tool.exec.nope"));
+    }
+
+    // --- argument-schema validation (opt-in) ---------------------------------------------
+
+    /// Build a registry + validating executor for a schema-bearing builtin in one step.
+    fn validating_setup(name: &str, schema: Value) -> (Registry, ToolExecutor) {
+        let handler = format!("{name}.handler");
+        let tool = tool_with_schema(name, schema, &handler);
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin(&handler, echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_arg_validation(SchemaValidation::On);
+        (registry, executor)
+    }
+
+    #[test]
+    fn validation_off_by_default_skips_check() {
+        // No opt-in: a missing required field is *not* rejected (behavior-preserving).
+        let tool = tool_with_schema(
+            "tool.exec.val.off",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+            "tool.exec.val.off.handler",
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.val.off.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"));
+
+        let outcome = executor
+            .execute(&registry, "tool.exec.val.off", &serde_json::json!({}))
+            .unwrap_or_else(|error| panic!("validation off must skip check: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn missing_required_field_is_invalid_arguments() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.req",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let error = executor
+            .execute(&registry, "tool.exec.val.req", &serde_json::json!({}))
+            .expect_err("missing required field must be invalid");
+        match error {
+            ExecError::InvalidArguments { tool, reason } => {
+                assert_eq!(tool, "tool.exec.val.req");
+                assert!(
+                    reason.contains("symbol"),
+                    "reason should name field: {reason}"
+                );
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn present_required_field_passes() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.present",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.present",
+                &serde_json::json!({ "symbol": "AAPL" }),
+            )
+            .unwrap_or_else(|error| panic!("present required field must pass: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "symbol": "AAPL" })
+        );
+    }
+
+    #[test]
+    fn wrong_property_type_is_invalid_arguments() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.wrongtype",
+            serde_json::json!({ "type": "object", "properties": { "limit": { "type": "integer" } } }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.wrongtype",
+                &serde_json::json!({ "limit": "ten" }),
+            )
+            .expect_err("wrong property type must be invalid");
+        match error {
+            ExecError::InvalidArguments { reason, .. } => {
+                assert!(
+                    reason.contains("limit"),
+                    "reason should name field: {reason}"
+                );
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn correct_property_type_passes() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.righttype",
+            serde_json::json!({ "type": "object", "properties": { "limit": { "type": "integer" } } }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.righttype",
+                &serde_json::json!({ "limit": 5 }),
+            )
+            .unwrap_or_else(|error| panic!("correct property type must pass: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "limit": 5 })
+        );
+    }
+
+    #[test]
+    fn extra_unknown_field_allowed() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.extra",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.extra",
+                &serde_json::json!({ "symbol": "x", "extra": 1 }),
+            )
+            .unwrap_or_else(|error| panic!("extra field must be allowed: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "symbol": "x", "extra": 1 })
+        );
+    }
+
+    #[test]
+    fn null_required_field_treated_as_missing() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.null",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.null",
+                &serde_json::json!({ "symbol": Value::Null }),
+            )
+            .expect_err("null required field must be invalid");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+    }
+
+    #[test]
+    fn non_object_schema_accepts_anything() {
+        // A non-object schema (`true`) has nothing to check: lenient/never-panic guard.
+        let (registry, executor) =
+            validating_setup("tool.exec.val.anyschema", serde_json::json!(true));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.anyschema",
+                &serde_json::json!({ "anything": 1 }),
+            )
+            .unwrap_or_else(|error| panic!("non-object schema must accept anything: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "anything": 1 })
+        );
+    }
+
+    #[test]
+    fn validate_gate_runs_before_backend_dispatch() {
+        // The handler is intentionally *not* registered; if the gate fails to short-circuit
+        // we would see HandlerNotFound, not InvalidArguments.
+        let tool = tool_with_schema(
+            "tool.exec.val.shortcircuit",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+            "tool.exec.val.shortcircuit.absent",
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new().with_arg_validation(SchemaValidation::On);
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.shortcircuit",
+                &serde_json::json!({}),
+            )
+            .expect_err("validation must short-circuit before dispatch");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+    }
+
+    #[test]
+    fn schema_validation_parse_maps_known_values_and_defaults_off() {
+        assert_eq!(SchemaValidation::parse("1"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("true"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("ON"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("yes"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("0"), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::parse("bogus"), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::parse(""), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::default(), SchemaValidation::Off);
+    }
+
+    #[test]
+    fn integer_type_accepts_i64_rejects_float() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.int",
+            serde_json::json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.int",
+                &serde_json::json!({ "n": 1.5 }),
+            )
+            .expect_err("float must fail integer type");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.int",
+                &serde_json::json!({ "n": 3 }),
+            )
+            .unwrap_or_else(|error| panic!("i64 must pass integer type: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({ "n": 3 }));
+    }
+
+    #[test]
+    fn compound_root_type_allows_null_without_object_validation() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.compound",
+            serde_json::json!({
+                "type": ["object", "null"],
+                "required": ["symbol"],
+                "properties": { "symbol": { "type": "string" } }
+            }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.compound",
+                &serde_json::json!(null),
+            )
+            .unwrap_or_else(|error| panic!("compound object/null schema must allow null: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!(null));
+    }
+
+    #[test]
+    fn integer_type_accepts_mathematically_integral_float() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.intfloat",
+            serde_json::json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.intfloat",
+                &serde_json::json!({ "n": 5.0 }),
+            )
+            .unwrap_or_else(|error| panic!("5.0 must pass integer type: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "n": 5.0 })
+        );
     }
 }
