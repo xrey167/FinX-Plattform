@@ -18,5 +18,11 @@ tdw-core = { workspace = true, optional = true }
 tdw-protocol = { workspace = true }
 thiserror = { workspace = true }
 
+# Unique target name so this `examples/basic.rs` does not collide with the other
+# persistence crates' `basic` example in the shared workspace target directory.
+[[example]]
+name = "tdw-rollout-basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
