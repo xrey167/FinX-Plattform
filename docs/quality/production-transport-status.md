@@ -126,7 +126,7 @@ lease loop.
 | `minio-init` | `minio/mc:latest`, creates `tdw-default` | ✅ added |
 | `tdw-bootstrap` | `Dockerfile.bootstrap`, `crates/tdw-bootstrap` | ✅ PG+S3+CH+Qdrant+Meili |
 | `tdw-worker-serve` | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`), `--serve` | ✅ Postgres-backed, long-running |
-| `tdw-service-daemon` | `docker/tdw-service.Dockerfile`, daemon | ✅ long-running (`0.0.0.0:7878`) |
+| `tdw-service-daemon` | `docker/tdw-service.Dockerfile` (`FEATURES=real-engines`), daemon | ✅ long-running (`0.0.0.0:7878`), `TDW_PROFILE=live` → real engines + PG-backed daemon stores |
 | `tdw-mcp-serve` | `docker/tdw-mcp.Dockerfile`, `--streamable-http` | ✅ long-running (`:8788`, daemon-routed) |
 | Runbook | `docs/release/data-backend-runbook.md` | ✅ updated |
 
@@ -136,18 +136,23 @@ The baseline schemas created here (ClickHouse `tdw` DB + marker table,
 Qdrant `tdw-default` collection, Meilisearch `tdw-default` index) prove the
 backends are reachable and writable; richer domain schemas are still created
 on first domain write. The `live` profile now runs the full long-running
-surface: a Postgres-backed worker, the `tdw-service` daemon (binds
-`0.0.0.0:7878`), and the `tdw-mcp` Streamable HTTP server (daemon-routed).
-The production profile is fail-closed **by default** (no `TDW_OIDC_*` config →
-no policy attached → dispatches return `Failed`), but it now attaches an
-auth-backed policy when the `TDW_OIDC_*` environment is configured and the OIDC
-inputs pass structural claim/JWKS validation (see
+surface against the **real** engines: a Postgres-backed worker, the
+`tdw-service` daemon (built `FEATURES=real-engines`, run with
+`TDW_PROFILE=live` so it wires `PgEngine` / `ClickHouseHttpEngine` /
+`QdrantHttpEngine` / `MeilisearchHttpEngine` / `S3Engine` and Postgres-backs its
+own session/rollout stores, fail-closed at startup on a missing connection env),
+and the `tdw-mcp` Streamable HTTP server (daemon-routed). Engine selection is
+covered by unit tests for the env-parsing and fail-closed paths; the real-engine
+integration tests stay env-gated (`TDW_*_TEST_URL`). The production profile is
+fail-closed **by default** (no `TDW_OIDC_*` config → no policy attached →
+dispatches return `Failed`), but it now attaches an auth-backed policy when the
+`TDW_OIDC_*` environment is configured and the OIDC inputs pass structural
+claim/JWKS validation (see
 [`production-auth-oidc`](../release/production-auth-oidc.md) for the full
 contract, fail-closed semantics, and boot diagnostics). Note this validates
 claim/JWKS *consistency* (issuer, audience, kid ∈ JWKS, allowed algorithm), not
-cryptographic signatures. Remaining:
-Postgres-back the daemon's own session/rollout stores. End-to-end run-through
-of the `live` profile requires a Docker daemon.
+cryptographic signatures. End-to-end run-through of the `live` profile requires a
+Docker daemon.
 
 ## Companions
 
