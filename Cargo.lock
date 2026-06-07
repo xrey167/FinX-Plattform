@@ -3993,6 +3993,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-alerts"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "sqlx",
+ "tdw-symbology",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-app-client"
 version = "0.1.0"
 dependencies = [

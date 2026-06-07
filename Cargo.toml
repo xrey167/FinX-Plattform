@@ -59,6 +59,7 @@ uuid = { version = "1.23.2", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 wasmi = "0.31"
 
+tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
 tdw-core = { path = "crates/tdw-core" }
