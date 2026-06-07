@@ -21,7 +21,6 @@ http = [
     "dep:bytes",
     "dep:reqwest",
     "dep:tdw-core",
-    "dep:tdw-domain",
     "dep:tokio", "tdw-core/http",
     "dep:tdw-provider-http",
     "tdw-provider-http/http"]
@@ -33,7 +32,6 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true, optional = true }
-tdw-domain = { workspace = true, optional = true }
 tdw-provider-http = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
