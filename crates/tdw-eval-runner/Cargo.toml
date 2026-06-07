@@ -15,5 +15,11 @@ tdw-llm = { workspace = true }
 [dev-dependencies]
 tdw-llm-anthropic = { workspace = true }
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_eval_runner_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
