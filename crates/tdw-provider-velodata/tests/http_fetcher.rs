@@ -8,7 +8,8 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_velodata::{
     AggregatedLiquidation, AggregatedOi, FundingRate, VelodataFundingQuery,
     VelodataHttpFundingFetcher, VelodataHttpLiquidationsFetcher, VelodataHttpOiFetcher,
@@ -20,70 +21,58 @@ use tdw_provider_velodata::{
 // ---------------------------------------------------------------------------
 
 fn funding_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "timestamp": 1704153600000i64,
-                "exchange": "binance",
-                "symbol": "BTCUSDT",
-                "fundingRate": 0.0001,
-                "fundingRateAnnualized": 0.1095
-            },
-            {
-                "timestamp": 1704182400000i64,
-                "exchange": "binance",
-                "symbol": "BTCUSDT",
-                "fundingRate": 0.00012,
-                "fundingRateAnnualized": 0.1314
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "timestamp": 1704153600000i64,
+            "exchange": "binance",
+            "symbol": "BTCUSDT",
+            "fundingRate": 0.0001,
+            "fundingRateAnnualized": 0.1095
+        },
+        {
+            "timestamp": 1704182400000i64,
+            "exchange": "binance",
+            "symbol": "BTCUSDT",
+            "fundingRate": 0.00012,
+            "fundingRateAnnualized": 0.1314
+        }
+    ])
 }
 
 fn liquidations_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "timestamp": 1704153600000i64,
-                "symbol": "BTC",
-                "longLiquidations": 1250000.0,
-                "shortLiquidations": 850000.0,
-                "totalLiquidations": 2100000.0
-            },
-            {
-                "timestamp": 1704157200000i64,
-                "symbol": "BTC",
-                "longLiquidations": 430000.0,
-                "shortLiquidations": 210000.0,
-                "totalLiquidations": 640000.0
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "timestamp": 1704153600000i64,
+            "symbol": "BTC",
+            "longLiquidations": 1250000.0,
+            "shortLiquidations": 850000.0,
+            "totalLiquidations": 2100000.0
+        },
+        {
+            "timestamp": 1704157200000i64,
+            "symbol": "BTC",
+            "longLiquidations": 430000.0,
+            "shortLiquidations": 210000.0,
+            "totalLiquidations": 640000.0
+        }
+    ])
 }
 
 fn oi_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "timestamp": 1704153600000i64,
-                "symbol": "BTC",
-                "openInterest": 15200000000.0,
-                "openInterestChange": 250000000.0
-            },
-            {
-                "timestamp": 1704157200000i64,
-                "symbol": "BTC",
-                "openInterest": 15450000000.0,
-                "openInterestChange": 250000000.0
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "timestamp": 1704153600000i64,
+            "symbol": "BTC",
+            "openInterest": 15200000000.0,
+            "openInterestChange": 250000000.0
+        },
+        {
+            "timestamp": 1704157200000i64,
+            "symbol": "BTC",
+            "openInterest": 15450000000.0,
+            "openInterestChange": 250000000.0
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -267,13 +256,7 @@ async fn live_velodata_funding_rates_returns_rows_when_env_vars_set() {
     let fetcher = VelodataHttpFundingFetcher::default();
     let query = VelodataFundingQuery::new("binance", "BTCUSDT", 10)
         .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -293,13 +276,7 @@ async fn live_velodata_liquidations_returns_rows_when_env_vars_set() {
     let fetcher = VelodataHttpLiquidationsFetcher::default();
     let query = VelodataLiquidationsQuery::new("BTC", 10)
         .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -318,13 +295,7 @@ async fn live_velodata_oi_returns_rows_when_env_vars_set() {
     let fetcher = VelodataHttpOiFetcher::default();
     let query =
         VelodataOiQuery::new("BTC", 10).unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

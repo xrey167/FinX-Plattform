@@ -13,12 +13,8 @@
 //! helper handles the conversion without pulling chrono / time / jiff
 //! as workspace dependencies just for this one call site.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::EquityHistoricalData;
 use tdw_provider_fileset::EquityHistoricalQuery;
 
@@ -208,21 +204,7 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
 /// `YYYY-MM-DD` calendar-date string in UTC. Uses Howard Hinnant's
 /// civil_from_days algorithm; correct for all Gregorian dates.
 fn unix_to_iso_date(timestamp_seconds: i64) -> String {
-    let days_since_epoch = timestamp_seconds.div_euclid(86_400);
-    // Shift so the era starts at 0000-03-01.
-    let days = days_since_epoch + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    if month <= 2 {
-        year += 1;
-    }
-    format!("{year:04}-{month:02}-{day:02}")
+    tdw_core::date::unix_seconds_to_iso_date(timestamp_seconds)
 }
 
 #[cfg(test)]

@@ -7,57 +7,16 @@
 //! The live integration test is additionally gated by `TDW_OECD_LIVE=1`
 //! so unattended CI stays offline.
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{BASE_URL, OecdObservation, OecdQuery, sdmx_data_url};
 
 const USER_AGENT: &str = "tdw-provider-oecd/0.1";
-
-// ── Fetcher struct ────────────────────────────────────────────────────────────
-
-/// Production OECD SDMX-JSON data fetcher.
-///
-/// No authentication is required. The base URL can be overridden for
-/// testing against a local mock server.
-#[derive(Clone, Debug)]
-pub struct OecdHttpDataFetcher {
-    base_url: String,
-}
-
-impl Default for OecdHttpDataFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl OecdHttpDataFetcher {
-    /// Override the OECD base URL (useful for pointing at a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `oecd` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-
-    /// Build the full request URL from a query, honouring `self.base_url`.
-    fn build_url(&self, query: &OecdQuery) -> Result<String> {
-        let base = self.base_url.trim_end_matches('/');
-        Ok(format!(
-            "{}/{}/{}/OECD?startTime={}&endTime={}&contentType=application/json",
-            base, query.dataset, query.filter, query.start_time, query.end_time,
-        ))
-    }
-}
 
 // ── SDMX-JSON deserialisation types ──────────────────────────────────────────
 
@@ -115,12 +74,27 @@ struct SdmxDimensionValue {
     id: String,
 }
 
-// ── Fetcher impl ──────────────────────────────────────────────────────────────
+// ── Provider spec ─────────────────────────────────────────────────────────────
 
-#[async_trait]
-impl Fetcher<OecdQuery, OecdObservation> for OecdHttpDataFetcher {
+/// Provider specification for the OECD SDMX-JSON data fetcher.
+///
+/// No authentication is required. The base URL can be overridden for
+/// testing against a local mock server.
+pub struct OecdDataSpec;
+
+impl ProviderSpec for OecdDataSpec {
     const PROVIDER: &'static str = "oecd";
     const ENDPOINT: &'static str = "sdmx_data";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "oecd client build";
+    const SEND_ERR: &'static str = "oecd extract_data request";
+    const RETURNED_ERR: &'static str = "oecd extract_data returned";
+    const READ_BODY_ERR: &'static str = "oecd read body";
+
+    type Query = OecdQuery;
+    type Data = OecdObservation;
 
     fn transform_query(params: Value) -> Result<OecdQuery> {
         let get_str = |key: &str| -> Result<String> {
@@ -140,37 +114,20 @@ impl Fetcher<OecdQuery, OecdObservation> for OecdHttpDataFetcher {
             .map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &OecdQuery, _creds: &Credentials) -> Result<Bytes> {
-        let url = self
-            .build_url(query)
-            .map_err(|e| Error::Provider(format!("oecd build_url: {e}")))?;
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("oecd client build: {e}")))?;
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("oecd extract_data request: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "oecd extract_data returned {status}: {body}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("oecd read body: {e}")))
+    fn build_request(
+        base_url: &str,
+        query: &OecdQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
+        let base = base_url.trim_end_matches('/');
+        let url = format!(
+            "{}/{}/{}/OECD?startTime={}&endTime={}&contentType=application/json",
+            base, query.dataset, query.filter, query.start_time, query.end_time,
+        );
+        Ok(client.get(&url))
     }
 
-    fn transform_data(&self, query: &OecdQuery, raw: Bytes) -> Result<Vec<OecdObservation>> {
+    fn transform_data(query: &OecdQuery, raw: Bytes) -> Result<Vec<OecdObservation>> {
         let envelope: SdmxEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("oecd parse_json: {e}")))?;
 
@@ -225,6 +182,9 @@ impl Fetcher<OecdQuery, OecdObservation> for OecdHttpDataFetcher {
         Ok(rows)
     }
 }
+
+/// Production OECD SDMX-JSON data fetcher.
+pub type OecdHttpDataFetcher = HttpFetcher<OecdDataSpec>;
 
 // ── URL helper used by the canonical sdmx_data_url fn ────────────────────────
 

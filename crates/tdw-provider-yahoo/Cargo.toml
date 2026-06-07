@@ -11,7 +11,7 @@ default = []
 # default so the workspace test set stays offline; the live test is
 # additionally gated by the env var TDW_YAHOO_LIVE=1 so unattended
 # CI runs do not hit Yahoo's chart API.
-http = ["dep:reqwest", "dep:tokio"]
+http = ["dep:reqwest", "dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -24,6 +24,9 @@ tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 
 [lints]
 workspace = true

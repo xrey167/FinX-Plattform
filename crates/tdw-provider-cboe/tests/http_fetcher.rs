@@ -10,61 +10,54 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_cboe::{
     CboeHttpIndexFetcher, CboeHttpOptionsFetcher, CboeIndexQuery, CboeOptionsQuery,
 };
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn options_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "data": {
-                "options": [
-                    {
-                        "option": "AAPL240119C00180000",
-                        "bid": 5.10,
-                        "ask": 5.30,
-                        "iv": 0.235,
-                        "delta": 0.45,
-                        "gamma": 0.02,
-                        "theta": -0.05,
-                        "open_interest": 12500
-                    },
-                    {
-                        "option": "AAPL240119P00180000",
-                        "bid": 2.40,
-                        "ask": 2.60,
-                        "iv": 0.210,
-                        "delta": -0.55,
-                        "gamma": 0.02,
-                        "theta": -0.04,
-                        "open_interest": 8750
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "data": {
+            "options": [
+                {
+                    "option": "AAPL240119C00180000",
+                    "bid": 5.10,
+                    "ask": 5.30,
+                    "iv": 0.235,
+                    "delta": 0.45,
+                    "gamma": 0.02,
+                    "theta": -0.05,
+                    "open_interest": 12500
+                },
+                {
+                    "option": "AAPL240119P00180000",
+                    "bid": 2.40,
+                    "ask": 2.60,
+                    "iv": 0.210,
+                    "delta": -0.55,
+                    "gamma": 0.02,
+                    "theta": -0.04,
+                    "open_interest": 8750
+                }
+            ]
+        }
+    })
 }
 
 fn index_cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "data": {
-                "symbol": "VIX",
-                "price": 13.45,
-                "change": -0.23,
-                "volume": 0
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "data": {
+            "symbol": "VIX",
+            "price": 13.45,
+            "change": -0.23,
+            "volume": 0
+        }
+    })
 }
 
 fn sample_options_query() -> CboeOptionsQuery {
@@ -197,13 +190,7 @@ async fn live_cboe_options_returns_contracts_when_env_var_set() {
 
     let fetcher = CboeHttpOptionsFetcher::default();
     let query = CboeOptionsQuery::new("AAPL").unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let contracts = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let contracts = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !contracts.is_empty(),
@@ -220,13 +207,7 @@ async fn live_cboe_index_returns_quote_when_env_var_set() {
 
     let fetcher = CboeHttpIndexFetcher::default();
     let query = CboeIndexQuery::new("VIX").unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let quotes = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let quotes = live_fetch_nonempty!(fetcher, query);
 
     assert_eq!(
         quotes.len(),

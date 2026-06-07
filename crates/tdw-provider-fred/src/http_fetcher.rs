@@ -5,12 +5,8 @@
 //! require `FRED_API_KEY`; the live integration test is additionally
 //! gated by `TDW_FRED_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{BASE_URL, FredObservation, FredSeriesObservationsQuery, series_observations_request};
 

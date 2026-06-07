@@ -78,6 +78,42 @@ pub struct MarketDataBar {
     pub source: String,
 }
 
+/// Shared OHLCV value block reused by `tdw-provider-*` intermediate
+/// deserialization structs.
+///
+/// Many providers parse a JSON object that carries the canonical `open`,
+/// `high`, `low`, `close`, `volume` floats alongside provider-specific fields.
+/// Embedding this struct with `#[serde(flatten)]` keeps the JSON shape
+/// byte-identical while collapsing the repeated field block to one definition.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Ohlcv {
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+impl Ohlcv {
+    /// Build a `MarketDataBar` carrying only the OHLCV fields, leaving the
+    /// remaining fields to be supplied via struct-update syntax.
+    #[must_use]
+    pub fn into_bar_template(self) -> MarketDataBar {
+        MarketDataBar {
+            symbol: String::new(),
+            venue: String::new(),
+            granularity: TimeGranularity::Day,
+            ts: String::new(),
+            open: self.open,
+            high: self.high,
+            low: self.low,
+            close: self.close,
+            volume: self.volume,
+            source: String::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Tick {
     #[validate(length(min = 1))]

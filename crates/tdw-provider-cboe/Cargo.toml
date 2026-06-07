@@ -11,17 +11,16 @@ default = []
 # tests stay offline; live calls are additionally gated by TDW_CBOE_LIVE=1.
 # No API key required — CBOE public endpoints are unauthenticated.
 http = [
-    "dep:async-trait",
     "dep:bytes",
     "dep:reqwest",
     "dep:serde_json",
     "dep:tdw-core",
     "dep:tdw-domain",
-    "dep:tokio",
-]
+    "dep:tokio", "tdw-core/http",
+    "dep:tdw-provider-http",
+    "tdw-provider-http/http"]
 
 [dependencies]
-async-trait = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 schemars = { workspace = true }
@@ -29,12 +28,16 @@ serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 tdw-core = { workspace = true, optional = true }
 tdw-domain = { workspace = true, optional = true }
+tdw-provider-http = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
 [[example]]
 name = "basic"
 required-features = ["http"]
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 
 [lints]
 workspace = true

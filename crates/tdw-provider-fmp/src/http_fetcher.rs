@@ -9,13 +9,9 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_core::http_support::prelude::*;
+use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 
 use crate::{
     API_KEY_ENV, BASE_URL, FmpError, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow,
@@ -39,11 +35,8 @@ struct FmpHistoricalEnvelope {
 #[derive(Deserialize)]
 struct FmpHistoricalBar {
     date: String,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
+    #[serde(flatten)]
+    ohlcv: Ohlcv,
 }
 
 #[derive(Deserialize)]
@@ -87,32 +80,11 @@ fn api_key() -> std::result::Result<String, FmpError> {
 // FmpHttpHistoricalFetcher
 // ---------------------------------------------------------------------------
 
-/// Production FMP daily-bar fetcher.
-#[derive(Clone, Debug)]
-pub struct FmpHttpHistoricalFetcher {
-    base_url: String,
-}
-
-impl Default for FmpHttpHistoricalFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl FmpHttpHistoricalFetcher {
-    /// Override the FMP base URL (useful for tests with a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `fmp` / `equity_historical` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP daily-bar fetcher.
+    pub FmpHttpHistoricalFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
@@ -136,7 +108,7 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
         let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
         let url = format!(
             "{}/historical-price-full/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.symbol,
         );
         let client = fmp_client().map_err(|e| Error::Provider(e.to_string()))?;
@@ -173,12 +145,8 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
                 venue: "fmp".to_string(),
                 granularity: TimeGranularity::Day,
                 ts: bar.date,
-                open: bar.open,
-                high: bar.high,
-                low: bar.low,
-                close: bar.close,
-                volume: bar.volume,
                 source: "fmp".to_string(),
+                ..bar.ohlcv.into_bar_template()
             });
         }
         Ok(rows)
@@ -189,32 +157,11 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
 // FmpHttpIncomeFetcher
 // ---------------------------------------------------------------------------
 
-/// Production FMP income-statement fetcher.
-#[derive(Clone, Debug)]
-pub struct FmpHttpIncomeFetcher {
-    base_url: String,
-}
-
-impl Default for FmpHttpIncomeFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl FmpHttpIncomeFetcher {
-    /// Override the FMP base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `fmp` / `income_statement` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP income-statement fetcher.
+    pub FmpHttpIncomeFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<FmpFundamentalsQuery, FmpIncomeRow> for FmpHttpIncomeFetcher {
@@ -261,7 +208,7 @@ impl Fetcher<FmpFundamentalsQuery, FmpIncomeRow> for FmpHttpIncomeFetcher {
         let path_segment = query.statement.as_path_segment();
         let url = format!(
             "{}/{}/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             path_segment,
             query.symbol,
         );

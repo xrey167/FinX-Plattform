@@ -7,13 +7,9 @@
 //! Live integration tests are additionally gated by `TDW_DATABENTO_LIVE=1`
 //! so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_core::http_support::prelude::*;
+use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 
 use crate::{API_KEY_ENV, BASE_URL, DatabentoTimeseriesQuery};
 
@@ -23,32 +19,11 @@ const USER_AGENT: &str = "tdw-provider-databento/0.1";
 // Timeseries fetcher  (`/timeseries.get_range`)
 // ---------------------------------------------------------------------------
 
-/// Production Databento timeseries OHLCV fetcher.
-#[derive(Clone, Debug)]
-pub struct DatabentoHttpTimeseriesFetcher {
-    base_url: String,
-}
-
-impl Default for DatabentoHttpTimeseriesFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DatabentoHttpTimeseriesFetcher {
-    /// Override the Databento base URL (useful for testing).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `databento` / `timeseries` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Databento timeseries OHLCV fetcher.
+    pub DatabentoHttpTimeseriesFetcher,
+    BASE_URL
+);
 
 // --- Databento API response types ------------------------------------------
 
@@ -62,11 +37,8 @@ struct TimeseriesResponse {
 struct OhlcvRecord {
     /// Nanosecond Unix timestamp.
     ts_event: i64,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
+    #[serde(flatten)]
+    ohlcv: Ohlcv,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +91,7 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
 
         let url = format!(
             "{}/timeseries.get_range",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
         let body = serde_json::json!({
             "dataset": query.dataset,
@@ -183,12 +155,8 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
                 venue: query.dataset.clone(),
                 granularity: TimeGranularity::Day,
                 ts: unix_nanos_to_iso_timestamp(record.ts_event),
-                open: record.open,
-                high: record.high,
-                low: record.low,
-                close: record.close,
-                volume: record.volume,
                 source: "databento".to_string(),
+                ..record.ohlcv.into_bar_template()
             });
         }
         Ok(bars)
@@ -216,32 +184,11 @@ pub struct DatabentoDataset {
     pub id: String,
 }
 
-/// Production fetcher for `GET /metadata.list_datasets`.
-#[derive(Clone, Debug)]
-pub struct DatabentoMetadataFetcher {
-    base_url: String,
-}
-
-impl Default for DatabentoMetadataFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DatabentoMetadataFetcher {
-    /// Override the base URL (useful for testing).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `databento` / `metadata` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production fetcher for `GET /metadata.list_datasets`.
+    pub DatabentoMetadataFetcher,
+    BASE_URL
+);
 
 #[derive(Deserialize)]
 struct MetadataResponse {
@@ -272,7 +219,7 @@ impl Fetcher<DatabentoMetadataQuery, DatabentoDataset> for DatabentoMetadataFetc
 
         let url = format!(
             "{}/metadata.list_datasets",
-            self.base_url.trim_end_matches('/')
+            self.base_url().trim_end_matches('/')
         );
 
         let client = Client::builder()
@@ -326,24 +273,7 @@ impl Fetcher<DatabentoMetadataQuery, DatabentoDataset> for DatabentoMetadataFetc
 /// Convert a nanosecond Unix timestamp to an ISO-8601 UTC string.
 fn unix_nanos_to_iso_timestamp(nanos: i64) -> String {
     let seconds = nanos.div_euclid(1_000_000_000);
-    let days_since_epoch = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400);
-    let days = days_since_epoch + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    if month <= 2 {
-        year += 1;
-    }
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    tdw_core::date::unix_seconds_to_iso_timestamp(seconds)
 }
 
 #[cfg(test)]

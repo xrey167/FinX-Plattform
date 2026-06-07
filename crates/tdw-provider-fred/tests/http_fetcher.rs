@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_fred::{FredHttpSeriesObservationsFetcher, FredSeriesObservationsQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> FredSeriesObservationsQuery {
     FredHttpSeriesObservationsFetcher::transform_query(json!({ "series_id": "gdp" }))
@@ -19,44 +20,40 @@ fn sample_query() -> FredSeriesObservationsQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "realtime_start": "2026-05-27",
-            "realtime_end": "2026-05-27",
-            "observation_start": "1776-07-04",
-            "observation_end": "9999-12-31",
-            "units": "lin",
-            "output_type": 1,
-            "file_type": "json",
-            "order_by": "observation_date",
-            "sort_order": "asc",
-            "count": 3,
-            "offset": 0,
-            "limit": 100000,
-            "observations": [
-                {
-                    "realtime_start": "2026-05-27",
-                    "realtime_end": "2026-05-27",
-                    "date": "2023-01-01",
-                    "value": "27164.359"
-                },
-                {
-                    "realtime_start": "2026-05-27",
-                    "realtime_end": "2026-05-27",
-                    "date": "2023-04-01",
-                    "value": "."
-                },
-                {
-                    "realtime_start": "2026-05-27",
-                    "realtime_end": "2026-05-27",
-                    "date": "2023-07-01",
-                    "value": "27967.697"
-                }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "realtime_start": "2026-05-27",
+        "realtime_end": "2026-05-27",
+        "observation_start": "1776-07-04",
+        "observation_end": "9999-12-31",
+        "units": "lin",
+        "output_type": 1,
+        "file_type": "json",
+        "order_by": "observation_date",
+        "sort_order": "asc",
+        "count": 3,
+        "offset": 0,
+        "limit": 100000,
+        "observations": [
+            {
+                "realtime_start": "2026-05-27",
+                "realtime_end": "2026-05-27",
+                "date": "2023-01-01",
+                "value": "27164.359"
+            },
+            {
+                "realtime_start": "2026-05-27",
+                "realtime_end": "2026-05-27",
+                "date": "2023-04-01",
+                "value": "."
+            },
+            {
+                "realtime_start": "2026-05-27",
+                "realtime_end": "2026-05-27",
+                "date": "2023-07-01",
+                "value": "27967.697"
+            }
+        ]
+    })
 }
 
 #[test]
@@ -79,14 +76,10 @@ fn cassette_replay_decodes_observations_and_skips_missing_values() {
 fn cassette_replay_surfaces_fred_error_envelope() {
     let fetcher = FredHttpSeriesObservationsFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "error_code": 400,
-            "error_message": "Bad Request. Variable api_key is required."
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "error_code": 400,
+        "error_message": "Bad Request. Variable api_key is required."
+    });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -118,13 +111,7 @@ async fn live_fred_returns_recent_observations_when_env_vars_set() {
 
     let fetcher = FredHttpSeriesObservationsFetcher::default().with_limit(5);
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

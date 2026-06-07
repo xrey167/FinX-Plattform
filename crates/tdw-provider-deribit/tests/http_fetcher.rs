@@ -10,86 +10,75 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_deribit::{
     DeribitFundingQuery, DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher,
     DeribitHttpOrderBookFetcher, DeribitInstrumentsQuery, DeribitKind, DeribitOrderBookQuery,
 };
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
 // ---------------------------------------------------------------------------
 
 fn instruments_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "result": [
-                {
-                    "instrument_name": "BTC-19JAN24-40000-C",
-                    "kind": "option",
-                    "strike": 40000.0,
-                    "expiration_timestamp": 1705651200000u64,
-                    "option_type": "call",
-                    "is_active": true
-                },
-                {
-                    "instrument_name": "BTC-19JAN24-40000-P",
-                    "kind": "option",
-                    "strike": 40000.0,
-                    "expiration_timestamp": 1705651200000u64,
-                    "option_type": "put",
-                    "is_active": true
-                }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "result": [
+            {
+                "instrument_name": "BTC-19JAN24-40000-C",
+                "kind": "option",
+                "strike": 40000.0,
+                "expiration_timestamp": 1705651200000u64,
+                "option_type": "call",
+                "is_active": true
+            },
+            {
+                "instrument_name": "BTC-19JAN24-40000-P",
+                "kind": "option",
+                "strike": 40000.0,
+                "expiration_timestamp": 1705651200000u64,
+                "option_type": "put",
+                "is_active": true
+            }
+        ]
+    })
 }
 
 fn order_book_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "result": {
-                "instrument_name": "BTC-19JAN24-40000-C",
-                "bid_iv": 45.2,
-                "ask_iv": 46.8,
-                "mark_iv": 46.0,
-                "underlying_price": 42500.0,
-                "bids": [[5.1, 10.0]],
-                "asks": [[5.3, 8.0]],
-                "greeks": {
-                    "delta": 0.35,
-                    "gamma": 0.00002,
-                    "vega": 85.0,
-                    "theta": -120.0
-                }
+    cassette_bytes!({
+        "result": {
+            "instrument_name": "BTC-19JAN24-40000-C",
+            "bid_iv": 45.2,
+            "ask_iv": 46.8,
+            "mark_iv": 46.0,
+            "underlying_price": 42500.0,
+            "bids": [[5.1, 10.0]],
+            "asks": [[5.3, 8.0]],
+            "greeks": {
+                "delta": 0.35,
+                "gamma": 0.00002,
+                "vega": 85.0,
+                "theta": -120.0
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn funding_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "result": [
-                {
-                    "timestamp": 1704153600000u64,
-                    "interest": 0.0001,
-                    "index_price": 42000.0
-                },
-                {
-                    "timestamp": 1704157200000u64,
-                    "interest": 0.00012,
-                    "index_price": 42050.0
-                }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "result": [
+            {
+                "timestamp": 1704153600000u64,
+                "interest": 0.0001,
+                "index_price": 42000.0
+            },
+            {
+                "timestamp": 1704157200000u64,
+                "interest": 0.00012,
+                "index_price": 42050.0
+            }
+        ]
+    })
 }
 
 fn sample_instruments_query() -> DeribitInstrumentsQuery {
@@ -324,13 +313,7 @@ async fn live_deribit_instruments_returns_list_when_env_var_set() {
     let fetcher = DeribitHttpInstrumentsFetcher::default();
     let query = DeribitInstrumentsQuery::new("BTC", DeribitKind::Option)
         .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let instruments = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let instruments = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !instruments.is_empty(),
@@ -348,13 +331,7 @@ async fn live_deribit_order_book_returns_data_when_env_var_set() {
     let fetcher = DeribitHttpOrderBookFetcher::default();
     let query = DeribitOrderBookQuery::new("BTC-PERPETUAL", 5)
         .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert_eq!(
         rows.len(),
@@ -375,13 +352,7 @@ async fn live_deribit_funding_returns_records_when_env_var_set() {
     let query =
         DeribitFundingQuery::new("BTC-PERPETUAL", 1_704_153_600_000, 1_704_240_000_000, 100)
             .unwrap_or_else(|e| panic!("query should build: {e}"));
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let records = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let records = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !records.is_empty(),
