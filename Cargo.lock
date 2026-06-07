@@ -4105,9 +4105,11 @@ name = "tdw-app-server"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hmac 0.13.0",
  "loom",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tdw-bus",
  "tdw-config",
  "tdw-event",
