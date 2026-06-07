@@ -44,9 +44,9 @@ futures-util = { version = "0.3.31", default-features = false }
 # the MCP wire stays strict JSON via the mcp adapter.
 json5 = "1"
 # JWT verification (signature + standard claim checks) for the OIDC ingress
-# boundary. Default backend is `ring`, which is already a vetted transitive
-# dependency (pulled by rustls), so this adds no new crypto license surface.
-jsonwebtoken = "9.3"
+# boundary. `rust_crypto` selects the pure-Rust crypto backend (rsa/p256/p384/
+# hmac/sha2 crates); no C / CMake / aws-lc-sys build dependency.
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 # Cross-platform filesystem notifications (pure Rust) for event-driven registry hot-reload.
 notify = "8"
 # Constant-time byte comparison for bearer-token / secret equality checks
