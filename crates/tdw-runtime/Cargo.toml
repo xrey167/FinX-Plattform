@@ -23,5 +23,9 @@ bytes = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 
+[[example]]
+name = "tdw_runtime_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
