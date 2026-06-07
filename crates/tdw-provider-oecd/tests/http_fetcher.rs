@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_oecd::{OecdHttpDataFetcher, OecdQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> OecdQuery {
     OecdHttpDataFetcher::transform_query(json!({
@@ -26,33 +27,29 @@ fn sample_query() -> OecdQuery {
 /// A cassette recording of the OECD SDMX-JSON response shape with two
 /// observations and one null value.
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "dataSets": [{
-                "observations": {
-                    "0:0:0:0": [1234.5, 0, null],
-                    "0:0:0:1": [null, 0, null],
-                    "0:0:0:2": [5678.9, 0, null]
-                }
-            }],
-            "structure": {
-                "dimensions": {
-                    "observation": [
-                        {
-                            "id": "TIME_PERIOD",
-                            "values": [
-                                { "id": "2023-Q1", "name": "2023-Q1" },
-                                { "id": "2023-Q2", "name": "2023-Q2" },
-                                { "id": "2023-Q3", "name": "2023-Q3" }
-                            ]
-                        }
-                    ]
-                }
+    cassette_bytes!({
+        "dataSets": [{
+            "observations": {
+                "0:0:0:0": [1234.5, 0, null],
+                "0:0:0:1": [null, 0, null],
+                "0:0:0:2": [5678.9, 0, null]
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }],
+        "structure": {
+            "dimensions": {
+                "observation": [
+                    {
+                        "id": "TIME_PERIOD",
+                        "values": [
+                            { "id": "2023-Q1", "name": "2023-Q1" },
+                            { "id": "2023-Q2", "name": "2023-Q2" },
+                            { "id": "2023-Q3", "name": "2023-Q3" }
+                        ]
+                    }
+                ]
+            }
+        }
+    })
 }
 
 #[test]
@@ -79,14 +76,10 @@ fn cassette_replay_decodes_observations_and_skips_nulls() {
 fn cassette_replay_empty_data_sets_returns_empty_vec() {
     let fetcher = OecdHttpDataFetcher::default();
     let query = sample_query();
-    let empty = Bytes::from(
-        json!({
-            "dataSets": [],
-            "structure": { "dimensions": { "observation": [] } }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let empty = cassette_bytes!({
+        "dataSets": [],
+        "structure": { "dimensions": { "observation": [] } }
+    });
     let rows = fetcher
         .transform_data(&query, empty)
         .unwrap_or_else(|e| panic!("empty dataSets must succeed: {e}"));
@@ -98,17 +91,13 @@ fn cassette_replay_empty_data_sets_returns_empty_vec() {
 fn cassette_replay_missing_structure_falls_back_to_key_as_period() {
     let fetcher = OecdHttpDataFetcher::default();
     let query = sample_query();
-    let no_structure = Bytes::from(
-        json!({
-            "dataSets": [{
-                "observations": {
-                    "0:0:0:0": [99.0, 0, null]
-                }
-            }]
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let no_structure = cassette_bytes!({
+        "dataSets": [{
+            "observations": {
+                "0:0:0:0": [99.0, 0, null]
+            }
+        }]
+    });
     let rows = fetcher
         .transform_data(&query, no_structure)
         .unwrap_or_else(|e| panic!("no-structure must succeed: {e}"));
@@ -163,14 +152,7 @@ async fn live_oecd_returns_observations_when_env_var_set() {
     }))
     .unwrap_or_else(|e| panic!("live query must build: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

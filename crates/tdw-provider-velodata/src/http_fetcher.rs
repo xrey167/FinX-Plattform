@@ -7,11 +7,7 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     API_KEY_ENV, API_KEY_HEADER, AggregatedLiquidation, AggregatedOi, BASE_URL, FundingRate,
@@ -61,37 +57,14 @@ fn read_api_key() -> Result<String> {
 // Funding-rates fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Velodata funding-rates HTTP fetcher.
-///
-/// Calls `GET /funding/rates` with exchange, symbol, `interval=8h`, and
-/// limit query parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
-#[derive(Clone, Debug)]
-pub struct VelodataHttpFundingFetcher {
-    base_url: String,
-}
-
-impl Default for VelodataHttpFundingFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl VelodataHttpFundingFetcher {
-    /// Override the Velodata base URL (useful for tests pointing at a mock
-    /// server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `velodata` provider.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Velodata funding-rates HTTP fetcher.
+    ///
+    /// Calls `GET /funding/rates` with exchange, symbol, `interval=8h`, and
+    /// limit query parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
+    pub VelodataHttpFundingFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<VelodataFundingQuery, FundingRate> for VelodataHttpFundingFetcher {
@@ -110,7 +83,7 @@ impl Fetcher<VelodataFundingQuery, FundingRate> for VelodataHttpFundingFetcher {
         let api_key = read_api_key()?;
         let url = format!(
             "{}/funding/rates?exchange={}&symbol={}&interval=8h&limit={}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.exchange,
             query.symbol,
             query.limit,
@@ -132,36 +105,14 @@ impl Fetcher<VelodataFundingQuery, FundingRate> for VelodataHttpFundingFetcher {
 // Liquidations fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Velodata aggregated-liquidations HTTP fetcher.
-///
-/// Calls `GET /liquidations/aggregated` with symbol, `interval=1h`, and
-/// limit query parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
-#[derive(Clone, Debug)]
-pub struct VelodataHttpLiquidationsFetcher {
-    base_url: String,
-}
-
-impl Default for VelodataHttpLiquidationsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl VelodataHttpLiquidationsFetcher {
-    /// Override the Velodata base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `velodata` provider.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Velodata aggregated-liquidations HTTP fetcher.
+    ///
+    /// Calls `GET /liquidations/aggregated` with symbol, `interval=1h`, and
+    /// limit query parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
+    pub VelodataHttpLiquidationsFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<VelodataLiquidationsQuery, AggregatedLiquidation> for VelodataHttpLiquidationsFetcher {
@@ -180,7 +131,7 @@ impl Fetcher<VelodataLiquidationsQuery, AggregatedLiquidation> for VelodataHttpL
         let api_key = read_api_key()?;
         let url = format!(
             "{}/liquidations/aggregated?symbol={}&interval=1h&limit={}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.symbol,
             query.limit,
         );
@@ -201,36 +152,14 @@ impl Fetcher<VelodataLiquidationsQuery, AggregatedLiquidation> for VelodataHttpL
 // Open-interest fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Velodata aggregated open-interest HTTP fetcher.
-///
-/// Calls `GET /oi/aggregated` with symbol, `interval=1h`, and limit query
-/// parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
-#[derive(Clone, Debug)]
-pub struct VelodataHttpOiFetcher {
-    base_url: String,
-}
-
-impl Default for VelodataHttpOiFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl VelodataHttpOiFetcher {
-    /// Override the Velodata base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `velodata` provider.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Velodata aggregated open-interest HTTP fetcher.
+    ///
+    /// Calls `GET /oi/aggregated` with symbol, `interval=1h`, and limit query
+    /// parameters. Requires `TDW_VELODATA_API_KEY` at runtime.
+    pub VelodataHttpOiFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<VelodataOiQuery, AggregatedOi> for VelodataHttpOiFetcher {
@@ -245,7 +174,7 @@ impl Fetcher<VelodataOiQuery, AggregatedOi> for VelodataHttpOiFetcher {
         let api_key = read_api_key()?;
         let url = format!(
             "{}/oi/aggregated?symbol={}&interval=1h&limit={}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.symbol,
             query.limit,
         );

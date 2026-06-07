@@ -9,14 +9,10 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::time::Duration;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 use tokio::time::sleep;
 
@@ -29,34 +25,13 @@ const RATE_LIMIT_DELAY: Duration = Duration::from_millis(100);
 
 // ── Filings fetcher ───────────────────────────────────────────────────────────
 
-/// Production SEC EDGAR submissions/filings fetcher.
-///
-/// Calls `GET /submissions/CIK{cik_padded_10digits}.json`.
-#[derive(Clone, Debug)]
-pub struct SecFilingsHttpFetcher {
-    base_url: String,
-}
-
-impl Default for SecFilingsHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl SecFilingsHttpFetcher {
-    /// Override the base URL (useful in tests pointing at a local stub).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `sec` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC EDGAR submissions/filings fetcher.
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json`.
+    pub SecFilingsHttpFetcher,
+    BASE_URL
+);
 
 /// Wire shape returned by `GET /submissions/CIK*.json`.
 #[derive(Deserialize)]
@@ -111,11 +86,11 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
     async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
         let url = format!(
             "{}/submissions/CIK{}.json",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.padded_cik(),
         );
 
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
         let response = client
             .get(&url)
             .send()
@@ -180,36 +155,15 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
 
 // ── XBRL company-facts fetcher ────────────────────────────────────────────────
 
-/// Production SEC EDGAR XBRL company-facts fetcher.
-///
-/// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json`.
-/// Returns equity historical data shaped as [`MarketDataBar`] by extracting
-/// `us-gaap/Revenue` USD facts tagged on 10-K filings.
-#[derive(Clone, Debug)]
-pub struct SecXbrlHttpFetcher {
-    base_url: String,
-}
-
-impl Default for SecXbrlHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl SecXbrlHttpFetcher {
-    /// Override the base URL (useful in tests pointing at a local stub).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `sec` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC EDGAR XBRL company-facts fetcher.
+    ///
+    /// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json`.
+    /// Returns equity historical data shaped as [`MarketDataBar`] by extracting
+    /// `us-gaap/Revenue` USD facts tagged on 10-K filings.
+    pub SecXbrlHttpFetcher,
+    BASE_URL
+);
 
 /// Wire shape for `GET /api/xbrl/companyfacts/CIK*.json`.
 #[derive(Deserialize)]
@@ -285,11 +239,11 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         let url = format!(
             "{}/api/xbrl/companyfacts/CIK{}.json",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             cik_query.padded_cik(),
         );
 
-        let client = build_client()?;
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
         let response = client
             .get(&url)
             .send()
@@ -370,15 +324,6 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         Ok(rows)
     }
-}
-
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("sec http client build: {e}")))
 }
 
 // ── Inline unit tests for transform_data (no network) ────────────────────────

@@ -11,8 +11,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_alpaca::{AlpacaHttpStockBarsFetcher, AlpacaStockBarsQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> AlpacaStockBarsQuery {
     AlpacaHttpStockBarsFetcher::transform_query(json!({
@@ -27,37 +28,33 @@ fn sample_query() -> AlpacaStockBarsQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "bars": {
-                "AAPL": [
-                    {
-                        "t": "2024-01-02T05:00:00Z",
-                        "o": 187.15,
-                        "h": 188.44,
-                        "l": 183.89,
-                        "c": 185.64,
-                        "v": 82488700.0,
-                        "n": 927445,
-                        "vw": 185.96
-                    },
-                    {
-                        "t": "2024-01-03T05:00:00Z",
-                        "o": 184.22,
-                        "h": 185.88,
-                        "l": 183.43,
-                        "c": 184.25,
-                        "v": 58414500.0,
-                        "n": 701238,
-                        "vw": 184.42
-                    }
-                ]
-            },
-            "next_page_token": null
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "bars": {
+            "AAPL": [
+                {
+                    "t": "2024-01-02T05:00:00Z",
+                    "o": 187.15,
+                    "h": 188.44,
+                    "l": 183.89,
+                    "c": 185.64,
+                    "v": 82488700.0,
+                    "n": 927445,
+                    "vw": 185.96
+                },
+                {
+                    "t": "2024-01-03T05:00:00Z",
+                    "o": 184.22,
+                    "h": 185.88,
+                    "l": 183.43,
+                    "c": 184.25,
+                    "v": 58414500.0,
+                    "n": 701238,
+                    "vw": 184.42
+                }
+            ]
+        },
+        "next_page_token": null
+    })
 }
 
 #[test]
@@ -82,14 +79,10 @@ fn cassette_replay_decodes_alpaca_bars_into_market_bars() {
 fn cassette_replay_surfaces_alpaca_error_envelope() {
     let fetcher = AlpacaHttpStockBarsFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "code": 40110000u64,
-            "message": "invalid API key ID"
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "code": 40110000u64,
+        "message": "invalid API key ID"
+    });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -126,13 +119,7 @@ async fn live_alpaca_returns_recent_bars_when_env_vars_set() {
 
     let fetcher = AlpacaHttpStockBarsFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

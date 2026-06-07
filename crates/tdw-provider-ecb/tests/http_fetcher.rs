@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_ecb::{EcbDataQuery, EcbHttpDataFetcher};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> EcbDataQuery {
     EcbHttpDataFetcher::transform_query(json!({
@@ -24,35 +25,31 @@ fn sample_query() -> EcbDataQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "dataSets": [{
-                "series": {
-                    "0:0:0:0:0": {
-                        "observations": {
-                            "0": [1.0934, 0, null],
-                            "1": [1.0945, 0, null],
-                            "2": [null, 0, null]
-                        }
+    cassette_bytes!({
+        "dataSets": [{
+            "series": {
+                "0:0:0:0:0": {
+                    "observations": {
+                        "0": [1.0934, 0, null],
+                        "1": [1.0945, 0, null],
+                        "2": [null, 0, null]
                     }
                 }
-            }],
-            "structure": {
-                "dimensions": {
-                    "observation": [{
-                        "id": "TIME_PERIOD",
-                        "values": [
-                            { "id": "2024-01-02" },
-                            { "id": "2024-01-03" },
-                            { "id": "2024-01-04" }
-                        ]
-                    }]
-                }
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }],
+        "structure": {
+            "dimensions": {
+                "observation": [{
+                    "id": "TIME_PERIOD",
+                    "values": [
+                        { "id": "2024-01-02" },
+                        { "id": "2024-01-03" },
+                        { "id": "2024-01-04" }
+                    ]
+                }]
+            }
+        }
+    })
 }
 
 #[test]
@@ -83,33 +80,29 @@ fn cassette_replay_monthly_estr_shape() {
     }))
     .unwrap_or_else(|error| panic!("query should transform: {error}"));
 
-    let raw = Bytes::from(
-        json!({
-            "dataSets": [{
-                "series": {
-                    "0:0:0:0:0:0:0": {
-                        "observations": {
-                            "0": [3.9, 0, null],
-                            "1": [3.9, 0, null]
-                        }
+    let raw = cassette_bytes!({
+        "dataSets": [{
+            "series": {
+                "0:0:0:0:0:0:0": {
+                    "observations": {
+                        "0": [3.9, 0, null],
+                        "1": [3.9, 0, null]
                     }
                 }
-            }],
-            "structure": {
-                "dimensions": {
-                    "observation": [{
-                        "id": "TIME_PERIOD",
-                        "values": [
-                            { "id": "2024-01" },
-                            { "id": "2024-02" }
-                        ]
-                    }]
-                }
             }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+        }],
+        "structure": {
+            "dimensions": {
+                "observation": [{
+                    "id": "TIME_PERIOD",
+                    "values": [
+                        { "id": "2024-01" },
+                        { "id": "2024-02" }
+                    ]
+                }]
+            }
+        }
+    });
 
     let rows = fetcher
         .transform_data(&query, raw)
@@ -161,13 +154,7 @@ async fn live_ecb_returns_recent_observations_when_env_var_set() {
 
     let fetcher = EcbHttpDataFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

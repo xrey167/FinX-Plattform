@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_binance::{BinanceHttpTickerPriceFetcher, BinanceTickerPriceQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> BinanceTickerPriceQuery {
     BinanceHttpTickerPriceFetcher::transform_query(json!({ "symbol": "btcusdt" }))
@@ -19,14 +20,10 @@ fn sample_query() -> BinanceTickerPriceQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "symbol": "BTCUSDT",
-            "price": "67432.12000000"
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "symbol": "BTCUSDT",
+        "price": "67432.12000000"
+    })
 }
 
 #[test]
@@ -46,14 +43,10 @@ fn cassette_replay_decodes_binance_ticker_price() {
 fn cassette_replay_surfaces_binance_error_envelope() {
     let fetcher = BinanceHttpTickerPriceFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "code": -1121,
-            "msg": "Invalid symbol."
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "code": -1121,
+        "msg": "Invalid symbol."
+    });
     let err = fetcher
         .transform_data(&query, envelope)
         .expect_err("error envelope must be propagated");
@@ -82,13 +75,7 @@ async fn live_binance_returns_ticker_price_when_env_var_set() {
 
     let fetcher = BinanceHttpTickerPriceFetcher::default();
     let query = sample_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|error| panic!("live extract_data must succeed: {error}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(!rows.is_empty(), "live response must include one price row");
     assert_eq!(rows[0].symbol, "BTCUSDT");

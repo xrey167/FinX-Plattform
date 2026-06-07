@@ -13,6 +13,7 @@ use tdw_provider_benzinga::{
     BenzingaEarningsItem, BenzingaEarningsQuery, BenzingaNewsItem, BenzingaNewsQuery,
     http_fetcher::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher},
 };
+use tdw_provider_testkit::live_fetch_obbject_nonempty;
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
@@ -171,16 +172,9 @@ async fn live_benzinga_news_returns_data_when_env_var_set() {
     let fetcher = BenzingaNewsHttpFetcher::default();
     let query =
         BenzingaNewsQuery::new("AAPL", 5).unwrap_or_else(|e| panic!("query must build: {e}"));
-    let obbject = fetcher
-        .fetch(
-            serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
-            &Credentials::default(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
-
-    assert!(
-        !obbject.rows.is_empty(),
+    live_fetch_obbject_nonempty!(
+        fetcher,
+        serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
         "live response must include at least one article"
     );
 }
@@ -195,16 +189,9 @@ async fn live_benzinga_earnings_returns_data_when_env_var_set() {
     let fetcher = BenzingaEarningsHttpFetcher::default();
     let query = BenzingaEarningsQuery::new("AAPL", "2024-01-01", "2024-12-31")
         .unwrap_or_else(|e| panic!("query must build: {e}"));
-    let obbject = fetcher
-        .fetch(
-            serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
-            &Credentials::default(),
-        )
-        .await
-        .unwrap_or_else(|e| panic!("live fetch must succeed: {e}"));
-
-    assert!(
-        !obbject.rows.is_empty(),
+    live_fetch_obbject_nonempty!(
+        fetcher,
+        serde_json::to_value(&query).unwrap_or_else(|e| panic!("query serialises: {e}")),
         "live response must include at least one earnings row"
     );
 }

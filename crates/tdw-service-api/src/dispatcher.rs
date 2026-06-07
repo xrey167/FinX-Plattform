@@ -34,6 +34,7 @@ use tdw_app_server::Dispatcher;
 )]
 use tdw_core::Fetcher;
 use tdw_core::{Error, Result};
+use tdw_domain::QuoteSnapshot;
 use tdw_hooks::SystemHookHandlerBackend;
 use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
@@ -100,6 +101,9 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             arguments,
             ..
         } => dispatch_tool(policy, tool_name, arguments),
+        Op::GetQuoteSnapshot { provider, symbol } => {
+            dispatch_get_quote_snapshot(state, policy, provider, symbol).await
+        }
         Op::StreamStart {
             provider,
             symbol,
@@ -111,6 +115,83 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
         Op::CompactContext { .. } => Ok(json!({ "acknowledged": "compact_context" })),
         Op::Cancel { .. } => Ok(json!({ "acknowledged": "cancel" })),
         Op::Shutdown => Ok(json!({ "shutdown": "requested" })),
+    }
+}
+
+/// Fetch a fresh last-price quote snapshot for `symbol` from `provider`.
+///
+/// This is a **no-cache read path**: the provider's HTTP endpoint is called on
+/// every dispatch and the result is returned directly — nothing is written to
+/// any storage layer. This design is intentional: price-alert engine callers
+/// must always see the freshest available price, so bypassing any cache is a
+/// correctness requirement, not an optimisation trade-off.
+///
+/// Currently only the `fmp` provider is supported. Additional providers can be
+/// wired behind `#[cfg(feature = "provider-*")]` arms following the same
+/// pattern.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if `provider` is
+/// not a recognised quote-snapshot provider for this build, or if the HTTP
+/// fetch fails (network, non-2xx, parse error).
+async fn dispatch_get_quote_snapshot(
+    _state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    provider: &str,
+    symbol: &str,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
+
+    let snapshot = fetch_quote_snapshot(provider, symbol).await?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "provider": provider,
+            "symbol": symbol,
+            "snapshot": snapshot,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Resolve `provider` to its quote-snapshot fetcher and execute a fresh read.
+///
+/// Only feature-enabled providers are compiled in. Offline (default) builds
+/// return an `Err` for any provider, keeping the workspace test set network-free.
+#[allow(unused_variables)] // `symbol` is used only inside the cfg-gated provider block
+async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnapshot> {
+    #[cfg(feature = "provider-fmp")]
+    if provider == "fmp" {
+        use crate::FmpHttpQuoteSnapshotFetcher;
+        use tdw_runtime::CommandRunner;
+        let runner = CommandRunner::new(crate::default_registry()?);
+        let params = json!({ "symbol": symbol });
+        let object = runner
+            .run(&FmpHttpQuoteSnapshotFetcher::default(), params)
+            .await?;
+        return object.rows.into_iter().next().ok_or_else(|| {
+            Error::Provider(format!("fmp quote snapshot returned no rows for {symbol}"))
+        });
+    }
+    Err(Error::Provider(format!(
+        "unsupported quote-snapshot provider: {provider}; available: {}",
+        available_quote_snapshot_providers()
+    )))
+}
+
+/// Comma-separated list of quote-snapshot providers available in this build.
+fn available_quote_snapshot_providers() -> &'static str {
+    #[cfg(feature = "provider-fmp")]
+    {
+        "fmp"
+    }
+    #[cfg(not(feature = "provider-fmp"))]
+    {
+        "(none — enable a provider-* feature)"
     }
 }
 
@@ -1001,6 +1082,33 @@ mod tests {
                 assert_eq!(value["stopped"], true);
             }
             other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_quote_snapshot_unsupported_provider_fails_with_descriptive_error() {
+        // Without any `provider-*` feature enabled the quote-snapshot dispatch
+        // table is empty, so any provider name must produce a structured error
+        // listing the (empty) available set rather than a panic.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::GetQuoteSnapshot {
+            provider: "nope".to_string(),
+            symbol: "AAPL".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("unsupported quote-snapshot provider: nope"),
+                    "got: {error}"
+                );
+                assert!(error.contains("available:"), "got: {error}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
         }
     }
 

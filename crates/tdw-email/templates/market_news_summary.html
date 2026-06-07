@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Market News Summary</title>
+  <style>
+    body { margin: 0; padding: 0; background: #f5f5f5; font-family: Arial, sans-serif; color: #333; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #fff; border-radius: 4px; overflow: hidden; }
+    .header { background: #0d3349; padding: 24px 32px; }
+    .header h1 { margin: 0; font-size: 20px; color: #fff; }
+    .header .date { margin: 4px 0 0; font-size: 13px; color: #a0b8cc; }
+    .body { padding: 32px; line-height: 1.6; }
+    .body h2 { font-size: 15px; color: #0d3349; margin: 24px 0 8px; }
+    .footer { background: #f0f0f0; padding: 16px 32px; font-size: 12px; color: #888; text-align: center; }
+    .footer a { color: #555; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <h1>Market News Summary</h1>
+      <p class="date">{{date}}</p>
+    </div>
+    <div class="body">
+      <p>Hello {{name}},</p>
+      <h2>Headlines</h2>
+      <p>{{headlines}}</p>
+      <h2>Summary</h2>
+      <p>{{summary}}</p>
+      <p>{{cta}}</p>
+    </div>
+    <div class="footer">
+      <p>You are receiving this digest because you opted in to market news alerts.</p>
+      <p><a href="{{unsubscribe_url}}">Unsubscribe</a></p>
+    </div>
+  </div>
+</body>
+</html>

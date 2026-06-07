@@ -193,6 +193,19 @@ fn op_shutdown_round_trips() {
     round_trip(&op);
 }
 
+#[test]
+fn op_get_quote_snapshot_round_trips_and_serialises_as_snake_case() {
+    let op = Op::GetQuoteSnapshot {
+        provider: "fmp".to_string(),
+        symbol: "AAPL".to_string(),
+    };
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert_eq!(encoded["type"], "get_quote_snapshot");
+    assert_eq!(encoded["provider"], "fmp");
+    assert_eq!(encoded["symbol"], "AAPL");
+    round_trip(&op);
+}
+
 // ----- EventMsg variants -----
 
 #[test]

@@ -1203,6 +1203,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "email-encoding"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9298e6504d9b9e780ed3f7dfd43a61be8cd0e09eb07f7706a945b0072b6670b6"
+dependencies = [
+ "base64",
+ "memchr",
+]
+
+[[package]]
+name = "email_address"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1714,6 +1730,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2127,6 +2149,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
+name = "lettre"
+version = "0.11.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0da65617f6cb926332d039cb578aad56178da86e128db6a1b09f4c94fa5b3349"
+dependencies = [
+ "async-trait",
+ "base64",
+ "email-encoding",
+ "email_address",
+ "fastrand",
+ "futures-io",
+ "futures-util",
+ "httpdate",
+ "idna",
+ "mime",
+ "nom 8.0.0",
+ "percent-encoding",
+ "quoted_printable",
+ "rustls",
+ "socket2",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "webpki-roots",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2279,6 +2328,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mime"
+version = "0.3.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2317,6 +2372,15 @@ checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
 dependencies = [
  "memchr",
  "minimal-lexical",
+]
+
+[[package]]
+name = "nom"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -2881,6 +2945,12 @@ checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "quoted_printable"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 
 [[package]]
 name = "r-efi"
@@ -3993,6 +4063,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-alert-evaluator"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tdw-alerts",
+ "tdw-domain",
+ "tdw-email",
+ "tdw-functions",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "tdw-alerts"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "sqlx",
+ "tdw-symbology",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-app-client"
 version = "0.1.0"
 dependencies = [
@@ -4148,6 +4246,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "inventory",
+ "reqwest",
  "schemars",
  "serde",
  "serde_json",
@@ -4194,6 +4293,18 @@ dependencies = [
  "serde",
  "serde_json",
  "validator",
+]
+
+[[package]]
+name = "tdw-email"
+version = "0.1.0"
+dependencies = [
+ "lettre",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4292,6 +4403,21 @@ dependencies = [
 [[package]]
 name = "tdw-fn-string"
 version = "0.1.0"
+
+[[package]]
+name = "tdw-functions"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tdw-cron",
+ "tdw-protocol",
+ "tdw-worker",
+ "thiserror 2.0.18",
+ "tokio",
+]
 
 [[package]]
 name = "tdw-graph"
@@ -4474,7 +4600,6 @@ dependencies = [
 name = "tdw-provider-akshare"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4482,6 +4607,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4490,7 +4617,6 @@ dependencies = [
 name = "tdw-provider-alpaca"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4498,6 +4624,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4506,7 +4634,6 @@ dependencies = [
 name = "tdw-provider-alpha-vantage"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4514,6 +4641,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4530,6 +4659,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4548,6 +4678,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -4558,7 +4690,6 @@ dependencies = [
 name = "tdw-provider-bls"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4566,6 +4697,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4574,7 +4707,6 @@ dependencies = [
 name = "tdw-provider-cboe"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4582,6 +4714,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4598,6 +4732,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4606,7 +4741,6 @@ dependencies = [
 name = "tdw-provider-coingecko"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4614,6 +4748,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4646,6 +4781,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4654,7 +4790,6 @@ dependencies = [
 name = "tdw-provider-ecb"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4662,6 +4797,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4670,7 +4807,6 @@ dependencies = [
 name = "tdw-provider-eia"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4678,6 +4814,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4707,6 +4845,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4723,6 +4862,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4738,6 +4878,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4746,7 +4887,6 @@ dependencies = [
 name = "tdw-provider-geckoterminal"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4754,6 +4894,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4762,7 +4904,6 @@ dependencies = [
 name = "tdw-provider-glassnode"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4770,21 +4911,35 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tdw-provider-http"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "serde_json",
+ "tdw-core",
 ]
 
 [[package]]
 name = "tdw-provider-huggingface"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4793,7 +4948,6 @@ dependencies = [
 name = "tdw-provider-nasdaq"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4801,6 +4955,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4809,7 +4965,6 @@ dependencies = [
 name = "tdw-provider-oecd"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4817,6 +4972,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4825,7 +4982,6 @@ dependencies = [
 name = "tdw-provider-polygon"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4833,6 +4989,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4849,6 +5007,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4865,15 +5024,24 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tdw-provider-testkit"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "serde_json",
+ "tdw-core",
 ]
 
 [[package]]
 name = "tdw-provider-tiingo"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bytes",
  "reqwest",
  "schemars",
@@ -4881,6 +5049,8 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4897,6 +5067,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4913,6 +5084,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4929,6 +5101,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4945,6 +5118,7 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-domain",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4990,6 +5164,7 @@ dependencies = [
  "tdw-core",
  "tdw-domain",
  "tdw-provider-fileset",
+ "tdw-provider-testkit",
  "tokio",
 ]
 
@@ -5452,7 +5627,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4ea810f0692f9f51b382fff5893887bb4580f5fa246fde546e0b13e7fcee662"
 dependencies = [
  "fnv",
- "nom",
+ "nom 7.1.3",
  "phf",
  "phf_codegen",
 ]

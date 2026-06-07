@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_bls::{BlsHttpTimeSeriesFetcher, BlsSeriesQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> BlsSeriesQuery {
     BlsHttpTimeSeriesFetcher::transform_query(json!({
@@ -23,45 +24,41 @@ fn sample_query() -> BlsSeriesQuery {
 }
 
 fn cassette_bytes() -> Bytes {
-    Bytes::from(
-        json!({
-            "status": "REQUEST_SUCCEEDED",
-            "responseTime": 51,
-            "message": [],
-            "Results": {
-                "series": [
-                    {
-                        "seriesID": "CUUR0000SA0",
-                        "data": [
-                            {
-                                "year": "2024",
-                                "period": "M01",
-                                "periodName": "January",
-                                "value": "308.417",
-                                "footnotes": [{}]
-                            },
-                            {
-                                "year": "2023",
-                                "period": "M12",
-                                "periodName": "December",
-                                "value": "306.746",
-                                "footnotes": [{}]
-                            },
-                            {
-                                "year": "2023",
-                                "period": "M01",
-                                "periodName": "January",
-                                "value": "299.170",
-                                "footnotes": [{}]
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "status": "REQUEST_SUCCEEDED",
+        "responseTime": 51,
+        "message": [],
+        "Results": {
+            "series": [
+                {
+                    "seriesID": "CUUR0000SA0",
+                    "data": [
+                        {
+                            "year": "2024",
+                            "period": "M01",
+                            "periodName": "January",
+                            "value": "308.417",
+                            "footnotes": [{}]
+                        },
+                        {
+                            "year": "2023",
+                            "period": "M12",
+                            "periodName": "December",
+                            "value": "306.746",
+                            "footnotes": [{}]
+                        },
+                        {
+                            "year": "2023",
+                            "period": "M01",
+                            "periodName": "January",
+                            "value": "299.170",
+                            "footnotes": [{}]
+                        }
+                    ]
+                }
+            ]
+        }
+    })
 }
 
 #[test]
@@ -87,16 +84,12 @@ fn cassette_replay_decodes_all_data_points() {
 fn cassette_replay_surfaces_failed_status() {
     let fetcher = BlsHttpTimeSeriesFetcher::default();
     let query = sample_query();
-    let envelope = Bytes::from(
-        json!({
-            "status": "REQUEST_FAILED",
-            "responseTime": 10,
-            "message": ["Your request could not be processed."],
-            "Results": {}
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let envelope = cassette_bytes!({
+        "status": "REQUEST_FAILED",
+        "responseTime": 10,
+        "message": ["Your request could not be processed."],
+        "Results": {}
+    });
 
     let err = fetcher
         .transform_data(&query, envelope)
@@ -168,43 +161,39 @@ fn multi_series_cassette_decodes_all_series() {
     }))
     .unwrap_or_else(|e| panic!("query must build: {e}"));
 
-    let multi_cassette = Bytes::from(
-        json!({
-            "status": "REQUEST_SUCCEEDED",
-            "responseTime": 75,
-            "message": [],
-            "Results": {
-                "series": [
-                    {
-                        "seriesID": "CUUR0000SA0",
-                        "data": [
-                            {
-                                "year": "2024",
-                                "period": "M01",
-                                "periodName": "January",
-                                "value": "308.417",
-                                "footnotes": [{}]
-                            }
-                        ]
-                    },
-                    {
-                        "seriesID": "LNS14000000",
-                        "data": [
-                            {
-                                "year": "2024",
-                                "period": "M01",
-                                "periodName": "January",
-                                "value": "3.7",
-                                "footnotes": [{}]
-                            }
-                        ]
-                    }
-                ]
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let multi_cassette = cassette_bytes!({
+        "status": "REQUEST_SUCCEEDED",
+        "responseTime": 75,
+        "message": [],
+        "Results": {
+            "series": [
+                {
+                    "seriesID": "CUUR0000SA0",
+                    "data": [
+                        {
+                            "year": "2024",
+                            "period": "M01",
+                            "periodName": "January",
+                            "value": "308.417",
+                            "footnotes": [{}]
+                        }
+                    ]
+                },
+                {
+                    "seriesID": "LNS14000000",
+                    "data": [
+                        {
+                            "year": "2024",
+                            "period": "M01",
+                            "periodName": "January",
+                            "value": "3.7",
+                            "footnotes": [{}]
+                        }
+                    ]
+                }
+            ]
+        }
+    });
 
     let rows = fetcher
         .transform_data(&query, multi_cassette)
@@ -231,14 +220,7 @@ async fn live_bls_returns_cpi_data_when_env_vars_set() {
     }))
     .unwrap_or_else(|e| panic!("query must build: {e}"));
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

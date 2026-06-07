@@ -1,0 +1,30 @@
+[package]
+name = "tdw-alert-evaluator"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# `smtp` enables the `EmailNotifier` — wraps `tdw_email::TransactionalMailer`.
+# The default build has zero I/O deps so offline/test scenarios work without SMTP.
+[features]
+default = []
+smtp = ["dep:tdw-email", "tdw-email/smtp"]
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+tdw-alerts = { path = "../tdw-alerts" }
+tdw-domain = { path = "../tdw-domain" }
+tdw-functions = { path = "../tdw-functions" }
+tdw-email = { path = "../tdw-email", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

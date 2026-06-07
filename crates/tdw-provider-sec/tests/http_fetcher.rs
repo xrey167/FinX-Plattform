@@ -12,67 +12,60 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_sec::{SecFilingsHttpFetcher, SecFilingsQuery, SecXbrlHttpFetcher};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_rows_expect};
 
 // ── Cassette helpers ──────────────────────────────────────────────────────────
 
 fn cassette_submissions() -> Bytes {
-    Bytes::from(
-        json!({
-            "cik": "320193",
-            "name": "Apple Inc.",
-            "filings": {
-                "recent": {
-                    "accessionNumber": [
-                        "0000320193-24-000123",
-                        "0000320193-23-000106"
-                    ],
-                    "form": ["10-K", "10-Q"],
-                    "filingDate": ["2024-10-01", "2023-08-04"]
-                }
+    cassette_bytes!({
+        "cik": "320193",
+        "name": "Apple Inc.",
+        "filings": {
+            "recent": {
+                "accessionNumber": [
+                    "0000320193-24-000123",
+                    "0000320193-23-000106"
+                ],
+                "form": ["10-K", "10-Q"],
+                "filingDate": ["2024-10-01", "2023-08-04"]
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn cassette_xbrl() -> Bytes {
-    Bytes::from(
-        json!({
-            "cik": 320193,
-            "entityName": "Apple Inc.",
-            "facts": {
-                "us-gaap": {
-                    "Revenue": {
-                        "label": "Revenue",
-                        "units": {
-                            "USD": [
-                                {
-                                    "end": "2024-09-28",
-                                    "val": 391035000000.0_f64,
-                                    "form": "10-K"
-                                },
-                                {
-                                    "end": "2023-09-30",
-                                    "val": 383285000000.0_f64,
-                                    "form": "10-K"
-                                },
-                                {
-                                    "end": "2024-03-30",
-                                    "val": 90753000000.0_f64,
-                                    "form": "10-Q"
-                                }
-                            ]
-                        }
+    cassette_bytes!({
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "Revenue": {
+                    "label": "Revenue",
+                    "units": {
+                        "USD": [
+                            {
+                                "end": "2024-09-28",
+                                "val": 391035000000.0_f64,
+                                "form": "10-K"
+                            },
+                            {
+                                "end": "2023-09-30",
+                                "val": 383285000000.0_f64,
+                                "form": "10-K"
+                            },
+                            {
+                                "end": "2024-03-30",
+                                "val": 90753000000.0_f64,
+                                "form": "10-Q"
+                            }
+                        ]
                     }
                 }
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 // ── Cassette tests (always run with --features http) ─────────────────────────
@@ -140,14 +133,7 @@ async fn live_sec_filings_returns_data_when_env_var_set() {
     let fetcher = SecFilingsHttpFetcher::default();
     let query = SecFilingsQuery::new("320193").expect("valid cik");
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .expect("live extract_data must succeed");
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .expect("live transform_data must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -173,14 +159,7 @@ async fn live_sec_xbrl_returns_revenue_bars_when_env_var_set() {
     let query = SecXbrlHttpFetcher::transform_query(json!({"symbol": "320193"}))
         .expect("transform_query must succeed");
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .expect("live extract_data must succeed");
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .expect("live transform_data must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

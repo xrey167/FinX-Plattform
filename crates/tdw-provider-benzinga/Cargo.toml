@@ -17,8 +17,7 @@ http = [
     "dep:serde_json",
     "dep:tdw-core",
     "dep:tdw-domain",
-    "dep:tokio",
-]
+    "dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
@@ -35,6 +34,9 @@ tokio = { workspace = true, optional = true }
 [[example]]
 name = "basic"
 required-features = ["http"]
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 
 [lints]
 workspace = true
