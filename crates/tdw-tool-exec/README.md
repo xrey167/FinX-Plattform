@@ -14,7 +14,10 @@ background `Command`) are honestly deferred with `NotYetSupported`.
 ## What it provides
 
 - `ToolExecutor` — `new`, `with_builtin(name, handler)`,
-  `with_command_policy(policy)`, `execute(registry, name, args)`.
+  `with_command_policy(policy)`, `with_receipts()`, `receipts()`,
+  `execute(registry, name, args)`.
+- `ReceiptLog` / `ToolReceipt` / `ChainStatus` / `ChainBreak` — the opt-in
+  tamper-evident receipt log (off by default).
 - `CommandPolicy` — the `Command` allow-list + timeout (`new`, `from_env`,
   `default`).
 - `ToolOutcome` — `{ structured: Value }`.
@@ -69,6 +72,37 @@ The `Command` path is deny-by-default and defends the argv boundary:
   inject argv;
 - output is captured on dedicated reader threads (no pipe-buffer deadlock) and
   the child is killed on timeout (`Backend("command timed out")`).
+
+## Tamper-evident receipt log (opt-in, off by default)
+
+`ToolExecutor::with_receipts()` enables an append-only, hash-chained log of
+**successful** executions. Each `execute(...)` appends a `ToolReceipt` whose
+`this_hash` chains over the previous receipt; `ReceiptLog::verify(&receipts)`
+walks the chain and reports the first inconsistency (`ChainBreak::Seq` /
+`PrevHash` / `ThisHash`), so a reordered, mutated, or re-linked receipt is
+detectable.
+
+- **Integrity, not cryptography.** The chain uses the std-library
+  `DefaultHasher` (SipHash) over a deterministic, key-sorted byte encoding of the
+  args/result `Value`. This is tamper-EVIDENT against accidental corruption or a
+  casual edit — it is **not** collision/second-preimage resistant against a
+  motivated attacker. Treat it as an in-process audit trail, not a security
+  boundary. No new dependency is added.
+- **Off by default.** Without `with_receipts()` there is zero behavioral or
+  performance change; `receipts()` returns `None`.
+- **Append-only.** No removal/mutation API; appends flow only through `execute`.
+- **Not `Sync` when enabled.** Recording uses interior mutability so
+  `execute(&self, ...)` is unchanged; a receipts-enabled executor must not be
+  shared across threads for concurrent `execute`.
+
+```rust
+let executor = ToolExecutor::new().with_receipts();
+// ...execute some tools...
+if let Some(log) = executor.receipts() {
+    let receipts = log.snapshot();
+    assert_eq!(ReceiptLog::verify(&receipts), ChainStatus::Valid);
+}
+```
 
 ## Invariants
 
