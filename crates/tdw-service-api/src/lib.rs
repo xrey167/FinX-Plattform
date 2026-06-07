@@ -123,6 +123,8 @@ use tdw_provider_ecb::EcbHttpDataFetcher;
 #[cfg(feature = "provider-eia")]
 use tdw_provider_eia::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+#[cfg(feature = "provider-finnhub")]
+use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher};
 #[cfg(feature = "provider-finra")]
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
@@ -259,6 +261,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FinraOtcSummaryHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
     registry.register(FinraShortInterestHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finnhub")]
+    registry.register(FinnhubHttpProfileFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finnhub")]
+    registry.register(FinnhubHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpHistoricalFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
@@ -1334,6 +1340,7 @@ mod tests {
         feature = "provider-ecb",
         feature = "provider-eia",
         feature = "provider-finra",
+        feature = "provider-finnhub",
         feature = "provider-fmp",
         feature = "provider-fred",
         feature = "provider-geckoterminal",
