@@ -6,22 +6,32 @@
 //! The live integration test is additionally gated by `TDW_ECB_LIVE=1` so
 //! unattended CI stays offline.
 
-use tdw_core::http_support::prelude::*;
+use bytes::Bytes;
+use reqwest::Client;
+use serde_json::Value;
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{BASE_URL, EcbDataQuery, EcbObservation, parse_ecb_value};
 
 const USER_AGENT: &str = "tdw-provider-ecb/0.1";
 
-tdw_core::provider_fetcher_struct!(
-    /// Production ECB SDW data fetcher.
-    pub EcbHttpDataFetcher,
-    BASE_URL
-);
+/// Provider specification for the ECB SDW data fetcher.
+pub struct EcbDataSpec;
 
-#[async_trait]
-impl Fetcher<EcbDataQuery, EcbObservation> for EcbHttpDataFetcher {
+impl ProviderSpec for EcbDataSpec {
     const PROVIDER: &'static str = "ecb";
     const ENDPOINT: &'static str = "data";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "ecb client build";
+    const SEND_ERR: &'static str = "ecb extract_data";
+    const RETURNED_ERR: &'static str = "ecb extract_data returned";
+    const READ_BODY_ERR: &'static str = "ecb read body";
+
+    type Query = EcbDataQuery;
+    type Data = EcbObservation;
 
     fn transform_query(params: Value) -> Result<EcbDataQuery> {
         let flow = params
@@ -44,10 +54,14 @@ impl Fetcher<EcbDataQuery, EcbObservation> for EcbHttpDataFetcher {
             .map_err(|error| Error::InvalidQuery(error.to_string()))
     }
 
-    async fn extract_data(&self, query: &EcbDataQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &EcbDataQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let endpoint = format!(
             "{}/data/{}/{}",
-            self.base_url().trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.flow,
             query.key,
         );
@@ -56,36 +70,16 @@ impl Fetcher<EcbDataQuery, EcbObservation> for EcbHttpDataFetcher {
             ("startPeriod", query.start_period.as_str()),
             ("endPeriod", query.end_period.as_str()),
         ];
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("ecb client build: {error}")))?;
-        let response = client
-            .get(&endpoint)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("ecb extract_data: {error}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "ecb extract_data returned {status}: {body}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("ecb read body: {error}")))
+        Ok(client.get(&endpoint).query(&query_params))
     }
 
-    fn transform_data(&self, query: &EcbDataQuery, raw: Bytes) -> Result<Vec<EcbObservation>> {
+    fn transform_data(query: &EcbDataQuery, raw: Bytes) -> Result<Vec<EcbObservation>> {
         let v: Value = serde_json::from_slice(&raw)
             .map_err(|error| Error::Provider(format!("ecb parse_json: {error}")))?;
         parse_ecb_value(&v, &query.flow, &query.key)
             .map_err(|error| Error::Provider(error.to_string()))
     }
 }
+
+/// Production ECB SDW data fetcher.
+pub type EcbHttpDataFetcher = HttpFetcher<EcbDataSpec>;

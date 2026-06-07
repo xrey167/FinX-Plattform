@@ -6,8 +6,12 @@
 //! the live integration tests are additionally gated by `TDW_EIA_LIVE=1` so
 //! unattended CI stays offline.
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use tdw_core::http_support::prelude::*;
+use serde_json::Value;
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{
     API_KEY_ENV, BASE_URL, EiaNaturalGasQuery, EiaNaturalGasRecord, EiaSpotPriceQuery,
@@ -74,18 +78,25 @@ struct EiaNaturalGasRaw {
 // EiaHttpSpotPriceFetcher
 // ---------------------------------------------------------------------------
 
-tdw_core::provider_fetcher_struct!(
-    /// Production EIA petroleum spot-price fetcher.
-    ///
-    /// Calls `GET /petroleum/pri/spt/data/` with daily frequency.
-    pub EiaHttpSpotPriceFetcher,
-    BASE_URL
-);
+/// Provider specification for the EIA petroleum spot-price fetcher.
+///
+/// Calls `GET /petroleum/pri/spt/data/` with daily frequency.
+pub struct EiaSpotPriceSpec;
 
-#[async_trait]
-impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher {
+impl ProviderSpec for EiaSpotPriceSpec {
     const PROVIDER: &'static str = PROVIDER_ID;
     const ENDPOINT: &'static str = "spot_price";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "eia build client";
+    const SEND_ERR: &'static str = "eia spot-price request";
+    const RETURNED_ERR: &'static str = "eia spot-price returned";
+    const READ_BODY_ERR: &'static str = "eia spot-price read body";
+    const UNREADABLE_BODY: Option<&'static str> = Some("<unreadable body>");
+
+    type Query = EiaSpotPriceQuery;
+    type Data = EiaSpotPriceRecord;
 
     fn transform_query(params: Value) -> Result<EiaSpotPriceQuery> {
         let query: EiaSpotPriceQuery = serde_json::from_value(params)
@@ -94,13 +105,13 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
             .map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &EiaSpotPriceQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &EiaSpotPriceQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "eia")?;
-        let client = tdw_core::http_support::build_client(USER_AGENT, "eia build client")?;
-        let endpoint = format!(
-            "{}/petroleum/pri/spt/data/",
-            self.base_url().trim_end_matches('/')
-        );
+        let endpoint = format!("{}/petroleum/pri/spt/data/", base_url.trim_end_matches('/'));
         let params = [
             ("api_key", api_key),
             ("frequency", "daily".to_string()),
@@ -109,33 +120,10 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
             ("sort[0][direction]", "desc".to_string()),
             ("length", query.length.to_string()),
         ];
-        let response = client
-            .get(&endpoint)
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("eia spot-price request: {e}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
-            return Err(Error::Provider(format!(
-                "eia spot-price returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("eia spot-price read body: {e}")))
+        Ok(client.get(&endpoint).query(&params))
     }
 
-    fn transform_data(
-        &self,
-        _query: &EiaSpotPriceQuery,
-        raw: Bytes,
-    ) -> Result<Vec<EiaSpotPriceRecord>> {
+    fn transform_data(_query: &EiaSpotPriceQuery, raw: Bytes) -> Result<Vec<EiaSpotPriceRecord>> {
         let envelope: EiaSpotPriceEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("eia spot-price parse_json: {e}")))?;
         let mut records = Vec::with_capacity(envelope.response.data.len());
@@ -166,22 +154,32 @@ impl Fetcher<EiaSpotPriceQuery, EiaSpotPriceRecord> for EiaHttpSpotPriceFetcher 
     }
 }
 
+/// Production EIA petroleum spot-price fetcher.
+pub type EiaHttpSpotPriceFetcher = HttpFetcher<EiaSpotPriceSpec>;
+
 // ---------------------------------------------------------------------------
 // EiaHttpNaturalGasFetcher
 // ---------------------------------------------------------------------------
 
-tdw_core::provider_fetcher_struct!(
-    /// Production EIA natural-gas price fetcher.
-    ///
-    /// Calls `GET /natural-gas/pri/sum/data/` with monthly frequency.
-    pub EiaHttpNaturalGasFetcher,
-    BASE_URL
-);
+/// Provider specification for the EIA natural-gas price fetcher.
+///
+/// Calls `GET /natural-gas/pri/sum/data/` with monthly frequency.
+pub struct EiaNaturalGasSpec;
 
-#[async_trait]
-impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetcher {
+impl ProviderSpec for EiaNaturalGasSpec {
     const PROVIDER: &'static str = PROVIDER_ID;
     const ENDPOINT: &'static str = "natural_gas";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "eia build client";
+    const SEND_ERR: &'static str = "eia natural-gas request";
+    const RETURNED_ERR: &'static str = "eia natural-gas returned";
+    const READ_BODY_ERR: &'static str = "eia natural-gas read body";
+    const UNREADABLE_BODY: Option<&'static str> = Some("<unreadable body>");
+
+    type Query = EiaNaturalGasQuery;
+    type Data = EiaNaturalGasRecord;
 
     fn transform_query(params: Value) -> Result<EiaNaturalGasQuery> {
         let query: EiaNaturalGasQuery = serde_json::from_value(params)
@@ -189,16 +187,15 @@ impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetch
         EiaNaturalGasQuery::new(query.length).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &EiaNaturalGasQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "eia")?;
-        let client = tdw_core::http_support::build_client(USER_AGENT, "eia build client")?;
         let endpoint = format!(
             "{}/natural-gas/pri/sum/data/",
-            self.base_url().trim_end_matches('/')
+            base_url.trim_end_matches('/')
         );
         let params = [
             ("api_key", api_key),
@@ -206,33 +203,10 @@ impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetch
             ("data[0]", "value".to_string()),
             ("length", query.length.to_string()),
         ];
-        let response = client
-            .get(&endpoint)
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("eia natural-gas request: {e}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<unreadable body>".to_string());
-            return Err(Error::Provider(format!(
-                "eia natural-gas returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("eia natural-gas read body: {e}")))
+        Ok(client.get(&endpoint).query(&params))
     }
 
-    fn transform_data(
-        &self,
-        _query: &EiaNaturalGasQuery,
-        raw: Bytes,
-    ) -> Result<Vec<EiaNaturalGasRecord>> {
+    fn transform_data(_query: &EiaNaturalGasQuery, raw: Bytes) -> Result<Vec<EiaNaturalGasRecord>> {
         let envelope: EiaNaturalGasEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("eia natural-gas parse_json: {e}")))?;
         let mut records = Vec::with_capacity(envelope.response.data.len());
@@ -262,3 +236,6 @@ impl Fetcher<EiaNaturalGasQuery, EiaNaturalGasRecord> for EiaHttpNaturalGasFetch
         Ok(records)
     }
 }
+
+/// Production EIA natural-gas price fetcher.
+pub type EiaHttpNaturalGasFetcher = HttpFetcher<EiaNaturalGasSpec>;
