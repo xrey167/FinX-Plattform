@@ -23,5 +23,9 @@ tdw-core = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
+[[example]]
+name = "basic"
+required-features = ["http"]
+
 [lints]
 workspace = true
