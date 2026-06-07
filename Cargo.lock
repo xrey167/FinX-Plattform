@@ -4307,6 +4307,18 @@ name = "tdw-fn-string"
 version = "0.1.0"
 
 [[package]]
+name = "tdw-functions"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-graph"
 version = "0.1.0"
 dependencies = [

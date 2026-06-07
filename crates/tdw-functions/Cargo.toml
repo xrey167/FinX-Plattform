@@ -1,0 +1,27 @@
+[package]
+name = "tdw-functions"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+# Enables the real Postgres backend (sqlx::PgPool). Off by default so the
+# workspace test set stays offline; the integration test is additionally
+# gated by the env var TDW_POSTGRES_TEST_URL.
+postgres = ["dep:sqlx", "dep:tokio"]
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sqlx = { workspace = true, features = ["postgres"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

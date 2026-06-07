@@ -124,6 +124,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "price_alerts",
             sql: include_str!("../../../migrations/postgres/20260607_0001_price_alerts.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0002",
+            name: "function_steps",
+            sql: include_str!("../../../migrations/postgres/20260607_0002_function_steps.sql"),
+        },
     ]
 }
 
