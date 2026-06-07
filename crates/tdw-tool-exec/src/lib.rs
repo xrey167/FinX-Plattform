@@ -684,12 +684,12 @@ mod tests {
 
     #[test]
     fn command_exceeding_timeout_is_killed() {
-        // A command that runs ~5s on both platforms; the 1s timeout must kill it.
-        // `cmd /c sleep 5` does not exist on Windows, so use a per-OS script.
+        // A command that runs ~2s on both platforms; the 200ms timeout must kill it.
+        // `cmd /c sleep 2` does not exist on Windows, so use a per-OS script.
         let script = if cfg!(windows) {
-            "ping -n 6 127.0.0.1 >NUL"
+            "ping -n 3 127.0.0.1 >NUL"
         } else {
-            "sleep 5"
+            "sleep 2"
         };
         let (command, args) = shell_command(script);
         let tool = tool_with_impl(
@@ -702,7 +702,7 @@ mod tests {
         );
         let registry = registry_with(&tool);
         let executor = ToolExecutor::new()
-            .with_command_policy(policy(Some(&[shell_bin()]), Duration::from_secs(1)));
+            .with_command_policy(policy(Some(&[shell_bin()]), Duration::from_millis(200)));
 
         let error = executor
             .execute(&registry, "tool.exec.slow", &serde_json::json!({}))
