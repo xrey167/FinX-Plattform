@@ -393,6 +393,27 @@ pub struct ResearchNote {
     pub tags: Vec<String>,
 }
 
+/// Company profile data returned by a reference-data provider (e.g. Finnhub
+/// `stock/profile2`).
+///
+/// Fields default to empty strings / `0.0` when a provider omits them so
+/// callers never have to deal with `Option` for display purposes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CompanyProfile {
+    /// Exchange ticker symbol (normalised to uppercase by the provider fetcher).
+    pub ticker: String,
+    /// Human-readable company name.
+    pub name: String,
+    /// ISO 4217 currency code for the primary listing.
+    pub currency: String,
+    /// Exchange or market name.
+    pub exchange: String,
+    /// URL of the company logo image.
+    pub logo_url: String,
+    /// Market capitalisation in millions of the listing currency.
+    pub market_cap_millions: f64,
+}
+
 /// A last-price snapshot for a single symbol, produced by the live read path.
 ///
 /// This is the hard dependency of the price-alert engine: callers request a

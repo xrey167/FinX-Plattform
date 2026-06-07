@@ -105,6 +105,7 @@ provider-deribit = ["dep:tdw-provider-deribit", "tdw-provider-deribit/http"]
 provider-ecb = ["dep:tdw-provider-ecb", "tdw-provider-ecb/http"]
 provider-eia = ["dep:tdw-provider-eia", "tdw-provider-eia/http"]
 provider-finra = ["dep:tdw-provider-finra", "tdw-provider-finra/http"]
+provider-finnhub = ["dep:tdw-provider-finnhub", "tdw-provider-finnhub/http"]
 provider-fmp = ["dep:tdw-provider-fmp", "tdw-provider-fmp/http"]
 provider-fred = ["dep:tdw-provider-fred", "tdw-provider-fred/http"]
 provider-geckoterminal = [
@@ -162,6 +163,7 @@ all-http-providers = [
     "provider-ecb",
     "provider-eia",
     "provider-finra",
+    "provider-finnhub",
     "provider-fmp",
     "provider-fred",
     "provider-geckoterminal",
@@ -235,6 +237,7 @@ tdw-provider-ecb = { path = "../tdw-provider-ecb", optional = true }
 tdw-provider-eia = { path = "../tdw-provider-eia", optional = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-finra = { path = "../tdw-provider-finra", optional = true }
+tdw-provider-finnhub = { path = "../tdw-provider-finnhub", optional = true }
 tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
