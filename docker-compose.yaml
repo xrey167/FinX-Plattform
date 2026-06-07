@@ -157,16 +157,19 @@ services:
     # to the host: the daemon transport is unauthenticated + plaintext, so it
     # stays internal-only. (To reach it from the host for debugging, attach to
     # the compose network or add a temporary `ports:` override locally.)
-    # Built with --features daemon-postgres so the daemon's own session/rollout
-    # stores are Postgres-backed (durable across restarts), selected at runtime
-    # via TDW_DAEMON_PG_URL. Distinct image tag from the `full`-profile
-    # tdw-service (which builds without features).
+    # Built with --features real-engines so the daemon wires the REAL production
+    # engines (Postgres relational, ClickHouse OLAP, Qdrant vector, Meilisearch
+    # lexical, S3/MinIO blob) AND Postgres-backs its own session/rollout stores
+    # (durable across restarts). Engine selection is driven at runtime by
+    # TDW_PROFILE=live (fail-closed at startup if a required TDW_* connection env
+    # is missing). Distinct image tag from the `full`-profile tdw-service (which
+    # builds without features).
     image: finx-plattform/tdw-service:local-pg
     build:
       context: .
       dockerfile: docker/tdw-service.Dockerfile
       args:
-        FEATURES: daemon-postgres
+        FEATURES: real-engines
     profiles: ["live"]
     depends_on:
       postgres:
@@ -174,10 +177,24 @@ services:
       tdw-bootstrap:
         condition: service_completed_successfully
     environment:
-      TDW_PROFILE: docker
+      # `live` selects the real engines (see TDW_* connection envs below). The
+      # daemon fails closed at startup if any required engine env is missing.
+      TDW_PROFILE: live
       TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
       # Postgres-back the daemon's session + rollout stores in live.
       TDW_DAEMON_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
+      # Real-engine connection envs (same backends the bootstrap provisions).
+      TDW_POSTGRES_URL: postgres://tdw:tdw@postgres:5432/tdw
+      TDW_CLICKHOUSE_URL: http://clickhouse:8123
+      TDW_CLICKHOUSE_USER: tdw
+      TDW_CLICKHOUSE_PASSWORD: tdw
+      TDW_QDRANT_URL: http://qdrant:6333
+      TDW_MEILI_URL: http://meilisearch:7700
+      TDW_S3_ENDPOINT: http://minio:9000
+      TDW_S3_BUCKET: tdw-default
+      TDW_S3_ACCESS_KEY: minio
+      TDW_S3_SECRET_KEY: minio123
+      TDW_S3_REGION: us-east-1
       # Production OIDC ingress auth. Read ONLY when TDW_PROFILE is prod|production
       # (this stack runs `docker`, so they are inert here and left commented).
       # Set all five required vars to attach an auth-backed policy; otherwise the
