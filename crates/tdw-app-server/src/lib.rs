@@ -29,6 +29,11 @@ mod transport_http;
 #[cfg(all(feature = "transport-http", not(loom)))]
 pub use transport_http::serve_http;
 
+// Shared service-operability surface (/health, /ready, /metrics). The pure
+// renderer and route classifier are always available; the async listener is
+// gated out under `--cfg loom` (it uses `tokio::net`).
+pub mod ops;
+
 pub use tdw_config::DaemonTransport;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -264,6 +269,11 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
     dispatcher: D,
     sink: S,
     next_sequence: std::sync::atomic::AtomicU64,
+    /// Optional dispatch metrics (outcome counters + in-flight gauge). `None`
+    /// keeps the loop's behavior byte-for-byte unchanged; the daemon attaches a
+    /// handle via [`ServiceLoop::with_metrics`] so its `/metrics` surface sees
+    /// live dispatch counts.
+    metrics: Option<ops::DaemonMetrics>,
 }
 
 impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
@@ -279,7 +289,17 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
             dispatcher,
             sink,
             next_sequence: std::sync::atomic::AtomicU64::new(1),
+            metrics: None,
         }
+    }
+
+    /// Attach a [`ops::DaemonMetrics`] handle so each dispatch updates the
+    /// daemon's outcome counters and in-flight gauge. Consumes and returns
+    /// `self` for builder use.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: ops::DaemonMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Receive one envelope, dispatch it, persist each event, send events on
@@ -287,7 +307,13 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
     /// the submission channel is closed.
     pub async fn run_once(&mut self) -> Option<Vec<EventMsg>> {
         let env = self.submissions.recv().await?;
+        if let Some(metrics) = &self.metrics {
+            metrics.dispatch_started();
+        }
         let emitted = self.dispatcher.dispatch(env.clone()).await;
+        if let Some(metrics) = &self.metrics {
+            metrics.dispatch_finished(&emitted);
+        }
         for event in &emitted {
             let seq = self
                 .next_sequence
@@ -402,6 +428,37 @@ pub fn spawn_inmemory_relay(
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
+/// Resolve when the process receives a graceful-stop signal: `ctrl_c` on every
+/// platform, plus `SIGTERM` on unix (what `docker stop`/systemd/Kubernetes send
+/// at the end of the termination grace period). Long-running serve loops
+/// (`tdw-mcp`, the worker, the daemon) await this to begin a bounded drain.
+///
+/// Excluded from the loom build (it uses `tokio::signal`).
+#[cfg(not(loom))]
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(sigterm) => sigterm,
+            // If SIGTERM cannot be installed, fall back to ctrl-c only.
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     mut service_loop: ServiceLoop<D, S>,
     relay: tokio::task::JoinHandle<()>,
@@ -414,10 +471,10 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     let shutdown_for_signal = shutdown.clone();
     #[cfg(not(loom))]
     let signal_task: tokio::task::JoinHandle<()> = tokio::spawn(async move {
-        // Ignore signal install errors on platforms that don't support ctrl_c.
-        if tokio::signal::ctrl_c().await.is_ok() {
-            shutdown_for_signal.cancel();
-        }
+        // Cancel on ctrl-c (all platforms) or SIGTERM (unix). SIGTERM is what
+        // container/systemd stop sends, so a graceful drain hinges on it.
+        shutdown_signal().await;
+        shutdown_for_signal.cancel();
     });
 
     loop {

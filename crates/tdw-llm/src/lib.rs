@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+pub mod fallback;
+pub use fallback::FallbackModel;
+
 use serde::{Deserialize, Serialize};
 use tdw_config::TdwConfig;
 use thiserror::Error;
