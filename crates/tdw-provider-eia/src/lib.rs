@@ -104,7 +104,7 @@ pub enum EiaProviderError {
     Provider(String),
 }
 
-fn validate_length(length: u32) -> Result<()> {
+const fn validate_length(length: u32) -> Result<()> {
     if length == 0 || length > 10_000 {
         return Err(EiaProviderError::InvalidLength(length));
     }

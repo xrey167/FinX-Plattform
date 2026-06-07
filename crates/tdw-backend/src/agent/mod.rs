@@ -203,7 +203,7 @@ impl AgentBackend {
     }
 
     /// Mutable access to the embedded MCP server (e.g. to drive a JSON-RPC session).
-    pub fn mcp_server(&mut self) -> &mut McpServer {
+    pub const fn mcp_server(&mut self) -> &mut McpServer {
         &mut self.mcp
     }
 
@@ -307,12 +307,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`KnowledgeGraph`].
     #[must_use]
-    pub fn kg(&self) -> &KnowledgeGraph {
+    pub const fn kg(&self) -> &KnowledgeGraph {
         &self.kg
     }
 
     /// Mutable access to the embedded [`KnowledgeGraph`].
-    pub fn kg_mut(&mut self) -> &mut KnowledgeGraph {
+    pub const fn kg_mut(&mut self) -> &mut KnowledgeGraph {
         &mut self.kg
     }
 
@@ -342,12 +342,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`TagStore`].
     #[must_use]
-    pub fn tags(&self) -> &TagStore {
+    pub const fn tags(&self) -> &TagStore {
         &self.tags
     }
 
     /// Mutable access to the embedded [`TagStore`].
-    pub fn tags_mut(&mut self) -> &mut TagStore {
+    pub const fn tags_mut(&mut self) -> &mut TagStore {
         &mut self.tags
     }
 
@@ -383,12 +383,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`FeatureStore`].
     #[must_use]
-    pub fn features(&self) -> &FeatureStore {
+    pub const fn features(&self) -> &FeatureStore {
         &self.features
     }
 
     /// Mutable access to the embedded [`FeatureStore`].
-    pub fn features_mut(&mut self) -> &mut FeatureStore {
+    pub const fn features_mut(&mut self) -> &mut FeatureStore {
         &mut self.features
     }
 
