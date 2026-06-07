@@ -219,3 +219,5 @@ docker compose --profile live down -v
   transport status across G010-G014.
 - `crates/tdw-bootstrap/src/main.rs` - exit-code legend and
   per-step JSON shape.
+- [`docs/release/service-operability.md`](service-operability.md) - daemon + MCP
+  `/health`, `/ready`, `/metrics` endpoints and graceful-drain operations.

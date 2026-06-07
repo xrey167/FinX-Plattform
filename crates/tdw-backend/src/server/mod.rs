@@ -18,6 +18,7 @@
 
 use std::net::SocketAddr;
 
+use tdw_app_server::ops::{DaemonMetrics, OpsProvider};
 use tdw_app_server::{CancellationToken, SubmissionHandle, serve, service_channel};
 use tdw_config::{DaemonTransport, TdwConfig};
 use tdw_protocol::EventMsg;
@@ -234,6 +235,57 @@ async fn spawn_http(
     )
 }
 
+/// Operability provider for the daemon's `/health`, `/ready`, `/metrics`
+/// surface. `/ready` probes the durable stores via [`AppState::readiness`];
+/// `/metrics` renders the live [`DaemonMetrics`] (dispatch outcome counters +
+/// in-flight gauge) shared with the daemon's [`ServiceLoop`].
+#[derive(Clone)]
+struct DaemonOps {
+    state: AppState,
+    metrics: DaemonMetrics,
+}
+
+impl OpsProvider for DaemonOps {
+    async fn ready(&self) -> (bool, String) {
+        match self.state.readiness().await {
+            Ok(()) => (true, "ready: durable stores reachable\n".to_string()),
+            Err(error) => (false, format!("not ready: stores unreachable: {error}\n")),
+        }
+    }
+
+    async fn metrics(&self) -> String {
+        self.metrics.render()
+    }
+}
+
+/// Bind and spawn the daemon's ops listener when `TDW_DAEMON_HTTP_BIND` is set.
+/// Returns the listener task, or `None` when unset (the default) or on bind
+/// failure (logged), so the daemon still serves its transport.
+async fn spawn_daemon_ops(
+    state: &AppState,
+    metrics: DaemonMetrics,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = std::env::var("TDW_DAEMON_HTTP_BIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-backend: ops listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    eprintln!("tdw-backend: ops listener on http://{bind} (/health /ready /metrics)");
+    let provider = DaemonOps {
+        state: state.clone(),
+        metrics,
+    };
+    Some(tokio::spawn(async move {
+        tdw_app_server::ops::serve_ops(listener, provider, cancel).await
+    }))
+}
+
 /// Emit the same startup policy diagnostics the original `tdw-service` binary
 /// did, reporting whether a policy is attached for the resolved profile.
 fn report_policy_state(state: &AppState, config: &TdwConfig) {
@@ -332,7 +384,9 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
 
     warn_on_unauthenticated_nonloopback_bind(config, &state);
 
+    let metrics = DaemonMetrics::new();
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
+    let service_loop = service_loop.with_metrics(metrics.clone());
     let cancel = CancellationToken::new();
     let relay = tdw_app_server::spawn_inmemory_relay(
         state.outbox.clone(),
@@ -342,6 +396,11 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     );
 
     let transport = spawn_transport(config, handle, events_rx, cancel.clone()).await?;
+
+    // Optional ops surface (/health, /ready, /metrics), env-gated and off by
+    // default; bound on TDW_DAEMON_HTTP_BIND. It shares the cancellation token
+    // so a graceful drain stops accepting ops requests too.
+    let ops_task = spawn_daemon_ops(&state, metrics, cancel.clone()).await;
 
     // Phase B — a standalone daemon's only memory surface is the persisted file
     // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
@@ -371,6 +430,11 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // teardown stays bounded.
     if let Some(task) = consolidation_task {
         task.abort();
+        let _ = task.await;
+    }
+    // The ops listener observes the same cancellation token; await its clean
+    // exit so the drain is bounded.
+    if let Some(task) = ops_task {
         let _ = task.await;
     }
     let _ = transport.join.await;
