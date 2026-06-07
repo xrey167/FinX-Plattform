@@ -28,5 +28,11 @@ tdw-event = { path = "../tdw-event" }
 tdw-storage-postgres = { path = "../tdw-storage-postgres", optional = true }
 tokio = { workspace = true, optional = true }
 
+# Unique target name so this `examples/basic.rs` does not collide with the other
+# persistence crates' `basic` example in the shared workspace target directory.
+[[example]]
+name = "tdw-bus-basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

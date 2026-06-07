@@ -15,6 +15,7 @@ doctest = false
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+subtle = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
@@ -22,10 +23,13 @@ tdw-config = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 tdw-tool-exec = { path = "../tdw-tool-exec" }
+# Used only by the ops surface: a tiny current-thread runtime drives the
+# graceful-shutdown signal handler (the MCP serve loop itself is plain std).
+tokio = { workspace = true, features = ["rt", "signal"] }
 
 [dev-dependencies]
 tdw-app-server = { workspace = true, features = ["transport-http"] }
-tokio = { workspace = true, features = ["net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 
 [lints]
 workspace = true

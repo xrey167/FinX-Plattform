@@ -14,5 +14,9 @@ doctest = false
 
 [dependencies]
 
+[[example]]
+name = "tdw_fn_string_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

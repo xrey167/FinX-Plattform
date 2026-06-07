@@ -48,7 +48,7 @@ pub struct UdfRequest {
 /// request to **tighten** the limit: they are clamped to the runtime default
 /// ceiling so a caller can run an untrusted UDF with a smaller fuel/memory
 /// budget, but can never raise a limit above the built-in maximum (which would
-/// otherwise be a DoS lever). See [`resolve_wasm_limits`].
+/// otherwise be a `DoS` lever). See [`resolve_wasm_limits`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WasmLimitsRequest {
     /// Max fuel (≈ executed bytecode ops) before the call traps.

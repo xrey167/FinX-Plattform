@@ -16,5 +16,11 @@ doctest = false
 serde = { workspace = true }
 thiserror = { workspace = true }
 
+# Unique target name so this `examples/basic.rs` does not collide with the other
+# storage crates' `basic` example in the shared workspace target directory.
+[[example]]
+name = "tdw-table-format-basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

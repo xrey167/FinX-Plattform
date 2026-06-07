@@ -18,3 +18,7 @@ thiserror = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-stage-basic"
+path = "examples/basic.rs"

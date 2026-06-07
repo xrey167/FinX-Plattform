@@ -94,6 +94,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --release --target x86_64-pc-windows-msvc
 
+  aarch64-build:
+    name: aarch64 Linux Build (release binaries)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cross linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      # Build-only (no test execution on the cross target) so the aarch64
+      # release leg cannot silently break between tagged releases.
+      - name: Cross-build release binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu \
+            --bin tdw-service --bin tdw-cli --bin tdw-mcp --bin tdw-worker
+
   images:
     name: Container Image (${{ matrix.binary }})
     runs-on: ubuntu-latest
@@ -101,18 +124,28 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Required for actions/attest-build-provenance on the pushed images.
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
         binary: [tdw-service, tdw-cli, tdw-mcp, tdw-worker]
     steps:
       - uses: actions/checkout@v6
+      # QEMU enables the linux/arm64 leg of the multi-arch buildx build on the
+      # x86_64 runner.
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
-      - name: Build image for scan
-        uses: docker/build-push-action@v6
+      # Build the amd64 image into the local docker daemon so Trivy can scan a
+      # concrete image. The multi-arch push below is a separate build (buildx
+      # cannot `load` a multi-platform manifest into the daemon).
+      - name: Build amd64 image for scan
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/${{ matrix.binary }}.Dockerfile
+          platforms: linux/amd64
           load: true
           tags: finx-plattform-${{ matrix.binary }}:ci
       - name: Scan image
@@ -130,16 +163,32 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push scanned image
+      - name: Resolve image name
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: image
         shell: bash
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          image="ghcr.io/${owner}/finx-plattform-${{ matrix.binary }}"
-          docker tag "finx-plattform-${{ matrix.binary }}:ci" "${image}:sha-${GITHUB_SHA}"
-          docker tag "finx-plattform-${{ matrix.binary }}:ci" "${image}:latest"
-          docker push "${image}:sha-${GITHUB_SHA}"
-          docker push "${image}:latest"
+          echo "ref=ghcr.io/${owner}/finx-plattform-${{ matrix.binary }}" >> "$GITHUB_OUTPUT"
+      - name: Build and push multi-arch image (amd64 + arm64)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/${{ matrix.binary }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.ref }}:sha-${{ github.sha }}
+            ${{ steps.image.outputs.ref }}:latest
+      - name: Attest image provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ steps.image.outputs.ref }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   integration:
     name: Integration, Property, and E2E Subset

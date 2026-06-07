@@ -33,5 +33,9 @@ name = "http_fetcher"
 path = "tests/http_fetcher.rs"
 required-features = ["http"]
 
+[[example]]
+name = "basic"
+required-features = ["http"]
+
 [lints]
 workspace = true

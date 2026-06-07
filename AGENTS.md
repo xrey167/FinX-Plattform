@@ -116,3 +116,13 @@
 4. `cargo run -p xtask -- clean-room-audit`
 5. PR opened (or, for in-progress work, branch pushed and `gh pr status`
    reviewed). Tool output, not assumption, is the evidence.
+
+## Batch Improvement Mode
+
+For systematic debt burn-down (lint waves, test gaps, provider wiring), use
+the batch improvement harness instead of ad-hoc sweeps: `cargo run -p xtask --
+improve-scan` refreshes the ranked backlog in `.batch/backlog.json`
+(single-writer; lands via its own `chore/batch-scan-*` PR), and the `/batch`
+command executes ranked items as one-worktree-one-PR batches with per-batch
+ledger files under `.batch/ledger/`. Contract and hazards:
+`docs/batch-improvement.md`.

@@ -18,6 +18,7 @@
 
 use std::net::SocketAddr;
 
+use tdw_app_server::ops::{DaemonMetrics, OpsProvider};
 use tdw_app_server::{CancellationToken, SubmissionHandle, serve, service_channel};
 use tdw_config::{DaemonTransport, TdwConfig};
 use tdw_protocol::EventMsg;
@@ -82,10 +83,10 @@ pub async fn load_config() -> Result<TdwConfig, ServerError> {
     Ok(config)
 }
 
-/// Resolve the effective profile: a non-empty `TDW_PROFILE` value overrides
-/// `current`; otherwise `current` is kept. Pure (env read happens at the call
-/// site) so the override precedence is unit-testable without mutating the
-/// process environment.
+/// Resolve the effective profile: `TDW_PROFILE` overrides `current` when non-empty.
+///
+/// Pure (env read happens at the call site) so the override precedence is unit-testable
+/// without mutating the process environment. Otherwise `current` is kept.
 #[must_use]
 pub fn resolve_profile(current: &str, env_profile: Option<String>) -> String {
     match env_profile {
@@ -234,6 +235,57 @@ async fn spawn_http(
     )
 }
 
+/// Operability provider for the daemon's `/health`, `/ready`, `/metrics`
+/// surface. `/ready` probes the durable stores via [`AppState::readiness`];
+/// `/metrics` renders the live [`DaemonMetrics`] (dispatch outcome counters +
+/// in-flight gauge) shared with the daemon's [`ServiceLoop`].
+#[derive(Clone)]
+struct DaemonOps {
+    state: AppState,
+    metrics: DaemonMetrics,
+}
+
+impl OpsProvider for DaemonOps {
+    async fn ready(&self) -> (bool, String) {
+        match self.state.readiness().await {
+            Ok(()) => (true, "ready: durable stores reachable\n".to_string()),
+            Err(error) => (false, format!("not ready: stores unreachable: {error}\n")),
+        }
+    }
+
+    async fn metrics(&self) -> String {
+        self.metrics.render()
+    }
+}
+
+/// Bind and spawn the daemon's ops listener when `TDW_DAEMON_HTTP_BIND` is set.
+/// Returns the listener task, or `None` when unset (the default) or on bind
+/// failure (logged), so the daemon still serves its transport.
+async fn spawn_daemon_ops(
+    state: &AppState,
+    metrics: DaemonMetrics,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = std::env::var("TDW_DAEMON_HTTP_BIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-backend: ops listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    eprintln!("tdw-backend: ops listener on http://{bind} (/health /ready /metrics)");
+    let provider = DaemonOps {
+        state: state.clone(),
+        metrics,
+    };
+    Some(tokio::spawn(async move {
+        tdw_app_server::ops::serve_ops(listener, provider, cancel).await
+    }))
+}
+
 /// Emit the same startup policy diagnostics the original `tdw-service` binary
 /// did, reporting whether a policy is attached for the resolved profile.
 fn report_policy_state(state: &AppState, config: &TdwConfig) {
@@ -251,6 +303,50 @@ fn report_policy_state(state: &AppState, config: &TdwConfig) {
         eprintln!(
             "tdw-backend: daemon starting in '{}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired (configure TDW_OIDC_*)",
             config.profile
+        );
+    }
+}
+
+/// Whether `bind` (a `host:port` socket spec) targets a loopback interface.
+///
+/// Used to decide whether a non-loopback (network-reachable) bind warrants a
+/// prominent security warning. Unparseable/host-only specs are treated as
+/// non-loopback so the warning errs on the side of caution.
+#[must_use]
+pub fn bind_is_loopback(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map_or(bind, |(host, _)| host)
+        .trim_matches(['[', ']']);
+    match host {
+        "localhost" => true,
+        other => other
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+    }
+}
+
+/// Emit a prominent warning when the daemon's TCP transport binds a
+/// non-loopback address while no auth-backed policy is attached.
+///
+/// Exposing the daemon on `0.0.0.0` (or any routable host) without ingress auth
+/// is the highest-risk misconfiguration: any host that can reach the port can
+/// drive the daemon. The safe default is loopback (`127.0.0.1:7878`); operators
+/// who deliberately bind wider must wire a policy (configure `TDW_OIDC_*`) and
+/// front the daemon with a token/mTLS/reverse-proxy layer — see
+/// `docs/release/data-backend-runbook.md`.
+fn warn_on_unauthenticated_nonloopback_bind(config: &TdwConfig, state: &AppState) {
+    if config.daemon.transport != DaemonTransport::Tcp {
+        return;
+    }
+    let bind = config
+        .daemon
+        .tcp_bind
+        .as_deref()
+        .unwrap_or("127.0.0.1:7878");
+    if !bind_is_loopback(bind) && state.policy.is_none() {
+        eprintln!(
+            "tdw-backend: SECURITY WARNING — daemon TCP transport is bound to non-loopback address '{bind}' with no auth-backed policy attached. Any host that can reach this port can drive the daemon. Configure TDW_OIDC_* and front the daemon with a token/mTLS/reverse-proxy layer (see docs/release/data-backend-runbook.md), or bind 127.0.0.1."
         );
     }
 }
@@ -273,7 +369,24 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
         .map_err(|e| format!("AppState::from_config failed: {e}"))?;
     report_policy_state(&state, config);
 
+    // A *partial* OIDC configuration (some but not all `TDW_OIDC_*` set, or an
+    // invalid JWKS/claims set) is an operator mistake, not a fail-closed default:
+    // refuse to start with the actionable diagnostic rather than silently
+    // running with no auth-backed policy. A fully-unset OIDC config keeps the
+    // existing fail-closed behavior (`policy_attach_error` is `None` there).
+    if let Some(error) = &state.policy_attach_error {
+        return Err(format!(
+            "refusing to start daemon in '{}' profile: {error}; set the listed TDW_OIDC_* variables (or unset all of them to run fail-closed)",
+            config.profile
+        )
+        .into());
+    }
+
+    warn_on_unauthenticated_nonloopback_bind(config, &state);
+
+    let metrics = DaemonMetrics::new();
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
+    let service_loop = service_loop.with_metrics(metrics.clone());
     let cancel = CancellationToken::new();
     let relay = tdw_app_server::spawn_inmemory_relay(
         state.outbox.clone(),
@@ -283,6 +396,11 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     );
 
     let transport = spawn_transport(config, handle, events_rx, cancel.clone()).await?;
+
+    // Optional ops surface (/health, /ready, /metrics), env-gated and off by
+    // default; bound on TDW_DAEMON_HTTP_BIND. It shares the cancellation token
+    // so a graceful drain stops accepting ops requests too.
+    let ops_task = spawn_daemon_ops(&state, metrics, cancel.clone()).await;
 
     // Phase B — a standalone daemon's only memory surface is the persisted file
     // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
@@ -312,6 +430,11 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // teardown stays bounded.
     if let Some(task) = consolidation_task {
         task.abort();
+        let _ = task.await;
+    }
+    // The ops listener observes the same cancellation token; await its clean
+    // exit so the drain is bounded.
+    if let Some(task) = ops_task {
         let _ = task.await;
     }
     let _ = transport.join.await;
@@ -631,5 +754,22 @@ mod tests {
         // profile, so the result equals resolve_profile of that same input.
         let expected_profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
         assert_eq!(config.profile, expected_profile);
+    }
+
+    #[test]
+    fn loopback_binds_are_recognized() {
+        assert!(bind_is_loopback("127.0.0.1:7878"));
+        assert!(bind_is_loopback("localhost:7878"));
+        assert!(bind_is_loopback("[::1]:7878"));
+        assert!(bind_is_loopback("127.0.0.5:7878"));
+    }
+
+    #[test]
+    fn non_loopback_binds_are_recognized() {
+        assert!(!bind_is_loopback("0.0.0.0:7878"));
+        assert!(!bind_is_loopback("192.168.1.10:7878"));
+        assert!(!bind_is_loopback("[::]:7878"));
+        // A host-only / unparseable spec errs on the side of caution.
+        assert!(!bind_is_loopback("example.com:7878"));
     }
 }

@@ -13,10 +13,10 @@ use serde_json::Value;
 use crate::base::EntityMeta;
 use crate::kind::{EntityKind, Group};
 
-/// Default API version for FinX agent-platform resources.
+/// Default API version for `FinX` agent-platform resources.
 pub const TDW_API_VERSION: &str = "tdw.finx/v1";
 
-/// API group for FinX resource definitions.
+/// API group for `FinX` resource definitions.
 pub const TDW_API_GROUP: &str = "tdw.finx";
 
 /// The metadata field name lifted into / merged out of the [`Resource`] envelope.
@@ -43,7 +43,7 @@ pub struct ResourceDefinition {
     /// JSON Schema (2020-12) for the kind's `spec`, when a concrete type exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_schema: Option<Value>,
-    /// Whether instances carry the data facets (plane/materialization/as_of/validation).
+    /// Whether instances carry the data facets (`plane/materialization/as_of/validation`).
     pub has_data_facets: bool,
     /// Whether the kind is autonomy-capable (agents only).
     pub autonomy_capable: bool,
@@ -57,7 +57,7 @@ pub struct Resource<S> {
     pub api_version: String,
     /// The entity kind discriminator.
     pub kind: EntityKind,
-    /// Shared metadata envelope (MCP base + FinX classification).
+    /// Shared metadata envelope (MCP base + `FinX` classification).
     pub metadata: EntityMeta,
     /// Kind-specific payload.
     pub spec: S,
@@ -106,9 +106,10 @@ pub trait RegistryEntity: Serialize {
     }
 }
 
-/// Rebuild a typed entity from a [`Resource`] by merging the envelope `metadata` back into
-/// the `spec` — the inverse of [`RegistryEntity::to_resource`]. Lets a generic
-/// `Resource<Value>` loaded from the registry be re-typed (e.g. into a `Tool`/`Prompt`).
+/// Rebuild a typed entity from a [`Resource`] — the inverse of [`RegistryEntity::to_resource`].
+///
+/// Merges the envelope `metadata` back into the `spec`, letting a generic `Resource<Value>`
+/// loaded from the registry be re-typed (e.g. into a `Tool`/`Prompt`).
 ///
 /// # Errors
 ///

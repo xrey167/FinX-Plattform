@@ -31,5 +31,11 @@ tokio = { workspace = true, optional = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 
+# Unique target name so this `examples/basic.rs` does not collide with the other
+# storage crates' `basic` example in the shared workspace target directory.
+[[example]]
+name = "tdw-storage-meilisearch-basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

@@ -23,9 +23,9 @@ pub struct ProviderRequest {
     pub path: String,
 }
 
-/// Query parameters for CoinGecko OHLC endpoint.
+/// Query parameters for `CoinGecko` OHLC endpoint.
 ///
-/// `coin_id` is the CoinGecko coin identifier (e.g. `"bitcoin"`, `"ethereum"`).
+/// `coin_id` is the `CoinGecko` coin identifier (e.g. `"bitcoin"`, `"ethereum"`).
 /// `vs_currency` is the target currency (e.g. `"usd"`, `"eur"`).
 /// `days` is the number of days of data to fetch (1, 7, 14, 30, 90, 180, 365, or `"max"`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -103,7 +103,7 @@ fn normalize_currency(currency: &str) -> Result<String> {
     Ok(currency.to_ascii_lowercase())
 }
 
-fn validate_days(days: u32) -> Result<u32> {
+const fn validate_days(days: u32) -> Result<u32> {
     match days {
         1 | 7 | 14 | 30 | 90 | 180 | 365 => Ok(days),
         _ => Err(CoinGeckoProviderError::InvalidDays),

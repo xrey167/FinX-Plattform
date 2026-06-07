@@ -19,5 +19,9 @@ tdw-event = { path = "../tdw-event" }
 [dev-dependencies]
 serde_json = { workspace = true }
 
+[[example]]
+name = "tdw_actor_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

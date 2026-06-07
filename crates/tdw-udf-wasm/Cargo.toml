@@ -25,5 +25,18 @@ wasmi = { workspace = true, optional = true }
 [dev-dependencies]
 wat = "1"
 
+# Unique example binary names (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates). The fixture
+# example compiles on default features; the real wasmi round-trip is gated via
+# required-features and skipped unless the feature is enabled.
+[[example]]
+name = "tdw_udf_wasm_basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "tdw_udf_wasm_wasmi_roundtrip"
+path = "examples/wasmi_roundtrip.rs"
+required-features = ["wasmi"]
+
 [lints]
 workspace = true

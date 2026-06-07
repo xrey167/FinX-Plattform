@@ -14,5 +14,11 @@ doctest = false
 
 [dependencies]
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_ml_registry_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

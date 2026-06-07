@@ -30,6 +30,10 @@ tdw-core = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
+[[example]]
+name = "basic"
+required-features = ["http"]
+
 [dev-dependencies]
 tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 

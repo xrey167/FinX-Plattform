@@ -1,0 +1,424 @@
+{
+  "buckets": {
+    "hygiene": "ok",
+    "lint-debt": "ok",
+    "provider-wiring": "ok",
+    "test-gaps": "ok"
+  },
+  "generatedAt": 1780787585,
+  "generatedBy": "cargo run -p xtask -- improve-scan",
+  "items": [
+    {
+      "bucket": "provider-wiring",
+      "count": 0,
+      "crates": [
+        "tdw-provider-fileset",
+        "tdw-service-api"
+      ],
+      "effort": "L",
+      "evidence": "tdw-provider-fileset has no `http` feature and no `provider-fileset`(-http) key — needs a wiring design, not the standard fetcher pattern",
+      "id": "provider:fileset",
+      "status": "needs-design",
+      "title": "Design wiring for tdw-provider-fileset (no `http` feature)"
+    },
+    {
+      "bucket": "provider-wiring",
+      "count": 0,
+      "crates": [
+        "tdw-provider-ws",
+        "tdw-service-api"
+      ],
+      "effort": "L",
+      "evidence": "tdw-provider-ws has no `http` feature and no `provider-ws`(-http) key — needs a wiring design, not the standard fetcher pattern",
+      "id": "provider:ws",
+      "status": "needs-design",
+      "title": "Design wiring for tdw-provider-ws (no `http` feature)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 62,
+      "crates": [
+        "tdw_agent",
+        "tdw_backend",
+        "tdw_proto",
+        "tdw_provider_adanos",
+        "tdw_provider_alpha_vantage",
+        "tdw_provider_benzinga",
+        "tdw_provider_coingecko",
+        "tdw_provider_deribit",
+        "tdw_provider_eia",
+        "tdw_provider_finra",
+        "tdw_provider_glassnode",
+        "tdw_provider_seeking_alpha",
+        "tdw_provider_trading_economics",
+        "tdw_provider_velodata",
+        "tdw_tool_exec",
+        "tdw_worker"
+      ],
+      "effort": "L",
+      "evidence": "62 warnings across 16 crates",
+      "id": "lint:clippy::missing_const_for_fn",
+      "status": "pending",
+      "title": "Resolve clippy::missing_const_for_fn (62 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 32,
+      "crates": [
+        "tdw_agent",
+        "tdw_agent_store",
+        "tdw_backend",
+        "tdw_eval_runner"
+      ],
+      "effort": "M",
+      "evidence": "32 warnings across 4 crates",
+      "id": "lint:clippy::too_long_first_doc_paragraph",
+      "status": "pending",
+      "title": "Resolve clippy::too_long_first_doc_paragraph (32 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 26,
+      "crates": [
+        "tdw_provider_akshare",
+        "tdw_provider_ecb",
+        "tdw_provider_eia",
+        "tdw_provider_oecd",
+        "tdw_provider_tradier",
+        "tdw_provider_velodata",
+        "types"
+      ],
+      "effort": "M",
+      "evidence": "26 warnings across 7 crates",
+      "id": "lint:clippy::float_cmp",
+      "status": "pending",
+      "title": "Resolve clippy::float_cmp (26 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 16,
+      "crates": [
+        "tdw_agent",
+        "tdw_provider_finra",
+        "tdw_provider_fmp",
+        "tdw_provider_nasdaq",
+        "tdw_provider_seeking_alpha",
+        "tdw_provider_trading_economics"
+      ],
+      "effort": "M",
+      "evidence": "16 warnings across 6 crates",
+      "id": "lint:clippy::derive_partial_eq_without_eq",
+      "status": "pending",
+      "title": "Resolve clippy::derive_partial_eq_without_eq (16 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 12,
+      "crates": [
+        "tdw_agent",
+        "tdw_provider_deribit",
+        "tdw_provider_ecb",
+        "tdw_service_api",
+        "tdw_worker"
+      ],
+      "effort": "M",
+      "evidence": "12 warnings across 5 crates",
+      "id": "lint:clippy::needless_pass_by_value",
+      "status": "pending",
+      "title": "Resolve clippy::needless_pass_by_value (12 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 12,
+      "crates": [
+        "tdw_backend",
+        "tdw_mcp",
+        "xtask"
+      ],
+      "effort": "M",
+      "evidence": "12 warnings across 3 crates",
+      "id": "lint:clippy::option_if_let_else",
+      "status": "pending",
+      "title": "Resolve clippy::option_if_let_else (12 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 12,
+      "crates": [
+        "tdw_backend",
+        "tdw_service_api"
+      ],
+      "effort": "M",
+      "evidence": "12 warnings across 2 crates",
+      "id": "lint:clippy::unused_async",
+      "status": "pending",
+      "title": "Resolve clippy::unused_async (12 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 10,
+      "crates": [
+        "tdw_backend",
+        "tdw_provider_velodata",
+        "xtask"
+      ],
+      "effort": "M",
+      "evidence": "10 warnings across 3 crates",
+      "id": "lint:clippy::map_unwrap_or",
+      "status": "pending",
+      "title": "Resolve clippy::map_unwrap_or (10 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 10,
+      "crates": [
+        "tdw-bootstrap",
+        "tdw_mcp",
+        "tdw_migration",
+        "tdw_service_api"
+      ],
+      "effort": "M",
+      "evidence": "10 warnings across 4 crates",
+      "id": "lint:clippy::too_many_lines",
+      "status": "pending",
+      "title": "Resolve clippy::too_many_lines (10 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 9,
+      "crates": [
+        "tdw_app_server",
+        "tdw_proto"
+      ],
+      "effort": "S",
+      "evidence": "9 warnings across 2 crates",
+      "id": "lint:clippy::doc_markdown",
+      "reopenedFrom": "done",
+      "status": "pending",
+      "title": "Resolve clippy::doc_markdown (9 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 8,
+      "crates": [
+        "tdw_knowledge",
+        "tdw_proto"
+      ],
+      "effort": "S",
+      "evidence": "8 warnings across 2 crates",
+      "id": "lint:clippy::must_use_candidate",
+      "status": "pending",
+      "title": "Resolve clippy::must_use_candidate (8 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 7,
+      "crates": [
+        "tdw_app_server",
+        "tdw_provider_velodata"
+      ],
+      "effort": "S",
+      "evidence": "7 warnings across 2 crates",
+      "id": "lint:clippy::cast_possible_truncation",
+      "status": "pending",
+      "title": "Resolve clippy::cast_possible_truncation (7 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 6,
+      "crates": [
+        "tdw_provider_ecb"
+      ],
+      "effort": "S",
+      "evidence": "6 warnings across 1 crates",
+      "id": "lint:clippy::manual_let_else",
+      "status": "pending",
+      "title": "Resolve clippy::manual_let_else (6 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 6,
+      "crates": [
+        "tdw_backend",
+        "tdw_service_api"
+      ],
+      "effort": "S",
+      "evidence": "6 warnings across 2 crates",
+      "id": "lint:clippy::significant_drop_tightening",
+      "status": "pending",
+      "title": "Resolve clippy::significant_drop_tightening (6 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 4,
+      "crates": [
+        "tdw_agent",
+        "tdw_provider_ecb"
+      ],
+      "effort": "S",
+      "evidence": "4 warnings across 2 crates",
+      "id": "lint:clippy::unnecessary_wraps",
+      "status": "pending",
+      "title": "Resolve clippy::unnecessary_wraps (4 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 3,
+      "crates": [
+        "tdw_provider_tmx",
+        "types"
+      ],
+      "effort": "S",
+      "evidence": "3 warnings across 2 crates",
+      "id": "lint:clippy::redundant_clone",
+      "status": "pending",
+      "title": "Resolve clippy::redundant_clone (3 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_provider_ccdata"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::ignored_unit_patterns",
+      "status": "pending",
+      "title": "Resolve clippy::ignored_unit_patterns (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_app_server"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::items_after_statements",
+      "status": "pending",
+      "title": "Resolve clippy::items_after_statements (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_mask"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::needless_collect",
+      "status": "pending",
+      "title": "Resolve clippy::needless_collect (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_provider_ecb"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::redundant_closure_for_method_calls",
+      "status": "pending",
+      "title": "Resolve clippy::redundant_closure_for_method_calls (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_tool_exec"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::single_option_map",
+      "status": "pending",
+      "title": "Resolve clippy::single_option_map (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_eval_runner"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::unnecessary_literal_bound",
+      "status": "pending",
+      "title": "Resolve clippy::unnecessary_literal_bound (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 2,
+      "crates": [
+        "tdw_backend"
+      ],
+      "effort": "S",
+      "evidence": "2 warnings across 1 crates",
+      "id": "lint:clippy::unnested_or_patterns",
+      "status": "pending",
+      "title": "Resolve clippy::unnested_or_patterns (2 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 1,
+      "crates": [
+        "tdw_provider_bls"
+      ],
+      "effort": "S",
+      "evidence": "1 warnings across 1 crates",
+      "id": "lint:clippy::manual_string_new",
+      "status": "pending",
+      "title": "Resolve clippy::manual_string_new (1 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 1,
+      "crates": [
+        "tdw_provider_finra"
+      ],
+      "effort": "S",
+      "evidence": "1 warnings across 1 crates",
+      "id": "lint:clippy::single_char_pattern",
+      "status": "pending",
+      "title": "Resolve clippy::single_char_pattern (1 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 1,
+      "crates": [
+        "tdw_mcp"
+      ],
+      "effort": "S",
+      "evidence": "1 warnings across 1 crates",
+      "id": "lint:clippy::single_match_else",
+      "status": "pending",
+      "title": "Resolve clippy::single_match_else (1 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 1,
+      "crates": [
+        "tdw_backend"
+      ],
+      "effort": "S",
+      "evidence": "1 warnings across 1 crates",
+      "id": "lint:clippy::unnecessary_trailing_comma",
+      "status": "pending",
+      "title": "Resolve clippy::unnecessary_trailing_comma (1 warnings)"
+    },
+    {
+      "bucket": "lint-debt",
+      "count": 1,
+      "crates": [
+        "tdw_backend"
+      ],
+      "effort": "S",
+      "evidence": "1 warnings across 1 crates",
+      "id": "lint:clippy::used_underscore_binding",
+      "status": "pending",
+      "title": "Resolve clippy::used_underscore_binding (1 warnings)"
+    }
+  ],
+  "toolchain": "rustc 1.95.0 (59807616e 2026-04-14)",
+  "version": 1
+}

@@ -1,96 +1,23 @@
 {
   "version": 1,
-  "createdAt": "2026-05-28T17:23:00.617Z",
-  "updatedAt": "2026-05-28T18:40:33.657Z",
+  "createdAt": "2026-06-06T22:03:11.163Z",
+  "updatedAt": "2026-06-06T22:03:41.452Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
   "codexGoalMode": "aggregate",
   "goals": [
     {
-      "id": "G001-post-merge-housekeeping",
-      "title": "Post-merge housekeeping",
-      "objective": "Verify PR #65 is merged on main, remove the merged local worktree and branch, confirm remote source branch deletion, record the primary checkout dirty/behind state without overwriting user-local .omx files, and document the safe cleanup evidence. This story should not make runtime code changes.",
-      "status": "complete",
+      "id": "G001-implement-and-ship-all-missing-parts",
+      "title": "Implement and ship all missing parts needed to bring FinX-Plattform t...",
+      "objective": "Implement and ship all missing parts needed to bring FinX-Plattform to release 1.0. Treat release 1.0 as a verified production-readiness milestone, not a cosmetic version bump. Preserve the clean-room boundary: no finx-* crates or dependencies, no copied FinX-XR code, no tdw-provider-openbb. Work in the sibling worktree work/release-1-0 and land by PR. First audit the current repo, docs, batch backlog, roadmap, TODOs, and verification gates to identify real blockers. Then implement missing release-critical platform parts in small story slices, keeping offline deterministic tests by default and env-gated live/integration tests where required. Finish with release docs/version evidence, full AGENTS.md verification, clean-room audit, final cleanup/review gate, branch push, PR creation, and gh pr status review.",
+      "status": "in_progress",
       "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:03:10.699Z",
-      "startedAt": "2026-05-28T17:23:28.155Z",
-      "completedAt": "2026-05-28T18:03:10.699Z",
-      "evidence": "G001-post-merge-housekeeping complete after retry: gh pr view 65 reports MERGED into main at 2026-05-28T17:11:15Z with merge commit 620ab7dc806ef4881e6ea0027e45b3a5e8abb204; git worktree list shows no FinX-Plattform-mcp-daemon-tool-exec worktree; git branch --list work/mcp-daemon-tool-exec returned no local branch; git ls-remote --heads origin work/mcp-daemon-tool-exec returned no remote branch; current worktree remains work/post-merge-followups at 620ab7d with intentional dirty .omx and follow-up code changes preserved."
-    },
-    {
-      "id": "G002-connect-timeout-review-follow-up",
-      "title": "Connect timeout review follow-up",
-      "objective": "Address the PR review note in tdw-app-client by replacing plain TcpStream::connect with TcpStream::connect_timeout or an equivalent bounded connection path so the configured daemon timeout covers connection establishment as well as read/write operations. Add or adjust focused tests for timeout/config behavior and run focused plus workspace verification.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T17:54:27.793Z",
-      "startedAt": "2026-05-28T17:44:36.958Z",
-      "completedAt": "2026-05-28T17:54:27.793Z",
-      "evidence": "G002-connect-timeout-review-follow-up complete: tdw-app-client uses TcpStream::connect_timeout for validated TCP daemon endpoints and reports connect-phase timeouts; tdw-mcp unavailable-daemon coverage accepts bounded connect timeout text while requiring endpoint evidence. Verification passed with temp CARGO_TARGET_DIR: cargo test -p tdw-app-client -p tdw-mcp daemon; cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit."
-    },
-    {
-      "id": "G003-mcp-daemon-client-transport-expansio",
-      "title": "MCP daemon client transport expansion",
-      "objective": "Extend daemon-backed MCP submission beyond the current TCP-only path. Add UDS support behind cfg(unix) and HTTP/SSE daemon client support if the existing daemon protocol supports it; wire the transport selection through tdw-app-client, tdw-mcp config/env overrides, and fail-closed unsupported transport handling. Preserve stdio and Streamable HTTP MCP server behavior.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:02:26.380Z",
-      "startedAt": "2026-05-28T17:54:40.792Z",
-      "completedAt": "2026-05-28T18:02:26.380Z",
-      "evidence": "G003-mcp-daemon-client-transport-expansio complete: tdw-app-client now supports TCP, cfg(unix) UDS, and plain HTTP/SSE daemon submission using the existing POST /op plus GET /events server contract; unsupported Windows UDS and HTTPS HTTP/SSE endpoints fail closed; tdw-mcp keeps config/env transport selection and adds in-process HTTP/SSE daemon-backed query coverage. Verification passed with temp CARGO_TARGET_DIR: cargo test -p tdw-app-client -p tdw-mcp daemon; cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit."
-    },
-    {
-      "id": "G004-worker-distributed-production-backen",
-      "title": "Worker distributed production backend",
-      "objective": "Add a production distributed worker backend for tdw-worker using the selected Postgres/RiverQueue-style durable scheduler path. Mirror the SQLite durable scheduler contract for enqueue, priority lease, lease expiry, retries, dead-lettering, idempotent completion, stats, and migration/config behavior. Keep local SQLite support intact.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:14:11.305Z",
-      "startedAt": "2026-05-28T18:13:45.577Z",
-      "completedAt": "2026-05-28T18:14:11.305Z",
-      "evidence": "Implemented PgWorkerQueue behind postgres feature with durable migration/config/readiness docs; mirrored SQLite enqueue, priority lease, lease expiry/reap, retry/dead-letter, idempotent complete, stats, and env-gated integration coverage. Verified: cargo test -p tdw-worker --features postgres; cargo clippy -p tdw-worker --features postgres --all-targets -- -D warnings; cargo test -p tdw-config -p tdw-migration; cargo fmt --all -- --check; git diff --check; cargo check --workspace."
-    },
-    {
-      "id": "G005-protocol-and-integration-hardening",
-      "title": "Protocol and integration hardening",
-      "objective": "Add always-on daemon protocol framing tests and env-gated integration tests for daemon-backed MCP execution and durable worker execution. Keep default cargo test offline and deterministic; document required env vars and CI/local run recipes.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:21:07.555Z",
-      "startedAt": "2026-05-28T18:14:20.099Z",
-      "completedAt": "2026-05-28T18:21:07.555Z",
-      "evidence": "Added always-on tdw-app-client daemon framing tests for length-delimited envelope writes, empty/oversized frames, terminal-event matching, and HTTP/SSE submit-path derivation; added env-gated tdw-mcp daemon integration test using TDW_MCP_DAEMON_INTEGRATION_ADDR; documented env vars and CI/local recipes; wired CI worker Postgres queue integration step. Verified: cargo test -p tdw-app-client -p tdw-mcp; cargo test -p tdw-mcp --test daemon_integration -- --nocapture; cargo test -p tdw-worker --features postgres --test pg_worker -- --nocapture; cargo clippy -p tdw-app-client -p tdw-mcp --all-targets -- -D warnings; cargo clippy -p tdw-worker --features postgres --all-targets -- -D warnings; cargo fmt --all -- --check; git diff --check; cargo check --workspace."
-    },
-    {
-      "id": "G006-test-policy-backlog",
-      "title": "Test policy backlog",
-      "objective": "Resolve and encode the remaining test-policy backlog: mutation testing cadence, loom expansion beyond tdw-bus, and fuzz target list for parsers/wire formats. Turn decisions into ADRs or policy docs and CI issues/tasks where enforcement is intentionally deferred.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:24:39.610Z",
-      "startedAt": "2026-05-28T18:21:15.960Z",
-      "completedAt": "2026-05-28T18:24:39.610Z",
-      "evidence": "Resolved and encoded test-policy backlog in docs/adr/0014-test-policy-backlog.md, docs/quality/test-policy-backlog.md, docs/testing.md, and docs/quality-gates.md. Decisions: O24 mutation remains nightly/release-candidate scoped for v0.1, not PR-required; O25 loom starts with bounded tdw-bus model before any broader async expansion; O26 fuzz targets start at protocol JSON, daemon frames/SSE, MCP JSON-RPC/HTTP, config TOML, and SQL guard parsing. Deferred tasks TEST-POLICY-001..005 record enforcement work intentionally not yet phase-exit gates. Verified: rg O24/O25/O26/TEST-POLICY across policy docs and gate files; cargo fmt --all -- --check; git diff --check; cargo run -p xtask -- quality-gate check."
-    },
-    {
-      "id": "G007-release-decision-and-aggregate-gate",
-      "title": "Release decision and aggregate gate",
-      "objective": "After the timeout fix and selected follow-ups land, decide whether to cut the next patch release. If releasing, update release evidence and run the release workflow. In either case run the mandatory final ultragoal cleanup/review gate: targeted verification, ai-slop-cleaner on changed files, rerun verification, final code review with APPROVE/CLEAR, then checkpoint the aggregate goal with quality-gate JSON.",
-      "status": "complete",
-      "attempt": 1,
-      "createdAt": "2026-05-28T17:23:00.617Z",
-      "updatedAt": "2026-05-28T18:40:33.657Z",
-      "startedAt": "2026-05-28T18:24:47.747Z",
-      "evidence": "Release deferred until PR/merge; final cleanup passed; post-cleaner/rebased verification passed; manual code review APPROVE/CLEAR; final gate in docs/quality/post-merge-followups-final-quality-gate.json.",
-      "completedAt": "2026-05-28T18:40:33.657Z"
+      "createdAt": "2026-06-06T22:03:11.163Z",
+      "updatedAt": "2026-06-06T22:03:41.452Z",
+      "startedAt": "2026-06-06T22:03:41.452Z"
     }
   ],
-  "codexObjective": "Complete all ultragoal stories in .omx/ultragoal/goals.json: G001-post-merge-housekeeping Post-merge housekeeping; G002-connect-timeout-review-follow-up Connect timeout review follow-up; G003-mcp-daemon-client-transport-expansio MCP daemon client transport expansion; G004-worker-distributed-production-backen Worker distributed production backend; G005-protocol-and-integration-hardening Protocol and integration hardening; G006-test-policy-backlog Test policy backlog; G007-release-decision-and-aggregate-gate Release decision and aggregate gate"
+  "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
+  "activeGoalId": "G001-implement-and-ship-all-missing-parts"
 }

@@ -18,5 +18,9 @@ thiserror = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-tools = { path = "../tdw-tools" }
 
+[[example]]
+name = "tdw_tool_exec_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

@@ -4,7 +4,9 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher};
+pub use http_fetcher::{
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -114,6 +116,65 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
 // ---------------------------------------------------------------------------
 // Mock fetcher (offline, for unit tests and feature-flag-off builds)
 // ---------------------------------------------------------------------------
+
+/// Query for a last-price quote snapshot from the FMP `/quote/{symbol}` endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpQuoteQuery {
+    pub symbol: String,
+}
+
+impl FmpQuoteQuery {
+    /// Construct a validated quote query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] if `symbol` is blank, or
+    /// [`FmpError::InvalidSymbol`] if it contains characters that are not
+    /// ASCII alphanumeric, `.`, `-`, or `_`.
+    pub fn new(symbol: &str) -> Result<Self> {
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+        })
+    }
+}
+
+/// Offline stub for the quote-snapshot endpoint.
+pub struct FmpMockQuoteSnapshotFetcher;
+
+impl FmpMockQuoteSnapshotFetcher {
+    /// Return one hardcoded [`QuoteSnapshotRow`] for the queried symbol.
+    ///
+    /// # Errors
+    ///
+    /// Never errors in the current implementation; the signature mirrors the
+    /// real fetcher so callers can swap implementations without changes.
+    pub fn fetch_stub(query: &FmpQuoteQuery) -> Result<Vec<QuoteSnapshotRow>> {
+        Ok(vec![QuoteSnapshotRow {
+            symbol: query.symbol.clone(),
+            price: 189.30,
+            change: 1.20,
+            changes_percentage: 0.638,
+            previous_close: 188.10,
+            timestamp: 1_717_200_000,
+        }])
+    }
+}
+
+/// A single row returned by the FMP `/quote/{symbol}` endpoint, used to build
+/// a [`tdw_domain::QuoteSnapshot`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QuoteSnapshotRow {
+    pub symbol: String,
+    pub price: f64,
+    pub change: f64,
+    #[serde(rename = "changesPercentage")]
+    pub changes_percentage: f64,
+    #[serde(rename = "previousClose")]
+    pub previous_close: f64,
+    /// Unix epoch in seconds (FMP returns seconds; multiplied by 1000 for
+    /// `ts_ms` in [`tdw_domain::QuoteSnapshot`]).
+    pub timestamp: i64,
+}
 
 /// Offline stub that returns a single hardcoded bar. Used in tests that do
 /// not enable the `http` feature.
@@ -249,6 +310,28 @@ mod tests {
             FmpStatement::Cashflow.as_path_segment(),
             "cash-flow-statement"
         );
+    }
+
+    #[test]
+    fn quote_query_normalises_symbol() {
+        let q = FmpQuoteQuery::new("aapl").unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.symbol, "AAPL");
+    }
+
+    #[test]
+    fn quote_query_rejects_empty_symbol() {
+        assert_eq!(FmpQuoteQuery::new(""), Err(FmpError::EmptySymbol));
+    }
+
+    #[test]
+    fn mock_quote_snapshot_fetcher_returns_stub_row() {
+        let q = FmpQuoteQuery::new("AAPL").unwrap_or_else(|e| panic!("query: {e}"));
+        let rows =
+            FmpMockQuoteSnapshotFetcher::fetch_stub(&q).unwrap_or_else(|e| panic!("stub: {e}"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].symbol, "AAPL");
+        assert_eq!(rows[0].price, 189.30);
+        assert_eq!(rows[0].timestamp, 1_717_200_000);
     }
 
     #[test]

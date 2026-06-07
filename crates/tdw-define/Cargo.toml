@@ -18,3 +18,7 @@ tdw-hooks = { path = "../tdw-hooks" }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-define-basic"
+path = "examples/basic.rs"

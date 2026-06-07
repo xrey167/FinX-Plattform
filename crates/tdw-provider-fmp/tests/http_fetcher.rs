@@ -10,10 +10,10 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::Fetcher;
+use tdw_core::{Credentials, Fetcher};
 use tdw_provider_fmp::{
     FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpStatement,
+    FmpHttpQuoteSnapshotFetcher, FmpStatement,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -165,6 +165,102 @@ fn malformed_json_produces_provider_error() {
     assert!(err.to_string().contains("fmp parse_json"));
 }
 
+fn quote_cassette() -> Bytes {
+    Bytes::from(
+        json!([
+            {
+                "symbol": "AAPL",
+                "price": 189.30,
+                "change": 1.20,
+                "changesPercentage": 0.638,
+                "previousClose": 188.10,
+                "timestamp": 1717200000_i64
+            }
+        ])
+        .to_string()
+        .into_bytes(),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Quote-snapshot cassette tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_fmp_quote_snapshot_response() {
+    let fetcher = FmpHttpQuoteSnapshotFetcher::default();
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = fetcher
+        .transform_data(&query, quote_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].current_price, 189.30);
+    assert_eq!(rows[0].change, 1.20);
+    assert_eq!(rows[0].change_percent, 0.638);
+    assert_eq!(rows[0].prev_close, 188.10);
+    // FMP timestamp is seconds; fetcher multiplies by 1000 for ts_ms.
+    assert_eq!(rows[0].ts_ms, 1_717_200_000_000);
+}
+
+#[test]
+fn quote_snapshot_transform_query_normalises_symbol_and_rejects_invalid() {
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "msft"}))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query.symbol, "MSFT");
+
+    assert!(
+        FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "MSFT/../../secret"}))
+            .is_err()
+    );
+    assert!(FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": ""})).is_err());
+}
+
+#[test]
+fn quote_snapshot_empty_response_produces_empty_vec() {
+    let fetcher = FmpHttpQuoteSnapshotFetcher::default();
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = Bytes::from(json!([]).to_string().into_bytes());
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert!(rows.is_empty());
+}
+
+#[test]
+fn quote_snapshot_missing_numerics_fall_back_to_zero() {
+    let fetcher = FmpHttpQuoteSnapshotFetcher::default();
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    // Only symbol provided — all numeric fields should default to 0.0 / 0.
+    let raw = Bytes::from(json!([{"symbol": "AAPL"}]).to_string().into_bytes());
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].current_price, 0.0);
+    assert_eq!(rows[0].ts_ms, 0);
+}
+
+#[test]
+fn quote_snapshot_malformed_json_produces_provider_error() {
+    let fetcher = FmpHttpQuoteSnapshotFetcher::default();
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = Bytes::from(b"not valid json".to_vec());
+
+    let err = fetcher
+        .transform_data(&query, raw)
+        .expect_err("malformed JSON must produce an error");
+    assert!(err.to_string().contains("fmp quote parse_json"));
+}
+
 // ---------------------------------------------------------------------------
 // Live test (gated by TDW_FMP_LIVE=1 and TDW_FMP_API_KEY)
 // ---------------------------------------------------------------------------
@@ -206,4 +302,30 @@ async fn live_fmp_income_returns_data_when_env_var_set() {
         !rows.is_empty(),
         "live income response must include at least one statement"
     );
+}
+
+#[tokio::test]
+async fn live_fmp_quote_snapshot_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP quote-snapshot integration test");
+        return;
+    }
+
+    let fetcher = FmpHttpQuoteSnapshotFetcher::default();
+    let query = FmpHttpQuoteSnapshotFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+
+    assert!(
+        !rows.is_empty(),
+        "live quote-snapshot response must include at least one entry"
+    );
+    assert_eq!(rows[0].symbol, "AAPL");
 }

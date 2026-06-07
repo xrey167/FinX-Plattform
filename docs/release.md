@@ -5,16 +5,25 @@ and `tdw-worker`.
 
 ## Version Policy
 
-FinX-Plattform uses SemVer tags in the form `vMAJOR.MINOR.PATCH`.
+FinX-Plattform uses SemVer tags in the form `vMAJOR.MINOR.PATCH`. The platform
+reached `v1.0.0` on 2026-06-07.
 
-Until the platform reaches `v1.0.0`:
+From `v1.0.0` onward (SemVer):
 
-- Increment `MINOR` for user-visible runtime, protocol, storage, provider,
-  or release-packaging changes.
-- Increment `PATCH` for compatible fixes, docs, CI-only changes, and
-  packaging repairs that do not change runtime behavior.
-- Keep breaking protocol or persistence changes behind migration notes in the
-  release notes, even while the major version is `0`.
+- Increment `MAJOR` for backward-incompatible protocol, persistence, public API,
+  or operator-contract changes (e.g. a default that breaks an existing exposed
+  deployment without an opt-out).
+- Increment `MINOR` for backward-compatible user-visible runtime, protocol,
+  storage, provider, or release-packaging additions.
+- Increment `PATCH` for compatible fixes, docs, CI-only changes, and packaging
+  repairs that do not change runtime behavior.
+- Document every breaking change, and any default that is breaking only for
+  exposed/non-default deployments, in the release notes under *Upgrade notes*.
+
+The workspace `Cargo.toml` `version` field is intentionally **not** bumped per
+release: releases are tag-driven, and the field has stayed pinned since the
+early tags. Do not couple a `Cargo.toml` version bump to a tag cut unless the
+crates are being published to a registry (they carry `publish = false`).
 
 The GitHub release workflow only packages tag pushes matching
 `vMAJOR.MINOR.PATCH`.
@@ -134,8 +143,9 @@ those deep runs are uploaded as CI artifacts on failure.
    confirm every user-visible change is captured under the new version section
    in [`CHANGELOG.md`](../CHANGELOG.md), and date that section. The `MINOR` vs
    `PATCH` choice must match the change set per the policy above.
-4. Run `cargo run -p xtask -- prerelease-check`; confirm the loom relay model
-   and fuzz-smoke corpus replay are green (`prerelease-check: PASS`).
+4. Run the [pre-release fuzz & loom recipe](quality/pre-release-fuzz-loom.md):
+   `cargo run -p xtask -- prerelease-check`; confirm the loom relay model and
+   fuzz-smoke corpus replay are green (`prerelease-check: PASS`).
 5. Create and push the tag:
 
    ```powershell

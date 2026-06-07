@@ -740,6 +740,65 @@ impl SqliteWorkerQueue {
         .await?;
         Ok(())
     }
+
+    /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
+    /// attempt counter so the serve loop picks it up again. Returns
+    /// [`WorkerQueueError::UnknownJob`] if the job does not exist and
+    /// [`WorkerQueueError::InvalidJob`] if it is not currently dead-lettered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn replay_dead_letter(&self, job_id: &str) -> Result<()> {
+        let Some(status) = self.job_status(job_id).await? else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+        if status != WorkerJobStatus::DeadLettered {
+            return Err(WorkerQueueError::InvalidJob(format!(
+                "job {job_id} is {status:?}, not DeadLettered",
+            )));
+        }
+        let now_ms = unix_epoch_millis()?;
+        sqlx::query(
+            r"
+            update worker_jobs
+            set status = ?1,
+                attempts = 0,
+                not_before_ms = ?2,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = null,
+                dead_lettered_at_ms = null,
+                completed_at_ms = null,
+                updated_at_ms = ?2
+            where job_id = ?3
+            ",
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Age in milliseconds of the oldest currently-leased job (now minus the
+    /// time it was leased, tracked by `updated_at_ms`). `None` when nothing is
+    /// leased. Used by the worker's `/metrics` `oldest_lease_age_ms` gauge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn oldest_lease_age_ms(&self) -> Result<Option<u64>> {
+        let row =
+            sqlx::query("select min(updated_at_ms) as oldest from worker_jobs where status = ?1")
+                .bind(WorkerJobStatus::Leased.as_str())
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(oldest_age_from_row(
+            row.and_then(|row| row.get::<Option<i64>, _>("oldest")),
+        ))
+    }
 }
 
 #[cfg(feature = "postgres")]
@@ -1106,6 +1165,66 @@ impl PgWorkerQueue {
         .await?;
         Ok(())
     }
+
+    /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
+    /// attempt counter so the serve loop picks it up again. Returns
+    /// [`WorkerQueueError::UnknownJob`] if the job does not exist and
+    /// [`WorkerQueueError::InvalidJob`] if it is not currently dead-lettered.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn replay_dead_letter(&self, job_id: &str) -> Result<()> {
+        let Some(status) = self.job_status(job_id).await? else {
+            return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
+        };
+        if status != WorkerJobStatus::DeadLettered {
+            return Err(WorkerQueueError::InvalidJob(format!(
+                "job {job_id} is {status:?}, not DeadLettered",
+            )));
+        }
+        let now_ms = unix_epoch_millis()?;
+        sqlx::query(
+            r#"
+            update system.worker_jobs
+            set status = $1,
+                attempts = 0,
+                not_before_ms = $2,
+                leased_by = null,
+                lease_expires_at_ms = null,
+                last_error = null,
+                dead_lettered_at_ms = null,
+                completed_at_ms = null,
+                updated_at_ms = $2
+            where job_id = $3
+            "#,
+        )
+        .bind(WorkerJobStatus::Pending.as_str())
+        .bind(u64_to_i64(now_ms)?)
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Age in milliseconds of the oldest currently-leased job (now minus the
+    /// time it was leased, tracked by `updated_at_ms`). `None` when nothing is
+    /// leased. Used by the worker's `/metrics` `oldest_lease_age_ms` gauge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn oldest_lease_age_ms(&self) -> Result<Option<u64>> {
+        let row = sqlx::query(
+            "select min(updated_at_ms) as oldest from system.worker_jobs where status = $1",
+        )
+        .bind(WorkerJobStatus::Leased.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(oldest_age_from_row(
+            row.and_then(|row| row.get::<Option<i64>, _>("oldest")),
+        ))
+    }
 }
 
 pub const SQLITE_WORKER_MIGRATION: &str = r"
@@ -1190,6 +1309,50 @@ pub fn sample_shutdown_job(job_id: &str) -> Result<WorkerJob> {
         not_before_ms: 0,
         priority: 0,
     })
+}
+
+/// Convert a persisted `min(updated_at_ms)` of the leased jobs into an age in
+/// milliseconds relative to now. `None` (no leased jobs) maps to `None`; a clock
+/// that is somehow ahead of the stored timestamp saturates to `0`.
+fn oldest_age_from_row(oldest_leased_at_ms: Option<i64>) -> Option<u64> {
+    let leased_at = u64::try_from(oldest_leased_at_ms?).ok()?;
+    let now_ms = unix_epoch_millis().ok()?;
+    Some(now_ms.saturating_sub(leased_at))
+}
+
+/// Render the worker's queue stats plus the oldest-lease age as Prometheus
+/// metrics: a labelled `tdw_worker_jobs{state=...}` gauge family (one sample per
+/// queue state) and a `tdw_worker_oldest_lease_age_ms` gauge.
+///
+/// Pure: takes a snapshot so it is unit-testable without a live queue.
+#[must_use]
+pub fn render_worker_metrics(stats: &WorkerQueueStats, oldest_lease_age_ms: Option<u64>) -> String {
+    use tdw_app_server::ops::{Metric, render_prometheus};
+
+    #[allow(clippy::cast_precision_loss)]
+    let jobs = |state: &str, value: u64| {
+        Metric::gauge(
+            "tdw_worker_jobs",
+            "Worker queue job count by state",
+            value as f64,
+        )
+        .with_label("state", state)
+    };
+    let metrics = vec![
+        jobs("pending", stats.pending),
+        jobs("leased", stats.leased),
+        jobs("completed", stats.completed),
+        jobs("dead_lettered", stats.dead_lettered),
+        Metric::gauge(
+            "tdw_worker_oldest_lease_age_ms",
+            "Age in milliseconds of the oldest currently-leased job (0 when none leased)",
+            #[allow(clippy::cast_precision_loss)]
+            {
+                oldest_lease_age_ms.unwrap_or(0) as f64
+            },
+        ),
+    ];
+    render_prometheus(&metrics)
 }
 
 fn validate_job(job: &WorkerJob) -> Result<()> {
@@ -1329,6 +1492,22 @@ pub trait ServeQueue: Send + Sync {
     ///
     /// Returns an error variant if the underlying operation fails.
     async fn reap_expired_leases(&self) -> Result<u64>;
+
+    /// Snapshot the queue's job counts by state (for the `/metrics` and `/ready`
+    /// surfaces). A successful call also proves the queue backend is reachable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn stats(&self) -> Result<WorkerQueueStats>;
+
+    /// Age in milliseconds of the oldest currently-leased job, or `None` when
+    /// nothing is leased (for the `/metrics` `oldest_lease_age_ms` gauge).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    async fn oldest_lease_age_ms(&self) -> Result<Option<u64>>;
 }
 
 #[async_trait::async_trait]
@@ -1356,6 +1535,14 @@ impl ServeQueue for SqliteWorkerQueue {
 
     async fn reap_expired_leases(&self) -> Result<u64> {
         Self::reap_expired_leases(self).await
+    }
+
+    async fn stats(&self) -> Result<WorkerQueueStats> {
+        Self::stats(self).await
+    }
+
+    async fn oldest_lease_age_ms(&self) -> Result<Option<u64>> {
+        Self::oldest_lease_age_ms(self).await
     }
 }
 
@@ -1385,6 +1572,60 @@ impl ServeQueue for PgWorkerQueue {
 
     async fn reap_expired_leases(&self) -> Result<u64> {
         Self::reap_expired_leases(self).await
+    }
+
+    async fn stats(&self) -> Result<WorkerQueueStats> {
+        Self::stats(self).await
+    }
+
+    async fn oldest_lease_age_ms(&self) -> Result<Option<u64>> {
+        Self::oldest_lease_age_ms(self).await
+    }
+}
+
+/// Operability provider over a shared [`ServeQueue`], exposing `/ready` and
+/// `/metrics` bodies for the worker's ops listener.
+///
+/// `/ready` is "queue reachable": a successful `stats()` round-trip proves the
+/// durable backend answers, so readiness gates on DB connectivity exactly as the
+/// deployment guide recommends. `/metrics` renders the queue stats plus the
+/// oldest-lease age via [`render_worker_metrics`].
+///
+/// Cloneable so the same shared queue handle backs both the serve loop and the
+/// ops listener (`SqliteWorkerQueue`/`PgWorkerQueue` are themselves `Clone`,
+/// sharing one connection pool).
+#[derive(Clone)]
+pub struct WorkerOps<Q> {
+    queue: Q,
+}
+
+impl<Q: Clone> WorkerOps<Q> {
+    /// Wrap a (cloned) queue handle that shares the serve loop's backend.
+    #[must_use]
+    pub const fn new(queue: Q) -> Self {
+        Self { queue }
+    }
+}
+
+#[cfg(not(loom))]
+impl<Q: ServeQueue + Clone + 'static> tdw_app_server::ops::OpsProvider for WorkerOps<Q> {
+    async fn ready(&self) -> (bool, String) {
+        match self.queue.stats().await {
+            Ok(stats) => (
+                true,
+                format!(
+                    "ready: queue reachable (pending={}, leased={}, dead_lettered={})\n",
+                    stats.pending, stats.leased, stats.dead_lettered
+                ),
+            ),
+            Err(error) => (false, format!("not ready: queue unreachable: {error}\n")),
+        }
+    }
+
+    async fn metrics(&self) -> String {
+        let stats = self.queue.stats().await.unwrap_or_default();
+        let oldest = self.queue.oldest_lease_age_ms().await.unwrap_or_default();
+        render_worker_metrics(&stats, oldest)
     }
 }
 
@@ -1506,7 +1747,7 @@ enum JobOutcome {
 }
 
 /// Fold a finished job's [`JobOutcome`] into the running [`ServeReport`].
-fn record_outcome(report: &mut ServeReport, outcome: JobOutcome) {
+const fn record_outcome(report: &mut ServeReport, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Completed => report.completed = report.completed.saturating_add(1),
         JobOutcome::Failed { dead_lettered } => {
@@ -1753,6 +1994,85 @@ mod daemon_handler_tests {
 }
 
 #[cfg(test)]
+mod metrics_tests {
+    use super::*;
+
+    #[test]
+    fn renders_jobs_by_state_and_oldest_lease_age() {
+        let stats = WorkerQueueStats {
+            pending: 2,
+            leased: 1,
+            completed: 5,
+            dead_lettered: 3,
+        };
+        let body = render_worker_metrics(&stats, Some(1234));
+        assert!(body.contains("# TYPE tdw_worker_jobs gauge"), "got: {body}");
+        assert!(
+            body.contains("tdw_worker_jobs{state=\"pending\"} 2"),
+            "got: {body}"
+        );
+        assert!(
+            body.contains("tdw_worker_jobs{state=\"leased\"} 1"),
+            "got: {body}"
+        );
+        assert!(
+            body.contains("tdw_worker_jobs{state=\"completed\"} 5"),
+            "got: {body}"
+        );
+        assert!(
+            body.contains("tdw_worker_jobs{state=\"dead_lettered\"} 3"),
+            "got: {body}"
+        );
+        assert!(
+            body.contains("tdw_worker_oldest_lease_age_ms 1234"),
+            "got: {body}"
+        );
+    }
+
+    #[test]
+    fn oldest_lease_age_renders_zero_when_none_leased() {
+        let stats = WorkerQueueStats::default();
+        let body = render_worker_metrics(&stats, None);
+        assert!(
+            body.contains("tdw_worker_oldest_lease_age_ms 0"),
+            "got: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_is_true_when_queue_reachable() {
+        use tdw_app_server::ops::OpsProvider;
+
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let ops = WorkerOps::new(queue);
+        let (ready, detail) = ops.ready().await;
+        assert!(ready, "expected ready, detail: {detail}");
+        assert!(detail.contains("queue reachable"), "detail: {detail}");
+    }
+
+    #[tokio::test]
+    async fn metrics_provider_reflects_enqueued_jobs() {
+        use tdw_app_server::ops::OpsProvider;
+
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let mut job = sample_shutdown_job("metrics-job").expect("sample job");
+        job.max_attempts = 3;
+        queue.enqueue(job).await.expect("enqueue");
+
+        let ops = WorkerOps::new(queue);
+        let body = ops.metrics().await;
+        assert!(
+            body.contains("tdw_worker_jobs{state=\"pending\"} 1"),
+            "got: {body}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod serve_tests {
     use super::*;
 
@@ -1849,7 +2169,7 @@ mod serve_tests {
     }
 
     /// In-memory `ServeQueue` for runner-logic tests: hands out a fixed set of
-    /// jobs then reports empty. Avoids the SQLite test backend's write-lock
+    /// jobs then reports empty. Avoids the `SQLite` test backend's write-lock
     /// contention, which would otherwise serialize concurrent completions and
     /// mask the runner's parallelism.
     struct MockQueue {
@@ -1890,6 +2210,18 @@ mod serve_tests {
 
         async fn reap_expired_leases(&self) -> Result<u64> {
             Ok(0)
+        }
+
+        async fn stats(&self) -> Result<WorkerQueueStats> {
+            let pending = self.pending.lock().expect("mock queue lock").len() as u64;
+            Ok(WorkerQueueStats {
+                pending,
+                ..WorkerQueueStats::default()
+            })
+        }
+
+        async fn oldest_lease_age_ms(&self) -> Result<Option<u64>> {
+            Ok(None)
         }
     }
 
@@ -2245,5 +2577,76 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("dead letters: {error}"));
         assert_eq!(letters[0].last_error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_replay_dead_letter_requeues_with_reset_attempts() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("connect: {error}"));
+        let mut job = test_job("job-replay");
+        job.max_attempts = 1;
+        queue
+            .enqueue(job)
+            .await
+            .unwrap_or_else(|error| panic!("enqueue: {error}"));
+        queue
+            .lease_next("worker-1")
+            .await
+            .unwrap_or_else(|error| panic!("lease: {error}"))
+            .expect("lease present");
+        let status = queue
+            .fail("job-replay", "boom", 0)
+            .await
+            .unwrap_or_else(|error| panic!("fail: {error}"));
+        assert_eq!(status, WorkerJobStatus::DeadLettered);
+
+        queue
+            .replay_dead_letter("job-replay")
+            .await
+            .unwrap_or_else(|error| panic!("replay: {error}"));
+
+        // Job is pending again with no dead-letter rows and a reset counter.
+        assert_eq!(
+            queue
+                .job_status("job-replay")
+                .await
+                .unwrap_or_else(|error| panic!("status: {error}")),
+            Some(WorkerJobStatus::Pending)
+        );
+        assert!(
+            queue
+                .dead_letters()
+                .await
+                .unwrap_or_else(|error| panic!("dead letters: {error}"))
+                .is_empty()
+        );
+        let release = queue
+            .lease_next("worker-2")
+            .await
+            .unwrap_or_else(|error| panic!("re-lease: {error}"))
+            .expect("re-lease present");
+        assert_eq!(release.job_id, "job-replay");
+        assert_eq!(release.attempt, 1, "attempt counter reset to a fresh lease");
+    }
+
+    #[tokio::test]
+    async fn sqlite_replay_dead_letter_rejects_unknown_and_live_jobs() {
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("connect: {error}"));
+        assert!(matches!(
+            queue.replay_dead_letter("missing").await,
+            Err(WorkerQueueError::UnknownJob(_))
+        ));
+
+        queue
+            .enqueue(test_job("job-live"))
+            .await
+            .unwrap_or_else(|error| panic!("enqueue: {error}"));
+        assert!(matches!(
+            queue.replay_dead_letter("job-live").await,
+            Err(WorkerQueueError::InvalidJob(_))
+        ));
     }
 }

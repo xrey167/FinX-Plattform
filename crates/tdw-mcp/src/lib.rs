@@ -16,6 +16,8 @@ use tdw_app_server::{DaemonEndpoint, DaemonTransport};
 use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
+pub mod ops;
+
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const DEFAULT_STREAMABLE_HTTP_BIND: &str = "127.0.0.1:8788";
 
@@ -73,11 +75,71 @@ impl JsonRpcProblem {
     }
 }
 
+/// Cheap, cloneable per-method request counters for the MCP `/metrics` surface.
+///
+/// Keyed by JSON-RPC method name (`initialize`, `tools/list`, `tools/call`, …)
+/// so the exposition shows one labelled sample per method actually seen. Backed
+/// by a `Mutex<BTreeMap>` (deterministic key order for stable output); the
+/// hot-path cost is one short lock per request.
+#[derive(Clone, Default)]
+pub struct McpMetrics {
+    by_method: Arc<Mutex<std::collections::BTreeMap<String, u64>>>,
+}
+
+impl McpMetrics {
+    /// A fresh, empty metrics handle.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one request for `method`.
+    pub fn record(&self, method: &str) {
+        if let Ok(mut map) = self.by_method.lock() {
+            *map.entry(method.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Render request counts as a Prometheus `tdw_mcp_requests_total{method=...}`
+    /// counter family.
+    #[must_use]
+    pub fn render(&self) -> String {
+        use tdw_app_server::ops::{Metric, render_prometheus};
+        let snapshot = self
+            .by_method
+            .lock()
+            .map(|map| map.clone())
+            .unwrap_or_default();
+        let metrics: Vec<Metric> = snapshot
+            .iter()
+            .map(|(method, count)| {
+                #[allow(clippy::cast_precision_loss)]
+                Metric::counter(
+                    "tdw_mcp_requests_total",
+                    "MCP JSON-RPC requests by method",
+                    *count as f64,
+                )
+                .with_label("method", method)
+            })
+            .collect();
+        if metrics.is_empty() {
+            // Emit the family header even with no samples so scrapers see the
+            // series exists.
+            return "# HELP tdw_mcp_requests_total MCP JSON-RPC requests by method\n\
+                    # TYPE tdw_mcp_requests_total counter\n"
+                .to_string();
+        }
+        render_prometheus(&metrics)
+    }
+}
+
 pub struct McpServer {
     initialized: bool,
     client_info: Option<Value>,
     cancelled_requests: Vec<CancelledRequest>,
     daemon: DaemonToolRuntime,
+    /// Per-method request counters surfaced by the ops `/metrics` endpoint.
+    metrics: McpMetrics,
     /// Optional `tdw-agent` registry whose `tool` resources are appended to the hardcoded
     /// `tools/list` catalog. `None` keeps only the built-in tools.
     registry: Option<Registry>,
@@ -99,6 +161,7 @@ impl Default for McpServer {
             client_info: None,
             cancelled_requests: Vec::new(),
             daemon: DaemonToolRuntime::from_env(),
+            metrics: McpMetrics::new(),
             registry: None,
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
@@ -119,10 +182,18 @@ impl McpServer {
             client_info: None,
             cancelled_requests: Vec::new(),
             daemon: DaemonToolRuntime::configured(config),
+            metrics: McpMetrics::new(),
             registry: None,
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
         }
+    }
+
+    /// A cloneable handle to this server's per-method request metrics, for the
+    /// ops `/metrics` endpoint.
+    #[must_use]
+    pub fn metrics(&self) -> McpMetrics {
+        self.metrics.clone()
     }
 
     /// Attach a `tdw-agent` [`Registry`]; its `tool` resources are exposed via `tools/list`
@@ -203,8 +274,14 @@ impl McpServer {
 
     pub fn handle_json_rpc_line(&mut self, line: &str) -> Vec<String> {
         let messages = match parse_inbound(line) {
-            Ok(inbound) if inbound.is_notification => self.handle_notification(&inbound),
-            Ok(inbound) => self.handle_request(&inbound),
+            Ok(inbound) if inbound.is_notification => {
+                self.metrics.record(&inbound.method);
+                self.handle_notification(&inbound)
+            }
+            Ok(inbound) => {
+                self.metrics.record(&inbound.method);
+                self.handle_request(&inbound)
+            }
             Err(problem) => vec![error_message(problem)],
         };
 
@@ -938,7 +1015,17 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
             return 1;
         }
     };
+    // Non-blocking accept so the loop can observe the graceful-shutdown flag
+    // (set by SIGTERM/Ctrl-C) between connections and drain.
+    if let Err(error) = listener.set_nonblocking(true) {
+        eprintln!("tdw-mcp Streamable HTTP set_nonblocking failed: {error}");
+        return 1;
+    }
     eprintln!("tdw-mcp Streamable HTTP listening on http://{bind}{STREAMABLE_HTTP_PATH}");
+
+    // Resolve the daemon's TCP address (if daemon-routed over TCP) for the ops
+    // `/ready` reachability probe, before `daemon` is moved into the server.
+    let daemon_tcp_addr = daemon_tcp_addr_for_readiness(daemon.as_ref());
 
     let base = match daemon {
         Some(config) => McpServer::with_daemon_config(config),
@@ -951,10 +1038,23 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
             return 2;
         }
     };
+
+    // Graceful shutdown: SIGTERM (container/systemd stop) or Ctrl-C trips the
+    // flag; the accept loop and the ops listener both observe it and stop.
+    let shutdown = ops::Shutdown::new();
+    ops::install_signal_handler(shutdown.clone());
+
+    // Optional ops surface (/health, /ready, /metrics), env-gated and off by
+    // default; bound on TDW_MCP_OPS_BIND on its own thread.
+    let ops_thread = spawn_mcp_ops(&server, daemon_tcp_addr, shutdown.clone());
+
     let config = Arc::new(streamable_http_config_from_env());
-    for accepted in listener.incoming() {
-        match accepted {
-            Ok(stream) => {
+    let exit_code = loop {
+        if shutdown.is_triggered() {
+            break 0;
+        }
+        match listener.accept() {
+            Ok((stream, _peer)) => {
                 let server = Arc::clone(&server);
                 let config = Arc::clone(&config);
                 if let Err(error) = std::thread::Builder::new()
@@ -968,17 +1068,55 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
                     })
                 {
                     eprintln!("tdw-mcp Streamable HTTP worker spawn failed: {error}");
-                    return 1;
+                    break 1;
                 }
+            }
+            Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
             }
             Err(error) => {
                 eprintln!("tdw-mcp Streamable HTTP accept failed: {error}");
-                return 1;
+                break 1;
             }
         }
-    }
+    };
 
-    0
+    shutdown.trigger();
+    if let Some(thread) = ops_thread {
+        let _ = thread.join();
+    }
+    exit_code
+}
+
+/// Resolve the daemon's `host:port` for the ops readiness probe: `Some` only
+/// when the MCP is daemon-routed over TCP (the reachability check connects to
+/// it). `None` for UDS/HTTP-SSE endpoints or when no daemon is configured.
+fn daemon_tcp_addr_for_readiness(daemon: Option<&DaemonClientConfig>) -> Option<String> {
+    let endpoint = daemon?.endpoint();
+    match endpoint.transport {
+        DaemonTransport::Tcp => Some(endpoint.address.clone()),
+        DaemonTransport::Uds | DaemonTransport::HttpSse => None,
+    }
+}
+
+/// Spawn the MCP ops listener thread when `TDW_MCP_OPS_BIND` is set. Returns the
+/// thread handle, or `None` when the env var is unset (the default).
+fn spawn_mcp_ops(
+    server: &Arc<Mutex<McpServer>>,
+    daemon_tcp_addr: Option<String>,
+    shutdown: ops::Shutdown,
+) -> Option<std::thread::JoinHandle<()>> {
+    let bind = non_empty_env("TDW_MCP_OPS_BIND")?;
+    let metrics = server.lock().ok()?.metrics();
+    let readiness = ops::McpReadiness::new(daemon_tcp_addr);
+    std::thread::Builder::new()
+        .name("tdw-mcp-ops".to_string())
+        .spawn(move || {
+            if let Err(error) = ops::serve_ops_blocking(&bind, metrics, readiness, shutdown) {
+                eprintln!("tdw-mcp ops listener error: {error}");
+            }
+        })
+        .ok()
 }
 
 #[must_use]
@@ -1342,7 +1480,46 @@ fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHtt
     let Some(candidate) = parts.next() else {
         return false;
     };
-    scheme.eq_ignore_ascii_case("bearer") && candidate == token
+    scheme.eq_ignore_ascii_case("bearer") && constant_time_str_eq(candidate, token)
+}
+
+/// Constant-time string equality for secret comparison (bearer tokens).
+///
+/// A naive `==` short-circuits on the first differing byte, leaking the length
+/// of the matching prefix through response timing. To compare without that side
+/// channel — and without leaking the secret's length either — both inputs are
+/// folded into a fixed-width 32-byte FNV-1a digest and the digests are compared
+/// with [`subtle::ConstantTimeEq`]. Equal strings always produce equal digests;
+/// unequal strings differ with overwhelming probability, and the comparison work
+/// is independent of where (or whether) the inputs diverge.
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    fixed_digest(a.as_bytes())
+        .ct_eq(&fixed_digest(b.as_bytes()))
+        .into()
+}
+
+/// Fold arbitrary-length bytes into a fixed 32-byte digest using FNV-1a across
+/// four independently-seeded lanes. Used only to give
+/// [`constant_time_str_eq`] equal-length inputs so the downstream
+/// constant-time compare neither short-circuits nor leaks input length.
+fn fixed_digest(bytes: &[u8]) -> [u8; 32] {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut digest = [0u8; 32];
+    for (lane, chunk) in digest.chunks_mut(8).enumerate() {
+        let mut hash = OFFSET ^ (lane as u64).wrapping_mul(PRIME);
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        // Mix the length into each lane so two inputs of different lengths that
+        // happen to collide on content still differ.
+        hash ^= bytes.len() as u64;
+        hash = hash.wrapping_mul(PRIME);
+        chunk.copy_from_slice(&hash.to_le_bytes());
+    }
+    digest
 }
 
 fn bind_is_loopback(bind: &str) -> bool {
@@ -3493,6 +3670,75 @@ mod tests {
             &config,
         );
         assert_eq!(authorized.status, 200);
+    }
+
+    #[test]
+    fn constant_time_str_eq_matches_equality_semantics() {
+        // Equal strings compare equal.
+        assert!(constant_time_str_eq(
+            "super-secret-token",
+            "super-secret-token"
+        ));
+        assert!(constant_time_str_eq("", ""));
+        // Any difference — content, a single byte, or length — compares unequal.
+        assert!(!constant_time_str_eq(
+            "super-secret-token",
+            "super-secret-toke"
+        ));
+        assert!(!constant_time_str_eq(
+            "super-secret-token",
+            "Super-secret-token"
+        ));
+        assert!(!constant_time_str_eq("secret", "secret-with-suffix"));
+        assert!(!constant_time_str_eq("secret", ""));
+        // A correct-length-but-wrong-content candidate is rejected.
+        assert!(!constant_time_str_eq("aaaaaa", "bbbbbb"));
+    }
+
+    #[test]
+    fn request_is_authorized_uses_constant_time_token_compare() {
+        let config = StreamableHttpConfig::new().with_auth_token("secret");
+
+        let correct = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Bearer secret".to_string())],
+            "",
+        );
+        assert!(request_is_authorized(&correct, &config));
+
+        // Wrong token, missing header, and non-bearer scheme are all rejected.
+        let wrong = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Bearer wrong".to_string())],
+            "",
+        );
+        assert!(!request_is_authorized(&wrong, &config));
+
+        let no_header = StreamableHttpRequest::new("POST", "/mcp", Vec::new(), "");
+        assert!(!request_is_authorized(&no_header, &config));
+
+        let wrong_scheme = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Basic secret".to_string())],
+            "",
+        );
+        assert!(!request_is_authorized(&wrong_scheme, &config));
+
+        // Case-insensitive bearer scheme still matches.
+        let lower_scheme = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "bearer secret".to_string())],
+            "",
+        );
+        assert!(request_is_authorized(&lower_scheme, &config));
+
+        // With no token configured every request is authorized.
+        let open = StreamableHttpConfig::new();
+        assert!(request_is_authorized(&no_header, &open));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Tests for the CCData HTTP fetcher.
+//! Tests for the `CCData` HTTP fetcher.
 //!
 //! Gated by `--features http` (no reqwest dep otherwise).
 //!

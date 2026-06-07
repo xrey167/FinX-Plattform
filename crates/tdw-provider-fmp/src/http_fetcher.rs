@@ -11,11 +11,11 @@
 
 use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
-use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
+use tdw_domain::{MarketDataBar, Ohlcv, QuoteSnapshot, TimeGranularity};
 
 use crate::{
     API_KEY_ENV, BASE_URL, FmpError, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow,
-    FmpStatement,
+    FmpQuoteQuery, FmpStatement,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -23,6 +23,23 @@ const USER_AGENT: &str = "tdw-provider-fmp/0.1";
 // ---------------------------------------------------------------------------
 // Internal serde shapes for the FMP API responses
 // ---------------------------------------------------------------------------
+
+/// Internal wire shape for `/quote/{symbol}` entries.
+#[derive(Deserialize)]
+struct FmpQuoteRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    price: f64,
+    #[serde(default)]
+    change: f64,
+    #[serde(rename = "changesPercentage", default)]
+    changes_percentage: f64,
+    #[serde(rename = "previousClose", default)]
+    previous_close: f64,
+    #[serde(default)]
+    timestamp: i64,
+}
 
 #[derive(Deserialize)]
 struct FmpHistoricalEnvelope {
@@ -250,6 +267,108 @@ impl Fetcher<FmpFundamentalsQuery, FmpIncomeRow> for FmpHttpIncomeFetcher {
                 revenue: s.revenue,
                 gross_profit: s.gross_profit,
                 net_income: s.net_income,
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpQuoteSnapshotFetcher
+// ---------------------------------------------------------------------------
+
+/// Production FMP last-price quote-snapshot fetcher.
+///
+/// Calls `/quote/{symbol}` (FMP free tier). Returns a single [`QuoteSnapshot`]
+/// per symbol with the most-recent trade price, absolute/relative change
+/// versus the previous close, and a millisecond-precision timestamp.
+///
+/// This is a **fresh-read path** — no caching or persistence is applied.
+/// Results are intended for real-time consumers such as a price-alert engine
+/// that must compare `current_price` to alert thresholds on every evaluation.
+#[derive(Clone, Debug)]
+pub struct FmpHttpQuoteSnapshotFetcher {
+    base_url: String,
+}
+
+impl Default for FmpHttpQuoteSnapshotFetcher {
+    fn default() -> Self {
+        Self {
+            base_url: BASE_URL.to_string(),
+        }
+    }
+}
+
+impl FmpHttpQuoteSnapshotFetcher {
+    /// Override the FMP base URL (useful for tests with a mock server).
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
+    /// Registry entry for the `fmp` / `quote_snapshot` slot.
+    pub fn registry_entry() -> RegistryEntry {
+        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+    }
+}
+
+#[async_trait]
+impl Fetcher<FmpQuoteQuery, QuoteSnapshot> for FmpHttpQuoteSnapshotFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "quote_snapshot";
+
+    fn transform_query(params: Value) -> Result<FmpQuoteQuery> {
+        let symbol = params
+            .get("symbol")
+            .or_else(|| params.get("ticker"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("fmp symbol must be a string".to_string()))?;
+        FmpQuoteQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &FmpQuoteQuery, _creds: &Credentials) -> Result<Bytes> {
+        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let url = format!(
+            "{}/quote/{}",
+            self.base_url.trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = fmp_client().map_err(|e| Error::Provider(e.to_string()))?;
+        let response = client
+            .get(&url)
+            .query(&[("apikey", api_key.as_str())])
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("fmp quote extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unreadable>"));
+            return Err(Error::Provider(format!(
+                "fmp quote returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("fmp quote read body: {e}")))
+    }
+
+    fn transform_data(&self, query: &FmpQuoteQuery, raw: Bytes) -> Result<Vec<QuoteSnapshot>> {
+        let entries: Vec<FmpQuoteRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp quote parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .map(|entry| QuoteSnapshot {
+                symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                current_price: entry.price,
+                change: entry.change,
+                change_percent: entry.changes_percentage,
+                prev_close: entry.previous_close,
+                // FMP returns seconds; convert to milliseconds for the domain type.
+                ts_ms: entry.timestamp * 1_000,
             })
             .collect();
         Ok(rows)

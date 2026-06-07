@@ -21,5 +21,9 @@ tdw-rollout = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 
+[[example]]
+name = "tdw_replay_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

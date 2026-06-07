@@ -2,6 +2,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod improve_scan;
+
 fn main() {
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "help".to_string());
@@ -36,6 +38,7 @@ fn main() {
         },
         "clean-room-audit" => clean_room_audit(),
         "prerelease-check" => prerelease_check(),
+        "improve-scan" => improve_scan::improve_scan(),
         _ => help(),
     };
 
@@ -48,7 +51,7 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check | improve-scan"
     );
     Ok(())
 }

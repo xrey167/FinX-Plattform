@@ -1,4 +1,4 @@
-//! The canonical FinX entity model — pure Rust, MCP-agnostic.
+//! The canonical `FinX` entity model — pure Rust, MCP-agnostic.
 //!
 //! These types are *ours*: identity/display ([`BaseMetadata`], [`Icon`]), classification
 //! ([`Origin`], [`Adaptivity`]), value sourcing ([`Reference`]), and the shared
@@ -124,9 +124,11 @@ pub enum Adaptivity {
     SelfModifying,
 }
 
-/// The feedback gate's minimum adaptivity: an entity must be at least [`Adaptivity::Learning`]
-/// to receive eval-driven mutations. A `None`/`Configured` entity is static or merely
-/// parameterized, so applying learned feedback to it would be a contract violation.
+/// The feedback gate's minimum adaptivity for eval-driven mutations.
+///
+/// An entity must be at least [`Adaptivity::Learning`] to receive eval-driven mutations.
+/// A `None`/`Configured` entity is static or merely parameterized, so applying learned
+/// feedback to it would be a contract violation.
 pub const FEEDBACK_MIN_ADAPTIVITY: Adaptivity = Adaptivity::Learning;
 
 /// Error returned by [`ensure_adaptive_for_feedback`] when an entity is not adaptive enough
@@ -146,10 +148,10 @@ pub enum AdaptivityError {
     },
 }
 
-/// The Adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >=`
-/// [`Adaptivity::Learning`]. This guards every feedback mutation so that only
-/// `Learning`/`SelfModifying` entities accrue learned state; a `None`/`Configured` entity is
-/// rejected with [`AdaptivityError::NotLearning`].
+/// The adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >= `[`Adaptivity::Learning`].
+///
+/// This guards every feedback mutation so that only `Learning`/`SelfModifying` entities accrue
+/// learned state; a `None`/`Configured` entity is rejected with [`AdaptivityError::NotLearning`].
 ///
 /// # Errors
 ///
@@ -165,9 +167,10 @@ pub fn ensure_adaptive_for_feedback(meta: &EntityMeta) -> Result<(), AdaptivityE
     }
 }
 
-/// Human-memory-inspired retention tier for the `memory` kind. Ordinal: shorter-lived
-/// tiers sort before longer-lived ones. Grounds on the `.remember/` layout
-/// (working → short → mid → long → core/forever).
+/// Human-memory-inspired retention tier for the `memory` kind.
+///
+/// Ordinal: shorter-lived tiers sort before longer-lived ones. Grounds on the `.remember/`
+/// layout (working → short → mid → long → core/forever).
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -188,25 +191,25 @@ pub enum Retention {
 impl Retention {
     /// Approximate time-to-live in days; `None` means it never expires (`Core`).
     #[must_use]
-    pub fn ttl_days(self) -> Option<u32> {
+    pub const fn ttl_days(self) -> Option<u32> {
         match self {
-            Retention::Working => Some(0),
-            Retention::ShortTerm => Some(1),
-            Retention::MidTerm => Some(7),
-            Retention::LongTerm => Some(90),
-            Retention::Core => None,
+            Self::Working => Some(0),
+            Self::ShortTerm => Some(1),
+            Self::MidTerm => Some(7),
+            Self::LongTerm => Some(90),
+            Self::Core => None,
         }
     }
 
     /// The next longer-lived tier a surviving memory consolidates into. `Core` is the
     /// fixpoint (consolidating a `Core` memory leaves it `Core`).
     #[must_use]
-    pub fn next(self) -> Retention {
+    pub const fn next(self) -> Self {
         match self {
-            Retention::Working => Retention::ShortTerm,
-            Retention::ShortTerm => Retention::MidTerm,
-            Retention::MidTerm => Retention::LongTerm,
-            Retention::LongTerm | Retention::Core => Retention::Core,
+            Self::Working => Self::ShortTerm,
+            Self::ShortTerm => Self::MidTerm,
+            Self::MidTerm => Self::LongTerm,
+            Self::LongTerm | Self::Core => Self::Core,
         }
     }
 }
@@ -241,15 +244,15 @@ impl Reference {
     /// Git / HTTP / connector references bridge outside the platform ([`Source::External`]);
     /// literals, variables and files are [`Source::Internal`].
     #[must_use]
-    pub fn source(&self) -> Source {
+    pub const fn source(&self) -> Source {
         match self {
-            Reference::Git(_) | Reference::Http(_) | Reference::Connector(_) => Source::External,
-            Reference::Literal(_)
-            | Reference::Variable(_)
-            | Reference::File(_)
+            Self::Git(_) | Self::Http(_) | Self::Connector(_) => Source::External,
+            Self::Literal(_)
+            | Self::Variable(_)
+            | Self::File(_)
             // Secrets resolve through a platform-mediated `secretstore`, so the reference
             // is `Internal` even if the backing vault is an external provider.
-            | Reference::Secret(_) => Source::Internal,
+            | Self::Secret(_) => Source::Internal,
         }
     }
 }
@@ -281,7 +284,7 @@ pub enum ToolImplementation {
         /// Run detached as a background job rather than capture-and-return.
         background: bool,
     },
-    /// An interactive terminal session (ConPTY via `portable-pty`).
+    /// An interactive terminal session (`ConPTY` via `portable-pty`).
     Pty {
         /// The shell/program to launch.
         command: String,
@@ -317,7 +320,7 @@ pub enum ToolImplementation {
 /// The shared metadata envelope embedded by every entity kind (the CRD `metadata`).
 ///
 /// Carries [`BaseMetadata`] (flattened, so `name`/`title`/… sit at the top level) plus the
-/// FinX classification and a forward-compatible `_meta` bag for unknown fields.
+/// `FinX` classification and a forward-compatible `_meta` bag for unknown fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct EntityMeta {
     /// Identity & display metadata.

@@ -29,5 +29,11 @@ tdw-embed = { path = "../tdw-embed" }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_embed_openai_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

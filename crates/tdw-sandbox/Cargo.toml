@@ -32,5 +32,11 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 wat = "1"
 
+[[example]]
+# The example uses the default fixture path, so it needs no required-features
+# (the `udf-wasm` feature is optional and exercised by the crate's tests).
+name = "tdw_sandbox_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

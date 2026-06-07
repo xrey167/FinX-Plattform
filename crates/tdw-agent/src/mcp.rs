@@ -160,7 +160,7 @@ impl From<&crate::Tool> for McpTool {
             idempotent_hint: tool.idempotent.then_some(true),
             open_world_hint: tool.open_world.then_some(true),
         };
-        McpTool {
+        Self {
             base: tool.meta.base.clone(),
             input_schema: tool.input_schema.clone(),
             output_schema: tool.output_schema.clone(),
@@ -206,7 +206,7 @@ impl From<&crate::Prompt> for McpPrompt {
     /// Project a canonical [`crate::Prompt`] onto the MCP wire shape. The argument
     /// `default` (an R1 reference) is domain-only and is not carried onto the wire.
     fn from(prompt: &crate::Prompt) -> Self {
-        McpPrompt {
+        Self {
             base: prompt.meta.base.clone(),
             arguments: prompt
                 .arguments
@@ -232,9 +232,10 @@ pub enum McpEntity {
     Prompt(McpPrompt),
 }
 
-/// Project a registry [`Resource`] onto its MCP wire form, if the kind is MCP-exposable
-/// (`tool` / `prompt`). Other kinds return `None`. This completes the round-trip
-/// JSON5 → `Resource` → canonical type → MCP wire.
+/// Project a registry [`Resource`] onto its MCP wire form, if the kind is MCP-exposable.
+///
+/// Only `tool` / `prompt` kinds are projected; other kinds return `None`. This completes
+/// the round-trip JSON5 → `Resource` → canonical type → MCP wire.
 ///
 /// # Errors
 ///

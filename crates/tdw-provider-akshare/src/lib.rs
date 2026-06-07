@@ -25,7 +25,7 @@ pub enum AkShareMarket {
 }
 
 impl AkShareMarket {
-    /// Returns the AkShare endpoint path for this market.
+    /// Returns the `AkShare` endpoint path for this market.
     #[must_use]
     pub const fn endpoint_path(self) -> &'static str {
         match self {
@@ -53,7 +53,7 @@ impl AkShareMarket {
     }
 }
 
-/// Query parameters for an AkShare historical OHLCV request.
+/// Query parameters for an `AkShare` historical OHLCV request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AkShareQuery {
     /// Exchange symbol (A-shares: 6 ASCII digits; HK: 5 ASCII digits).
@@ -87,7 +87,7 @@ impl AkShareQuery {
     }
 }
 
-/// Errors produced by the AkShare provider.
+/// Errors produced by the `AkShare` provider.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AkShareError {
     #[error("akshare symbol must be ASCII digits only and {0} characters for the selected market")]

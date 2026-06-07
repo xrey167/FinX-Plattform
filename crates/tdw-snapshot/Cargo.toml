@@ -30,5 +30,11 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 
+# Unique target name so this `examples/basic.rs` does not collide with the other
+# persistence crates' `basic` example in the shared workspace target directory.
+[[example]]
+name = "tdw-snapshot-basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

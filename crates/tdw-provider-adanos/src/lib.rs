@@ -274,7 +274,7 @@ fn normalize_ticker(ticker: &str) -> Result<String> {
     Ok(ticker.to_ascii_uppercase())
 }
 
-fn validate_limit(limit: u32, max: u32) -> Result<u32> {
+const fn validate_limit(limit: u32, max: u32) -> Result<u32> {
     if limit == 0 || limit > max {
         return Err(AdanosProviderError::InvalidLimit(max));
     }

@@ -16,6 +16,13 @@ doctest = false
 serde = { workspace = true }
 tdw-config = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_llm_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

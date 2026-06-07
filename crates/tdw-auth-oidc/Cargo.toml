@@ -13,7 +13,16 @@ license = "MIT OR Apache-2.0"
 doctest = false
 
 [dependencies]
+jsonwebtoken = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+serde_json = { workspace = true }
+
+[[example]]
+name = "tdw_auth_oidc_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

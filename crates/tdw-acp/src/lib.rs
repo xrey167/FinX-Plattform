@@ -169,6 +169,10 @@ fn validate_op(op: &Op) -> Result<()> {
             Ok(())
         }
         Op::StreamStop { stream_id } => validate_token("stream_id", stream_id),
+        Op::GetQuoteSnapshot { provider, symbol } => {
+            validate_token("provider", provider)?;
+            validate_token("symbol", symbol)
+        }
         Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }

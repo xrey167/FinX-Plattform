@@ -23,3 +23,8 @@ tdw-domain = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-provider-fileset-basic"
+path = "examples/basic.rs"
+

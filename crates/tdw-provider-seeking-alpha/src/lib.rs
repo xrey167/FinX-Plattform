@@ -6,7 +6,7 @@
 //! (`src/http_fetcher.rs`). The crate compiles and tests correctly
 //! without network access by default.
 //!
-//! Auth uses RapidAPI headers:
+//! Auth uses `RapidAPI` headers:
 //! - `x-rapidapi-key: {TDW_SEEKING_ALPHA_API_KEY}`
 //! - `x-rapidapi-host: seeking-alpha.p.rapidapi.com`
 
@@ -187,7 +187,7 @@ fn normalize_ticker(ticker: &str) -> Result<String> {
     Ok(ticker.to_ascii_uppercase())
 }
 
-fn validate_size(size: u32) -> Result<u32> {
+const fn validate_size(size: u32) -> Result<u32> {
     if size == 0 || size > MAX_ARTICLE_SIZE {
         return Err(SeekingAlphaProviderError::InvalidSize);
     }

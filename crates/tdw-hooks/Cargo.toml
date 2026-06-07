@@ -20,5 +20,9 @@ tdw-event = { path = "../tdw-event" }
 tdw-protocol = { workspace = true }
 thiserror = { workspace = true }
 
+[[example]]
+name = "tdw_hooks_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

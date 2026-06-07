@@ -4,13 +4,180 @@ All notable changes to FinX-Plattform are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 SemVer tags `vMAJOR.MINOR.PATCH` as defined in [`docs/release.md`](docs/release.md).
 
-While the major version is `0`, `MINOR` is incremented for user-visible
-runtime, protocol, storage, provider, or release-packaging changes, and `PATCH`
-for compatible fixes, docs, CI-only changes, and packaging repairs.
+From `v1.0.0` onward the project follows standard SemVer: `MAJOR` for
+backward-incompatible protocol/persistence/API/operator-contract changes,
+`MINOR` for backward-compatible user-visible additions, and `PATCH` for
+compatible fixes, docs, CI-only changes, and packaging repairs. The pre-1.0
+history below used `MINOR` for any user-visible change while the major version
+was `0`. The workspace `Cargo.toml` `version` field is intentionally not bumped
+per release — releases are tag-driven (see [`docs/release.md`](docs/release.md)).
 
 ## [Unreleased]
 
-_Nothing yet._
+## [1.1.0] - pending
+
+Security, observability, and production-readiness release on top of `v1.0.0`.
+Hardens authentication (cryptographic OIDC, constant-time token comparison,
+loopback-default daemon bind), wires real storage/compute engines into the
+`live` profile by default, completes registry-driven dispatch, lands the
+worker dead-letter operator surface, and adds CI live-stack/multiarch coverage,
+on top of a workspace-wide documentation and lint-debt sweep.
+
+> **Drafted from a draining merge train.** This section consolidates everything
+> merged after `v1.0.0` (PR #148) as of drafting. Several PRs were still
+> open/queued at draft time and are listed under *Pending — close before tag*
+> below; the final pre-tag touch-up reconciles them with
+> `git log v1.0.0..HEAD --oneline` before the `v1.1.0` tag is cut.
+
+### Added
+
+- **Real engines by default in the `live` profile** (#157). `tdw-service-api`'s
+  `AppState` now wires the real ClickHouse / Postgres / Qdrant / Meilisearch /
+  S3 engines (behind feature gates) instead of in-memory stand-ins when the
+  `live` Compose profile is selected, so the deployed stack exercises the
+  production storage/compute paths. The default offline build is unchanged.
+- **Registry-driven dispatch end to end** (#158). Ingest is now driven through
+  the provider registry, a `ToolRegistry` routes tool/MCP calls, and the wasm
+  UDF runtime is reachable from the daemon dispatch path — closing the gap
+  between the registered provider/tool set and what the daemon can actually
+  execute.
+- **Worker dead-letter operator surface** (#153). `tdw-worker` gains
+  `dead-letter list` / `dead-letter replay` CLI subcommands for inspecting and
+  re-enqueueing dead-lettered jobs, plus a bounded-concurrency clamp so
+  `TDW_WORKER_CONCURRENCY` cannot exceed a safe ceiling. Documented in
+  `docs/release/worker-deployment.md`.
+- **Cryptographic OIDC verification** in `tdw-auth-oidc` (#150). New
+  `verify_jwt` / `verify_jwt_strict` verify a compact JWT's signature against
+  supplied verifying keys (RS256/ES256, resolved by `kid`) and enforce
+  `exp`/`nbf`/`iat` (60s clock-skew leeway), issuer, and audience — failing
+  closed on any error. The `none` pseudo-algorithm and HMAC tokens are rejected
+  (alg-confusion / `alg:none` defence). Built on `jsonwebtoken` (default `ring`
+  backend, already a vetted transitive dependency). The existing structural
+  claim/JWKS checks remain as a pre-filter. Remote JWKS fetch stays out of
+  scope: verifying keys are supplied from the configured JWKS.
+- **Standalone test-policy workflow + pre-release fuzz/loom recipe** (#152).
+  A dedicated `test-policy` GitHub workflow plus the documented
+  `cargo run -p xtask -- prerelease-check` recipe that runs the stable
+  corpus-replay fuzz harnesses and the `tdw-app-server` loom relay model as the
+  release readiness gate. Adds 21 characterization tests for the vendored
+  `tdw-proto` prost types (#151).
+
+### Changed
+
+- **Constant-time bearer-token comparison** on the MCP Streamable HTTP layer
+  (#150). `TDW_MCP_HTTP_TOKEN` validation now compares tokens via `subtle`'s
+  `ConstantTimeEq` over fixed-width digests instead of `==`, removing the
+  timing side channel (and not leaking token length).
+- **Safe daemon TCP defaults** (#150). The daemon TCP transport already
+  defaults to loopback (`127.0.0.1:7878`) when `TDW_DAEMON_TCP_BIND` is unset;
+  it now logs a prominent `SECURITY WARNING` at startup when bound to a
+  non-loopback address with no auth-backed policy attached. **Operator note:**
+  deployments that previously relied on an implicit non-loopback bind must set
+  `TDW_DAEMON_TCP_BIND` explicitly and attach an auth-backed policy.
+- **Partial OIDC config is now a hard startup error** (#150). A
+  partially-configured `prod`/`production` boot (some but not all `TDW_OIDC_*`
+  set, or invalid JWKS/claims) makes the daemon **refuse to start**, with a
+  diagnostic listing every missing variable. A fully-unset OIDC config keeps the
+  existing fail-closed (starts, dispatches return `Failed`) behavior.
+  `OidcPolicyError` gained `MissingEnvVars(Vec<&'static str>)` (replacing the
+  single-var `MissingEnvVar`).
+- **CI: live-stack + tools smoke jobs, aarch64 release leg, multiarch images**
+  (#155). A new `live-stack` workflow brings up the Compose stack and runs the
+  smoke path; the CI tools job covers the `tdw-cli`/`tdw-mcp` surface; the
+  release workflow gains an `aarch64-unknown-linux-gnu` build leg; and container
+  images are now built multiarch.
+
+### Security
+
+- The OIDC, constant-time token comparison, and loopback-default daemon-bind
+  changes (#150) collectively harden the production authentication and transport
+  posture. See *Upgrade notes* in
+  [`docs/release/v1.1.0-notes.md`](docs/release/v1.1.0-notes.md) for the
+  breaking-for-exposed-deployments details.
+
+### Docs
+
+- **Consolidated `TDW_*` environment reference + operator setup** (#149). New
+  [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the single source of truth
+  for every `TDW_*` variable, with a rewritten `.env.example`, a
+  `secrets-and-tls.md` runbook, and `compose-setup` helper scripts.
+- **Lint-debt sweep.** `missing_const_for_fn` resolved across 16 crates
+  (#156, #160) and `too_long_first_doc_paragraph` across 4 crates (#162).
+
+### Pending — close before tag
+
+These PRs were still open/queued at draft time. Reconcile against
+`git log v1.0.0..HEAD --oneline` and fold the merged ones into the sections
+above before cutting the `v1.1.0` tag:
+
+- **#161** — `feat(ops)`: `/health` `/ready` `/metrics` endpoints + graceful
+  drain for daemon, worker, and MCP (G002). *(Adds observability surface; move
+  to Added once merged.)*
+- **#158-adjacent / #159** — `chore(release)`: 1.0 gap-audit closure (other
+  session).
+- **#169** — `feat(tdw-llm)`: `FallbackModel` primary→secondary provider
+  wrapper. *(Added once merged.)*
+- **#163** — `fix(deps)`: bump `jsonwebtoken` 9.3.1 → 10.4.0 on the
+  `rust_crypto` backend. *(Changed/Security once merged.)*
+- **#164–#168, #170–#172** — `docs`: README + ARCHITECTURE + examples sweep for
+  all 113 crates (providers A/B/C, domain, storage, AI, services, core).
+  *(Docs once merged.)*
+
+## [1.0.0] - 2026-06-07
+
+### Added
+
+- Release 1.0 readiness hardening: Yahoo's real HTTP fetcher is now selectable
+  through `tdw-service-api`'s provider feature set and included in
+  `all-http-providers`.
+- Deterministic coverage for the `tdw-bootstrap`, `tdw-cli`, and `tdw-proto`
+  crates so the batch backlog no longer treats them as untested leaf binaries.
+
+### Changed
+
+- Updated release-facing README status text to reflect the existing tag history
+  and the active `v1.0.0` readiness branch.
+
+## [0.10.0] - 2026-06-06
+
+Protobuf market-data types and full data-provider wiring: every standalone
+`tdw-provider-*` crate is now registrable in the service dispatcher behind
+per-provider feature gates, with the default build still fully offline.
+
+### Added
+
+- **`tdw-proto` crate** (#139). Protobuf bindings for the core market-data
+  types — `OhlcvBar`, `Tick`, `PriceLevel`, `OrderBookSnapshot`, and the
+  `MarketDataEnvelope` `oneof` wrapper — generated from
+  `proto/market_data.proto`. The generated bindings are vendored
+  (`src/finance.gen.rs`) so the crate builds with no system `protoc` and no
+  build-time codegen; the runtime depends only on upstream `prost`.
+- **All 30 standalone data providers wired into the dispatcher** (#140, #141).
+  `tdw-service-api::default_registry()` can now register every
+  `tdw-provider-*` crate behind a per-provider cargo feature
+  (`provider-<name>`) plus an `all-http-providers` aggregate. With no features
+  the default registry stays offline and registers exactly 3 providers
+  (fileset, yahoo, mock-ws); `all-http-providers` registers 50 distinct
+  `(provider, endpoint)` entries. Seven providers (adanos, benzinga, cboe,
+  deribit, eia, glassnode, seeking-alpha) were converted to the canonical
+  `tdw_core::Fetcher` trait. The CI lint job now clippy- and test-checks the
+  `all-http-providers` feature so the wired registry cannot silently regress.
+- **`TDW_DAEMON_OPEN_POLICY` escape hatch and a worker concurrency default of
+  4** (#133).
+
+### Changed
+
+- Dependency bumps: `ratatui` 0.30.0 → 0.30.1 (#137), `aws-config`
+  1.8.17 → 1.8.18 (#135), `aws-sdk-s3` 1.134.0 → 1.135.0 (#138), `chrono`
+  0.4.44 → 0.4.45 (#136), and the `docker/build-push-action` GitHub Action
+  6 → 7 (#134).
+
+### Fixed
+
+- `tdw-provider-tiingo` did not compile under `--features http`
+  (`TiingoNewsArticle` lacked the `Serialize`/`Deserialize`/`JsonSchema`
+  derives required by `DataModel`); fixed and now covered by the new
+  `all-http-providers` CI checks (#141).
 
 ## [0.9.0] - 2026-05-31
 
@@ -370,7 +537,12 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.10.0...v1.0.0
+[0.10.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.4.0...v0.5.0

@@ -121,7 +121,7 @@ impl Backend {
 
     /// The underlying daemon composition root.
     #[must_use]
-    pub fn app_state(&self) -> &AppState {
+    pub const fn app_state(&self) -> &AppState {
         &self.state
     }
 
@@ -494,7 +494,7 @@ impl Backend {
 /// stay reproducible. With the `openai` feature built **and**
 /// `TDW_EMBED_PROVIDER=openai` plus an API key configured
 /// (`TDW_OPENAI_EMBEDDING_API_KEY` or `OPENAI_API_KEY`), a real
-/// OpenAI HTTP embedder is used instead. `TDW_EMBED_MODEL` overrides
+/// `OpenAI` HTTP embedder is used instead. `TDW_EMBED_MODEL` overrides
 /// the model (default `text-embedding-3-small`);
 /// `TDW_OPENAI_EMBEDDING_BASE_URL` optionally overrides the endpoint.
 ///

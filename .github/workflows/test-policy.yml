@@ -1,0 +1,97 @@
+name: Test Policy
+
+# Deferred test-policy work from ADR 0014 / docs/quality/test-policy-backlog.md.
+# These jobs are intentionally NOT PR gates: they run on a weekly schedule and
+# on manual dispatch only, so the default `cargo test` / `ci.yml` path stays
+# offline, deterministic, and fast. See:
+#   - docs/adr/0014-test-policy-backlog.md
+#   - docs/quality/test-policy-backlog.md
+#   - docs/quality/pre-release-fuzz-loom.md
+on:
+  schedule:
+    # Weekly, Monday 03:11 UTC (offset from the nightly bench at 02:17 so the
+    # heavier mutation sweep does not contend with nightly runners).
+    - cron: "11 3 * * 1"
+  workflow_dispatch:
+
+# Read-only: these jobs only publish artifacts, never push or gate merges.
+permissions:
+  contents: read
+
+jobs:
+  # TEST-POLICY-001: baseline mutation-score reporting. Bounded per-mutant
+  # runtime via --timeout; package-scoped to the protocol/daemon/MCP/worker
+  # boundaries plus the core domain crate. continue-on-error keeps survivors
+  # from failing the run (no score floor until the seven-run baseline exists,
+  # per ADR 0014). The aggregated summary + raw outcomes JSON are uploaded as
+  # an artifact for trend tracking. This is report-only, not a PR gate.
+  mutation-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-mutants
+      - name: tdw-core mutants
+        run: cargo mutants -p tdw-core --features inventory-registration --timeout 120 --output mutants.out/tdw-core
+        continue-on-error: true
+      - name: tdw-protocol mutants
+        run: cargo mutants -p tdw-protocol --timeout 120 --output mutants.out/tdw-protocol
+        continue-on-error: true
+      - name: tdw-app-client mutants
+        run: cargo mutants -p tdw-app-client --timeout 120 --output mutants.out/tdw-app-client
+        continue-on-error: true
+      - name: tdw-mcp mutants
+        run: cargo mutants -p tdw-mcp --timeout 120 --output mutants.out/tdw-mcp
+        continue-on-error: true
+      - name: tdw-worker mutants
+        run: cargo mutants -p tdw-worker --timeout 120 --output mutants.out/tdw-worker
+        continue-on-error: true
+      - name: Aggregate machine-readable summary
+        run: cargo run -p xtask -- mutation report mutants.out
+      - name: Upload mutation summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-summary
+          path: |
+            mutants.out/mutation-summary.json
+            mutants.out/**/outcomes.json
+
+  # TEST-POLICY-004 (nightly half): build and smoke-run each cargo-fuzz target
+  # for a short, bounded budget against its committed seed corpus. Nightly
+  # toolchain only (libfuzzer-sys); the `fuzz/` crate is excluded from the
+  # stable workspace so this never affects the default build or `cargo test`.
+  # Non-blocking: not a required PR check, only this scheduled/manual run.
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Smoke-run fuzz targets
+        working-directory: fuzz
+        # Force the gnu target: cargo-fuzz needs ASan, which is incompatible
+        # with statically linked musl libc ("sanitizer is incompatible with
+        # statically linked libc"). gnu uses a dynamic libc, so ASan links.
+        run: |
+          for target in protocol_json config_toml mcp_jsonrpc mcp_http daemon_frame sql_guard; do
+            echo "::group::fuzz $target"
+            cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -runs=10000 -max_total_time=30
+            echo "::endgroup::"
+          done
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/**
