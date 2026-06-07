@@ -11,7 +11,7 @@
 
 use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 
 use crate::{
     API_KEY_ENV, BASE_URL, FmpError, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow,
@@ -35,11 +35,8 @@ struct FmpHistoricalEnvelope {
 #[derive(Deserialize)]
 struct FmpHistoricalBar {
     date: String,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
+    #[serde(flatten)]
+    ohlcv: Ohlcv,
 }
 
 #[derive(Deserialize)]
@@ -148,12 +145,8 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
                 venue: "fmp".to_string(),
                 granularity: TimeGranularity::Day,
                 ts: bar.date,
-                open: bar.open,
-                high: bar.high,
-                low: bar.low,
-                close: bar.close,
-                volume: bar.volume,
                 source: "fmp".to_string(),
+                ..bar.ohlcv.into_bar_template()
             });
         }
         Ok(rows)
