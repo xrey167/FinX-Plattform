@@ -29,4 +29,8 @@ pub enum FunctionError {
     /// A JSON serialization or deserialization error.
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    /// A trigger definition is invalid (e.g. unparseable cron expression).
+    #[error("trigger error: {0}")]
+    Trigger(String),
 }
