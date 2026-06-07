@@ -280,3 +280,27 @@ fn log_step(step: &str, status: &str, detail: Option<&str>) {
     }
     println!("{record}");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn require_env_reports_missing_variable_name() {
+        let name = format!("TDW_BOOTSTRAP_TEST_MISSING_ENV_{}", std::process::id());
+
+        let error = require_env(&name).expect_err("missing env var should error");
+
+        assert_eq!(error, format!("env var {name} is required"));
+    }
+
+    #[test]
+    fn bootstrap_constants_match_release_runbook_contract() {
+        assert_eq!(MARKER_KEY, "_tdw_bootstrap_marker");
+        assert_eq!(MARKER_BODY, b"tdw-bootstrap ok\n");
+        assert_eq!(CLICKHOUSE_DB, "tdw");
+        assert_eq!(QDRANT_COLLECTION, "tdw-default");
+        assert_eq!(MEILI_INDEX, "tdw-default");
+        assert_eq!(DEFAULT_QDRANT_VECTOR_SIZE, 1536);
+    }
+}

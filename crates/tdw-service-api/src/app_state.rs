@@ -206,18 +206,21 @@ impl AppState {
     ///
     /// Returns an error variant if the underlying operation fails.
     pub async fn from_config(config: TdwConfig) -> Result<Self> {
+        let live = live_engines_requested(&config.profile);
+
         let (session, rollout) = build_durable_stores(&config).await?;
 
-        let blob: Arc<dyn BlobEngine> = select_blob_engine(&config);
+        let blob: Arc<dyn BlobEngine> = select_blob_engine(&config, live).await?;
+        let relational = select_relational_engine(live).await?;
         let (policy, policy_attach_error) = build_policy(&config);
 
         Ok(Self {
             config,
-            olap: select_olap_engine()?,
-            relational: Arc::new(PostgresRecordingEngine::default()),
+            olap: select_olap_engine(live)?,
+            relational,
             blob,
-            vector: select_vector_engine()?,
-            lexical: Arc::new(InMemoryLexicalEngine::default()),
+            vector: select_vector_engine(live)?,
+            lexical: select_lexical_engine(live)?,
             registry: Arc::new(default_registry()?),
             bus: Arc::new(Mutex::new(EventBus::new(DEFAULT_BUS_CAPACITY))),
             outbox: Arc::new(Mutex::new(InMemoryOutbox::default())),
@@ -478,74 +481,252 @@ impl AppState {
     }
 }
 
+/// Whether the daemon should wire the **real** production engines for every
+/// storage trait, failing closed when a required connection env var (or the
+/// corresponding cargo feature) is absent.
+///
+/// True when the resolved profile is `live`, or when `TDW_ENGINES=real` is set
+/// (a profile-independent escape hatch for operators running the real engines
+/// under a different profile name). The env override is parsed
+/// case-insensitively and trims surrounding whitespace; any other value (or an
+/// unset var) leaves the offline in-memory defaults in place.
+#[must_use]
+fn live_engines_requested(profile: &str) -> bool {
+    if profile == "live" {
+        return true;
+    }
+    std::env::var("TDW_ENGINES")
+        .ok()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("real"))
+}
+
+/// Read a required, non-blank connection env var for the live engine path.
+/// Returns a fail-closed [`Error::Storage`] naming the missing variable so a
+/// misconfigured `live` boot surfaces the actionable cause at startup instead of
+/// silently degrading to an offline engine.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] when `key` is unset or trims to empty.
+// Called only from feature-gated live arms (and the tests). Allow dead_code so
+// a default build with no real-* features still compiles clean under -D warnings.
+#[cfg_attr(
+    not(any(
+        feature = "real-s3",
+        feature = "real-clickhouse",
+        feature = "real-qdrant",
+        feature = "real-meilisearch"
+    )),
+    allow(dead_code)
+)]
+fn require_engine_env(key: &str) -> Result<String> {
+    required_env(key).ok_or_else(|| {
+        Error::Storage(format!(
+            "live profile requires {key} to wire the real engine (set it or unset TDW_PROFILE=live)"
+        ))
+    })
+}
+
+/// Fail-closed error for a live boot that requested real engines but was built
+/// without the cargo feature that compiles the corresponding backend.
+// Used by the `cfg(not(feature = ...))` live arms and the tests. When every
+// real-* feature is enabled at once none of those arms compile, so allow
+// dead_code to keep the full-feature build clean under -D warnings.
+#[cfg_attr(
+    all(
+        feature = "real-s3",
+        feature = "real-postgres",
+        feature = "real-clickhouse",
+        feature = "real-qdrant",
+        feature = "real-meilisearch"
+    ),
+    allow(dead_code)
+)]
+fn missing_feature_err(engine: &str, feature: &str) -> Error {
+    Error::Storage(format!(
+        "live profile requires the real {engine} engine, but this binary was built without the \
+         `{feature}` cargo feature (rebuild with --features {feature} or the `real-engines` bundle)"
+    ))
+}
+
 /// Select the blob engine based on compile-time features and runtime config.
 ///
 /// Step 3 of the adapter pattern: register in `AppState::from_config`.
-fn select_blob_engine(config: &TdwConfig) -> Arc<dyn BlobEngine> {
+///
+/// In the `live` engine path the real [`S3Engine`] is wired from the
+/// `TDW_S3_*` envs (fail-closed on a missing required var or absent feature).
+/// Otherwise the `storage-fs` local-disk engine is used for the `service`
+/// profile, falling back to the in-memory engine.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] when the `live` path is requested but a required
+/// `TDW_S3_*` var is missing or the `real-s3` feature is not compiled in.
+#[cfg_attr(not(feature = "real-s3"), allow(clippy::unused_async))]
+async fn select_blob_engine(config: &TdwConfig, live: bool) -> Result<Arc<dyn BlobEngine>> {
+    if live {
+        #[cfg(feature = "real-s3")]
+        {
+            let endpoint = require_engine_env("TDW_S3_ENDPOINT")?;
+            let bucket = require_engine_env("TDW_S3_BUCKET")?;
+            let access_key = require_engine_env("TDW_S3_ACCESS_KEY")?;
+            let secret_key = require_engine_env("TDW_S3_SECRET_KEY")?;
+            let region = required_env("TDW_S3_REGION").unwrap_or_else(|| "us-east-1".to_string());
+            let engine = tdw_storage_s3::S3Engine::from_endpoint(
+                endpoint, region, access_key, secret_key, bucket,
+            );
+            return Ok(Arc::new(engine));
+        }
+        #[cfg(not(feature = "real-s3"))]
+        return Err(missing_feature_err("S3 blob", "real-s3"));
+    }
+
     // When the `storage-fs` feature is compiled in and the profile is
     // "service", use the local filesystem blob engine rooted at `data_dir`.
     #[cfg(feature = "storage-fs")]
     if config.profile == "service" {
         use tdw_storage_fs::LocalBlobEngine;
-        return Arc::new(LocalBlobEngine::new(&config.paths.data_dir));
+        return Ok(Arc::new(LocalBlobEngine::new(&config.paths.data_dir)));
     }
 
     // Suppress unused-variable warning on the non-feature path.
     let _ = config;
-    Arc::new(InMemoryS3BlobEngine::default())
+    Ok(Arc::new(InMemoryS3BlobEngine::default()))
 }
 
-/// Select the OLAP engine. With the `real-clickhouse` feature enabled and
-/// `TDW_CLICKHOUSE_URL` set, the daemon talks to a live `ClickHouse` over HTTP
-/// (so the ingest/query path persists for real); otherwise the offline
-/// `ClickHouseRecordingEngine` is used. `TDW_CLICKHOUSE_USER` /
-/// `TDW_CLICKHOUSE_PASSWORD` are optional (default user, no password).
+/// Select the relational engine. In the `live` engine path the real
+/// [`PgEngine`] is connected from `TDW_POSTGRES_URL` (falling back to
+/// `TDW_DAEMON_PG_URL` / `DATABASE_URL`), fail-closed on a missing URL or absent
+/// `real-postgres` feature. Otherwise the offline `PostgresRecordingEngine` is
+/// used.
 ///
 /// # Errors
 ///
-/// Returns an error if `TDW_CLICKHOUSE_URL` is set but cannot be parsed.
+/// Returns [`Error::Storage`] when the `live` path is requested but no Postgres
+/// URL is configured or the `real-postgres` feature is not compiled in, and
+/// [`Error::Storage`] when the connection fails.
+#[cfg_attr(not(feature = "real-postgres"), allow(clippy::unused_async))]
+async fn select_relational_engine(live: bool) -> Result<Arc<dyn RelationalEngine>> {
+    if live {
+        #[cfg(feature = "real-postgres")]
+        {
+            let url = relational_pg_url().ok_or_else(|| {
+                Error::Storage(
+                    "live profile requires TDW_POSTGRES_URL (or TDW_DAEMON_PG_URL / DATABASE_URL) \
+                     to wire the real Postgres engine"
+                        .to_string(),
+                )
+            })?;
+            let engine = tdw_storage_postgres::PgEngine::connect(&url)
+                .await
+                .map_err(|e| Error::Storage(format!("live pg connect: {e}")))?;
+            return Ok(Arc::new(engine));
+        }
+        #[cfg(not(feature = "real-postgres"))]
+        return Err(missing_feature_err("Postgres relational", "real-postgres"));
+    }
+    Ok(Arc::new(PostgresRecordingEngine::default()))
+}
+
+/// Resolve the relational engine's Postgres URL, preferring the dedicated
+/// `TDW_POSTGRES_URL` over the daemon's `TDW_DAEMON_PG_URL` and a shared
+/// `DATABASE_URL`. Returns `None` when none is set (non-empty).
+#[cfg(feature = "real-postgres")]
+fn relational_pg_url() -> Option<String> {
+    ["TDW_POSTGRES_URL", "TDW_DAEMON_PG_URL", "DATABASE_URL"]
+        .into_iter()
+        .find_map(required_env)
+}
+
+/// Select the OLAP engine. In the `live` engine path the real
+/// [`ClickHouseHttpEngine`] is wired from `TDW_CLICKHOUSE_URL` (+ optional
+/// `TDW_CLICKHOUSE_USER` / `TDW_CLICKHOUSE_PASSWORD`), fail-closed on a missing
+/// URL or absent `real-clickhouse` feature. Otherwise the offline
+/// `ClickHouseRecordingEngine` is used.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] when the `live` path is requested but
+/// `TDW_CLICKHOUSE_URL` is missing or the `real-clickhouse` feature is not
+/// compiled in, and a parse error if the endpoint URL cannot be parsed.
 // Real Err path exists behind `real-clickhouse` (ClickHouseHttpEngine::new(..)?);
 // only looks unwrappable in the default build, so keep the Result and the allow.
 #[allow(clippy::unnecessary_wraps)]
-fn select_olap_engine() -> Result<Arc<dyn OlapEngine>> {
-    #[cfg(feature = "real-clickhouse")]
-    {
-        if let Ok(url) = std::env::var("TDW_CLICKHOUSE_URL")
-            && !url.trim().is_empty()
+fn select_olap_engine(live: bool) -> Result<Arc<dyn OlapEngine>> {
+    if live {
+        #[cfg(feature = "real-clickhouse")]
         {
+            let url = require_engine_env("TDW_CLICKHOUSE_URL")?;
             let user = std::env::var("TDW_CLICKHOUSE_USER").ok();
             let password = std::env::var("TDW_CLICKHOUSE_PASSWORD").ok();
             let engine = tdw_storage_clickhouse::ClickHouseHttpEngine::new(&url, user, password)?;
             return Ok(Arc::new(engine));
         }
+        #[cfg(not(feature = "real-clickhouse"))]
+        return Err(missing_feature_err("ClickHouse OLAP", "real-clickhouse"));
     }
     Ok(Arc::new(ClickHouseRecordingEngine::default()))
 }
 
-/// Select the vector engine. With the `real-qdrant` feature enabled and
-/// `TDW_QDRANT_URL` set, the daemon talks to a live Qdrant over HTTP (so the
-/// knowledge index built over `AppState.vector` persists for real); otherwise
-/// the offline `InMemoryVectorEngine` is used. `TDW_QDRANT_API_KEY` is optional
-/// (default: no API key).
+/// Select the vector engine. In the `live` engine path the real
+/// [`QdrantHttpEngine`] is wired from `TDW_QDRANT_URL` (+ optional
+/// `TDW_QDRANT_API_KEY`), fail-closed on a missing URL or absent `real-qdrant`
+/// feature. Otherwise the offline `InMemoryVectorEngine` is used.
 ///
 /// # Errors
 ///
-/// Returns an error if `TDW_QDRANT_URL` is set but cannot be parsed.
+/// Returns [`Error::Storage`] when the `live` path is requested but
+/// `TDW_QDRANT_URL` is missing or the `real-qdrant` feature is not compiled in,
+/// and a parse error if the endpoint URL cannot be parsed.
 // Real Err path exists behind `real-qdrant` (QdrantHttpEngine::new(..)?); only
 // looks unwrappable in the default build, so keep the Result and the allow.
 #[allow(clippy::unnecessary_wraps)]
-fn select_vector_engine() -> Result<Arc<dyn VectorEngine>> {
-    #[cfg(feature = "real-qdrant")]
-    {
-        if let Ok(url) = std::env::var("TDW_QDRANT_URL")
-            && !url.trim().is_empty()
+fn select_vector_engine(live: bool) -> Result<Arc<dyn VectorEngine>> {
+    if live {
+        #[cfg(feature = "real-qdrant")]
         {
+            let url = require_engine_env("TDW_QDRANT_URL")?;
             let api_key = std::env::var("TDW_QDRANT_API_KEY").ok();
             let engine = tdw_storage_qdrant::QdrantHttpEngine::new(&url, api_key)?;
             return Ok(Arc::new(engine));
         }
+        #[cfg(not(feature = "real-qdrant"))]
+        return Err(missing_feature_err("Qdrant vector", "real-qdrant"));
     }
     Ok(Arc::new(InMemoryVectorEngine::default()))
+}
+
+/// Select the lexical engine. In the `live` engine path the real
+/// [`MeilisearchHttpEngine`] is wired from `TDW_MEILI_URL` (+ optional
+/// `TDW_MEILI_API_KEY`), fail-closed on a missing URL or absent
+/// `real-meilisearch` feature. Otherwise the offline `InMemoryLexicalEngine` is
+/// used. This is the first runtime wiring of the real Meilisearch engine
+/// (mirroring how Qdrant / ClickHouse are wired above).
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] when the `live` path is requested but
+/// `TDW_MEILI_URL` is missing or the `real-meilisearch` feature is not compiled
+/// in, and a parse error if the endpoint URL cannot be parsed.
+// Real Err path exists behind `real-meilisearch` (MeilisearchHttpEngine::new(..)?);
+// only looks unwrappable in the default build, so keep the Result and the allow.
+#[allow(clippy::unnecessary_wraps)]
+fn select_lexical_engine(live: bool) -> Result<Arc<dyn LexicalEngine>> {
+    if live {
+        #[cfg(feature = "real-meilisearch")]
+        {
+            let url = require_engine_env("TDW_MEILI_URL")?;
+            let api_key = std::env::var("TDW_MEILI_API_KEY").ok();
+            let engine = tdw_storage_meilisearch::MeilisearchHttpEngine::new(&url, api_key)?;
+            return Ok(Arc::new(engine));
+        }
+        #[cfg(not(feature = "real-meilisearch"))]
+        return Err(missing_feature_err(
+            "Meilisearch lexical",
+            "real-meilisearch",
+        ));
+    }
+    Ok(Arc::new(InMemoryLexicalEngine::default()))
 }
 
 /// Build the daemon's session + rollout stores.
@@ -605,8 +786,10 @@ fn daemon_pg_url() -> Option<String> {
 /// [`tdw_auth_oidc::ClaimValidationError`] from structural validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OidcPolicyError {
-    /// A required `TDW_OIDC_*` variable was unset or blank (the named var).
-    MissingEnvVar(&'static str),
+    /// One or more required `TDW_OIDC_*` variables were unset or blank while at
+    /// least one other was set (a partial misconfiguration). Carries every
+    /// missing variable so the operator can fix the configuration in one pass.
+    MissingEnvVars(Vec<&'static str>),
     /// A `kid:alg` JWKS segment was malformed (missing `:` or an empty side).
     MalformedJwksPair(String),
     /// The same `kid` appeared more than once in the JWKS spec.
@@ -618,7 +801,9 @@ pub enum OidcPolicyError {
 impl std::fmt::Display for OidcPolicyError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::MissingEnvVar(var) => write!(f, "{var} missing"),
+            Self::MissingEnvVars(vars) => {
+                write!(f, "partial OIDC config: missing {}", vars.join(", "))
+            }
             Self::MalformedJwksPair(pair) => write!(f, "malformed JWKS pair: {pair}"),
             Self::DuplicateKid(kid) => write!(f, "duplicate kid in JWKS: {kid}"),
             Self::InvalidClaims(error) => write!(f, "invalid claims: {error:?}"),
@@ -728,8 +913,8 @@ fn build_prod_policy_from_env()
 /// Semantics:
 /// - **all five required vars unset → `Ok(None)`** (deliberately unconfigured,
 ///   fail-closed by design — not an error).
-/// - **some required vars present, others missing → `Err(MissingEnvVar(..))`**
-///   naming the first missing required var (a partial misconfiguration).
+/// - **some required vars present, others missing → `Err(MissingEnvVars(..))`**
+///   naming every missing required var (a partial misconfiguration).
 /// - **all required present but parse/validation fails → `Err(..)`**.
 /// - **all valid → `Ok(Some(policy))`**.
 ///
@@ -750,14 +935,17 @@ fn build_prod_policy_from_lookup(
     }
 
     // Some present, some missing: a partial misconfiguration is an error so the
-    // operator sees which var to set rather than a silent fail-closed.
-    let mut required = Vec::with_capacity(REQUIRED_OIDC_VARS.len());
-    for (key, value) in REQUIRED_OIDC_VARS.iter().zip(resolved) {
-        match value {
-            Some(value) => required.push(value),
-            None => return Err(OidcPolicyError::MissingEnvVar(key)),
-        }
+    // operator sees *every* var to set rather than a silent fail-closed (and so
+    // the daemon can refuse to start — see `run_daemon`).
+    let missing: Vec<&'static str> = REQUIRED_OIDC_VARS
+        .iter()
+        .zip(&resolved)
+        .filter_map(|(key, value)| value.is_none().then_some(*key))
+        .collect();
+    if !missing.is_empty() {
+        return Err(OidcPolicyError::MissingEnvVars(missing));
     }
+    let required: Vec<String> = resolved.into_iter().flatten().collect();
 
     let roles_spec = lookup("TDW_OIDC_ROLES").unwrap_or_default();
     build_prod_policy(
@@ -1234,15 +1422,23 @@ mod tests {
     }
 
     #[test]
-    fn build_prod_policy_from_lookup_partial_config_names_missing_var() {
-        // Issuer + audience present, JWKS (a required var) missing: the wrapper
-        // must surface the first missing required var, not silently fail closed.
+    fn build_prod_policy_from_lookup_partial_config_names_missing_vars() {
+        // Issuer + audience present, the other three required vars missing: the
+        // wrapper must surface *every* missing required var (so the daemon can
+        // refuse to start with a complete diagnostic), not silently fail closed.
         let map = std::collections::HashMap::from([
             ("TDW_OIDC_ISSUER", "https://issuer.example"),
             ("TDW_OIDC_AUDIENCE", "tdw-daemon"),
         ]);
         let result = build_prod_policy_from_lookup(|key| map.get(key).map(ToString::to_string));
-        assert_eq!(result, Err(OidcPolicyError::MissingEnvVar("TDW_OIDC_JWKS")));
+        assert_eq!(
+            result,
+            Err(OidcPolicyError::MissingEnvVars(vec![
+                "TDW_OIDC_JWKS",
+                "TDW_OIDC_SUBJECT",
+                "TDW_OIDC_KID",
+            ]))
+        );
     }
 
     #[test]
@@ -1372,5 +1568,72 @@ mod tests {
         assert_eq!(state.config.profile, "service");
         // Engine is present and usable.
         let _ = Arc::clone(&state.blob);
+    }
+
+    #[test]
+    fn live_engines_requested_for_live_profile() {
+        // Env-free: the `live` profile alone selects the real engine path.
+        assert!(live_engines_requested("live"));
+    }
+
+    #[test]
+    fn live_engines_not_requested_for_other_profiles_without_env() {
+        // These profiles never request real engines on their own. (TDW_ENGINES
+        // is not set in the offline test runner, so the env arm is inert.)
+        assert!(!live_engines_requested("default"));
+        assert!(!live_engines_requested("docker"));
+        assert!(!live_engines_requested("service"));
+        assert!(!live_engines_requested("production"));
+    }
+
+    /// Without the real-engine features compiled in (the default offline build),
+    /// a `live` profile must fail closed at startup rather than silently falling
+    /// back to an in-memory engine. The feature-absent error is env-free, so this
+    /// is deterministic in the parallel suite.
+    #[cfg(not(any(
+        feature = "real-s3",
+        feature = "real-postgres",
+        feature = "real-clickhouse",
+        feature = "real-qdrant",
+        feature = "real-meilisearch"
+    )))]
+    #[tokio::test]
+    async fn live_profile_without_real_engine_features_fails_closed() {
+        let mut config = TdwConfig {
+            profile: "live".to_string(),
+            ..TdwConfig::default()
+        };
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+
+        let Err(error) = AppState::from_config(config).await else {
+            panic!("live profile without real-engine features must fail closed");
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains("live profile requires"),
+            "expected a fail-closed live-engine error, got: {message}"
+        );
+    }
+
+    /// The feature-missing fail-closed message names the cargo feature to enable
+    /// so an operator can act on it. Pure (env-free) string assertion.
+    #[test]
+    fn missing_feature_err_names_the_feature() {
+        let error = missing_feature_err("S3 blob", "real-s3");
+        let message = error.to_string();
+        assert!(message.contains("real-s3"), "got: {message}");
+        assert!(message.contains("real-engines"), "got: {message}");
+    }
+
+    /// `require_engine_env` fails closed (naming the variable) when a required
+    /// live connection var is unset. Uses a uniquely-named var guaranteed to be
+    /// absent in the test runner so this stays race-free.
+    #[test]
+    fn require_engine_env_fails_closed_when_var_unset() {
+        const ABSENT: &str = "TDW_G003_DEFINITELY_UNSET_VAR";
+        let error = require_engine_env(ABSENT).expect_err("unset var must fail closed");
+        let message = error.to_string();
+        assert!(message.contains(ABSENT), "got: {message}");
+        assert!(message.contains("live profile requires"), "got: {message}");
     }
 }

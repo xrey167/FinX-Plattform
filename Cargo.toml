@@ -43,8 +43,15 @@ futures-util = { version = "0.3.31", default-features = false }
 # Pure-Rust JSON5 parser. Comment-friendly authoring format for the agent registry;
 # the MCP wire stays strict JSON via the mcp adapter.
 json5 = "1"
+# JWT verification (signature + standard claim checks) for the OIDC ingress
+# boundary. `rust_crypto` selects the pure-Rust crypto backend (rsa/p256/p384/
+# hmac/sha2 crates); no C / CMake / aws-lc-sys build dependency.
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 # Cross-platform filesystem notifications (pure Rust) for event-driven registry hot-reload.
 notify = "8"
+# Constant-time byte comparison for bearer-token / secret equality checks
+# (timing-attack resistant). Already a vetted transitive dependency.
+subtle = "2.6"
 toml = "1.1.2"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.2", features = ["v7", "serde"] }

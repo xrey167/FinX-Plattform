@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "DEPRECATED (pre-taxonomy): an entity→table mapping. Q8 reclassified storage to a\n`resourcedefinition` persistence facet + relation, so this is no longer a first-class\nkind. Retained because downstream crates still consume it.",
+  "description": "DEPRECATED (pre-taxonomy): an entity→table mapping.\n\nQ8 reclassified storage to a `resourcedefinition` persistence facet + relation, so this\nis no longer a first-class kind. Retained because downstream crates still consume it.",
   "properties": {
     "entity": {
       "type": "string"
