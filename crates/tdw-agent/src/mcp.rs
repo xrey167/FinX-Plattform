@@ -232,9 +232,10 @@ pub enum McpEntity {
     Prompt(McpPrompt),
 }
 
-/// Project a registry [`Resource`] onto its MCP wire form, if the kind is MCP-exposable
-/// (`tool` / `prompt`). Other kinds return `None`. This completes the round-trip
-/// JSON5 → `Resource` → canonical type → MCP wire.
+/// Project a registry [`Resource`] onto its MCP wire form, if the kind is MCP-exposable.
+///
+/// Only `tool` / `prompt` kinds are projected; other kinds return `None`. This completes
+/// the round-trip JSON5 → `Resource` → canonical type → MCP wire.
 ///
 /// # Errors
 ///
