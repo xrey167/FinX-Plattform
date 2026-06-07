@@ -150,7 +150,7 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
     Ok(symbol.to_ascii_uppercase())
 }
 
-fn validate_limit(limit: u32) -> Result<u32> {
+const fn validate_limit(limit: u32) -> Result<u32> {
     if limit == 0 {
         return Err(VelodataProviderError::InvalidLimit);
     }

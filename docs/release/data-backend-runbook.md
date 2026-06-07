@@ -37,7 +37,7 @@ This starts:
 | `minio-init`        | `minio/mc:latest`                  | Creates the `tdw-default` bucket once, then exits                           |
 | `tdw-bootstrap`     | built from `Dockerfile.bootstrap`  | Applies G013 Postgres schemas, writes the S3 marker, and creates the ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection, and Meilisearch `tdw-default` index, then exits |
 | `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`) | Long-running `tdw-worker --serve` over **Postgres** (`PgWorkerQueue`, self-migrates `system.worker_jobs`); starts after bootstrap |
-| `tdw-service-daemon`| `docker/tdw-service.Dockerfile`    | Long-running daemon, binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); **internal-only** (not host-published — its transport is unauthenticated plaintext) |
+| `tdw-service-daemon`| `docker/tdw-service.Dockerfile` (`FEATURES=real-engines`) | Long-running daemon running `TDW_PROFILE=live`, so it wires the **real** engines (Postgres, ClickHouse, Qdrant, Meilisearch, S3/MinIO) from the `TDW_*` connection envs and Postgres-backs its own session/rollout stores; binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); **internal-only** (not host-published — its transport is unauthenticated plaintext) |
 | `tdw-mcp-serve`     | `docker/tdw-mcp.Dockerfile`        | Long-running MCP Streamable HTTP at `0.0.0.0:8788` (host `8788`); daemon tools routed to `tdw-service-daemon:7878`; **requires** `TDW_MCP_HTTP_TOKEN` |
 
 `tdw-bootstrap` runs after `postgres` is healthy, `minio-init` has finished,
@@ -52,6 +52,36 @@ live up` fails fast if it is unset. Set a strong, unique value in `.env`
 (e.g. `openssl rand -hex 32`) — the MCP server refuses a non-loopback bind
 without it. Front it with a TLS/OAuth reverse proxy per
 [`mcp-remote-deployment.md`](mcp-remote-deployment.md) for any non-local use.
+
+### Daemon TCP transport — bind safely
+
+The daemon's TCP transport (`TDW_DAEMON_TCP_BIND`) **defaults to loopback**
+(`127.0.0.1:7878`) when the variable is unset, so an out-of-the-box run is not
+reachable off-host. Binding a routable address is an **explicit opt-in**.
+
+- **Safe default**: leave `TDW_DAEMON_TCP_BIND` unset (or set `127.0.0.1:7878`).
+  Anything that needs the daemon (the MCP server, workers) reaches it over the
+  loopback/compose network.
+- **Container / cross-host**: the `live` compose stack sets
+  `TDW_DAEMON_TCP_BIND=0.0.0.0:7878` so sibling containers can reach it, but the
+  port is **internal-only** (not host-published) and the compose network is the
+  trust boundary. Do **not** publish `7878` to the host or a routable interface.
+- **Prominent warning**: when the daemon binds a **non-loopback** address with
+  **no auth-backed policy attached**, it logs a `SECURITY WARNING` to stderr at
+  startup (the daemon's transport is unauthenticated plaintext — any host that
+  can reach the port can drive it).
+
+If you must expose the daemon beyond loopback, protect it with one of:
+
+- **Ingress auth policy**: configure `TDW_OIDC_*` (see
+  [`production-auth-oidc.md`](production-auth-oidc.md)) so dispatches require a
+  verified token; cryptographic JWT verification (RS256/ES256 signature + claim
+  checks) is enforced by `tdw-auth-oidc`.
+- **mTLS**: terminate mutual-TLS at a sidecar/proxy in front of `7878` so only
+  clients presenting a trusted client certificate reach the daemon.
+- **Reverse proxy**: front the daemon with a TLS/OAuth reverse proxy (as for the
+  MCP server) and keep the daemon itself bound to loopback inside the trust
+  boundary.
 
 ## Verify the bootstrap
 
@@ -104,6 +134,29 @@ curl -s http://localhost:6333/collections/tdw-default | findstr status
 curl -s http://localhost:7700/indexes/tdw-default | findstr uid
 ```
 
+## Real-engine selection contract (`TDW_PROFILE=live`)
+
+The `tdw-service-daemon` is built with `--features real-engines` and runs with
+`TDW_PROFILE=live`. Under that profile the daemon wires the **real** production
+engine for every storage trait instead of the offline in-memory defaults, and
+**fails closed at startup** (clear error, non-zero exit) when a required
+connection env var is missing or the matching cargo feature was not compiled in.
+Set `TDW_ENGINES=real` to force the same real-engine path under a different
+profile name.
+
+| Engine (trait) | Real backend | Cargo feature | Connection envs (required unless noted) |
+|---|---|---|---|
+| relational (`RelationalEngine`) | `PgEngine` | `real-postgres` | `TDW_POSTGRES_URL` (falls back to `TDW_DAEMON_PG_URL` / `DATABASE_URL`) |
+| OLAP (`OlapEngine`) | `ClickHouseHttpEngine` | `real-clickhouse` | `TDW_CLICKHOUSE_URL`; `TDW_CLICKHOUSE_USER` / `TDW_CLICKHOUSE_PASSWORD` optional |
+| vector (`VectorEngine`) | `QdrantHttpEngine` | `real-qdrant` | `TDW_QDRANT_URL`; `TDW_QDRANT_API_KEY` optional |
+| lexical (`LexicalEngine`) | `MeilisearchHttpEngine` | `real-meilisearch` | `TDW_MEILI_URL`; `TDW_MEILI_API_KEY` optional |
+| blob (`BlobEngine`) | `S3Engine` | `real-s3` | `TDW_S3_ENDPOINT`, `TDW_S3_BUCKET`, `TDW_S3_ACCESS_KEY`, `TDW_S3_SECRET_KEY`; `TDW_S3_REGION` optional (default `us-east-1`) |
+
+The `real-engines` feature bundle enables all five plus `daemon-postgres`. The
+compose `live` profile sets every required env above (the same backends the
+`tdw-bootstrap` one-shot provisions on first run), so the daemon comes up against
+the live data backend with no further configuration.
+
 ## Re-running bootstrap
 
 Bootstrap is idempotent (all `CREATE TABLE` statements use
@@ -150,9 +203,6 @@ docker compose --profile live down -v
   get that `Failed` result. Deterministic offline MCP tools work regardless. A
   `prod`/`production` daemon attaches an auth-backed policy when `TDW_OIDC_*` is
   configured — see [`production-auth-oidc.md`](./production-auth-oidc.md).
-- Back the daemon's own stores with Postgres. `tdw-service-daemon` uses in-memory
-  session/rollout defaults for boot; wiring its stores to the live Postgres is a
-  further enhancement (the worker IS Postgres-backed).
 - Define rich domain schemas. The ClickHouse table, Qdrant collection, and
   Meilisearch index created here are baseline markers proving the backends are
   reachable and writable; application tables/collections are still created on
@@ -162,6 +212,7 @@ docker compose --profile live down -v
 
 ## See also
 
+- `docs/release/secrets-and-tls.md` - systemd/Kubernetes secret injection, TLS, and `TDW_MCP_HTTP_TOKEN` rotation.
 - `docs/quality/production-storage-transports.md` - per-backend
   recipes and the full G010 status table.
 - `docs/quality/production-transport-status.md` - workspace-wide

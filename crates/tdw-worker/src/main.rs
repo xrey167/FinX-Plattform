@@ -27,6 +27,10 @@ async fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    if std::env::args().any(|arg| arg == "dead-letters") {
+        return dead_letters_command().await;
+    }
+
     if std::env::args().any(|arg| arg == "--serve" || arg == "--serve-once") {
         return serve().await;
     }
@@ -95,6 +99,99 @@ async fn serve() -> std::result::Result<(), String> {
         serde_json::to_string(&report).map_err(|error| error.to_string())?
     );
     Ok(())
+}
+
+/// Parse the `dead-letters` subcommand from the CLI arguments.
+///
+/// `tdw-worker dead-letters list`
+/// `tdw-worker dead-letters replay <job_id>`
+#[derive(Debug, PartialEq, Eq)]
+enum DeadLetterCommand {
+    List,
+    Replay(String),
+}
+
+fn parse_dead_letter_command() -> std::result::Result<DeadLetterCommand, String> {
+    parse_dead_letter_args(std::env::args())
+}
+
+fn parse_dead_letter_args(
+    args: impl Iterator<Item = String>,
+) -> std::result::Result<DeadLetterCommand, String> {
+    let mut args = args.skip_while(|arg| arg != "dead-letters");
+    // Drop the `dead-letters` token itself.
+    args.next();
+    match args.next().as_deref() {
+        Some("list") | None => Ok(DeadLetterCommand::List),
+        Some("replay") => match args.next() {
+            Some(job_id) if !job_id.trim().is_empty() => Ok(DeadLetterCommand::Replay(job_id)),
+            _ => Err("dead-letters replay requires a <job_id> argument".to_string()),
+        },
+        Some(other) => Err(format!(
+            "unknown dead-letters subcommand '{other}' (expected 'list' or 'replay <job_id>')"
+        )),
+    }
+}
+
+/// Operate on the dead-letter queue: list dead-lettered jobs as JSON, or replay
+/// one back onto the queue. Uses the same backend selection as `--serve`.
+async fn dead_letters_command() -> std::result::Result<(), String> {
+    let command = parse_dead_letter_command()?;
+    match worker_backend_from_env() {
+        #[cfg(feature = "postgres")]
+        WorkerBackend::Postgres(url) => {
+            let queue = tdw_worker::PgWorkerQueue::connect(&url)
+                .await
+                .map_err(|error| error.to_string())?;
+            match command {
+                DeadLetterCommand::List => {
+                    let letters = queue.dead_letters().await.map_err(|e| e.to_string())?;
+                    print_dead_letters(&letters)
+                }
+                DeadLetterCommand::Replay(job_id) => {
+                    queue
+                        .replay_dead_letter(&job_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    report_replay(&job_id, "postgres");
+                    Ok(())
+                }
+            }
+        }
+        WorkerBackend::Sqlite(db_url) => {
+            let queue = tdw_worker::SqliteWorkerQueue::connect(&db_url)
+                .await
+                .map_err(|error| error.to_string())?;
+            match command {
+                DeadLetterCommand::List => {
+                    let letters = queue.dead_letters().await.map_err(|e| e.to_string())?;
+                    print_dead_letters(&letters)
+                }
+                DeadLetterCommand::Replay(job_id) => {
+                    queue
+                        .replay_dead_letter(&job_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    report_replay(&job_id, "sqlite");
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+fn print_dead_letters(letters: &[tdw_worker::DeadLetterRecord]) -> std::result::Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string(letters).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+/// Audit log line for a dead-letter replay, emitted to stderr so it lands in
+/// operator logs alongside the worker's other diagnostics.
+fn report_replay(job_id: &str, backend: &str) {
+    eprintln!("tdw-worker dead-letters replay job_id={job_id} backend={backend} status=requeued");
 }
 
 /// Which durable backend `--serve` runs against.
@@ -247,10 +344,27 @@ fn serve_config_from_env() -> tdw_worker::ServeConfig {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
     {
-        // Clamp to at least 1 so `0`/garbage never stalls the serve loop.
-        config.max_concurrent = concurrency.max(1);
+        config.max_concurrent = clamp_concurrency(concurrency);
     }
     config
+}
+
+/// Upper bound on `TDW_WORKER_CONCURRENCY`. Bounds in-flight jobs so a typo
+/// (e.g. `100000`) cannot exhaust DB connections / file descriptors.
+const MAX_WORKER_CONCURRENCY: usize = 256;
+
+/// Clamp the requested worker concurrency into `1..=MAX_WORKER_CONCURRENCY`,
+/// warning on stderr when the request is clamped. `0`/garbage never stalls the
+/// serve loop, and an over-large value never exhausts resources.
+fn clamp_concurrency(requested: usize) -> usize {
+    let clamped = requested.clamp(1, MAX_WORKER_CONCURRENCY);
+    if clamped != requested {
+        eprintln!(
+            "tdw-worker: TDW_WORKER_CONCURRENCY={requested} clamped to {clamped} \
+             (valid range 1..={MAX_WORKER_CONCURRENCY})"
+        );
+    }
+    clamped
 }
 
 async fn durable_smoke() -> tdw_worker::Result<String> {
@@ -273,4 +387,60 @@ async fn durable_smoke() -> tdw_worker::Result<String> {
         "stats": stats
     })
     .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(parts: &[&str]) -> impl Iterator<Item = String> {
+        parts
+            .iter()
+            .map(|part| (*part).to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn clamp_concurrency_bounds_to_valid_range() {
+        assert_eq!(clamp_concurrency(0), 1, "zero must not stall the loop");
+        assert_eq!(clamp_concurrency(1), 1);
+        assert_eq!(clamp_concurrency(8), 8);
+        assert_eq!(
+            clamp_concurrency(MAX_WORKER_CONCURRENCY),
+            MAX_WORKER_CONCURRENCY
+        );
+        assert_eq!(
+            clamp_concurrency(MAX_WORKER_CONCURRENCY + 1),
+            MAX_WORKER_CONCURRENCY,
+            "over-large request is capped"
+        );
+        assert_eq!(clamp_concurrency(100_000), MAX_WORKER_CONCURRENCY);
+    }
+
+    #[test]
+    fn parse_dead_letter_args_defaults_to_list() {
+        assert!(matches!(
+            parse_dead_letter_args(args(&["tdw-worker", "dead-letters"])),
+            Ok(DeadLetterCommand::List)
+        ));
+        assert!(matches!(
+            parse_dead_letter_args(args(&["tdw-worker", "dead-letters", "list"])),
+            Ok(DeadLetterCommand::List)
+        ));
+    }
+
+    #[test]
+    fn parse_dead_letter_args_parses_replay() {
+        match parse_dead_letter_args(args(&["tdw-worker", "dead-letters", "replay", "job-7"])) {
+            Ok(DeadLetterCommand::Replay(job_id)) => assert_eq!(job_id, "job-7"),
+            other => panic!("expected replay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_dead_letter_args_rejects_bad_input() {
+        assert!(parse_dead_letter_args(args(&["tdw-worker", "dead-letters", "replay"])).is_err());
+        assert!(parse_dead_letter_args(args(&["tdw-worker", "dead-letters", "bogus"])).is_err());
+    }
 }

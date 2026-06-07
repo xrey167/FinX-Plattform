@@ -39,7 +39,7 @@ pub enum DeribitKind {
 impl DeribitKind {
     /// Return the lowercase string value used as the `kind` query parameter.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Option => "option",
             Self::Future => "future",
@@ -366,7 +366,7 @@ fn normalize_instrument_name(name: &str) -> Result<String> {
     Ok(name.to_ascii_uppercase())
 }
 
-fn validate_depth(depth: u32) -> Result<u32> {
+const fn validate_depth(depth: u32) -> Result<u32> {
     match depth {
         1 | 5 | 10 | 20 => Ok(depth),
         _ => Err(DeribitProviderError::InvalidDepth),

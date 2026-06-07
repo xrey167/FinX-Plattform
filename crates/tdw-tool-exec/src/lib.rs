@@ -90,7 +90,7 @@ impl CommandPolicy {
     /// `allowed = None` denies all command execution; `Some(list)` permits exactly the bare
     /// command names in `list`.
     #[must_use]
-    pub fn new(allowed: Option<Vec<String>>, timeout: Duration) -> Self {
+    pub const fn new(allowed: Option<Vec<String>>, timeout: Duration) -> Self {
         Self { allowed, timeout }
     }
 
