@@ -30,9 +30,10 @@ use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};
 use crate::config::BackendConfig;
 use crate::error::BackendResult;
 
-/// Environment variable naming the directory of `tdw-agent` registry definitions
-/// to load. Shared with `tdw-mcp`'s server entrypoints so the embedded and
-/// stand-alone MCP surfaces resolve the same registry.
+/// Environment variable naming the directory of `tdw-agent` registry definitions to load.
+///
+/// Shared with `tdw-mcp`'s server entrypoints so the embedded and stand-alone MCP surfaces
+/// resolve the same registry.
 pub const REGISTRY_DIR_ENV: &str = tdw_mcp::REGISTRY_DIR_ENV;
 
 /// The `pass_rate` threshold below which eval feedback disables a skill. A run whose
