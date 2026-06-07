@@ -12,6 +12,9 @@ inventory-registration = ["dep:inventory"]
 # read_required_key) consumed by `tdw-provider-*` crates. Gated so the default
 # offline build pulls in no reqwest dependency.
 http = ["dep:reqwest"]
+# Offline tiered context-compaction pipeline over `tdw_llm::ChatMessage`. Gated
+# so the default/provider builds pull in no `tdw-llm` dependency.
+compaction = ["dep:tdw-llm"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -22,6 +25,7 @@ reqwest = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-llm = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [[example]]
