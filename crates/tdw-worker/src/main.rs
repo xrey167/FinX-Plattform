@@ -216,7 +216,7 @@ fn worker_backend_from_env() -> WorkerBackend {
 }
 
 /// Run the lease loop with the configured handler over any `ServeQueue` backend.
-async fn run_serve_dispatch<Q: tdw_worker::ServeQueue>(
+async fn run_serve_dispatch<Q: tdw_worker::ServeQueue + Clone + 'static>(
     queue: Q,
     daemon: Option<(DaemonClientConfig, String)>,
     config: tdw_worker::ServeConfig,
@@ -236,22 +236,67 @@ async fn run_serve_dispatch<Q: tdw_worker::ServeQueue>(
     }
 }
 
-async fn run_serve<Q: tdw_worker::ServeQueue, H: tdw_worker::JobHandler>(
+async fn run_serve<Q: tdw_worker::ServeQueue + Clone + 'static, H: tdw_worker::JobHandler>(
     queue: Q,
     handler: H,
     config: tdw_worker::ServeConfig,
     once: bool,
 ) -> tdw_worker::Result<tdw_worker::ServeReport> {
-    let runner = tdw_worker::WorkerRunner::new(queue, handler, config);
     if once {
-        runner.run_until_idle().await
-    } else {
-        runner
-            .run(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await
+        // `--serve-once` drains the ready backlog and exits; no long-running ops
+        // listener is wired for the one-shot path.
+        let runner = tdw_worker::WorkerRunner::new(queue, handler, config);
+        return runner.run_until_idle().await;
     }
+
+    // The ops listener (/health, /ready, /metrics) is OFF by default; it binds
+    // only when TDW_WORKER_HTTP_BIND is set. It shares the serve loop's queue
+    // handle (same backend pool) so /ready reflects real queue connectivity.
+    let cancel = tdw_app_server::CancellationToken::new();
+    let ops_task = spawn_worker_ops(&queue, cancel.clone()).await;
+
+    let runner = tdw_worker::WorkerRunner::new(queue, handler, config);
+    let cancel_for_drain = cancel.clone();
+    let report = runner
+        .run(async move {
+            // SIGTERM (container/systemd stop) or Ctrl-C: stop accepting ops
+            // requests and let the lease loop drain its in-flight jobs (its own
+            // drain pattern never cancels a leased job).
+            tdw_app_server::shutdown_signal().await;
+            cancel_for_drain.cancel();
+        })
+        .await;
+
+    // Ensure the ops listener is torn down even if the loop returned without a
+    // signal (e.g. resolved-shutdown), then await it.
+    cancel.cancel();
+    if let Some(task) = ops_task {
+        let _ = task.await;
+    }
+    report
+}
+
+/// Bind and spawn the worker's ops listener when `TDW_WORKER_HTTP_BIND` is set.
+/// Returns the listener task, or `None` when the env var is unset (default).
+/// A bind failure is logged and treated as "no listener" so the worker still
+/// serves jobs.
+async fn spawn_worker_ops<Q: tdw_worker::ServeQueue + Clone + 'static>(
+    queue: &Q,
+    cancel: tdw_app_server::CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = non_empty_env("TDW_WORKER_HTTP_BIND")?;
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-worker ops listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    eprintln!("tdw-worker ops listener on http://{bind} (/health /ready /metrics)");
+    let provider = tdw_worker::WorkerOps::new(queue.clone());
+    Some(tokio::spawn(async move {
+        tdw_app_server::ops::serve_ops(listener, provider, cancel).await
+    }))
 }
 
 /// Resolve daemon-dispatch config from the environment. Returns `None` (ack

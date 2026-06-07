@@ -23,7 +23,8 @@ Source of truth: `crates/tdw-worker/src/lib.rs` and `crates/tdw-worker/src/main.
 | `WorkerRunner` + `JobHandler` (generic over the backend) | shipped (library) |
 | `DaemonJobHandler` - submits each job's `OpEnvelope` to the daemon | shipped (library) |
 | `LoggingAckHandler` - offline ack (no execution) | shipped (library, the default) |
-| Metrics endpoint / alerting | **not shipped** - requirements below |
+| Ops endpoints (`/health`, `/ready`, `/metrics`), graceful drain | shipped (CLI) - see [Operability endpoints](#operability-endpoints) |
+| Alerting | operator-supplied - requirements below |
 
 `tdw-worker --serve` runs the lease loop over a durable queue and drains
 in-flight work on Ctrl-C. The backend is selected from the environment:
@@ -117,18 +118,84 @@ Operational rules:
   work within the lease TTL, then exit. Anything not completed is reclaimed by
   expiry - safe because completion is idempotent.
 
+## Operability endpoints
+
+`tdw-worker --serve` exposes an optional HTTP ops surface, **off by default**.
+Set `TDW_WORKER_HTTP_BIND` (e.g. `0.0.0.0:9101`) to bind it. It shares the serve
+loop's queue handle, so `/ready` reflects real queue connectivity.
+
+| Endpoint | Meaning | Status |
+|---|---|---|
+| `GET /health` | Process liveness | `200` once serving |
+| `GET /ready` | Queue (DB) reachable | `200` ready / `503` not ready |
+| `GET /metrics` | Prometheus text exposition | `200` |
+
+Metrics emitted (hand-rolled Prometheus 0.0.4 text format, no extra deps):
+
+```text
+# TYPE tdw_worker_jobs gauge
+tdw_worker_jobs{state="pending"} N
+tdw_worker_jobs{state="leased"} N
+tdw_worker_jobs{state="completed"} N
+tdw_worker_jobs{state="dead_lettered"} N
+# TYPE tdw_worker_oldest_lease_age_ms gauge
+tdw_worker_oldest_lease_age_ms N
+```
+
+These map directly onto the alert table below: `tdw_worker_jobs{state="pending"}`
+is the backlog, `{state="dead_lettered"}` is the primary alarm, and
+`tdw_worker_oldest_lease_age_ms` flags leases stuck near (or past) the TTL.
+
+### Graceful drain
+
+On `SIGTERM` (what `docker stop`, systemd, and Kubernetes send) or Ctrl-C, the
+serve loop stops accepting new leases, lets in-flight jobs finish, and exits `0`.
+The ops listener stops accepting at the same time. In-flight jobs are never
+cancelled — anything not completed before the timeout is reclaimed by lease
+expiry (safe because completion is idempotent).
+
 ## Process supervision
 
 The lease loop must run under a supervisor that restarts it and bounds restart
 storms:
 
 - **systemd:** `Restart=always`, `RestartSec=5`, `StartLimitIntervalSec`/
-  `StartLimitBurst` to cap crash loops, `TimeoutStopSec` >= lease TTL so drain
-  completes, run as a dedicated non-root user.
-- **Kubernetes:** a `Deployment` (not a `Job`); `terminationGracePeriodSeconds`
-  >= lease TTL; liveness probe on the lease loop's heartbeat; readiness gated on
-  a successful DB connection; `replicas` scaled by `ready` backlog. Leases make
-  multiple replicas safe - no two workers hold the same job.
+  `StartLimitBurst` to cap crash loops, run as a dedicated non-root user. Set
+  **`TimeoutStopSec` >= lease TTL** (default TTL 30s → `TimeoutStopSec=45`) so a
+  SIGTERM drain finishes before systemd escalates to SIGKILL:
+
+  ```ini
+  [Service]
+  Environment=TDW_WORKER_PG_URL=postgres://…
+  Environment=TDW_WORKER_HTTP_BIND=127.0.0.1:9101
+  ExecStart=/usr/local/bin/tdw-worker --serve
+  Restart=always
+  RestartSec=5
+  TimeoutStopSec=45
+  ```
+
+- **Kubernetes:** a `Deployment` (not a `Job`); set
+  **`terminationGracePeriodSeconds` >= lease TTL** (e.g. `45`) so the drain
+  completes; liveness on `/health`, readiness on `/ready`; `replicas` scaled by
+  the `tdw_worker_jobs{state="pending"}` backlog. Leases make multiple replicas
+  safe — no two workers hold the same job.
+
+  ```yaml
+  spec:
+    terminationGracePeriodSeconds: 45
+    containers:
+      - name: tdw-worker
+        env:
+          - { name: TDW_WORKER_HTTP_BIND, value: "0.0.0.0:9101" }
+        ports:
+          - { containerPort: 9101, name: ops }
+        livenessProbe:
+          httpGet: { path: /health, port: ops }
+          periodSeconds: 15
+        readinessProbe:
+          httpGet: { path: /ready, port: ops }
+          periodSeconds: 15
+  ```
 - **Connection pooling:** front Postgres with PgBouncer (transaction pooling) if
   you run many replicas; each `PgWorkerQueue` keeps its own pool.
 - Run the container **unprivileged** with a read-only root filesystem; the
