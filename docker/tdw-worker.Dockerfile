@@ -20,9 +20,11 @@ COPY . .
 RUN cargo build --release --bin tdw-worker ${FEATURES:+--features "$FEATURES"}
 
 FROM debian:bookworm-slim AS runtime
+# `curl` is included so the compose/K8s healthcheck can probe the worker's ops
+# endpoints (/health, /ready) on TDW_WORKER_HTTP_BIND.
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin tdw
 COPY --from=builder /app/target/release/tdw-worker /usr/local/bin/tdw-worker
