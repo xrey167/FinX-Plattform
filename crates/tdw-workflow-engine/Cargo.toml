@@ -11,3 +11,7 @@ tdw-agent = { path = "../tdw-agent" }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-workflow-engine-basic"
+path = "examples/basic.rs"
