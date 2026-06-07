@@ -1342,7 +1342,46 @@ fn request_is_authorized(request: &StreamableHttpRequest, config: &StreamableHtt
     let Some(candidate) = parts.next() else {
         return false;
     };
-    scheme.eq_ignore_ascii_case("bearer") && candidate == token
+    scheme.eq_ignore_ascii_case("bearer") && constant_time_str_eq(candidate, token)
+}
+
+/// Constant-time string equality for secret comparison (bearer tokens).
+///
+/// A naive `==` short-circuits on the first differing byte, leaking the length
+/// of the matching prefix through response timing. To compare without that side
+/// channel — and without leaking the secret's length either — both inputs are
+/// folded into a fixed-width 32-byte FNV-1a digest and the digests are compared
+/// with [`subtle::ConstantTimeEq`]. Equal strings always produce equal digests;
+/// unequal strings differ with overwhelming probability, and the comparison work
+/// is independent of where (or whether) the inputs diverge.
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    fixed_digest(a.as_bytes())
+        .ct_eq(&fixed_digest(b.as_bytes()))
+        .into()
+}
+
+/// Fold arbitrary-length bytes into a fixed 32-byte digest using FNV-1a across
+/// four independently-seeded lanes. Used only to give
+/// [`constant_time_str_eq`] equal-length inputs so the downstream
+/// constant-time compare neither short-circuits nor leaks input length.
+fn fixed_digest(bytes: &[u8]) -> [u8; 32] {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut digest = [0u8; 32];
+    for (lane, chunk) in digest.chunks_mut(8).enumerate() {
+        let mut hash = OFFSET ^ (lane as u64).wrapping_mul(PRIME);
+        for &byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+        // Mix the length into each lane so two inputs of different lengths that
+        // happen to collide on content still differ.
+        hash ^= bytes.len() as u64;
+        hash = hash.wrapping_mul(PRIME);
+        chunk.copy_from_slice(&hash.to_le_bytes());
+    }
+    digest
 }
 
 fn bind_is_loopback(bind: &str) -> bool {
@@ -3493,6 +3532,75 @@ mod tests {
             &config,
         );
         assert_eq!(authorized.status, 200);
+    }
+
+    #[test]
+    fn constant_time_str_eq_matches_equality_semantics() {
+        // Equal strings compare equal.
+        assert!(constant_time_str_eq(
+            "super-secret-token",
+            "super-secret-token"
+        ));
+        assert!(constant_time_str_eq("", ""));
+        // Any difference — content, a single byte, or length — compares unequal.
+        assert!(!constant_time_str_eq(
+            "super-secret-token",
+            "super-secret-toke"
+        ));
+        assert!(!constant_time_str_eq(
+            "super-secret-token",
+            "Super-secret-token"
+        ));
+        assert!(!constant_time_str_eq("secret", "secret-with-suffix"));
+        assert!(!constant_time_str_eq("secret", ""));
+        // A correct-length-but-wrong-content candidate is rejected.
+        assert!(!constant_time_str_eq("aaaaaa", "bbbbbb"));
+    }
+
+    #[test]
+    fn request_is_authorized_uses_constant_time_token_compare() {
+        let config = StreamableHttpConfig::new().with_auth_token("secret");
+
+        let correct = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Bearer secret".to_string())],
+            "",
+        );
+        assert!(request_is_authorized(&correct, &config));
+
+        // Wrong token, missing header, and non-bearer scheme are all rejected.
+        let wrong = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Bearer wrong".to_string())],
+            "",
+        );
+        assert!(!request_is_authorized(&wrong, &config));
+
+        let no_header = StreamableHttpRequest::new("POST", "/mcp", Vec::new(), "");
+        assert!(!request_is_authorized(&no_header, &config));
+
+        let wrong_scheme = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "Basic secret".to_string())],
+            "",
+        );
+        assert!(!request_is_authorized(&wrong_scheme, &config));
+
+        // Case-insensitive bearer scheme still matches.
+        let lower_scheme = StreamableHttpRequest::new(
+            "POST",
+            "/mcp",
+            vec![("Authorization".to_string(), "bearer secret".to_string())],
+            "",
+        );
+        assert!(request_is_authorized(&lower_scheme, &config));
+
+        // With no token configured every request is authorized.
+        let open = StreamableHttpConfig::new();
+        assert!(request_is_authorized(&no_header, &open));
     }
 
     #[test]

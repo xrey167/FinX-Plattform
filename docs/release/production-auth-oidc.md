@@ -5,11 +5,16 @@ Single reference for configuring the `tdw-service` daemon's ingress auth in a
 auth configured it attaches no policy and every dispatch returns `Failed`.
 Set the variables below to attach an auth-backed policy.
 
-> **Scope caveat — structural, not cryptographic.** This validates claim/JWKS
-> **consistency** (issuer, audience, subject, `kid` ∈ JWKS, allowed algorithm,
-> role-name shape). It does **not** verify JWT cryptographic signatures, fetch a
-> remote JWKS, or check token expiry. Full signature verification + JWKS
-> transport/refresh is a tracked follow-up in `tdw-auth-oidc`.
+> **Verification model.** The `TDW_OIDC_*` policy builder performs the
+> **structural** claim/JWKS consistency pre-filter described below (issuer,
+> audience, subject, `kid` ∈ JWKS, allowed algorithm, role-name shape).
+> **Cryptographic** JWT verification — RS256/ES256 signature validation against
+> the supplied verifying keys plus `exp`/`nbf`/`iat` (60s clock-skew leeway),
+> issuer, and audience enforcement — is implemented in `tdw-auth-oidc`'s
+> `verify_jwt` / `verify_jwt_strict`, which reject the `none` pseudo-algorithm
+> and HMAC tokens (alg-confusion / `alg:none` defence) and fail closed on any
+> error. Remote JWKS fetch/refresh remains out of scope: verifying keys are
+> supplied from the configured JWKS rather than fetched at runtime.
 
 ## When it applies
 
@@ -35,32 +40,34 @@ counts as unset.
 ## Fail-closed semantics
 
 - **All five required vars unset** → no policy attached, *intentionally*. This
-  is the default fail-closed posture and is logged as a generic message.
-- **Some required vars present, others missing** → fail closed **and** the boot
-  log names the first missing variable (a partial misconfiguration is treated as
-  an operator error, not a silent default).
+  is the default fail-closed posture and is logged as a generic message; the
+  daemon **starts** (every dispatch returns `Failed` until a policy is wired).
+- **Some required vars present, others missing** → the daemon **refuses to
+  start**. A partial misconfiguration is an operator error, not a silent
+  default: startup returns an error whose diagnostic lists **every** missing
+  variable. Set the listed variables, or unset all of them to run fail-closed.
 - **All required present but parse/validation fails** (malformed `kid:alg` pair,
   duplicate `kid`, unknown `kid`, unsupported algorithm, audience/issuer/subject
-  mismatch, invalid role) → fail closed **and** the boot log names the specific
-  cause.
+  mismatch, invalid role) → the daemon **refuses to start** and the error names
+  the specific cause.
 - **All valid** → an auth-backed policy is attached and dispatches resolve.
 
 ## Boot diagnostics
 
-The daemon prints one of the following to stderr at startup (`{profile}` is the
+The daemon prints/returns one of the following at startup (`{profile}` is the
 effective profile):
 
-- Policy attached:
-  `tdw-service: daemon starting in '{profile}' profile with a policy attached; dispatches will resolve`
-- Partial/invalid prod config (names the cause):
-  `tdw-service: daemon starting in '{profile}' profile with no policy attached: TDW_OIDC_JWKS missing; configure TDW_OIDC_* correctly so dispatches resolve`
-  or e.g. `... no policy attached: invalid claims: UnknownKeyId; ...`
-- Fully-unset (generic fail-closed):
-  `tdw-service: daemon starting in '{profile}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired (configure TDW_OIDC_*)`
+- Policy attached (stderr, then continues):
+  `tdw-backend: daemon starting in '{profile}' profile with a policy attached; dispatches will resolve`
+- Partial/invalid prod config (**startup error — the daemon does not start**):
+  `refusing to start daemon in '{profile}' profile: partial OIDC config: missing TDW_OIDC_JWKS, TDW_OIDC_SUBJECT, TDW_OIDC_KID; set the listed TDW_OIDC_* variables (or unset all of them to run fail-closed)`
+  or e.g. `... refusing to start ...: invalid claims: UnknownKeyId; ...`
+- Fully-unset (generic fail-closed, stderr, then continues):
+  `tdw-backend: daemon starting in '{profile}' profile with no policy attached; dispatches will return Failed until an auth-backed policy is wired (configure TDW_OIDC_*)`
 
 The specific-cause variants are produced by the typed `OidcPolicyError`
-(`MissingEnvVar`, `MalformedJwksPair`, `DuplicateKid`, `InvalidClaims`) in
-`tdw-service-api`.
+(`MissingEnvVars`, `MalformedJwksPair`, `DuplicateKid`, `InvalidClaims`) in
+`tdw-service-api`; `run_daemon` turns any of them into a hard startup error.
 
 ## Worked example
 
@@ -74,10 +81,10 @@ $env:TDW_OIDC_KID     = "key1"
 $env:TDW_OIDC_ROLES   = "analyst,udf_runner"
 ```
 
-To verify the fail-closed diagnostics, start the daemon with a *partial* set
-(e.g. drop `TDW_OIDC_JWKS`) and confirm the boot log names the missing variable;
-with all valid, confirm "policy attached"; with all unset, confirm the generic
-fail-closed message.
+To verify the startup contract, start the daemon with a *partial* set (e.g. drop
+`TDW_OIDC_JWKS`) and confirm the daemon **refuses to start** with an error
+listing every missing variable; with all valid, confirm "policy attached"; with
+all unset, confirm the daemon starts and logs the generic fail-closed message.
 
 ## Evidence
 

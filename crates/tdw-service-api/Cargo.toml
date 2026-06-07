@@ -48,6 +48,36 @@ real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
 ## `TDW_QDRANT_TEST_URL`.
 real-qdrant = ["tdw-storage-qdrant/qdrant"]
 
+## Swap the lexical engine in `AppState` for the real `MeilisearchHttpEngine`
+## (reqwest over the Meilisearch REST API). Activates
+## `tdw-storage-meilisearch/meilisearch`. When the `live` profile is selected,
+## `from_config` reads `TDW_MEILI_URL` (+ optional `TDW_MEILI_API_KEY`) to point
+## the lexical index at a live Meilisearch so search documents survive restarts.
+real-meilisearch = ["tdw-storage-meilisearch/meilisearch"]
+
+## Swap the blob engine in `AppState` for the real `S3Engine` (aws-sdk-s3).
+## Activates `tdw-storage-s3/s3`. When the `live` profile is selected,
+## `from_config` reads `TDW_S3_ENDPOINT` / `TDW_S3_BUCKET` / `TDW_S3_ACCESS_KEY`
+## / `TDW_S3_SECRET_KEY` (+ optional `TDW_S3_REGION`) to point object storage at
+## a live S3/MinIO bucket. Independent of the `storage-fs` local-disk path.
+real-s3 = ["tdw-storage-s3/s3"]
+
+## Aggregate: select the real production engines (Postgres relational,
+## ClickHouse OLAP, Qdrant vector, Meilisearch lexical, S3 blob) **and** the
+## Postgres-backed daemon session/rollout stores. This is the feature set the
+## `live` compose stack builds with so that `TDW_PROFILE=live` (or
+## `TDW_ENGINES=real`) wires every engine to its real backend, failing closed at
+## startup when a required connection env var is missing. Default builds leave
+## all of these off, keeping the offline in-memory engines.
+real-engines = [
+    "real-postgres",
+    "real-clickhouse",
+    "real-qdrant",
+    "real-meilisearch",
+    "real-s3",
+    "daemon-postgres",
+]
+
 ## Enable the live Binance trade websocket subscribe path in the streaming
 ## ingest control ops. Forwarded to `tdw-provider-binance/ws`. Without this
 ## feature the default offline (deterministic single-tick) streamer is used so
@@ -103,6 +133,10 @@ provider-trading-economics = [
 ]
 provider-velodata = ["dep:tdw-provider-velodata", "tdw-provider-velodata/http"]
 
+## Yahoo is already a non-optional offline dependency. This feature swaps the
+## canonical yahoo/equity_historical implementation to the real HTTP fetcher.
+provider-yahoo-http = ["tdw-provider-yahoo/http"]
+
 ## Binance is already a non-optional dependency (its offline ws default and
 ## fixture path stay wired); this feature only turns on its `http` ticker-price
 ## fetcher and registers it.
@@ -110,7 +144,9 @@ provider-binance-http = ["tdw-provider-binance/http"]
 
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
-## providers; this only adds the live HTTP fetchers when explicitly enabled.
+## providers; this adds live HTTP fetchers when explicitly enabled. Yahoo is the
+## exception: `provider-yahoo-http` swaps the existing offline Yahoo fixture for
+## the real HTTP implementation under the same provider/endpoint key.
 all-http-providers = [
     "provider-adanos",
     "provider-akshare",
@@ -142,6 +178,7 @@ all-http-providers = [
     "provider-trading-economics",
     "provider-velodata",
     "provider-binance-http",
+    "provider-yahoo-http",
 ]
 
 [dependencies]
