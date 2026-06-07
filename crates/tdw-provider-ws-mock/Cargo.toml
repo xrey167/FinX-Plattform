@@ -20,5 +20,9 @@ serde = { workspace = true }
 tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
 
+[[example]]
+name = "ws_mock_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

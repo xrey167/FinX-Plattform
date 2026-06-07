@@ -42,5 +42,11 @@ name = "http_fetcher"
 path = "tests/http_fetcher.rs"
 required-features = ["http"]
 
+[[example]]
+name = "trading_economics_basic"
+path = "examples/basic.rs"
+required-features = ["http"]
+
 [lints]
 workspace = true
+
