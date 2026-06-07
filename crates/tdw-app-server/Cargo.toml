@@ -17,6 +17,9 @@ default = ["transport-tcp"]
 transport-tcp = []
 transport-http = []
 transport-uds = []
+# Exposes GET /functions, POST /functions/invoke, and PUT /functions/resume
+# behind the hand-rolled HTTP transport.  Requires transport-http.
+functions-route = ["transport-http", "dep:hmac", "dep:sha2"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -28,6 +31,8 @@ tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tdw-event = { path = "../tdw-event" }

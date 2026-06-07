@@ -26,8 +26,15 @@ pub use transport_uds::serve_uds;
 
 #[cfg(all(feature = "transport-http", not(loom)))]
 mod transport_http;
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub use transport_http::serve_functions_http;
 #[cfg(all(feature = "transport-http", not(loom)))]
 pub use transport_http::serve_http;
+
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub mod functions_route;
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub use functions_route::{FunctionEntry, FunctionsHandler, HandlerError, SigningConfig};
 
 // Shared service-operability surface (/health, /ready, /metrics). The pure
 // renderer and route classifier are always available; the async listener is

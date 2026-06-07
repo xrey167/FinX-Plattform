@@ -52,6 +52,12 @@ notify = "8"
 # Constant-time byte comparison for bearer-token / secret equality checks
 # (timing-attack resistant). Already a vetted transitive dependency.
 subtle = "2.6"
+# HMAC-SHA256 for /functions request-signature verification.
+# Both crates are pure Rust (no C/CMake deps) and are already transitively
+# present via jsonwebtoken's rust_crypto feature; declaring them here makes
+# the version explicit and avoids re-resolving a new entry in Cargo.lock.
+hmac = "0.13"
+sha2 = "0.11"
 toml = "1.1.2"
 tracing = "0.1"
 ulid = { version = "1.2.1", features = ["serde"] }
