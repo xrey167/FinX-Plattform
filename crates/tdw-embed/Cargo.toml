@@ -13,5 +13,11 @@ thiserror = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_embed_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
