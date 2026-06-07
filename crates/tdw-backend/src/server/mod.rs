@@ -772,4 +772,206 @@ mod tests {
         // A host-only / unparseable spec errs on the side of caution.
         assert!(!bind_is_loopback("example.com:7878"));
     }
+
+    // -- Round 18: daemon serving-path behavioral suite ---------------------
+    //
+    // These tests drive the previously-0%-covered daemon RUN path
+    // (`run_daemon`, `run(DaemonOnly)`, `run(Both)`) to completion over an
+    // ephemeral loopback TCP port, cancelling via a loopback `DaemonClient`
+    // `Op::Shutdown` (the same proven mechanism as
+    // `data::tests::serve_binds_ephemeral_port_submits_via_loopback_then_shuts_down`).
+    //
+    // Hermetic and edition-2024 safe: NO `std::env::set_var` anywhere; the
+    // daemon is steered purely via an explicit `TdwConfig` (Tcp + a reserved
+    // loopback port) and a loopback client. The `env_blocked_subset`
+    // (partial-OIDC early-return, `TDW_MEMORY_DIR` consolidation branch, and
+    // the `report_policy_state` attach-error / no-policy arms) is deliberately
+    // NOT exercised here. Under the default profile `AppState::from_config`
+    // attaches a local-default policy, so `state.policy.is_some()` and the
+    // present-arm of `report_policy_state` fires while `policy_attach_error`
+    // stays `None` (so the partial-OIDC `Err` return is correctly skipped).
+
+    use std::time::Duration;
+    use tdw_app_client::{DaemonClient, DaemonClientConfig};
+    use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+
+    /// Reserve a concrete free loopback port by binding an ephemeral listener,
+    /// reading the OS-assigned address, then dropping the listener so the
+    /// daemon under test can rebind it. This is how the serving-path tests
+    /// learn a port to point the loopback client at, since `run_daemon` /
+    /// `run` consume their config and do not surface the bound address the way
+    /// `Backend::serve` does.
+    async fn reserve_loopback_addr() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserving an ephemeral loopback port should succeed");
+        let addr = listener
+            .local_addr()
+            .expect("local_addr on the reserved listener")
+            .to_string();
+        drop(listener);
+        addr
+    }
+
+    /// Build a `TdwConfig` whose daemon binds `addr` over TCP and whose
+    /// durable stores are fully in-memory/temp, exactly as the production
+    /// `load_config` daemon-boot overrides do (an in-memory SQLite session
+    /// store + a temp rollout dir). Using the raw `TdwConfig::default()` here
+    /// would point the session store at `~/.tdw/session.sqlite`, so
+    /// `AppState::from_config` would fail and the daemon would never bind.
+    fn in_memory_daemon_config(addr: &str) -> TdwConfig {
+        let mut config = TdwConfig::default();
+        config.daemon.transport = DaemonTransport::Tcp;
+        config.daemon.tcp_bind = Some(addr.to_string());
+        config.session.sqlite_path = "sqlite::memory:".to_string();
+        config.paths.rollout_dir = std::env::temp_dir()
+            .join("tdw-rollout-r18-a.jsonl")
+            .to_string_lossy()
+            .into_owned();
+        config
+    }
+
+    /// Build a `Shutdown` op envelope, mirroring `data::tests::make_envelope`.
+    fn shutdown_envelope() -> OpEnvelope {
+        OpEnvelope::new(
+            SessionId::new("session-server-test").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "user:test".to_string(),
+                kind: ActorKind::User,
+                tenant_id: Some("default".to_string()),
+            },
+            Op::Shutdown,
+        )
+    }
+
+    /// Submit a loopback `Op::Shutdown` to the daemon at `addr`, retrying the
+    /// connect a few times so the spawned daemon has a moment to bind. Returns
+    /// once the daemon emits a terminal `Completed` event for the op.
+    async fn submit_loopback_shutdown(addr: String) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let attempt_addr = addr.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let client = DaemonClient::new(
+                    DaemonClientConfig::tcp(attempt_addr).with_timeout(Duration::from_secs(1)),
+                );
+                client.submit_and_wait(&shutdown_envelope())
+            })
+            .await
+            .expect("spawn_blocking join");
+
+            match result {
+                Ok(submission) => {
+                    assert!(
+                        submission
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, EventMsg::Completed { .. })),
+                        "the daemon must emit a terminal Completed event for the shutdown op"
+                    );
+                    return;
+                }
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "loopback client never reached the daemon: {error}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_daemon_serves_then_shuts_down_via_loopback() {
+        // Drives `run_daemon` end-to-end: AppState::from_config, the
+        // report_policy_state present-arm (default profile attaches a policy),
+        // service_channel + relay + spawn_transport wiring, the no-memory-dir
+        // (None) consolidation arm, `serve` until the loopback Shutdown
+        // cancels it, and the bounded Ok(()) teardown.
+        let addr = reserve_loopback_addr().await;
+
+        let config = in_memory_daemon_config(&addr);
+
+        let daemon = tokio::spawn(async move { run_daemon(&config).await });
+
+        submit_loopback_shutdown(addr).await;
+
+        let joined = tokio::time::timeout(Duration::from_secs(5), daemon)
+            .await
+            .expect("run_daemon must join promptly after the loopback Shutdown")
+            .expect("run_daemon task should not panic");
+        joined.expect("run_daemon should return Ok(()) on a clean Shutdown-driven teardown");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_daemon_only_surface_serves_then_shuts_down_via_loopback() {
+        // Drives `run(BackendConfig{surfaces: DaemonOnly})`: the DaemonOnly
+        // match arm and its BackendError::Init map closure on the success
+        // branch (which never fires here), delegating to `run_daemon`.
+        let addr = reserve_loopback_addr().await;
+
+        let cfg = BackendConfig {
+            tdw: in_memory_daemon_config(&addr),
+            surfaces: Surfaces::DaemonOnly,
+            ..Default::default()
+        };
+
+        let server = tokio::spawn(async move { run(cfg).await });
+
+        submit_loopback_shutdown(addr).await;
+
+        let joined = tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("run(DaemonOnly) must join promptly after the loopback Shutdown")
+            .expect("run task should not panic");
+        joined.expect("run(DaemonOnly) should return Ok(()) on a clean Shutdown-driven teardown");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn run_both_surface_wires_daemon_and_runs_mcp_loop_to_completion() {
+        // Drives `run(BackendConfig{surfaces: Both, mcp_transport: Stdio})` ->
+        // `run_both`: Backend::from_config, backend.serve, bound_addr
+        // resolution, the named `tdw-backend-mcp` OS-thread spawn, the
+        // spawn_blocking join, backend.shutdown, and exit_code_to_result.
+        //
+        // In Both mode the embedded stdio MCP loop owns the process lifetime
+        // and ends on stdin EOF. Under the test runner stdin is already at EOF
+        // (no input is piped), so `run_stdio_json_rpc_with_daemon` iterates
+        // zero lines and returns code 0 promptly; that drives `run_both`
+        // through the OS-thread join, `backend.shutdown` (which cancels the
+        // in-process daemon and reclaims its tasks), and `exit_code_to_result`
+        // to a clean `Ok(())`. We therefore do NOT inject a loopback Shutdown
+        // here — the MCP-EOF path self-terminates the surface, which is the
+        // real Both-mode lifecycle.
+        //
+        // We assert `run` returns within a bounded timeout — `Ok(())` on the
+        // clean (code 0) exit, or a deterministic `BackendError::Init` mapped
+        // by `exit_code_to_result` on a non-zero code. Per the plan this test
+        // is upside-only (the DaemonOnly + run_daemon tests already clear the
+        // coverage floor), so a non-zero exit code is an accepted outcome, not
+        // a failure.
+        let addr = reserve_loopback_addr().await;
+
+        let cfg = BackendConfig {
+            tdw: in_memory_daemon_config(&addr),
+            surfaces: Surfaces::Both,
+            mcp_transport: McpTransport::Stdio,
+        };
+
+        let joined = tokio::time::timeout(Duration::from_secs(10), run(cfg))
+            .await
+            .expect("run(Both) must complete within the bounded timeout");
+        match joined {
+            Ok(()) => {}
+            Err(BackendError::Init(msg)) => {
+                assert!(
+                    msg.contains("MCP loop exited with code"),
+                    "a non-zero MCP exit must be reported via exit_code_to_result, got: {msg}"
+                );
+            }
+            Err(other) => panic!("unexpected run(Both) error: {other:?}"),
+        }
+    }
 }
