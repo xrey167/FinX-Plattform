@@ -53,6 +53,7 @@ notify = "8"
 # (timing-attack resistant). Already a vetted transitive dependency.
 subtle = "2.6"
 toml = "1.1.2"
+tracing = "0.1"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }

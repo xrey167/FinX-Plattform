@@ -239,6 +239,24 @@ impl AppState {
         self
     }
 
+    /// Probe the daemon's durable stores for the `/ready` endpoint.
+    ///
+    /// Returns `Ok(())` when the session store answers a read (a cheap
+    /// round-trip that proves the SQLite/Postgres session backend is reachable);
+    /// returns the underlying [`Error`] otherwise. The rollout/engine backends
+    /// share the same connection in the durable (`daemon-postgres`) path, so the
+    /// session probe is a faithful readiness signal without doing extra work on
+    /// the hot path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant when the session store cannot be queried.
+    pub async fn readiness(&self) -> Result<()> {
+        let probe = SessionId::new("__readiness_probe__")
+            .map_err(|error| Error::Storage(format!("readiness session id: {error}")))?;
+        self.session.cost_entries(&probe).await.map(|_| ())
+    }
+
     /// Replace the relational engine with a real [`PgEngine`] connected to
     /// `database_url`.
     ///
@@ -1139,6 +1157,17 @@ mod tests {
     async fn carries_layered_config_profile_into_app_state() {
         let state = AppState::in_memory_for_tests().await;
         assert_eq!(state.config.profile, "default");
+    }
+
+    #[tokio::test]
+    async fn readiness_succeeds_for_in_memory_stores() {
+        // The /ready probe must pass against the always-available in-memory
+        // SQLite session store.
+        let state = AppState::in_memory_for_tests().await;
+        state
+            .readiness()
+            .await
+            .expect("in-memory stores must be reachable");
     }
 
     #[tokio::test]

@@ -17,9 +17,11 @@ COPY . .
 RUN cargo build --release --bin tdw-mcp
 
 FROM debian:bookworm-slim AS runtime
+# `curl` is included so the compose/K8s healthcheck can probe the MCP ops
+# endpoints (/health, /ready) on TDW_MCP_OPS_BIND.
 RUN apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home --shell /usr/sbin/nologin tdw
 COPY --from=builder /app/target/release/tdw-mcp /usr/local/bin/tdw-mcp
