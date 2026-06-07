@@ -206,6 +206,27 @@ pub struct Prompt {
     pub arguments: Vec<PromptArgument>,
 }
 
+/// Optional per-agent runtime overrides for scoped delegation.
+///
+/// Every field is additive and `None` by default, so existing `*.json5` cards and golden
+/// snapshots deserialize byte-identically. Holds only `Option<String>`/`Option<u32>`, so it
+/// derives `Eq` like the sibling [`SlashArg`]; it carries no validation invariants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentRuntime {
+    /// Preferred provider (e.g. an LLM vendor key); `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Preferred model identifier; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Per-invocation timeout in seconds; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u32>,
+    /// Maximum agent iterations; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentCard {
     #[validate(nested)]
@@ -218,6 +239,36 @@ pub struct AgentCard {
     pub content_refs: Vec<ContentRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Allowlist of tools this agent may use. Empty (the default) inherits nothing — an agent
+    /// with no declared scope grants no tools and hands no tools to its delegates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_scope: Vec<String>,
+    /// Optional runtime overrides (provider/model/timeout/iterations) for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<AgentRuntime>,
+}
+
+impl AgentCard {
+    /// Returns `true` when `name` is present in this agent's [`tool_scope`](AgentCard::tool_scope)
+    /// allowlist. An empty scope grants nothing.
+    #[must_use]
+    pub fn grants_tool(&self, name: &str) -> bool {
+        self.tool_scope.iter().any(|tool| tool == name)
+    }
+
+    /// Computes the tool scope to hand to a delegate: the intersection of `requested` with this
+    /// agent's own scope.
+    ///
+    /// The result is order-stable and deduplicated relative to `self.tool_scope`, and is always a
+    /// subset of the parent scope — a delegate can never receive a tool the parent does not hold.
+    #[must_use]
+    pub fn child_scope(&self, requested: &[String]) -> Vec<String> {
+        self.tool_scope
+            .iter()
+            .filter(|tool| requested.iter().any(|req| req == *tool))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
@@ -1417,6 +1468,8 @@ pub fn sample_agent_card() -> AgentCard {
             tags: vec!["prompt".to_string()],
         }],
         endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+        tool_scope: Vec::new(),
+        runtime: None,
     }
 }
 
@@ -1791,6 +1844,85 @@ mod tests {
             assert!(bundle.contains_key(name), "missing schema: {name}");
         }
         assert_eq!(bundle.len(), AGENT_SCHEMA_NAMES.len());
+    }
+
+    fn agent_card_with_scope(tool_scope: Vec<String>, runtime: Option<AgentRuntime>) -> AgentCard {
+        let json = include_str!("../tests/golden/agent_card.json");
+        let mut card = serde_json::from_str::<AgentCard>(json)
+            .unwrap_or_else(|error| panic!("agent card fixture should parse: {error}"));
+        card.tool_scope = tool_scope;
+        card.runtime = runtime;
+        card
+    }
+
+    #[test]
+    fn grants_tool_respects_allowlist() {
+        let card = agent_card_with_scope(vec!["read".into(), "search".into()], None);
+        assert!(card.grants_tool("read"));
+        assert!(card.grants_tool("search"));
+        assert!(!card.grants_tool("write"));
+
+        // An empty scope grants nothing.
+        let empty = agent_card_with_scope(Vec::new(), None);
+        assert!(!empty.grants_tool("read"));
+    }
+
+    #[test]
+    fn child_scope_returns_intersection_never_superset() {
+        let card =
+            agent_card_with_scope(vec!["read".into(), "search".into(), "fetch".into()], None);
+
+        // A requested tool NOT in the parent scope is dropped (never a superset).
+        let requested = vec!["search".into(), "write".into(), "read".into()];
+        let child = card.child_scope(&requested);
+        assert_eq!(child, vec!["read".to_string(), "search".to_string()]);
+        assert!(!child.iter().any(|tool| tool == "write"));
+
+        // The child scope is always a subset of the parent scope.
+        for tool in &child {
+            assert!(card.grants_tool(tool));
+        }
+
+        // No requested tools => empty child scope.
+        assert!(card.child_scope(&[]).is_empty());
+    }
+
+    #[test]
+    fn agent_card_round_trips_with_scope_and_runtime() {
+        let runtime = AgentRuntime {
+            provider: Some("anthropic".into()),
+            model: Some("claude-opus".into()),
+            timeout_secs: Some(30),
+            max_iterations: Some(8),
+        };
+        let card = agent_card_with_scope(vec!["read".into(), "search".into()], Some(runtime));
+
+        let encoded = serde_json::to_string(&card)
+            .unwrap_or_else(|error| panic!("agent card should serialize: {error}"));
+        assert!(encoded.contains("tool_scope"));
+        assert!(encoded.contains("runtime"));
+
+        let decoded = serde_json::from_str::<AgentCard>(&encoded)
+            .unwrap_or_else(|error| panic!("agent card should deserialize: {error}"));
+        assert_eq!(decoded, card);
+        assert_eq!(
+            decoded.tool_scope,
+            vec!["read".to_string(), "search".to_string()]
+        );
+        let decoded_runtime = decoded.runtime.expect("runtime present after round-trip");
+        assert_eq!(decoded_runtime.provider.as_deref(), Some("anthropic"));
+        assert_eq!(decoded_runtime.timeout_secs, Some(30));
+        assert_eq!(decoded_runtime.max_iterations, Some(8));
+    }
+
+    #[test]
+    fn agent_card_defaults_omit_new_fields() {
+        // Empty/None defaults are skipped, keeping existing golden snapshots byte-identical.
+        let card = agent_card_with_scope(Vec::new(), None);
+        let encoded = serde_json::to_string(&card)
+            .unwrap_or_else(|error| panic!("agent card should serialize: {error}"));
+        assert!(!encoded.contains("tool_scope"));
+        assert!(!encoded.contains("runtime"));
     }
 
     #[test]
