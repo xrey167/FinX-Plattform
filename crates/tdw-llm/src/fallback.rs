@@ -136,6 +136,9 @@ mod tests {
                     LlmError::InvalidBaseUrl => LlmError::InvalidBaseUrl,
                     LlmError::UnsafeBaseUrl => LlmError::UnsafeBaseUrl,
                     LlmError::UnsupportedProvider(p) => LlmError::UnsupportedProvider(p.clone()),
+                    LlmError::InvalidModelRef => LlmError::InvalidModelRef,
+                    LlmError::MissingCredentials(p) => LlmError::MissingCredentials(p.clone()),
+                    LlmError::NoEligibleModel => LlmError::NoEligibleModel,
                 }),
             }
         }

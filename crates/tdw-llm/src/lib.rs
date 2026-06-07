@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod fallback;
+pub mod router;
 pub use fallback::FallbackModel;
+pub use router::{CredentialProbe, ModelFactory, ModelRef, ModelRouter, parse_model_ref};
 
 use serde::{Deserialize, Serialize};
 use tdw_config::TdwConfig;
@@ -27,6 +29,12 @@ pub enum LlmError {
     UnsafeBaseUrl,
     #[error("unsupported provider: {0}")]
     UnsupportedProvider(String),
+    #[error("model ref must be of the form <provider>/<model>")]
+    InvalidModelRef,
+    #[error("no credentials available for provider: {0}")]
+    MissingCredentials(String),
+    #[error("no eligible model: every candidate was unregistered or missing credentials")]
+    NoEligibleModel,
 }
 
 /// Classification of an error's recoverability for retry decisions.
@@ -160,6 +168,20 @@ pub trait LanguageModel: Send + Sync {
     ///
     /// Returns an error variant if the underlying operation fails.
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse>;
+}
+
+/// Blanket forwarding impl so a boxed [`LanguageModel`] (e.g. an element of a
+/// `Vec<Arc<dyn LanguageModel>>` produced by [`router::ModelRouter::resolve_chain`])
+/// can itself be used wherever a `LanguageModel` is required, such as the
+/// `P`/`S` slots of [`FallbackModel`].
+impl LanguageModel for std::sync::Arc<dyn LanguageModel> {
+    fn model_id(&self) -> &str {
+        (**self).model_id()
+    }
+
+    fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {
+        (**self).complete(request)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
