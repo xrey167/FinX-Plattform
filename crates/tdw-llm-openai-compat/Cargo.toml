@@ -21,5 +21,11 @@ tdw-llm = { workspace = true }
 thiserror = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_llm_openai_compat_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

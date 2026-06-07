@@ -8,5 +8,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 serde = { workspace = true }
 
+# Unique example binary name (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates).
+[[example]]
+name = "tdw_kg_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
