@@ -173,6 +173,15 @@ fn validate_op(op: &Op) -> Result<()> {
             validate_token("provider", provider)?;
             validate_token("symbol", symbol)
         }
+        Op::CreateAlert {
+            symbol, condition, ..
+        } => {
+            validate_token("symbol", symbol)?;
+            validate_token("condition", condition)
+        }
+        Op::ListAlerts {} => Ok(()),
+        Op::DeleteAlert { id } => validate_token("id", id),
+        Op::SetAlertActive { id, .. } => validate_token("id", id),
         Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }

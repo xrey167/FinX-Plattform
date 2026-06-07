@@ -42,6 +42,9 @@ use tdw_storage_s3::InMemoryS3BlobEngine;
 
 use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry, run_ws_ingest};
 
+#[cfg(feature = "alerts")]
+use tdw_alerts::{AlertStore, InMemoryAlertStore};
+
 const DEFAULT_BUS_CAPACITY: usize = 1024;
 const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
 const LOCAL_POLICY_AUDIENCE: &str = "tdw-daemon";
@@ -189,6 +192,13 @@ pub struct AppState {
     /// across `AppState` clones (the daemon clones `AppState` per connection),
     /// so a stream started on one clone is visible to `stop_stream` on another.
     pub streams: Arc<Mutex<HashMap<String, StreamControl>>>,
+    /// Price-alert persistence store. Always `InMemoryAlertStore` unless the
+    /// `alerts-postgres` feature is enabled **and** a Postgres URL is configured
+    /// at runtime (`TDW_ALERT_PG_URL` or `DATABASE_URL`). Present only when the
+    /// `alerts` feature is enabled; absent in default offline builds so the
+    /// dependency is not pulled in unconditionally.
+    #[cfg(feature = "alerts")]
+    pub alert_store: Arc<dyn AlertStore>,
 }
 
 impl AppState {
@@ -230,6 +240,8 @@ impl AppState {
             session,
             rollout,
             streams: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "alerts")]
+            alert_store: Arc::new(InMemoryAlertStore::new()),
         })
     }
 

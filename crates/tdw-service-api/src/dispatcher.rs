@@ -16,6 +16,8 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+#[cfg(feature = "alerts")]
+use tdw_alerts::{AlertDirection, NewAlert, PriceAlert};
 use tdw_app_server::Dispatcher;
 #[cfg_attr(
     not(any(
@@ -41,6 +43,8 @@ use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
 use tdw_sandbox::{LocalUdfSandbox, SandboxRuntime, UdfRequest};
 use tdw_tools::{RegisteredTool, ToolDefinition, ToolRegistry, ToolRouter};
+#[cfg(feature = "alerts")]
+use uuid::Uuid;
 
 use crate::{
     AppState, PolicyEnforcementConfig, SelectedYahooEquityHistoricalFetcher, ServiceEndpoint,
@@ -110,6 +114,33 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             table,
         } => dispatch_stream_start(state, policy, provider, symbol, table.clone()).await,
         Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id).await,
+        #[cfg(feature = "alerts")]
+        Op::CreateAlert {
+            symbol,
+            target_price,
+            condition,
+        } => {
+            dispatch_create_alert(state, policy, symbol, target_price, condition).await
+        }
+        #[cfg(feature = "alerts")]
+        Op::ListAlerts {} => dispatch_list_alerts(state, policy).await,
+        #[cfg(feature = "alerts")]
+        Op::DeleteAlert { id } => dispatch_delete_alert(state, policy, id).await,
+        #[cfg(feature = "alerts")]
+        Op::SetAlertActive { id, active } => {
+            dispatch_set_alert_active(state, policy, id, *active).await
+        }
+        // When the `alerts` feature is disabled these variants are unreachable
+        // from the daemon (the ACP validation layer still parses them), so we
+        // return a descriptive error rather than silently dropping the request.
+        #[cfg(not(feature = "alerts"))]
+        Op::CreateAlert { .. }
+        | Op::ListAlerts {}
+        | Op::DeleteAlert { .. }
+        | Op::SetAlertActive { .. } => Err(Error::Provider(
+            "alert ops require the `alerts` feature; rebuild tdw-service-api with --features alerts"
+                .to_string(),
+        )),
         Op::ApprovalResponse { .. } => Ok(json!({ "acknowledged": "approval_response" })),
         Op::AppendUserMessage { .. } => Ok(json!({ "acknowledged": "append_user_message" })),
         Op::CompactContext { .. } => Ok(json!({ "acknowledged": "compact_context" })),
@@ -287,6 +318,241 @@ async fn dispatch_stream_stop(
         }),
         &policy.mask_rules,
     ))
+}
+
+/// Create a price alert owned by the authenticated principal.
+///
+/// Owner identity is derived exclusively from the verified JWT subject in
+/// `policy` — it is never read from request fields, closing the id-only gap
+/// in the source spec. `target_price` arrives as a decimal string from the
+/// protocol layer (preserving `Op: Eq`); it is parsed here and rejected if
+/// non-finite or non-positive. The alert id is minted as a `UUIDv7` string,
+/// matching the `OpId::generated()` convention used elsewhere in the daemon.
+/// When the `alerts` feature is absent this arm is unreachable (the match arm
+/// in `run_dispatch` is `#[cfg(feature = "alerts")]`-gated at the call site),
+/// so this function is only compiled with that feature.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if `target_price`
+/// cannot be parsed as a finite positive `f64`, if `condition` is not a valid
+/// [`AlertDirection`], or if the store write fails.
+#[cfg(feature = "alerts")]
+async fn dispatch_create_alert(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    symbol: &str,
+    target_price: &str,
+    condition: &str,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::AlertManage, &mut backend)?;
+
+    // Server-derived owner — never from the request payload.
+    let owner_id = evidence.principal.clone();
+
+    let price: f64 = target_price.parse().map_err(|_| {
+        Error::Provider(format!(
+            "target_price must be a decimal number, got: {target_price:?}"
+        ))
+    })?;
+    if !price.is_finite() || price <= 0.0 {
+        return Err(Error::Provider(format!(
+            "target_price must be a finite positive number, got: {target_price:?}"
+        )));
+    }
+
+    let direction: AlertDirection = condition.parse().map_err(|_| {
+        Error::Provider(format!(
+            "condition must be \"Above\" or \"Below\", got: {condition:?}"
+        ))
+    })?;
+
+    let now_ms = now_ms();
+    let id = Uuid::now_v7().to_string();
+    let alert = PriceAlert::new(
+        NewAlert {
+            owner_id,
+            symbol: symbol.to_string(),
+            target_price: price,
+            condition: direction,
+            expires_at_ms: None,
+        },
+        id,
+        now_ms,
+    );
+
+    state
+        .alert_store
+        .insert(&alert)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store insert: {e}")))?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "alert": serde_json::to_value(&alert)
+                .map_err(|e| Error::Provider(format!("alert serialize: {e}")))?,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// List all price alerts owned by the authenticated principal, newest first.
+///
+/// Owner scoping is enforced server-side: the query passes only the verified
+/// JWT subject to `list_by_owner`, so a caller can never see another user's
+/// alerts regardless of what any request field might carry.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails or if the store
+/// read fails.
+#[cfg(feature = "alerts")]
+async fn dispatch_list_alerts(state: &AppState, policy: &PolicyEnforcementConfig) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::AlertManage, &mut backend)?;
+
+    let owner_id = evidence.principal.clone();
+
+    let alerts = state
+        .alert_store
+        .list_by_owner(&owner_id)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store list: {e}")))?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "alerts": serde_json::to_value(&alerts)
+                .map_err(|e| Error::Provider(format!("alerts serialize: {e}")))?,
+            "count": alerts.len(),
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Delete a price alert, with server-enforced owner check.
+///
+/// The store is queried by owner first: `list_by_owner` is used to check
+/// ownership before calling `delete_by_id`. If no alert with `id` belonging
+/// to this principal exists, the error does **not** leak whether an alert with
+/// that id exists for another owner — both cases return the same
+/// "not found or not owned" message (deliberate deviation from the source's
+/// id-only delete gap).
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if the caller does
+/// not own the alert, or if the store write fails.
+#[cfg(feature = "alerts")]
+async fn dispatch_delete_alert(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    id: &str,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::AlertManage, &mut backend)?;
+
+    let owner_id = evidence.principal.clone();
+
+    // Owner check: fetch this principal's alerts and confirm the id is among
+    // them. Using list_by_owner (not a direct id lookup) ensures the existence
+    // of an alert with that id belonging to *another* owner is not leaked.
+    let owned = state
+        .alert_store
+        .list_by_owner(&owner_id)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store list: {e}")))?;
+
+    if !owned.iter().any(|a| a.id == id) {
+        return Err(Error::Provider(
+            "alert not found or not owned by the authenticated principal".to_string(),
+        ));
+    }
+
+    state
+        .alert_store
+        .delete_by_id(id)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store delete: {e}")))?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "id": id,
+            "deleted": true,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Toggle the `active` flag on a price alert, with server-enforced owner check.
+///
+/// Same ownership enforcement as [`dispatch_delete_alert`]: the alert must
+/// belong to the authenticated principal; a mismatched or non-existent id
+/// returns a non-leaking error.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if the caller does
+/// not own the alert, or if the store write fails.
+#[cfg(feature = "alerts")]
+async fn dispatch_set_alert_active(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    id: &str,
+    active: bool,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::AlertManage, &mut backend)?;
+
+    let owner_id = evidence.principal.clone();
+
+    let owned = state
+        .alert_store
+        .list_by_owner(&owner_id)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store list: {e}")))?;
+
+    if !owned.iter().any(|a| a.id == id) {
+        return Err(Error::Provider(
+            "alert not found or not owned by the authenticated principal".to_string(),
+        ));
+    }
+
+    state
+        .alert_store
+        .set_active(id, active)
+        .await
+        .map_err(|e| Error::Provider(format!("alert store set_active: {e}")))?;
+
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "id": id,
+            "active": active,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Current Unix-epoch millisecond timestamp.
+///
+/// Used to supply `now_ms` when constructing a [`PriceAlert`] from a
+/// [`NewAlert`] spec. Saturates to `i64::MAX` rather than panicking on
+/// platforms where `SystemTime` could overflow, though that scenario is not
+/// reachable on any target this crate is built for.
+#[cfg(feature = "alerts")]
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 async fn dispatch_run_query(
@@ -1287,6 +1553,382 @@ mod tests {
                 assert_eq!(value["output"], "AAPL");
             }
             other => panic!("expected Completed (limits clamped, not rejected), got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Alert CRUD dispatcher tests (require `alerts` feature)
+    // -----------------------------------------------------------------------
+
+    /// Build a policy whose principal is `owner`.
+    #[cfg(feature = "alerts")]
+    fn alert_policy(owner: &str) -> PolicyEnforcementConfig {
+        PolicyEnforcementConfig {
+            auth: IngressAuthContext {
+                claims: JwtClaims {
+                    sub: owner.to_string(),
+                    iss: "https://issuer".to_string(),
+                    aud: "tdw".to_string(),
+                    kid: "k1".to_string(),
+                    roles: vec!["analyst".to_string()],
+                },
+                jwks: vec![JwksKey {
+                    kid: "k1".to_string(),
+                    alg: "RS256".to_string(),
+                }],
+                issuer: "https://issuer".to_string(),
+                audience: "tdw".to_string(),
+            },
+            hooks: Vec::new(),
+            hook_execution: tdw_hooks::HookExecutionPolicy::default(),
+            mask_rules: Vec::new(),
+        }
+    }
+
+    /// `AppState` pre-wired with a fresh `InMemoryAlertStore`.
+    #[cfg(feature = "alerts")]
+    async fn alert_state(owner: &str) -> AppState {
+        AppState::in_memory_for_tests()
+            .await
+            .with_policy(alert_policy(owner))
+    }
+
+    /// CreateAlert returns a persisted alert whose owner_id equals the
+    /// verified principal — never the content of any request field.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn create_alert_derives_owner_from_principal() {
+        let state = alert_state("alice").await;
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "AAPL".to_string(),
+            target_price: "200.00".to_string(),
+            condition: "Above".to_string(),
+        });
+        let op_id = env.op_id.clone();
+        let events = dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            EventMsg::Started { op_id: sid } => assert_eq!(sid, &op_id),
+            other => panic!("expected Started, got {other:?}"),
+        }
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                // owner_id must equal the JWT sub, never a client-supplied value
+                assert_eq!(value["alert"]["owner_id"], "alice");
+                assert_eq!(value["alert"]["symbol"], "AAPL");
+                assert_eq!(value["alert"]["target_price"], 200.0_f64);
+                assert_eq!(value["alert"]["active"], true);
+                assert_eq!(value["alert"]["triggered"], false);
+                assert_eq!(value["evidence"]["principal"], "alice");
+                assert_eq!(value["evidence"]["endpoint"], "tdw.alert.manage");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// ListAlerts returns only the principal's own alerts (owner-scoped).
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn list_alerts_is_owner_scoped() {
+        let state_alice = alert_state("alice").await;
+
+        // Alice creates two alerts.
+        for symbol in ["AAPL", "MSFT"] {
+            let env = make_envelope(Op::CreateAlert {
+                symbol: symbol.to_string(),
+                target_price: "100.00".to_string(),
+                condition: "Above".to_string(),
+            });
+            let events = dispatch_op(&state_alice, env).await;
+            assert!(
+                matches!(&events[1], EventMsg::Completed { .. }),
+                "create should succeed for {symbol}"
+            );
+        }
+
+        // Bob uses a different policy (different principal) but the SAME
+        // in-memory store (via Arc clone so the data is shared).
+        let mut state_bob = state_alice.clone();
+        state_bob.policy = Some(alert_policy("bob"));
+
+        // Alice sees her 2 alerts.
+        let env_alice = make_envelope(Op::ListAlerts {});
+        let events_alice = dispatch_op(&state_alice, env_alice).await;
+        match &events_alice[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["count"], 2, "alice should see 2 alerts");
+                let alerts = value["alerts"].as_array().expect("alerts array");
+                assert!(
+                    alerts.iter().all(|a| a["owner_id"] == "alice"),
+                    "all returned alerts must belong to alice"
+                );
+            }
+            other => panic!("expected Completed for alice list, got {other:?}"),
+        }
+
+        // Bob sees 0 alerts (he hasn't created any).
+        let env_bob = make_envelope(Op::ListAlerts {});
+        let events_bob = dispatch_op(&state_bob, env_bob).await;
+        match &events_bob[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["count"], 0, "bob should see 0 alerts");
+            }
+            other => panic!("expected Completed for bob list, got {other:?}"),
+        }
+    }
+
+    /// DeleteAlert by another owner is refused with a non-leaking error.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn delete_alert_cross_owner_is_refused() {
+        let state_alice = alert_state("alice").await;
+
+        // Alice creates an alert; capture the id from the response.
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "BTC".to_string(),
+            target_price: "50000.00".to_string(),
+            condition: "Above".to_string(),
+        });
+        let events = dispatch_op(&state_alice, env).await;
+        let alert_id = match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => value["alert"]["id"]
+                .as_str()
+                .expect("id should be a string")
+                .to_string(),
+            other => panic!("create should succeed, got {other:?}"),
+        };
+
+        // Bob tries to delete Alice's alert — must be refused.
+        let mut state_bob = state_alice.clone();
+        state_bob.policy = Some(alert_policy("bob"));
+        let env_bob = make_envelope(Op::DeleteAlert {
+            id: alert_id.clone(),
+        });
+        let events_bob = dispatch_op(&state_bob, env_bob).await;
+        match &events_bob[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("not found or not owned"),
+                    "error must not leak existence, got: {error}"
+                );
+            }
+            other => panic!("expected Failed for cross-owner delete, got {other:?}"),
+        }
+
+        // Alice can still see the alert (it was NOT deleted).
+        let list_env = make_envelope(Op::ListAlerts {});
+        let list_events = dispatch_op(&state_alice, list_env).await;
+        match &list_events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => assert_eq!(value["count"], 1, "alice's alert must still exist"),
+            other => panic!("expected Completed for alice list, got {other:?}"),
+        }
+    }
+
+    /// DeleteAlert by the owning principal succeeds.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn delete_alert_own_succeeds() {
+        let state = alert_state("alice").await;
+
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "ETH".to_string(),
+            target_price: "2000.00".to_string(),
+            condition: "Below".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+        let alert_id = match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => value["alert"]["id"].as_str().expect("id").to_string(),
+            other => panic!("create should succeed, got {other:?}"),
+        };
+
+        let del_env = make_envelope(Op::DeleteAlert { id: alert_id });
+        let del_events = dispatch_op(&state, del_env).await;
+        match &del_events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["deleted"], true);
+            }
+            other => panic!("expected Completed for own delete, got {other:?}"),
+        }
+
+        // Confirm it is gone.
+        let list_env = make_envelope(Op::ListAlerts {});
+        let list_events = dispatch_op(&state, list_env).await;
+        match &list_events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => assert_eq!(value["count"], 0, "alert should be gone after delete"),
+            other => panic!("expected Completed for list-after-delete, got {other:?}"),
+        }
+    }
+
+    /// SetAlertActive by another owner is refused (same non-leaking error as delete).
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn set_alert_active_cross_owner_is_refused() {
+        let state_alice = alert_state("alice").await;
+
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "SOL".to_string(),
+            target_price: "150.00".to_string(),
+            condition: "Above".to_string(),
+        });
+        let events = dispatch_op(&state_alice, env).await;
+        let alert_id = match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => value["alert"]["id"].as_str().expect("id").to_string(),
+            other => panic!("create should succeed, got {other:?}"),
+        };
+
+        let mut state_bob = state_alice.clone();
+        state_bob.policy = Some(alert_policy("bob"));
+
+        let env_bob = make_envelope(Op::SetAlertActive {
+            id: alert_id,
+            active: false,
+        });
+        let events_bob = dispatch_op(&state_bob, env_bob).await;
+        match &events_bob[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("not found or not owned"),
+                    "error must not leak existence, got: {error}"
+                );
+            }
+            other => panic!("expected Failed for cross-owner toggle, got {other:?}"),
+        }
+    }
+
+    /// SetAlertActive by the owning principal succeeds and toggles the flag.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn set_alert_active_own_succeeds() {
+        let state = alert_state("alice").await;
+
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "DOGE".to_string(),
+            target_price: "0.10".to_string(),
+            condition: "Above".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+        let alert_id = match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => value["alert"]["id"].as_str().expect("id").to_string(),
+            other => panic!("create should succeed, got {other:?}"),
+        };
+
+        // Disable the alert.
+        let env_off = make_envelope(Op::SetAlertActive {
+            id: alert_id.clone(),
+            active: false,
+        });
+        let events_off = dispatch_op(&state, env_off).await;
+        match &events_off[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => assert_eq!(value["active"], false),
+            other => panic!("expected Completed for set_active=false, got {other:?}"),
+        }
+
+        // Re-enable the alert.
+        let env_on = make_envelope(Op::SetAlertActive {
+            id: alert_id,
+            active: true,
+        });
+        let events_on = dispatch_op(&state, env_on).await;
+        match &events_on[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => assert_eq!(value["active"], true),
+            other => panic!("expected Completed for set_active=true, got {other:?}"),
+        }
+    }
+
+    /// CreateAlert rejects a non-numeric target_price string.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn create_alert_rejects_non_numeric_target_price() {
+        let state = alert_state("alice").await;
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "AAPL".to_string(),
+            target_price: "not-a-number".to_string(),
+            condition: "Above".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("target_price must be a decimal number"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed for bad price, got {other:?}"),
+        }
+    }
+
+    /// CreateAlert rejects a non-positive target_price.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn create_alert_rejects_non_positive_target_price() {
+        let state = alert_state("alice").await;
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "AAPL".to_string(),
+            target_price: "-1.00".to_string(),
+            condition: "Above".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(error.contains("finite positive number"), "got: {error}");
+            }
+            other => panic!("expected Failed for negative price, got {other:?}"),
+        }
+    }
+
+    /// CreateAlert rejects an invalid condition string.
+    #[cfg(feature = "alerts")]
+    #[tokio::test]
+    async fn create_alert_rejects_invalid_condition() {
+        let state = alert_state("alice").await;
+        let env = make_envelope(Op::CreateAlert {
+            symbol: "AAPL".to_string(),
+            target_price: "100.00".to_string(),
+            condition: "sideways".to_string(),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(error.contains("\"Above\" or \"Below\""), "got: {error}");
+            }
+            other => panic!("expected Failed for bad condition, got {other:?}"),
         }
     }
 }

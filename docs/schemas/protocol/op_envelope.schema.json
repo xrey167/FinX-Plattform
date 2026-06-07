@@ -308,6 +308,82 @@
           "type": "object"
         },
         {
+          "description": "Create a new price alert for the authenticated principal. The server\nderives `owner_id` from the verified JWT subject — it is **never** read\nfrom the request payload. `target_price` is a decimal string (e.g.\n`\"123.45\"`) — carrying it as `String` preserves `Op: Eq` (f64 is not\n`Eq`) and avoids NaN-in-protocol. The dispatcher validates it is a\nfinite, positive number. `condition` is the `AlertDirection` text:\n`\"Above\"` or `\"Below\"`. Serializes as `create_alert`.",
+          "properties": {
+            "condition": {
+              "type": "string"
+            },
+            "symbol": {
+              "type": "string"
+            },
+            "target_price": {
+              "type": "string"
+            },
+            "type": {
+              "const": "create_alert",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "symbol",
+            "target_price",
+            "condition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "List all price alerts owned by the authenticated principal, newest\nfirst. No filter parameters — owner scoping is enforced server-side\nfrom the verified JWT subject. Serializes as `list_alerts`.",
+          "properties": {
+            "type": {
+              "const": "list_alerts",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Delete the price alert with `id`. The server verifies that the alert\nbelongs to the authenticated principal before deleting; a mismatched or\nnon-existent id returns an error that does **not** leak existence.\nSerializes as `delete_alert`.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "delete_alert",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Enable or disable the price alert with `id`. Same server-side ownership\ncheck as `DeleteAlert`. Serializes as `set_alert_active`.",
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "set_alert_active",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "active"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "type": {
               "const": "shutdown",

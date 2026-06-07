@@ -143,6 +143,17 @@ provider-yahoo-http = ["tdw-provider-yahoo/http"]
 ## fetcher and registers it.
 provider-binance-http = ["tdw-provider-binance/http"]
 
+## Enable the price-alert CRUD dispatcher arms (`CreateAlert`, `ListAlerts`,
+## `DeleteAlert`, `SetAlertActive`). Requires a Postgres connection: when the
+## `postgres` feature on `tdw-alerts` is absent the store falls back to the
+## in-memory implementation (suitable for tests and offline builds). Enabling
+## this feature also activates `real-postgres` so `PgAlertStore` can be built.
+alerts = ["dep:tdw-alerts"]
+
+## Like `alerts` but wires the real `PgAlertStore` instead of `InMemoryAlertStore`.
+## Used by the `live` compose stack so alerts survive container restarts.
+alerts-postgres = ["alerts", "tdw-alerts/postgres", "real-postgres"]
+
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
 ## providers; this adds live HTTP fetchers when explicitly enabled. Yahoo is the
@@ -190,8 +201,10 @@ futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+uuid = { workspace = true }
 tdw-acp = { workspace = true }
 tdw-actor = { path = "../tdw-actor" }
+tdw-alerts = { path = "../tdw-alerts", optional = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-app-client = { workspace = true }
