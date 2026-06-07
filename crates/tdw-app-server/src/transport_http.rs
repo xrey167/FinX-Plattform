@@ -1,12 +1,21 @@
 //! Minimal hand-rolled HTTP/1.1 + SSE transport (feature = "transport-http").
 //!
 //! Endpoints:
-//!   POST /op   — submit an `OpEnvelope` JSON body; responds 202 Accepted.
+//!   POST /op     — submit an `OpEnvelope` JSON body; responds 202 Accepted.
 //!   GET  /events — open SSE stream; emits `data: {event-json}\n\n` per `EventMsg`.
+//!
+//! When the `functions-route` feature is also active, three additional
+//! endpoints are available via [`serve_functions_http`]:
+//!   GET  /functions          — enumerate registered functions.
+//!   POST /functions/invoke   — invoke a function by id.
+//!   PUT  /functions/resume   — resume a partially-done run.
 //!
 //! No axum/hyper dependency; plain `tokio::net::TcpStream` IO only.
 
 #![cfg(feature = "transport-http")]
+
+#[cfg(feature = "functions-route")]
+use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -189,6 +198,54 @@ async fn handle_http_conn(
                 .await;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Functions control-plane HTTP listener (feature = "functions-route")
+// ---------------------------------------------------------------------------
+
+/// Spawn an HTTP/1.1 listener that serves the functions control-plane routes:
+///
+/// - `GET  /functions`         — enumerate registered functions (JSON array).
+/// - `POST /functions/invoke`  — invoke a function; returns `{ run_id, result }`.
+/// - `PUT  /functions/resume`  — resume a run; returns `{ run_id, result }`.
+///
+/// Every connection is handed off to
+/// [`crate::functions_route::handle_functions_conn`].  Authentication is
+/// HMAC-based (see [`crate::functions_route`]) rather than session-based;
+/// configure `RuntimeConfig::signing_secret` to enable request verification.
+///
+/// `now_ms_fn` is called once per accepted connection to obtain the current
+/// millisecond timestamp.  Pass `|| { std::time::SystemTime::now() … }` in
+/// production; pass a fixed closure in tests.
+///
+/// # Errors
+///
+/// Returns an `io::Error` if accepting a connection fails.
+#[cfg(feature = "functions-route")]
+pub async fn serve_functions_http(
+    listener: TcpListener,
+    handler: Arc<dyn crate::functions_route::FunctionsHandler>,
+    config: Arc<crate::functions_route::SigningConfig>,
+    now_ms_fn: impl Fn() -> i64 + Send + 'static,
+    cancel: CancellationToken,
+) -> std::io::Result<()> {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            accept = listener.accept() => {
+                let (stream, _peer) = accept?;
+                let h = Arc::clone(&handler);
+                let cfg = Arc::clone(&config);
+                let now_ms = now_ms_fn();
+                tokio::spawn(crate::functions_route::handle_functions_conn(
+                    stream, h, cfg, now_ms,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Find the position of `\r\n\r\n` in a byte slice, returning the index of `\r`.
