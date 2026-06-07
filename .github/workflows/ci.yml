@@ -5,6 +5,13 @@ on:
   push:
     branches: [main]
 
+# Cancel superseded runs on a PR branch when it is pushed again (rebases,
+# auto-update-branch). Runs on `main` are never cancelled so post-merge
+# verification always completes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   unit:
     name: Unit (${{ matrix.os }})
