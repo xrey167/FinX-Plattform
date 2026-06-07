@@ -1,5 +1,14 @@
 #![forbid(unsafe_code)]
 
+pub mod envelope;
+pub mod models;
+
+pub use envelope::{ResultEnvelope, ResultExtra, Warning};
+pub use models::{
+    Estimate, FinancialStatement, KeyMetrics, MacroSeries, NewsArticle, OptionContract,
+    OwnershipRecord, RateObservation, Ratios, StatementKind,
+};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
