@@ -56,7 +56,7 @@ pub enum AlphaVantageFunction {
 impl AlphaVantageFunction {
     /// Returns the `function=` query-parameter value expected by Alpha Vantage.
     #[must_use]
-    pub fn as_api_str(&self) -> &'static str {
+    pub const fn as_api_str(&self) -> &'static str {
         match self {
             Self::TimeSeriesDaily => "TIME_SERIES_DAILY",
             Self::GlobalQuote => "GLOBAL_QUOTE",

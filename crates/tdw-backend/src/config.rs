@@ -54,7 +54,7 @@ impl BackendConfig {
 
     /// Override which surfaces are served.
     #[must_use]
-    pub fn with_surfaces(mut self, surfaces: Surfaces) -> Self {
+    pub const fn with_surfaces(mut self, surfaces: Surfaces) -> Self {
         self.surfaces = surfaces;
         self
     }

@@ -10,20 +10,40 @@
 //! Returns `Vec<EventMsg>` per envelope: a `Started` followed by a terminal
 //! `Completed` or `Failed`.
 
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tdw_app_server::Dispatcher;
+#[cfg_attr(
+    not(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    )),
+    allow(unused_imports)
+)]
+use tdw_core::Fetcher;
 use tdw_core::{Error, Result};
 use tdw_hooks::SystemHookHandlerBackend;
 use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
-use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
 use tdw_sandbox::{LocalUdfSandbox, SandboxRuntime, UdfRequest};
+use tdw_tools::{RegisteredTool, ToolDefinition, ToolRegistry, ToolRouter};
 
 use crate::{
-    AppState, PolicyEnforcementConfig, ServiceEndpoint, enforce_request_path_with_backend,
-    mask_json_response,
+    AppState, PolicyEnforcementConfig, SelectedYahooEquityHistoricalFetcher, ServiceEndpoint,
+    enforce_request_path_with_backend, mask_json_response,
 };
 
 #[async_trait]
@@ -202,17 +222,19 @@ async fn dispatch_ingest(
         ));
     }
 
-    // Bronze landing table keyed by (provider, endpoint). Provider rows are
-    // written verbatim via JSONEachRow; normalization to `raw.market_data_bar`
-    // is a downstream (silver) concern.
-    let table = match (provider, endpoint) {
-        ("fileset" | "yahoo", "equity_historical") => "raw.equity_historical",
-        (provider, endpoint) => {
-            return Err(Error::Provider(format!(
-                "unsupported ingest provider/endpoint: {provider}/{endpoint}"
-            )));
-        }
+    // Registry-driven dispatch: resolve (provider, endpoint) against the build's
+    // ingest dispatch table — every feature-enabled fetcher with a bronze landing
+    // table is dispatchable. An unknown pair yields a structured error listing the
+    // providers/endpoints this build can actually ingest, rather than a flat
+    // "unsupported" string.
+    let table = ingest_dispatch_table();
+    let Some(binding) = table.get(&(provider, endpoint)) else {
+        return Err(Error::Provider(format!(
+            "unsupported ingest provider/endpoint: {provider}/{endpoint}; available: {}",
+            available_ingest_pairs(&table)
+        )));
     };
+    let bronze_table = binding.table;
 
     let runner = CommandRunner::new((*state.registry).clone());
     let mut per_symbol = Vec::with_capacity(symbols.len());
@@ -223,20 +245,15 @@ async fn dispatch_ingest(
         if let Some(range) = range {
             params["range"] = json!({ "start": range.start, "end": range.end });
         }
-        let object = match provider {
-            "fileset" => runner.run(&FilesetEquityHistoricalFetcher, params).await?,
-            "yahoo" => runner.run(&YahooEquityHistoricalFetcher, params).await?,
-            _ => unreachable!("provider/endpoint validated above"),
-        };
         // Per-(op, symbol) dedup token: stable across retries of the same op
         // (same session_id + sequence) yet distinct per symbol, so a multi-symbol
         // op does not dedup later symbols' blocks against the first.
         let token = tdw_storage_clickhouse::ingest_dedup_token(
             env.session_id.as_str(),
             env.sequence,
-            &format!("{table}:{symbol}"),
+            &format!("{bronze_table}:{symbol}"),
         );
-        let rows = persist_batch(state, table, &token, &object).await?;
+        let rows = (binding.run)(state, &runner, params, bronze_table, token.clone()).await?;
         total_rows += rows;
         per_symbol.push(json!({ "symbol": symbol, "rows": rows, "dedup_token": token }));
     }
@@ -246,12 +263,150 @@ async fn dispatch_ingest(
             "evidence": evidence,
             "provider": provider,
             "endpoint": endpoint,
-            "table": table,
+            "table": bronze_table,
             "rows": total_rows,
             "symbols": per_symbol,
         }),
         &policy.mask_rules,
     ))
+}
+
+/// One entry in the registry-driven ingest dispatch table.
+///
+/// `table` is the bronze landing table for the fetcher's data model; `run` is a
+/// type-erased closure that fetches one symbol through the concrete fetcher and
+/// persists it under the supplied dedup token, returning the row count. Erasing
+/// the fetcher's `(Query, DataModel)` types behind a closure lets a single,
+/// data-driven loop dispatch over heterogeneous providers without a per-provider
+/// `match` arm on the hot path.
+struct IngestBinding {
+    table: &'static str,
+    run: IngestRunner,
+}
+
+type IngestRunner = Box<
+    dyn for<'a> Fn(
+            &'a AppState,
+            &'a CommandRunner,
+            Value,
+            &'static str,
+            String,
+        ) -> Pin<Box<dyn Future<Output = Result<usize>> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
+/// Build an [`IngestBinding`] for a concrete fetcher writing into `table`.
+///
+/// The fetcher is constructed per call via `Default` (fetchers are unit/cheap
+/// structs); the binding fetches one symbol's batch and persists it.
+fn binding<F, Q, D>(table: &'static str) -> IngestBinding
+where
+    F: tdw_core::Fetcher<Q, D> + Default,
+    Q: tdw_core::QueryParams,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  params: Value,
+                  table: &'static str,
+                  token: String| {
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// The registry-driven ingest dispatch table for this build.
+///
+/// Each `(provider, endpoint)` key mirrors a feature-enabled `Fetcher`
+/// registered in [`crate::default_registry`]; the value binds it to its bronze
+/// landing table. Only fetchers with a canonical bronze table are listed —
+/// `EquityHistoricalData` → `raw.equity_historical`, `MarketDataBar` →
+/// `raw.market_data_bar` — so each landing write stays JSONEachRow-coherent with
+/// its destination schema. The offline-default build registers exactly the two
+/// fixture equity fetchers, keeping ingest network-free without any features.
+fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBinding> {
+    let mut table: BTreeMap<(&'static str, &'static str), IngestBinding> = BTreeMap::new();
+    // Offline fixture fetchers — always available.
+    table.insert(
+        ("fileset", "equity_historical"),
+        binding::<FilesetEquityHistoricalFetcher, _, _>("raw.equity_historical"),
+    );
+    table.insert(
+        ("yahoo", "equity_historical"),
+        binding::<SelectedYahooEquityHistoricalFetcher, _, _>("raw.equity_historical"),
+    );
+    // Feature-enabled `MarketDataBar` (canonical OHLC bar) fetchers land in the
+    // shared bronze bar table. Each arm mirrors a `provider-*` feature wired into
+    // `default_registry`.
+    #[cfg(feature = "provider-akshare")]
+    table.insert(
+        ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
+        binding::<crate::AkShareHttpFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-alpaca")]
+    table.insert(
+        ("alpaca", crate::AlpacaHttpStockBarsFetcher::ENDPOINT),
+        binding::<crate::AlpacaHttpStockBarsFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-alpha-vantage")]
+    table.insert(
+        ("alpha_vantage", crate::AlphaVantageHttpFetcher::ENDPOINT),
+        binding::<crate::AlphaVantageHttpFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-ccdata")]
+    table.insert(
+        ("ccdata", crate::CCDataHttpFetcher::ENDPOINT),
+        binding::<crate::CCDataHttpFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-coingecko")]
+    table.insert(
+        ("coingecko", crate::CoinGeckoHttpOhlcFetcher::ENDPOINT),
+        binding::<crate::CoinGeckoHttpOhlcFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-databento")]
+    table.insert(
+        ("databento", crate::DatabentoHttpTimeseriesFetcher::ENDPOINT),
+        binding::<crate::DatabentoHttpTimeseriesFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-fmp")]
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalFetcher::ENDPOINT),
+        binding::<crate::FmpHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-polygon")]
+    table.insert(
+        ("polygon", crate::PolygonHttpAggregatesFetcher::ENDPOINT),
+        binding::<crate::PolygonHttpAggregatesFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-sec")]
+    table.insert(
+        ("sec", crate::SecXbrlHttpFetcher::ENDPOINT),
+        binding::<crate::SecXbrlHttpFetcher, _, _>("raw.market_data_bar"),
+    );
+    #[cfg(feature = "provider-tiingo")]
+    table.insert(
+        ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
+        binding::<crate::TiingoHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
+    );
+    table
+}
+
+/// Comma-separated, sorted `provider/endpoint` list for the unsupported-pair
+/// error. `BTreeMap` iteration is already sorted, so the output is stable.
+fn available_ingest_pairs(table: &BTreeMap<(&'static str, &'static str), IngestBinding>) -> String {
+    table
+        .keys()
+        .map(|(provider, endpoint)| format!("{provider}/{endpoint}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Persist a fetched batch as an idempotent `INSERT … FORMAT JSONEachRow` and
@@ -280,6 +435,20 @@ fn dispatch_tool(
     let mut backend = SystemHookHandlerBackend::default();
     let evidence =
         enforce_request_path_with_backend(policy, ServiceEndpoint::ToolCall, &mut backend)?;
+
+    // Route through the tool registry: an unknown tool yields a structured error
+    // listing the tools this build exposes, rather than a flat "unsupported"
+    // string. Policy enforcement above runs *before* this resolution, so an
+    // unauthorized caller never reaches a tool — known or unknown.
+    let registry = service_tool_registry();
+    let router = ToolRouter::new(registry.clone());
+    if router.route(tool_name).is_err() {
+        return Err(Error::Provider(format!(
+            "unsupported tool: {tool_name}; available: {}",
+            available_tool_names(&registry)
+        )));
+    }
+
     match tool_name {
         "udf.run" => {
             let request: UdfRequest = serde_json::from_value(arguments.clone())
@@ -297,8 +466,60 @@ fn dispatch_tool(
                 &policy.mask_rules,
             ))
         }
-        other => Err(Error::Provider(format!("unsupported tool: {other}"))),
+        // The registry above is the single source of truth for *which* tools
+        // exist; a registered name without a dispatch arm here is a build bug.
+        other => Err(Error::Provider(format!(
+            "tool registered but not dispatchable: {other}"
+        ))),
     }
+}
+
+/// The service tool registry for this build.
+///
+/// Built per dispatch (cheap: a `BTreeMap` of small definitions). The handler
+/// closure is a placeholder — `udf.run` is executed via the sandbox in
+/// [`dispatch_tool`] because it needs the WASM runtime and structured error
+/// mapping — but registering the tool here makes the registry the authoritative
+/// listing for routing and the unknown-tool error.
+fn service_tool_registry() -> ToolRegistry {
+    let mut registry = ToolRegistry::default();
+    registry
+        .register(udf_run_tool())
+        .expect("udf.run tool definition is valid and registered exactly once");
+    registry
+}
+
+/// Definition for the `udf.run` tool. The handler is unused on the hot path
+/// (see [`dispatch_tool`]); it exists only to satisfy [`RegisteredTool`].
+fn udf_run_tool() -> RegisteredTool {
+    RegisteredTool::new(
+        ToolDefinition {
+            name: "udf.run".to_string(),
+            description: "Execute a sandboxed user-defined function.".to_string(),
+            input_schema: json!({ "type": "object" }),
+            output_schema: json!({ "type": "object" }),
+            permission_pattern: "udf.run".to_string(),
+        },
+        udf_run_placeholder_handler,
+    )
+}
+
+/// Placeholder handler for the `udf.run` registry entry. Never invoked:
+/// [`dispatch_tool`] executes `udf.run` via the sandbox (which needs the WASM
+/// runtime and structured error mapping). The registry only needs a handler to
+/// construct a [`RegisteredTool`]; the echo behaviour here is inert.
+fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
+    Ok(input)
+}
+
+/// Comma-separated, sorted tool names for the unknown-tool error.
+fn available_tool_names(registry: &ToolRegistry) -> String {
+    registry
+        .definitions()
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -330,6 +551,14 @@ mod tests {
             hook_execution: tdw_hooks::HookExecutionPolicy::default(),
             mask_rules: Vec::new(),
         }
+    }
+
+    /// Policy whose principal also holds the `udf_runner` role required by the
+    /// `tdw.udf.run` (ToolCall) endpoint — analyst alone is denied there.
+    fn udf_runner_policy() -> PolicyEnforcementConfig {
+        let mut policy = analyst_policy();
+        policy.auth.claims.roles = vec!["analyst".to_string(), "udf_runner".to_string()];
+        policy
     }
 
     fn make_envelope(op: Op) -> OpEnvelope {
@@ -531,11 +760,166 @@ mod tests {
         match &events[1] {
             EventMsg::Failed { error, .. } => {
                 assert!(
-                    error.contains("unsupported ingest provider/endpoint"),
+                    error.contains("unsupported ingest provider/endpoint: nope/equity_historical"),
                     "got: {error}"
+                );
+                // Registry-driven: the structured error advertises the pairs this
+                // (offline-default) build can actually ingest.
+                assert!(
+                    error.contains("available:"),
+                    "error should list available providers, got: {error}"
+                );
+                assert!(
+                    error.contains("fileset/equity_historical")
+                        && error.contains("yahoo/equity_historical"),
+                    "error should list both offline fixture providers, got: {error}"
                 );
             }
             other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_dispatch_table_lists_offline_fixture_providers() {
+        // The two fixture equity providers are always dispatchable (regardless of
+        // enabled provider features), both routed through the generic
+        // (type-erased) ingest binding rather than a hardcoded provider match, and
+        // both land in the equity bronze table.
+        let table = ingest_dispatch_table();
+        assert_eq!(
+            table[&("fileset", "equity_historical")].table,
+            "raw.equity_historical"
+        );
+        assert_eq!(
+            table[&("yahoo", "equity_historical")].table,
+            "raw.equity_historical"
+        );
+        let available = available_ingest_pairs(&table);
+        assert!(
+            available.contains("fileset/equity_historical")
+                && available.contains("yahoo/equity_historical"),
+            "available pairs should list both fixture providers, got: {available}"
+        );
+    }
+
+    /// The offline-default build (no `provider-*` features) dispatches over
+    /// *exactly* the two fixture equity providers, keeping ingest network-free.
+    #[cfg(not(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    )))]
+    #[tokio::test]
+    async fn ingest_dispatch_table_offline_default_is_exactly_two_fixtures() {
+        let table = ingest_dispatch_table();
+        assert_eq!(
+            available_ingest_pairs(&table),
+            "fileset/equity_historical, yahoo/equity_historical"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_dispatches_fileset_fixture_provider() {
+        // Second fixture provider (the first, `yahoo`, is covered by
+        // `ingest_batch_persists_and_reports_dedup_token`): proves the
+        // registry-driven path dispatches more than one provider.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "fileset".to_string(),
+            endpoint: "equity_historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "fileset");
+                assert_eq!(value["table"], "raw.equity_historical");
+                assert!(value["rows"].as_u64().expect("rows count") >= 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_registry_routes_known_and_rejects_unknown() {
+        let registry = service_tool_registry();
+        let router = ToolRouter::new(registry.clone());
+        // Known tool routes.
+        assert!(router.route("udf.run").is_ok());
+        // Unknown tool is rejected by the router.
+        assert!(router.route("does.not.exist").is_err());
+        // The available-names helper lists the build's tools for the error.
+        assert_eq!(available_tool_names(&registry), "udf.run");
+    }
+
+    #[tokio::test]
+    async fn tool_call_unknown_tool_lists_available_names() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(udf_runner_policy());
+        let env = make_envelope(Op::ToolCall {
+            call_id: tdw_protocol::ToolCallId::new("tc-1").expect("tool call id"),
+            tool_name: "bogus.tool".to_string(),
+            arguments: json!({}),
+            permission_id: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("unsupported tool: bogus.tool"),
+                    "got: {error}"
+                );
+                assert!(error.contains("available: udf.run"), "got: {error}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_call_udf_run_executes_through_registry() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(udf_runner_policy());
+        let env = make_envelope(Op::ToolCall {
+            call_id: tdw_protocol::ToolCallId::new("tc-2").expect("tool call id"),
+            tool_name: "udf.run".to_string(),
+            arguments: json!({
+                "name": "upper",
+                "runtime": "Wasm",
+                "source": "upper(input)",
+                "input": "aapl",
+                "allow_network": false,
+                "allow_filesystem": false,
+            }),
+            permission_id: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert!(value.get("runtime").is_some(), "got: {value}");
+                assert!(value.get("output").is_some(), "got: {value}");
+            }
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -662,6 +1046,48 @@ mod tests {
                 );
             }
             other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// Per-request `WasmLimits` carried in the `udf.run` op payload are parsed
+    /// into the `UdfRequest` and plumbed to the WASM runtime. Over-ceiling values
+    /// are clamped (never raise the built-in maximum) rather than rejected, so the
+    /// op still completes through the wasm runtime. (The sandbox covers the clamp
+    /// arithmetic itself; this asserts the dispatcher plumbs the field end-to-end.)
+    #[cfg(feature = "udf-wasm")]
+    #[tokio::test]
+    async fn tool_call_udf_run_plumbs_and_clamps_wasm_limits() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(udf_runner_policy());
+        let env = make_envelope(Op::ToolCall {
+            call_id: tdw_protocol::ToolCallId::new("tc-3").expect("tool call id"),
+            tool_name: "udf.run".to_string(),
+            arguments: json!({
+                "name": "upper",
+                "runtime": "Wasm",
+                // Non-base64-wasm source routes to the deterministic fixture path,
+                // which still resolves (and clamps) the per-request limits.
+                "source": "plain udf source",
+                "input": "aapl",
+                "allow_network": false,
+                "allow_filesystem": false,
+                // Over-ceiling fuel + memory: must be clamped, not rejected.
+                "wasm_limits": { "fuel": u64::MAX, "max_memory_bytes": usize::MAX },
+            }),
+            permission_id: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["runtime"], "Wasm");
+                assert_eq!(value["output"], "AAPL");
+            }
+            other => panic!("expected Completed (limits clamped, not rejected), got {other:?}"),
         }
     }
 }

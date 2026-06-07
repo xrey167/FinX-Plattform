@@ -160,7 +160,10 @@ use tdw_provider_velodata::{
     VelodataHttpFundingFetcher, VelodataHttpLiquidationsFetcher, VelodataHttpOiFetcher,
 };
 use tdw_provider_ws_mock::MockEquityStreamer;
+#[cfg(not(feature = "provider-yahoo-http"))]
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -178,6 +181,11 @@ use tdw_tools::{ToolOrchestrator, ToolRegistry, echo_tool};
 use tdw_tui::event_lines;
 use tdw_udf::{UdfDefinition, UdfRuntime, evaluate};
 use tdw_workflow_engine::WorkflowEngine;
+
+#[cfg(feature = "provider-yahoo-http")]
+type SelectedYahooEquityHistoricalFetcher = YahooHttpEquityHistoricalFetcher;
+#[cfg(not(feature = "provider-yahoo-http"))]
+type SelectedYahooEquityHistoricalFetcher = YahooEquityHistoricalFetcher;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSummary {
@@ -201,7 +209,7 @@ pub struct ResearchIndexEvidence {
 pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
-    registry.register(YahooEquityHistoricalFetcher::registry_entry())?;
+    registry.register(SelectedYahooEquityHistoricalFetcher::registry_entry())?;
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
     registry.register(AdanosSentimentHttpFetcher::registry_entry())?;
@@ -329,7 +337,7 @@ pub fn fetch_equity_historical(
 
     match provider {
         "fileset" => block_on(runner.run(&FilesetEquityHistoricalFetcher, params)),
-        "yahoo" => block_on(runner.run(&YahooEquityHistoricalFetcher, params)),
+        "yahoo" => block_on(runner.run(&SelectedYahooEquityHistoricalFetcher::default(), params)),
         other => Err(Error::Registry(format!("unknown provider: {other}"))),
     }
 }
@@ -1291,10 +1299,22 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "provider-yahoo-http")]
+    #[test]
+    fn yahoo_http_feature_selects_http_fetcher_for_execution_paths() {
+        let selected = std::any::type_name::<SelectedYahooEquityHistoricalFetcher>();
+
+        assert!(
+            selected.ends_with("YahooHttpEquityHistoricalFetcher"),
+            "selected yahoo fetcher was {selected}"
+        );
+    }
+
     /// The default (no-feature) build must register exactly the three offline
-    /// providers (fileset, yahoo, mock-ws). Enabling any `provider-*` feature
-    /// only adds live HTTP fetchers on top, so this exact count is asserted only
-    /// when no provider feature is active.
+    /// providers (fileset, yahoo, mock-ws). Enabling provider features adds live
+    /// HTTP fetchers on top, except `provider-yahoo-http`, which swaps Yahoo's
+    /// offline fixture for the live implementation under the same key. This
+    /// exact offline count is asserted only when no provider feature is active.
     #[cfg(not(any(
         feature = "provider-adanos",
         feature = "provider-akshare",
@@ -1326,6 +1346,7 @@ mod tests {
         feature = "provider-trading-economics",
         feature = "provider-velodata",
         feature = "provider-binance-http",
+        feature = "provider-yahoo-http",
     )))]
     #[test]
     fn default_registry_is_offline_only() {

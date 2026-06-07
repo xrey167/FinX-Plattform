@@ -49,8 +49,19 @@ Independent of the backend, it picks one of two handlers:
   configured; acknowledges and completes each job without executing it, so the
   loop/retry/dead-letter wiring can be exercised offline.
 
-Tunables: `TDW_WORKER_ID`, `TDW_WORKER_LEASE_TTL_MS`, `TDW_WORKER_POLL_MS`, plus
-the `TDW_WORKER_DAEMON_*` set above.
+Tunables: `TDW_WORKER_ID`, `TDW_WORKER_LEASE_TTL_MS`, `TDW_WORKER_POLL_MS`,
+`TDW_WORKER_CONCURRENCY`, plus the `TDW_WORKER_DAEMON_*` set above.
+
+### Concurrency (`TDW_WORKER_CONCURRENCY`)
+
+The serve loop drives up to `max_concurrent` jobs in-flight at once (default
+`4`). Set `TDW_WORKER_CONCURRENCY` to override it. The value is clamped to
+`1..=256`: `0`/garbage is raised to `1` (so the loop never stalls) and an
+over-large value (e.g. a typo like `100000`) is capped at `256` so a single
+worker cannot exhaust DB connections or file descriptors. When the requested
+value is clamped, the worker logs a warning to stderr at startup
+(`TDW_WORKER_CONCURRENCY=… clamped to …`). Size it against your job's I/O
+profile and the connection budget of the backend (and PgBouncer, if fronted).
 
 ## Backend contract (the numbers you deploy against)
 
@@ -139,7 +150,35 @@ table. Suggested signals:
 
 - **Dead letters are the primary alarm.** A non-zero, rising
   `dead_lettered` means jobs exhausted `max_attempts`; route to an on-call queue
-  and provide a replay/inspection path for `dead_letters()`.
+  and triage with the CLI below.
+
+### Dead-letter triage (CLI)
+
+`tdw-worker` ships first-class dead-letter operability against both backends
+(the backend is selected from the environment exactly like `--serve`: Postgres
+when built `--features postgres` with `TDW_WORKER_PG_URL`/`DATABASE_URL` set,
+SQLite otherwise):
+
+- **List** the dead-letter queue as JSON (the full `DeadLetterRecord` array,
+  including `last_error` and `attempts`) for inspection or piping into `jq`:
+
+  ```bash
+  tdw-worker dead-letters list
+  ```
+
+- **Replay** a single job once the underlying cause is fixed. Replay
+  re-enqueues the job as `Pending` with its attempt counter reset to zero and
+  clears the dead-letter/error/lease state, so the serve loop picks it up again
+  on the next lease. An audit line is written to stderr
+  (`tdw-worker dead-letters replay job_id=… backend=… status=requeued`):
+
+  ```bash
+  tdw-worker dead-letters replay <job_id>
+  ```
+
+  Replaying an unknown `job_id` errors (`unknown job_id`), and replaying a job
+  that is not currently dead-lettered errors (`invalid job`) - replay never
+  resurrects a live or completed job.
 - **Backlog vs. throughput.** Alert on `ready` rising while `leased` is flat -
   that is "no workers consuming," distinct from "too much work."
 - Export the stats poll as Prometheus gauges (or your metrics system) from the
@@ -157,15 +196,13 @@ table. Suggested signals:
       TTL.
 - [ ] Stats exported as metrics; alerts wired for dead letters, backlog growth,
       and missed heartbeats.
-- [ ] A documented replay/triage path for dead-lettered jobs.
+- [ ] Dead-letter triage wired to `tdw-worker dead-letters list` / `replay
+      <job_id>` (see "Dead-letter triage" above); on-call runbook references it.
 - [ ] Load/restart tested: kill a worker mid-job and confirm the lease expires
       and the job is re-leased and completed exactly once.
 
 ## What this does NOT cover
 
-- Concurrency. The lease loop processes one job at a time;
-  `DaemonJobHandler` submits and waits per job. Parallel in-flight jobs are a
-  follow-up.
 - Result forwarding. `DaemonJobHandler` maps the daemon's terminal event to
   job success/failure but does not persist or forward the daemon `result`
   payload beyond that.

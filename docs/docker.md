@@ -10,7 +10,28 @@ docker compose --profile tools config
 
 `minimal` starts Postgres and ClickHouse. `full` adds Qdrant, Meilisearch,
 MinIO, Redis, `tdw-service`, and `tdw-worker`. `tools` adds one-shot
-`tdw-cli` and `tdw-mcp` services for local packaged-command checks.
+`tdw-cli` and `tdw-mcp` services for local packaged-command checks. The `live`
+profile brings up the long-running daemon, worker, and MCP HTTP server — see
+[`docs/release/data-backend-runbook.md`](release/data-backend-runbook.md).
+
+## First-run setup
+
+Before the first `live` bring-up, create `.env` and a random
+`TDW_MCP_HTTP_TOKEN` with the idempotent helper:
+
+```powershell
+.\scripts\compose-setup.ps1
+```
+
+```bash
+./scripts/compose-setup.sh
+```
+
+It copies `.env.example` to `.env` (if absent) and fills `TDW_MCP_HTTP_TOKEN`
+with a securely random hex-32 value. Every variable is documented in
+[`docs/CONFIGURATION.md`](CONFIGURATION.md); secret-injection and TLS templates
+live in [`docs/release/secrets-and-tls.md`](release/secrets-and-tls.md).
+`.env` is gitignored — never commit it.
 
 Run the G014 packaged smoke path through Compose:
 

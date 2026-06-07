@@ -49,7 +49,7 @@ impl FinraShortInterestQuery {
     ///
     /// Returns [`FinraProviderError::InvalidLimit`] if `limit` is 0 or
     /// exceeds [`SHORT_INTEREST_MAX_LIMIT`].
-    pub fn new(limit: u32, offset: u32) -> Result<Self> {
+    pub const fn new(limit: u32, offset: u32) -> Result<Self> {
         if limit == 0 || limit > SHORT_INTEREST_MAX_LIMIT {
             return Err(FinraProviderError::InvalidLimit {
                 got: limit,
@@ -76,7 +76,7 @@ impl FinraOtcSummaryQuery {
     ///
     /// Returns [`FinraProviderError::InvalidLimit`] if `limit` is 0 or
     /// exceeds [`SHORT_INTEREST_MAX_LIMIT`].
-    pub fn new(limit: u32) -> Result<Self> {
+    pub const fn new(limit: u32) -> Result<Self> {
         if limit == 0 || limit > SHORT_INTEREST_MAX_LIMIT {
             return Err(FinraProviderError::InvalidLimit {
                 got: limit,
