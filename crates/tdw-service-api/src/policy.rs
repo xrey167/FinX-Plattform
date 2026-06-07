@@ -334,3 +334,43 @@ fn masked_leaf(value: &Value, mode: MaskMode) -> Value {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn last4(field: &str) -> MaskRule {
+        MaskRule {
+            field: field.to_string(),
+            mode: MaskMode::Last4,
+        }
+    }
+
+    #[test]
+    fn last4_masks_long_string_to_trailing_four_digits() {
+        // The Last4 string path: keep only the final four characters behind the
+        // `***` marker. Reached via the public mask_json_response -> the private
+        // masked_leaf Last4 arm.
+        let masked = mask_json_response(json!({ "account": "1234567890" }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***7890");
+    }
+
+    #[test]
+    fn last4_masks_non_string_value_to_bare_marker() {
+        // as_str() is None for a numeric leaf, so the map_or_else fallback yields
+        // the bare `***` marker (no suffix).
+        let masked = mask_json_response(json!({ "account": 12345 }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***");
+    }
+
+    #[test]
+    fn last4_masks_short_string_keeping_all_available_chars() {
+        // A string shorter than four chars exercises the chars().rev().take(4)
+        // boundary: every character is retained behind the marker.
+        let masked = mask_json_response(json!({ "account": "ab" }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***ab");
+    }
+}
