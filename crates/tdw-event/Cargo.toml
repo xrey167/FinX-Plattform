@@ -11,5 +11,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 validator = { workspace = true }
 
+[[example]]
+name = "tdw_event_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

@@ -10,5 +10,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-protocol = { workspace = true }
 
+[[example]]
+name = "tdw_exec_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
