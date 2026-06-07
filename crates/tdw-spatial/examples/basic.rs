@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-spatial --example basic
+//! cargo run -p tdw-spatial --example tdw-spatial-basic
 //! ```
 
 use tdw_spatial::{BoundingBox, Point, manhattan_distance, validate_bounding_box};

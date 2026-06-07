@@ -13,3 +13,7 @@ serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-spatial-basic"
+path = "examples/basic.rs"

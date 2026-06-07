@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-cdc --example basic
+//! cargo run -p tdw-cdc --example tdw-cdc-basic
 //! ```
 
 use tdw_cdc::CdcStream;

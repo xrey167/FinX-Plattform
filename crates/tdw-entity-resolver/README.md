@@ -52,7 +52,7 @@ assert_eq!(hits[0].score, 100);
 Run the worked example:
 
 ```text
-cargo run -p tdw-entity-resolver --example basic
+cargo run -p tdw-entity-resolver --example tdw-entity-resolver-basic
 ```
 
 ## See also

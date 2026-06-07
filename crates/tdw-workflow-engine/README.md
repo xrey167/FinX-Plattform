@@ -44,7 +44,7 @@ See `examples/basic.rs` for a full, runnable construction of a `WorkflowDefiniti
 Run the worked example:
 
 ```text
-cargo run -p tdw-workflow-engine --example basic
+cargo run -p tdw-workflow-engine --example tdw-workflow-engine-basic
 ```
 
 ## See also

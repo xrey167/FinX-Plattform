@@ -5,7 +5,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-entity-resolver --example basic
+//! cargo run -p tdw-entity-resolver --example tdw-entity-resolver-basic
 //! ```
 
 use tdw_entity_resolver::{IdentifierRecord, resolve_by_identifier, resolve_symbol};

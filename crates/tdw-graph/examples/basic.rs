@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-graph --example basic
+//! cargo run -p tdw-graph --example tdw-graph-basic
 //! ```
 
 use tdw_graph::DirectedGraph;

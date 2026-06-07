@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-sql-codegen --example basic
+//! cargo run -p tdw-sql-codegen --example tdw-sql-codegen-basic
 //! ```
 
 use tdw_sql_codegen::analytics::{default_granularities, emit_ohlc_ddl};

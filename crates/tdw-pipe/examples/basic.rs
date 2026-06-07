@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-pipe --example basic
+//! cargo run -p tdw-pipe --example tdw-pipe-basic
 //! ```
 
 use tdw_pipe::PipeDefinition;

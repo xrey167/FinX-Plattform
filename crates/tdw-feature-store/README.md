@@ -49,7 +49,7 @@ assert_eq!(store.latest("instrument:AAPL").map(|s| s.as_of.clone()), Some("2026-
 Run the worked example:
 
 ```text
-cargo run -p tdw-feature-store --example basic
+cargo run -p tdw-feature-store --example tdw-feature-store-basic
 ```
 
 ## See also

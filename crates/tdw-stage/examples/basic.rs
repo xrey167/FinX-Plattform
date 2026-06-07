@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-stage --example basic
+//! cargo run -p tdw-stage --example tdw-stage-basic
 //! ```
 
 use tdw_stage::{CopyIntoPlan, StageLocation};

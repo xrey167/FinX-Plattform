@@ -48,7 +48,7 @@ assert!(graph.has_cycle());
 Run the worked example:
 
 ```text
-cargo run -p tdw-graph --example basic
+cargo run -p tdw-graph --example tdw-graph-basic
 ```
 
 ## See also

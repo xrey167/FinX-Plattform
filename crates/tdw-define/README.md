@@ -58,7 +58,7 @@ assert_eq!(
 Run the worked example:
 
 ```text
-cargo run -p tdw-define --example basic
+cargo run -p tdw-define --example tdw-define-basic
 ```
 
 ## See also

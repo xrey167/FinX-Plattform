@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-feature-store --example basic
+//! cargo run -p tdw-feature-store --example tdw-feature-store-basic
 //! ```
 
 use std::collections::BTreeMap;

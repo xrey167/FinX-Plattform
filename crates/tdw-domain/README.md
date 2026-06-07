@@ -59,7 +59,7 @@ assert!(Figi::new("TOO_SHORT").is_err());
 Run the worked example:
 
 ```text
-cargo run -p tdw-domain --example basic
+cargo run -p tdw-domain --example tdw-domain-basic
 ```
 
 ## See also

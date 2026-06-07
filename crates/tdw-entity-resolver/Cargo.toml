@@ -12,3 +12,7 @@ tdw-kg = { path = "../tdw-kg" }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-entity-resolver-basic"
+path = "examples/basic.rs"

@@ -53,7 +53,7 @@ assert_eq!(tail[0].offset, 2);
 Run the worked example:
 
 ```text
-cargo run -p tdw-cdc --example basic
+cargo run -p tdw-cdc --example tdw-cdc-basic
 ```
 
 ## See also

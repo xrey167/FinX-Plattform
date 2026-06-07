@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-define --example basic
+//! cargo run -p tdw-define --example tdw-define-basic
 //! ```
 
 use tdw_define::{DefineError, DefineEvent};

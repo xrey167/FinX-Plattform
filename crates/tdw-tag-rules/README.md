@@ -56,7 +56,7 @@ assert_eq!(engine.version(), 1);
 Run the worked example:
 
 ```text
-cargo run -p tdw-tag-rules --example basic
+cargo run -p tdw-tag-rules --example tdw-tag-rules-basic
 ```
 
 ## See also

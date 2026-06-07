@@ -45,7 +45,7 @@ assert!(manhattan_distance(nyc, Point { lat: 40.8, lon: -73.9 }) > 0.0);
 Run the worked example:
 
 ```text
-cargo run -p tdw-spatial --example basic
+cargo run -p tdw-spatial --example tdw-spatial-basic
 ```
 
 ## See also

@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-pipeline --example basic
+//! cargo run -p tdw-pipeline --example tdw-pipeline-basic
 //! ```
 
 use tdw_pipeline::{can_enqueue, market_data_dbt_jobs, validate_jobs};

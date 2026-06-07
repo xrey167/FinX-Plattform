@@ -54,7 +54,7 @@ assert_eq!(pipe.last_offset, 42);
 Run the worked example:
 
 ```text
-cargo run -p tdw-pipe --example basic
+cargo run -p tdw-pipe --example tdw-pipe-basic
 ```
 
 ## See also

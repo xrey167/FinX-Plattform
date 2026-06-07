@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-workflow-engine --example basic
+//! cargo run -p tdw-workflow-engine --example tdw-workflow-engine-basic
 //! ```
 
 use tdw_agent::{

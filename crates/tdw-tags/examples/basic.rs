@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-tags --example basic
+//! cargo run -p tdw-tags --example tdw-tags-basic
 //! ```
 
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};

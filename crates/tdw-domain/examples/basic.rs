@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-domain --example basic
+//! cargo run -p tdw-domain --example tdw-domain-basic
 //! ```
 
 use tdw_domain::{Figi, MarketDataBar, TimeGranularity};

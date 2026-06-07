@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-tag-rules --example basic
+//! cargo run -p tdw-tag-rules --example tdw-tag-rules-basic
 //! ```
 
 use tdw_tag_rules::{RuleEngine, RuleError, RulePredicate, TagRule};

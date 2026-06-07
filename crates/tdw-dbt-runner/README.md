@@ -50,7 +50,7 @@ assert_eq!(rows[0].1, "success");
 Run the worked example:
 
 ```text
-cargo run -p tdw-dbt-runner --example basic
+cargo run -p tdw-dbt-runner --example tdw-dbt-runner-basic
 ```
 
 ## See also

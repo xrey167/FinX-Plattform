@@ -47,7 +47,7 @@ assert!(can_enqueue(silver, &["dbt_bronze_market_data"]));
 Run the worked example:
 
 ```text
-cargo run -p tdw-pipeline --example basic
+cargo run -p tdw-pipeline --example tdw-pipeline-basic
 ```
 
 ## See also

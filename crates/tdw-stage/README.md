@@ -50,7 +50,7 @@ assert!(plan.validate().is_ok());
 Run the worked example:
 
 ```text
-cargo run -p tdw-stage --example basic
+cargo run -p tdw-stage --example tdw-stage-basic
 ```
 
 ## See also

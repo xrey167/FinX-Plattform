@@ -57,7 +57,7 @@ assert!(store.active_tags("instrument:AAPL", "2026-07-01").is_empty());
 Run the worked example:
 
 ```text
-cargo run -p tdw-tags --example basic
+cargo run -p tdw-tags --example tdw-tags-basic
 ```
 
 ## See also

@@ -4,7 +4,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run -p tdw-dbt-runner --example basic
+//! cargo run -p tdw-dbt-runner --example tdw-dbt-runner-basic
 //! ```
 
 use tdw_dbt_runner::{DbtCommand, parse_run_results, run_step_rows};

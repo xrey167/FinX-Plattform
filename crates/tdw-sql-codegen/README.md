@@ -50,7 +50,7 @@ assert!(ohlc.contains("engine = AggregatingMergeTree"));
 Run the worked example:
 
 ```text
-cargo run -p tdw-sql-codegen --example basic
+cargo run -p tdw-sql-codegen --example tdw-sql-codegen-basic
 ```
 
 ## See also
