@@ -5,8 +5,12 @@
 //! environment and appends it as the `api_key` query parameter. Live
 //! integration tests are additionally gated by `TDW_GLASSNODE_LIVE=1`.
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use tdw_core::http_support::prelude::*;
+use serde_json::Value;
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_ENV, BASE_URL, GlassnodeDataPoint, GlassnodeMetric, GlassnodeMetricQuery};
 
@@ -19,24 +23,22 @@ struct RawPoint {
     v: f64,
 }
 
-tdw_core::provider_fetcher_struct!(
-    /// Production Glassnode metric fetcher.
-    pub GlassnodeHttpFetcher,
-    BASE_URL
-);
+/// Provider specification for the Glassnode metric fetcher.
+pub struct GlassnodeSpec;
 
-impl GlassnodeHttpFetcher {
-    /// Create a new fetcher pointing at the canonical Glassnode base URL.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[async_trait]
-impl Fetcher<GlassnodeMetricQuery, GlassnodeDataPoint> for GlassnodeHttpFetcher {
+impl ProviderSpec for GlassnodeSpec {
     const PROVIDER: &'static str = crate::PROVIDER_ID;
     const ENDPOINT: &'static str = "metric";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "glassnode client";
+    const SEND_ERR: &'static str = "glassnode extract_data";
+    const RETURNED_ERR: &'static str = "glassnode extract_data returned";
+    const READ_BODY_ERR: &'static str = "glassnode read body";
+
+    type Query = GlassnodeMetricQuery;
+    type Data = GlassnodeDataPoint;
 
     fn transform_query(params: Value) -> Result<GlassnodeMetricQuery> {
         let asset = params
@@ -60,59 +62,27 @@ impl Fetcher<GlassnodeMetricQuery, GlassnodeDataPoint> for GlassnodeHttpFetcher 
             .map_err(|error| Error::InvalidQuery(error.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &GlassnodeMetricQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
-        let api_key = std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                Error::Provider(format!("glassnode api key env {API_KEY_ENV} must be set"))
-            })?;
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "glassnode")?;
 
         let url = format!(
             "{}{}",
-            self.base_url().trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.metric.api_path()
         );
 
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("glassnode client: {error}")))?;
-        let response = client
-            .get(&url)
-            .query(&[
-                ("a", query.asset.as_str()),
-                ("i", query.interval.as_str()),
-                ("api_key", api_key.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("glassnode extract_data: {error}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "glassnode extract_data returned {status}: {body}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("glassnode read body: {error}")))
+        Ok(client.get(&url).query(&[
+            ("a", query.asset.as_str()),
+            ("i", query.interval.as_str()),
+            ("api_key", api_key.as_str()),
+        ]))
     }
 
-    fn transform_data(
-        &self,
-        query: &GlassnodeMetricQuery,
-        raw: Bytes,
-    ) -> Result<Vec<GlassnodeDataPoint>> {
+    fn transform_data(query: &GlassnodeMetricQuery, raw: Bytes) -> Result<Vec<GlassnodeDataPoint>> {
         let points: Vec<RawPoint> = serde_json::from_slice(&raw)
             .map_err(|error| Error::Provider(format!("glassnode json parse: {error}")))?;
 
@@ -129,3 +99,6 @@ impl Fetcher<GlassnodeMetricQuery, GlassnodeDataPoint> for GlassnodeHttpFetcher 
         Ok(rows)
     }
 }
+
+/// Production Glassnode metric fetcher.
+pub type GlassnodeHttpFetcher = HttpFetcher<GlassnodeSpec>;

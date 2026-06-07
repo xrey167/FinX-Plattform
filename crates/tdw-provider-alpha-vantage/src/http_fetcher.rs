@@ -6,37 +6,25 @@
 //! integration test is additionally gated by `TDW_ALPHA_VANTAGE_LIVE=1` so
 //! unattended CI stays offline.
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashMap;
-use tdw_core::http_support::prelude::*;
+use tdw_core::{Error, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_ENV, AlphaVantageError, AlphaVantageFunction, AlphaVantageQuery, BASE_URL};
 
 const USER_AGENT: &str = "tdw-provider-alpha-vantage/0.1";
 
-tdw_core::provider_fetcher_struct!(
-    /// Production Alpha Vantage HTTP fetcher.
-    ///
-    /// Supports both `TIME_SERIES_DAILY` and `GLOBAL_QUOTE` endpoints.
-    /// Auth is read from the `TDW_ALPHA_VANTAGE_API_KEY` environment variable.
-    ///
-    /// # Rate limits
-    ///
-    /// The free-tier Alpha Vantage key allows **25 requests per day**. Use a
-    /// paid key or cache responses locally for higher throughput.
-    pub AlphaVantageHttpFetcher,
-    BASE_URL
-);
-
-impl AlphaVantageHttpFetcher {
-    fn read_api_key() -> Result<String> {
-        std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| Error::Provider(AlphaVantageError::MissingApiKey.to_string()))
-    }
+fn read_api_key() -> Result<String> {
+    std::env::var(API_KEY_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::Provider(AlphaVantageError::MissingApiKey.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -85,13 +73,33 @@ struct AvGlobalQuoteEnvelope {
 }
 
 // ---------------------------------------------------------------------------
-// Fetcher impl
+// Provider spec
 // ---------------------------------------------------------------------------
 
-#[async_trait]
-impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
+/// Provider specification for the Alpha Vantage HTTP fetcher.
+///
+/// Supports both `TIME_SERIES_DAILY` and `GLOBAL_QUOTE` endpoints.
+/// Auth is read from the `TDW_ALPHA_VANTAGE_API_KEY` environment variable.
+///
+/// # Rate limits
+///
+/// The free-tier Alpha Vantage key allows **25 requests per day**. Use a
+/// paid key or cache responses locally for higher throughput.
+pub struct AlphaVantageSpec;
+
+impl ProviderSpec for AlphaVantageSpec {
     const PROVIDER: &'static str = "alpha_vantage";
     const ENDPOINT: &'static str = "market_data";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "alpha_vantage client build";
+    const SEND_ERR: &'static str = "alpha_vantage extract_data";
+    const RETURNED_ERR: &'static str = "alpha_vantage extract_data returned";
+    const READ_BODY_ERR: &'static str = "alpha_vantage read body";
+
+    type Query = AlphaVantageQuery;
+    type Data = MarketDataBar;
 
     fn transform_query(params: Value) -> Result<AlphaVantageQuery> {
         let symbol = params
@@ -117,36 +125,22 @@ impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
         AlphaVantageQuery::new(symbol, function).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &AlphaVantageQuery, _creds: &Credentials) -> Result<Bytes> {
-        let api_key = Self::read_api_key()?;
+    fn build_request(
+        base_url: &str,
+        query: &AlphaVantageQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
+        let api_key = read_api_key()?;
         let query_params = [
             ("function", query.function.as_api_str().to_string()),
             ("symbol", query.symbol.clone()),
             ("outputsize", "compact".to_string()),
             ("apikey", api_key),
         ];
-        let client =
-            tdw_core::http_support::build_client(USER_AGENT, "alpha_vantage client build")?;
-        let response = client
-            .get(self.base_url())
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("alpha_vantage extract_data: {e}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "alpha_vantage extract_data returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("alpha_vantage read body: {e}")))
+        Ok(client.get(base_url).query(&query_params))
     }
 
-    fn transform_data(&self, query: &AlphaVantageQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
+    fn transform_data(query: &AlphaVantageQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
         match query.function {
             AlphaVantageFunction::TimeSeriesDaily => {
                 transform_time_series_daily(&query.symbol, raw)
@@ -155,6 +149,9 @@ impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
         }
     }
 }
+
+/// Production Alpha Vantage HTTP fetcher.
+pub type AlphaVantageHttpFetcher = HttpFetcher<AlphaVantageSpec>;
 
 // ---------------------------------------------------------------------------
 // Transform helpers

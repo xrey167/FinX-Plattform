@@ -5,20 +5,20 @@
 //! `POLYGON_API_KEY`; the live integration test is additionally gated
 //! by `TDW_POLYGON_LIVE=1` so unattended CI stays offline.
 
+#![cfg(feature = "http")]
+
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use tdw_core::http_support::prelude::*;
+use serde_json::Value;
+use tdw_core::{Error, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{BASE_URL, PolygonAggregatesQuery, aggregates_request};
 
 const API_KEY_ENV: &str = "POLYGON_API_KEY";
 const USER_AGENT: &str = "tdw-provider-polygon/0.1";
-
-tdw_core::provider_fetcher_struct!(
-    /// Production Polygon aggregate-bars fetcher.
-    pub PolygonHttpAggregatesFetcher,
-    BASE_URL
-);
 
 #[derive(Deserialize)]
 struct PolygonEnvelope {
@@ -50,10 +50,22 @@ struct PolygonAggregate {
     timestamp_ms: i64,
 }
 
-#[async_trait]
-impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFetcher {
+/// Provider specification for the Polygon aggregate-bars fetcher.
+pub struct PolygonAggregatesSpec;
+
+impl ProviderSpec for PolygonAggregatesSpec {
     const PROVIDER: &'static str = "polygon";
     const ENDPOINT: &'static str = "aggregates";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "polygon client";
+    const SEND_ERR: &'static str = "polygon extract_data";
+    const RETURNED_ERR: &'static str = "polygon extract_data returned";
+    const READ_BODY_ERR: &'static str = "polygon read body";
+
+    type Query = PolygonAggregatesQuery;
+    type Data = MarketDataBar;
 
     fn transform_query(params: Value) -> Result<PolygonAggregatesQuery> {
         let ticker = params
@@ -87,23 +99,17 @@ impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFet
             .map_err(|error| Error::InvalidQuery(error.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &PolygonAggregatesQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         aggregates_request(&query.ticker, true)
             .map_err(|error| Error::Provider(error.to_string()))?;
-        let api_key = std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                Error::Provider(format!("polygon api key env {API_KEY_ENV} must be set"))
-            })?;
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "polygon")?;
         let endpoint = format!(
             "{}/v2/aggs/ticker/{}/range/1/day/{}/{}",
-            self.base_url().trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.ticker,
             query.from,
             query.to
@@ -114,35 +120,10 @@ impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFet
             ("limit", query.limit.to_string()),
             ("apiKey", api_key),
         ];
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("polygon client: {error}")))?;
-        let response = client
-            .get(&endpoint)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("polygon extract_data: {error}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "polygon extract_data returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("polygon read body: {error}")))
+        Ok(client.get(&endpoint).query(&query_params))
     }
 
-    fn transform_data(
-        &self,
-        query: &PolygonAggregatesQuery,
-        raw: Bytes,
-    ) -> Result<Vec<MarketDataBar>> {
+    fn transform_data(query: &PolygonAggregatesQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
         let envelope: PolygonEnvelope = serde_json::from_slice(&raw)
             .map_err(|error| Error::Provider(format!("polygon parse_json: {error}")))?;
         if envelope
@@ -172,6 +153,9 @@ impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFet
         Ok(rows)
     }
 }
+
+/// Production Polygon aggregate-bars fetcher.
+pub type PolygonHttpAggregatesFetcher = HttpFetcher<PolygonAggregatesSpec>;
 
 fn unix_millis_to_iso_timestamp(timestamp_millis: i64) -> String {
     let seconds = timestamp_millis.div_euclid(1_000);

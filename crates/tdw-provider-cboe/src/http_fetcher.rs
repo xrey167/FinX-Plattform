@@ -5,8 +5,12 @@
 //! via `reqwest`. No API key is required. Live calls are additionally gated by
 //! `TDW_CBOE_LIVE=1` so unattended CI stays offline.
 
+use bytes::Bytes;
+use reqwest::Client;
 use serde::Deserialize;
-use tdw_core::http_support::prelude::*;
+use serde_json::Value;
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{
     BASE_URL, CboeIndexQuery, CboeOptionsQuery, CboeProviderError, index_request_path,
@@ -64,16 +68,22 @@ use crate::{CboeIndexQuote, CboeOptionContract};
 // Options fetcher
 // ---------------------------------------------------------------------------
 
-tdw_core::provider_fetcher_struct!(
-    /// Production CBOE delayed options chain fetcher.
-    pub CboeHttpOptionsFetcher,
-    BASE_URL
-);
+/// Provider specification for the CBOE delayed options chain fetcher.
+pub struct CboeOptionsSpec;
 
-#[async_trait]
-impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
+impl ProviderSpec for CboeOptionsSpec {
     const PROVIDER: &'static str = "cboe";
     const ENDPOINT: &'static str = "options";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "cboe options client build";
+    const SEND_ERR: &'static str = "cboe options request";
+    const RETURNED_ERR: &'static str = "cboe options returned";
+    const READ_BODY_ERR: &'static str = "cboe options read body";
+
+    type Query = CboeOptionsQuery;
+    type Data = CboeOptionContract;
 
     fn transform_query(params: Value) -> Result<CboeOptionsQuery> {
         let symbol = params
@@ -86,41 +96,18 @@ impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
         CboeOptionsQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &CboeOptionsQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &CboeOptionsQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let path =
             options_request_path(&query.symbol).map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("cboe options client build: {e}")))?;
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("cboe options request: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "cboe options returned {status}: {body}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("cboe options read body: {e}")))
+        let url = format!("{}{path}", base_url.trim_end_matches('/'));
+        Ok(client.get(&url))
     }
 
-    fn transform_data(
-        &self,
-        _query: &CboeOptionsQuery,
-        raw: Bytes,
-    ) -> Result<Vec<CboeOptionContract>> {
+    fn transform_data(_query: &CboeOptionsQuery, raw: Bytes) -> Result<Vec<CboeOptionContract>> {
         let envelope: OptionsEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("cboe options parse_json: {e}")))?;
 
@@ -144,20 +131,29 @@ impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
     }
 }
 
+/// Production CBOE delayed options chain fetcher.
+pub type CboeHttpOptionsFetcher = HttpFetcher<CboeOptionsSpec>;
+
 // ---------------------------------------------------------------------------
 // Index fetcher
 // ---------------------------------------------------------------------------
 
-tdw_core::provider_fetcher_struct!(
-    /// Production CBOE US-index quote fetcher.
-    pub CboeHttpIndexFetcher,
-    BASE_URL
-);
+/// Provider specification for the CBOE US-index quote fetcher.
+pub struct CboeIndexSpec;
 
-#[async_trait]
-impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
+impl ProviderSpec for CboeIndexSpec {
     const PROVIDER: &'static str = "cboe";
     const ENDPOINT: &'static str = "index_quotes";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "cboe index client build";
+    const SEND_ERR: &'static str = "cboe index request";
+    const RETURNED_ERR: &'static str = "cboe index returned";
+    const READ_BODY_ERR: &'static str = "cboe index read body";
+
+    type Query = CboeIndexQuery;
+    type Data = CboeIndexQuote;
 
     fn transform_query(params: Value) -> Result<CboeIndexQuery> {
         let index = params
@@ -168,36 +164,17 @@ impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
         CboeIndexQuery::new(index).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &CboeIndexQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &CboeIndexQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let path = index_request_path(&query.index).map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
-
-        let client = Client::builder()
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|e| Error::Provider(format!("cboe index client build: {e}")))?;
-
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("cboe index request: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "cboe index returned {status}: {body}"
-            )));
-        }
-
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("cboe index read body: {e}")))
+        let url = format!("{}{path}", base_url.trim_end_matches('/'));
+        Ok(client.get(&url))
     }
 
-    fn transform_data(&self, _query: &CboeIndexQuery, raw: Bytes) -> Result<Vec<CboeIndexQuote>> {
+    fn transform_data(_query: &CboeIndexQuery, raw: Bytes) -> Result<Vec<CboeIndexQuote>> {
         let envelope: IndexEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("cboe index parse_json: {e}")))?;
 
@@ -209,6 +186,9 @@ impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
         }])
     }
 }
+
+/// Production CBOE US-index quote fetcher.
+pub type CboeHttpIndexFetcher = HttpFetcher<CboeIndexSpec>;
 
 // ---------------------------------------------------------------------------
 // Error mapping helper (unused directly but kept for completeness)
