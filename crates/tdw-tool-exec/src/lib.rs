@@ -15,6 +15,7 @@
 
 pub mod loop_guard;
 
+use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -169,6 +170,110 @@ const fn effect_label(effect: ToolEffect) -> &'static str {
         ToolEffect::ReadOnly => "read-only",
         ToolEffect::WriteSafe => "write-safe",
         ToolEffect::Destructive => "destructive",
+    }
+}
+
+/// Exact `Backend` message produced on a command timeout (literal at the timeout site in
+/// [`dispatch_command`]). Matched verbatim so only this specific `Backend` failure is treated
+/// as recoverable.
+const TIMEOUT_BACKEND_MSG: &str = "command timed out";
+
+impl ExecError {
+    /// Whether the agent could plausibly recover by adjusting its request and retrying.
+    #[must_use]
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            Self::BadArguments(_)
+            | Self::InvalidArguments { .. }
+            | Self::ToolNotFound(_)
+            | Self::HandlerNotFound(_) => true,
+            Self::Unbound
+            | Self::NotPermitted(_)
+            | Self::NotYetSupported(_)
+            | Self::Blocked { .. } => false,
+            // Temporary heuristic pending an `ExecError::Timeout` variant: only the exact
+            // timeout message is recoverable; all other backend failures stay non-recoverable.
+            Self::Backend(message) => message == TIMEOUT_BACKEND_MSG,
+        }
+    }
+
+    /// Stable machine tag for this variant, independent of its [`Display`](std::fmt::Display)
+    /// text.
+    #[must_use]
+    fn reason_tag(&self) -> &'static str {
+        match self {
+            Self::Unbound => "unbound",
+            Self::ToolNotFound(_) => "tool_not_found",
+            Self::HandlerNotFound(_) => "handler_not_found",
+            Self::NotPermitted(_) => "not_permitted",
+            Self::NotYetSupported(_) => "not_yet_supported",
+            Self::Backend(message) if message == TIMEOUT_BACKEND_MSG => "backend_timeout",
+            Self::Backend(_) => "backend",
+            Self::BadArguments(_) => "bad_arguments",
+            Self::Blocked { .. } => "blocked",
+            Self::InvalidArguments { .. } => "invalid_arguments",
+        }
+    }
+
+    /// Short stable hint describing how the agent might respond to this variant.
+    #[must_use]
+    fn variant_hint(&self) -> &'static str {
+        match self {
+            Self::Unbound => "tool is listed but not runnable; choose another tool",
+            Self::ToolNotFound(_) => "no such tool; check the tool name",
+            Self::HandlerNotFound(_) => "builtin handler is not registered; check the name",
+            Self::NotPermitted(_) => "blocked by policy; do not retry",
+            Self::NotYetSupported(_) => "this implementation variant is not available yet",
+            Self::Backend(message) if message == TIMEOUT_BACKEND_MSG => {
+                "the command timed out; retry may succeed"
+            }
+            Self::Backend(_) => "backend failure; do not blindly retry",
+            Self::BadArguments(_) | Self::InvalidArguments { .. } => "fix the arguments and retry",
+            Self::Blocked { .. } => "blocked by autonomy policy; do not retry without escalation",
+        }
+    }
+
+    /// Render this error as a model-visible tool-result observation.
+    ///
+    /// Shape: `{tool, is_error: true, reason, detail, hint}`.
+    #[must_use]
+    pub fn to_observation(&self, tool: &str) -> Value {
+        serde_json::json!({
+            "tool": tool,
+            "is_error": true,
+            "reason": self.reason_tag(),
+            "detail": self.to_string(),
+            "hint": self.variant_hint(),
+        })
+    }
+}
+
+/// Per-tool failure counter that caps how many times a given tool may fail before the agent
+/// should stop retrying it. Pure and synchronous: no async, no I/O.
+#[derive(Clone, Debug, Default)]
+pub struct FailureBudget {
+    per_tool: BTreeMap<String, u32>,
+    cap: u32,
+}
+
+impl FailureBudget {
+    /// A new budget allowing up to `cap` failures per tool.
+    #[must_use]
+    pub fn new(cap: u32) -> Self {
+        Self {
+            per_tool: BTreeMap::new(),
+            cap,
+        }
+    }
+
+    /// Record a failure for `tool`, returning whether the tool is still within budget.
+    pub fn record(&mut self, tool: &str) -> bool {
+        let count = self
+            .per_tool
+            .entry(tool.to_string())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+        *count <= self.cap
     }
 }
 
@@ -1258,6 +1363,93 @@ mod tests {
             .execute(&registry, "tool.exec.nope", &serde_json::json!({}))
             .expect_err("unknown tool must error");
         assert!(matches!(error, ExecError::ToolNotFound(name) if name == "tool.exec.nope"));
+    }
+
+    // --- self-healing observation helpers ------------------------------------------------
+
+    #[test]
+    fn is_recoverable_classifies_error_variants() {
+        assert!(ExecError::BadArguments("bad".to_string()).is_recoverable());
+        assert!(
+            ExecError::InvalidArguments {
+                tool: "tool.x".to_string(),
+                reason: "missing field".to_string(),
+            }
+            .is_recoverable()
+        );
+        assert!(ExecError::ToolNotFound("t".to_string()).is_recoverable());
+        assert!(ExecError::HandlerNotFound("h".to_string()).is_recoverable());
+
+        assert!(!ExecError::Unbound.is_recoverable());
+        assert!(!ExecError::NotPermitted("nope".to_string()).is_recoverable());
+        assert!(!ExecError::NotYetSupported("later").is_recoverable());
+        assert!(
+            !ExecError::Blocked {
+                tool: "tool.x".to_string(),
+                effect: "destructive",
+                level: "read-only",
+            }
+            .is_recoverable()
+        );
+
+        assert!(!ExecError::Backend("failed to spawn command: x".to_string()).is_recoverable());
+        assert!(ExecError::Backend(TIMEOUT_BACKEND_MSG.to_string()).is_recoverable());
+        assert!(
+            !ExecError::Backend("command timed out while draining".to_string()).is_recoverable()
+        );
+    }
+
+    #[test]
+    fn to_observation_has_stable_shape_and_tags() {
+        let obs = ExecError::BadArguments("missing field".to_string()).to_observation("tool.x");
+        assert_eq!(obs["tool"], "tool.x");
+        assert_eq!(obs["is_error"], true);
+        assert_eq!(obs["reason"], "bad_arguments");
+        assert_eq!(obs["detail"], "bad arguments: missing field");
+        assert!(obs["hint"].is_string());
+
+        let obs = ExecError::NotPermitted("blocked".to_string()).to_observation("tool.y");
+        assert_eq!(obs["tool"], "tool.y");
+        assert_eq!(obs["is_error"], true);
+        assert_eq!(obs["reason"], "not_permitted");
+
+        let obs = ExecError::Backend(TIMEOUT_BACKEND_MSG.to_string()).to_observation("tool.z");
+        assert_eq!(obs["reason"], "backend_timeout");
+
+        let obs = ExecError::Backend("spawn failed".to_string()).to_observation("tool.z");
+        assert_eq!(obs["reason"], "backend");
+
+        let obs = ExecError::InvalidArguments {
+            tool: "tool.arg".to_string(),
+            reason: "missing symbol".to_string(),
+        }
+        .to_observation("tool.arg");
+        assert_eq!(obs["reason"], "invalid_arguments");
+
+        let obs = ExecError::Blocked {
+            tool: "tool.write".to_string(),
+            effect: "write-safe",
+            level: "read-only",
+        }
+        .to_observation("tool.write");
+        assert_eq!(obs["reason"], "blocked");
+    }
+
+    #[test]
+    fn failure_budget_record_returns_true_up_to_cap_then_false() {
+        let mut budget = FailureBudget::new(2);
+        assert!(budget.record("tool.a"));
+        assert!(budget.record("tool.a"));
+        assert!(!budget.record("tool.a"));
+        assert!(!budget.record("tool.a"));
+
+        assert!(budget.record("tool.b"));
+    }
+
+    #[test]
+    fn failure_budget_cap_zero_is_immediately_exceeded() {
+        let mut budget = FailureBudget::new(0);
+        assert!(!budget.record("tool.a"));
     }
 
     // --- argument-schema validation (opt-in) ---------------------------------------------
