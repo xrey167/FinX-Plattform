@@ -211,6 +211,16 @@ pub enum Op {
     Cancel {
         op_id: OpId,
     },
+    /// Fetch a fresh last-price quote snapshot for `symbol` from the named
+    /// `provider`. This is a **no-cache read**: the daemon calls the provider's
+    /// HTTP endpoint on every dispatch and returns the result directly without
+    /// writing to any storage layer. Intended for real-time consumers such as a
+    /// price-alert engine that evaluate `current_price` against thresholds on
+    /// every trigger cycle. Serializes as `get_quote_snapshot`.
+    GetQuoteSnapshot {
+        provider: String,
+        symbol: String,
+    },
     /// Start a live streaming-ingest task for `provider`/`symbol`, draining the
     /// provider's websocket subscription into the (optional) `table` (defaulting
     /// to the provider's bronze landing table). Serializes as `stream_start`.
@@ -380,6 +390,20 @@ mod tests {
         let encoded = serde_json::to_string(&frame).expect("frame serializes");
         let decoded: ReplayFrame = serde_json::from_str(&encoded).expect("frame deserializes");
         assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn get_quote_snapshot_op_round_trips_with_tagged_variant() {
+        let op = Op::GetQuoteSnapshot {
+            provider: "fmp".to_string(),
+            symbol: "AAPL".to_string(),
+        };
+        let encoded = serde_json::to_value(&op).expect("op serializes");
+        assert_eq!(encoded["type"], "get_quote_snapshot");
+        assert_eq!(encoded["provider"], "fmp");
+        assert_eq!(encoded["symbol"], "AAPL");
+        let decoded: Op = serde_json::from_value(encoded).expect("op deserializes");
+        assert_eq!(decoded, op);
     }
 
     #[test]

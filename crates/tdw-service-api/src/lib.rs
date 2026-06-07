@@ -126,7 +126,9 @@ use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 #[cfg(feature = "provider-finra")]
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
-use tdw_provider_fmp::{FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher};
+use tdw_provider_fmp::{
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
+};
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::FredHttpSeriesObservationsFetcher;
 #[cfg(feature = "provider-geckoterminal")]
@@ -261,6 +263,8 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpHistoricalFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpIncomeFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-geckoterminal")]
