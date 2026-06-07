@@ -393,6 +393,30 @@ pub struct ResearchNote {
     pub tags: Vec<String>,
 }
 
+/// A last-price snapshot for a single symbol, produced by the live read path.
+///
+/// This is the hard dependency of the price-alert engine: callers request a
+/// fresh read (no cache) and compare `current_price` against alert thresholds.
+/// `change` and `change_percent` are absolute/relative moves versus
+/// `prev_close`; all numeric fields default to `0.0` when the provider omits
+/// them. `ts_ms` is a Unix epoch in milliseconds.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct QuoteSnapshot {
+    /// Ticker symbol, normalised to uppercase by the provider fetcher.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Most-recent trade price.
+    pub current_price: f64,
+    /// Absolute price change versus the previous close (`current_price − prev_close`).
+    pub change: f64,
+    /// Relative price change as a percentage (`change / prev_close × 100`).
+    pub change_percent: f64,
+    /// Adjusted previous session close price.
+    pub prev_close: f64,
+    /// Snapshot timestamp as Unix epoch milliseconds (UTC).
+    pub ts_ms: i64,
+}
+
 /// Error returned when constructing a validated reference-data newtype id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReferenceIdError {
@@ -593,6 +617,31 @@ pub struct ClassificationNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quote_snapshot_serde_round_trip() {
+        let snap = QuoteSnapshot {
+            symbol: "AAPL".to_string(),
+            current_price: 189.30,
+            change: 1.20,
+            change_percent: 0.638,
+            prev_close: 188.10,
+            ts_ms: 1_717_200_000_000,
+        };
+        let encoded = serde_json::to_value(&snap).expect("serialize");
+        assert_eq!(encoded["symbol"], "AAPL");
+        assert_eq!(encoded["current_price"], 189.30);
+        assert_eq!(encoded["ts_ms"], 1_717_200_000_000_i64);
+        let decoded: QuoteSnapshot = serde_json::from_value(encoded).expect("deserialize");
+        assert_eq!(decoded, snap);
+        assert!(snap.validate().is_ok());
+
+        let bad = QuoteSnapshot {
+            symbol: String::new(),
+            ..snap
+        };
+        assert!(bad.validate().is_err());
+    }
 
     #[test]
     fn exposes_all_bom_schema_names() {

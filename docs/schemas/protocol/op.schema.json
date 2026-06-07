@@ -119,6 +119,14 @@
             }
           ]
         },
+        "symbols": {
+          "default": [],
+          "description": "Symbols to ingest in this batch. Each is fetched and persisted\nindependently (with its own deduplication token), so a single op can\nfan out across a watchlist. Must be non-empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "type": {
           "const": "ingest_batch",
           "type": "string"
@@ -216,6 +224,71 @@
       "required": [
         "type",
         "op_id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Fetch a fresh last-price quote snapshot for `symbol` from the named\n`provider`. This is a **no-cache read**: the daemon calls the provider's\nHTTP endpoint on every dispatch and returns the result directly without\nwriting to any storage layer. Intended for real-time consumers such as a\nprice-alert engine that evaluate `current_price` against thresholds on\nevery trigger cycle. Serializes as `get_quote_snapshot`.",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "type": {
+          "const": "get_quote_snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "symbol"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Start a live streaming-ingest task for `provider`/`symbol`, draining the\nprovider's websocket subscription into the (optional) `table` (defaulting\nto the provider's bronze landing table). Serializes as `stream_start`.",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "table": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "stream_start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "symbol"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Stop a previously started streaming-ingest task identified by\n`stream_id`. Serializes as `stream_stop`.",
+      "properties": {
+        "stream_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "stream_stop",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "stream_id"
       ],
       "type": "object"
     },
