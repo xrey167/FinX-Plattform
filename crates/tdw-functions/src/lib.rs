@@ -501,11 +501,11 @@ mod tests {
 mod worker_tests {
     use std::sync::{
         Arc,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     };
 
     use serde_json::json;
-    use tdw_worker::{InMemoryWorkerQueue, JobHandler, WorkerQueueError};
+    use tdw_worker::{InMemoryWorkerQueue, JobHandler, WorkerJob, WorkerQueueError};
 
     use super::{
         FunctionDef, FunctionRegistry, InMemoryRunStore, InMemoryStepStore, RunStatus, RunStore,
@@ -513,7 +513,7 @@ mod worker_tests {
     };
     use crate::job::{
         FUNCTIONS_QUEUE, FUNCTIONS_TOOL_NAME, FunctionJob, FunctionJobHandler, JobMode,
-        build_worker_job, enqueue_invoke, extract_function_job,
+        RoutingJobHandler, build_worker_job, enqueue_invoke, extract_function_job,
     };
 
     fn simple_def(id: &str) -> FunctionDef {
@@ -737,6 +737,121 @@ mod worker_tests {
             step_counter.load(Ordering::SeqCst),
             1,
             "step-1 must not re-execute on resume"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // RoutingJobHandler: function jobs run the registry; other jobs delegate
+    // to the inner handler.
+    // -----------------------------------------------------------------------
+
+    /// Inner [`JobHandler`] that records whether it was called.
+    struct RecordingHandler {
+        called: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl JobHandler for RecordingHandler {
+        async fn handle(&self, _job: &WorkerJob) -> Result<(), String> {
+            self.called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// Build a non-function [`WorkerJob`] that [`extract_function_job`] rejects.
+    fn non_function_job(job_id: &str) -> WorkerJob {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId, ToolCallId};
+
+        let envelope = OpEnvelope::new(
+            SessionId::new("other-session").expect("sid"),
+            1,
+            ActorRef {
+                actor_id: "other".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::ToolCall {
+                call_id: ToolCallId::new("other-call").expect("cid"),
+                tool_name: "some.other.tool".to_string(),
+                arguments: json!({}),
+                permission_id: None,
+            },
+        );
+        WorkerJob {
+            job_id: job_id.to_string(),
+            queue: "other-queue".to_string(),
+            envelope,
+            max_attempts: 1,
+            not_before_ms: 0,
+            priority: 0,
+        }
+    }
+
+    // Test A: a FunctionJob runs the registry; the inner handler is NOT called.
+    #[tokio::test]
+    async fn routing_function_job_runs_registry_not_inner() {
+        let steps = Arc::new(InMemoryStepStore::new());
+        let runs = Arc::new(InMemoryRunStore::new());
+        let mut reg = FunctionRegistry::with_stores(
+            Arc::clone(&steps) as Arc<dyn StepStore>,
+            Arc::clone(&runs) as Arc<dyn RunStore>,
+        );
+        reg.register(simple_def("fn-route")).expect("register");
+
+        let inner_called = Arc::new(AtomicBool::new(false));
+        let handler = RoutingJobHandler::new(
+            Arc::new(reg),
+            RecordingHandler {
+                called: Arc::clone(&inner_called),
+            },
+        );
+
+        let func_job = FunctionJob {
+            function_id: "fn-route".to_string(),
+            run_id: "run-route-1".to_string(),
+            payload: json!({}),
+            mode: JobMode::Invoke,
+        };
+        let worker_job = build_worker_job("job-route-1", &func_job).expect("build");
+        handler.handle(&worker_job).await.expect("handle ok");
+
+        // The function ran (registry recorded a completed run).
+        let record = runs
+            .get_run("run-route-1")
+            .await
+            .expect("get_run")
+            .expect("Some");
+        assert_eq!(record.status, RunStatus::Completed);
+
+        // The inner handler must NOT have been called.
+        assert!(
+            !inner_called.load(Ordering::SeqCst),
+            "inner handler must not run for a FunctionJob"
+        );
+    }
+
+    // Test B: a non-function job is delegated to the inner handler.
+    #[tokio::test]
+    async fn routing_non_function_job_delegates_to_inner() {
+        let reg = FunctionRegistry::new();
+
+        let inner_called = Arc::new(AtomicBool::new(false));
+        let handler = RoutingJobHandler::new(
+            Arc::new(reg),
+            RecordingHandler {
+                called: Arc::clone(&inner_called),
+            },
+        );
+
+        let job = non_function_job("job-other-1");
+        // Sanity: the routing precondition — this job is not a FunctionJob.
+        assert!(extract_function_job(&job).is_err());
+
+        handler.handle(&job).await.expect("handle ok");
+
+        assert!(
+            inner_called.load(Ordering::SeqCst),
+            "inner handler must run for a non-FunctionJob"
         );
     }
 }
