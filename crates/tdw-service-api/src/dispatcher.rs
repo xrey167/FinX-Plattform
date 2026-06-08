@@ -46,6 +46,7 @@ use tdw_tools::{RegisteredTool, ToolDefinition, ToolRegistry, ToolRouter};
 #[cfg(feature = "alerts")]
 use uuid::Uuid;
 
+use crate::provider_resolve::{is_logical_endpoint, resolve_logical_endpoint};
 use crate::{
     AppState, PolicyEnforcementConfig, SelectedYahooEquityHistoricalFetcher, ServiceEndpoint,
     enforce_request_path_with_backend, mask_json_response,
@@ -598,6 +599,22 @@ async fn dispatch_ingest(
     // providers/endpoints this build can actually ingest, rather than a flat
     // "unsupported" string.
     let table = ingest_dispatch_table();
+
+    // Logical-endpoint resolution layer (L1.5): when `endpoint` is a logical
+    // path (slash form, e.g. `equity/price/historical`), map it — honouring any
+    // explicit `provider` argument, else first available registered candidate —
+    // to a concrete (provider, endpoint) pair before the dispatch-table lookup.
+    // Concrete endpoints (no slash) pass through unchanged, so the direct path is
+    // fully backwards-compatible. This runs *after* the policy guard above, so
+    // enforcement ordering is unchanged.
+    let (provider, endpoint) = if is_logical_endpoint(endpoint) {
+        let resolved =
+            resolve_logical_endpoint(endpoint, provider, |p, e| table.contains_key(&(p, e)))?;
+        (resolved.provider, resolved.endpoint)
+    } else {
+        (provider, endpoint)
+    };
+
     let Some(binding) = table.get(&(provider, endpoint)) else {
         return Err(Error::Provider(format!(
             "unsupported ingest provider/endpoint: {provider}/{endpoint}; available: {}",
@@ -1220,6 +1237,172 @@ mod tests {
                 assert_eq!(value["provider"], "fileset");
                 assert_eq!(value["table"], "raw.equity_historical");
                 assert!(value["rows"].as_u64().expect("rows count") >= 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_logical_endpoint_default_resolves_first_available_provider() {
+        // L1.5: a logical endpoint with no explicit provider resolves to the
+        // first registered candidate. In the offline build that is `fileset`
+        // (it leads `yahoo` in the candidate order), and the dispatch result
+        // reports the *resolved* concrete provider/endpoint.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: String::new(),
+            endpoint: "equity/price/historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "fileset");
+                assert_eq!(value["endpoint"], "equity_historical");
+                assert_eq!(value["table"], "raw.equity_historical");
+                assert!(value["rows"].as_u64().expect("rows count") >= 1);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_logical_endpoint_explicit_provider_wins() {
+        // L1.5: an explicit `provider` selects that candidate even when it is not
+        // first in the candidate order (`yahoo` follows `fileset`).
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "yahoo".to_string(),
+            endpoint: "equity/price/historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "yahoo");
+                assert_eq!(value["endpoint"], "equity_historical");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Offline-only: with `provider-fmp` enabled, `fmp` IS registered, so this
+    /// unavailable-provider assertion only holds in the default (no-feature)
+    /// build. Mirrors `ingest_dispatch_table_offline_default_is_exactly_two_fixtures`.
+    #[cfg(not(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    )))]
+    #[tokio::test]
+    async fn ingest_logical_endpoint_unavailable_provider_fails_with_candidates() {
+        // L1.5: an explicit provider that is a candidate but not registered in
+        // this build fails with a structured error listing the registered
+        // candidates (`fmp` is feature-gated; offline build has fileset+yahoo).
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "fmp".to_string(),
+            endpoint: "equity/price/historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("not registered in this build"),
+                    "got: {error}"
+                );
+                assert!(
+                    error.contains("fileset") && error.contains("yahoo"),
+                    "error should list registered candidates, got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// Offline-only: the crypto candidates (`coingecko`/`ccdata`) become
+    /// registered under their provider features, so the no-available-provider
+    /// assertion only holds in the default build.
+    #[cfg(not(any(feature = "provider-coingecko", feature = "provider-ccdata")))]
+    #[tokio::test]
+    async fn ingest_logical_endpoint_no_available_provider_fails() {
+        // L1.5: `crypto/price/historical` candidates are all feature-gated, so an
+        // offline build cannot resolve any and reports a structured error naming
+        // the candidates.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: String::new(),
+            endpoint: "crypto/price/historical".to_string(),
+            symbols: vec!["BTC".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("no registered provider for logical endpoint"),
+                    "got: {error}"
+                );
+                assert!(
+                    error.contains("coingecko") && error.contains("ccdata"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_concrete_endpoint_bypasses_logical_resolution() {
+        // L1.5 backwards-compat: a concrete endpoint (no slash) is dispatched
+        // directly, exactly as before the resolution layer existed.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::IngestBatch {
+            provider: "yahoo".to_string(),
+            endpoint: "equity_historical".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            range: None,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["provider"], "yahoo");
+                assert_eq!(value["endpoint"], "equity_historical");
             }
             other => panic!("expected Completed, got {other:?}"),
         }
