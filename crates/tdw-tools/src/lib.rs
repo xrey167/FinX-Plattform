@@ -312,4 +312,63 @@ mod tests {
             Err(ToolError::InvalidDefinition("name"))
         );
     }
+
+    #[test]
+    fn orchestrator_reports_unknown_and_denied_and_validates_remaining_fields() {
+        // Routing an unregistered tool yields UnknownTool.
+        let empty = ToolOrchestrator::new(ToolRegistry::default(), PermissionRules::default());
+        assert_eq!(
+            empty.run(
+                ToolCallId::new("c0").expect("tool call id"),
+                "tdw.missing",
+                json!({})
+            ),
+            Err(ToolError::UnknownTool("tdw.missing".to_string()))
+        );
+
+        // A Deny permission rule yields PermissionDenied (no handler call).
+        let mut registry = ToolRegistry::default();
+        registry
+            .register(echo_tool())
+            .unwrap_or_else(|error| panic!("register: {error}"));
+        let mut deny = PermissionRules::default();
+        deny.push(PermissionRule::new(
+            PermissionEffect::Deny,
+            "tdw.echo",
+            "tdw.echo",
+        ));
+        let orchestrator = ToolOrchestrator::new(registry, deny);
+        assert_eq!(
+            orchestrator.run(
+                ToolCallId::new("c1").expect("tool call id"),
+                "tdw.echo",
+                json!({})
+            ),
+            Err(ToolError::PermissionDenied("tdw.echo".to_string()))
+        );
+
+        // Remaining validate_tool_definition branches.
+        let base = || ToolDefinition {
+            name: "tdw.echo".to_string(),
+            description: "ok".to_string(),
+            input_schema: json!({"type": "object"}),
+            output_schema: json!({"type": "object"}),
+            permission_pattern: "tdw.echo".to_string(),
+        };
+        assert_eq!(
+            validate_tool_definition(&ToolDefinition {
+                description: "  ".to_string(),
+                ..base()
+            }),
+            Err(ToolError::InvalidDefinition("description"))
+        );
+        // "tdw*" is not a valid pattern (a wildcard must follow a dot, e.g. "tdw.*").
+        assert_eq!(
+            validate_tool_definition(&ToolDefinition {
+                permission_pattern: "tdw*".to_string(),
+                ..base()
+            }),
+            Err(ToolError::InvalidDefinition("permission_pattern"))
+        );
+    }
 }
