@@ -96,12 +96,9 @@ impl Fetcher<FredSeriesObservationsQuery, FredObservation> for FredHttpSeriesObs
     const ENDPOINT: &'static str = "series_observations";
 
     fn transform_query(params: Value) -> Result<FredSeriesObservationsQuery> {
-        let series_id = params
-            .get("series_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::InvalidQuery("fred series_id must be a string".to_string()))?;
-        FredSeriesObservationsQuery::new(series_id)
-            .map_err(|error| Error::InvalidQuery(error.to_string()))
+        // Shared normalization parses series_id alongside the standard
+        // start_date/end_date/limit parameters in one pass.
+        FredSeriesObservationsQuery::from_value(&params)
     }
 
     async fn extract_data(
@@ -127,13 +124,23 @@ impl Fetcher<FredSeriesObservationsQuery, FredObservation> for FredHttpSeriesObs
             ("api_key", api_key),
             ("file_type", "json".to_string()),
         ];
-        if let Some(limit) = self.limit {
+        // Caller-supplied standard params (parsed once by the shared
+        // normalization) take precedence over the fetcher's configured
+        // defaults; FRED maps them onto observation_start/observation_end/limit.
+        let limit = query.params.limit.unwrap_or(0);
+        if limit > 0 {
+            query_params.push(("limit", limit.to_string()));
+        } else if let Some(limit) = self.limit {
             query_params.push(("limit", limit.to_string()));
         }
-        if let Some(observation_start) = &self.observation_start {
+        if let Some(start) = query.params.start_date {
+            query_params.push(("observation_start", start.to_string()));
+        } else if let Some(observation_start) = &self.observation_start {
             query_params.push(("observation_start", observation_start.clone()));
         }
-        if let Some(observation_end) = &self.observation_end {
+        if let Some(end) = query.params.end_date {
+            query_params.push(("observation_end", end.to_string()));
+        } else if let Some(observation_end) = &self.observation_end {
             query_params.push(("observation_end", observation_end.clone()));
         }
 

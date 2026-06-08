@@ -114,4 +114,51 @@ mod tests {
             Err(DefineError::InvalidTableName)
         );
     }
+
+    #[test]
+    fn validate_rejects_each_bad_component() {
+        let ok = DefineEvent {
+            event_name: "market_data_changed".to_string(),
+            on_table: "raw.market_data_bar".to_string(),
+            hook_name: "emit.market_data_changed".to_string(),
+            transaction_mode: TransactionMode::PostCommit,
+        };
+        assert_eq!(ok.validate(), Ok(()));
+
+        // Bad event name (whitespace is not an allowed action-name character).
+        assert_eq!(
+            DefineEvent {
+                event_name: "bad name".to_string(),
+                ..ok.clone()
+            }
+            .validate(),
+            Err(DefineError::InvalidEventName)
+        );
+        // Empty hook name is rejected (event + table still valid).
+        assert_eq!(
+            DefineEvent {
+                hook_name: String::new(),
+                ..ok.clone()
+            }
+            .validate(),
+            Err(DefineError::InvalidHookName)
+        );
+        // on_table must be exactly schema.table: single-part and three-part rejected.
+        assert_eq!(
+            DefineEvent {
+                on_table: "public".to_string(),
+                ..ok.clone()
+            }
+            .validate(),
+            Err(DefineError::InvalidTableName)
+        );
+        assert_eq!(
+            DefineEvent {
+                on_table: "a.b.c".to_string(),
+                ..ok
+            }
+            .validate(),
+            Err(DefineError::InvalidTableName)
+        );
+    }
 }

@@ -23,6 +23,7 @@ mod app_state;
 mod dispatcher;
 mod event_sink;
 mod policy;
+mod provider_resolve;
 mod stream_ingest;
 
 pub use app_state::{AppState, OidcPolicyError};

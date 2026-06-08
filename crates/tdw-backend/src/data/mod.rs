@@ -520,7 +520,7 @@ fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
     match provider.as_deref() {
-        None | Some("hash") | Some("local") => Ok(Arc::new(HashEmbeddingProvider::default())),
+        None | Some("hash" | "local") => Ok(Arc::new(HashEmbeddingProvider::default())),
         #[cfg(feature = "openai")]
         Some("openai") => build_openai_embedder(),
         #[cfg(feature = "google")]
@@ -858,10 +858,10 @@ mod tests {
         assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
 
         let bus = backend.event_bus();
-        let _bus_guard = bus
+        let bus_guard = bus
             .lock()
             .unwrap_or_else(|error| panic!("bus lock: {error}"));
-        drop(_bus_guard);
+        drop(bus_guard);
 
         let outbox = backend.outbox();
         let _outbox_guard = outbox

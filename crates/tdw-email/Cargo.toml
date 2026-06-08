@@ -11,12 +11,18 @@ default = []
 # workspace test set stays offline; live sends are additionally gated by
 # the presence of TDW_SMTP_HOST in the environment.
 smtp = ["dep:lettre", "dep:tokio"]
+# Enables the BroadcastClient backed by reqwest. Off by default so the
+# workspace test set stays offline; live calls are additionally gated by
+# the presence of TDW_BROADCAST_API_KEY in the environment.
+broadcast = ["dep:reqwest", "dep:serde_json", "dep:tokio"]
 
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 lettre = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]

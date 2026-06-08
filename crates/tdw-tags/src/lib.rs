@@ -56,10 +56,21 @@ impl TagStore {
         if matches!(definition.ttl_days, Some(0)) {
             return Err(TagError::InvalidTagId(definition.tag_id));
         }
-        self.definitions
+        let previous = self
+            .definitions
             .insert(definition.tag_id.clone(), definition.clone());
         if self.has_cycle(&definition.tag_id) {
-            self.definitions.remove(&definition.tag_id);
+            // Roll back to the prior state. Removing the tag outright would drop
+            // a pre-existing valid definition and leave children pointing at a
+            // now-missing parent; restoring `previous` keeps the store consistent.
+            match previous {
+                Some(prior) => {
+                    self.definitions.insert(definition.tag_id.clone(), prior);
+                }
+                None => {
+                    self.definitions.remove(&definition.tag_id);
+                }
+            }
             return Err(TagError::Cycle(definition.tag_id));
         }
         Ok(())
@@ -251,6 +262,51 @@ mod tests {
                 provenance: "manual".to_string(),
             }),
             Err(TagError::InvalidAssignment)
+        );
+    }
+
+    #[test]
+    fn rejected_cycle_redefinition_restores_prior_definition() {
+        let mut store = TagStore::default();
+        store
+            .define(TagDefinition {
+                tag_id: "a:root".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("define a:root: {error}"));
+        store
+            .define(TagDefinition {
+                tag_id: "b:child".to_string(),
+                parent: Some("a:root".to_string()),
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("define b:child: {error}"));
+
+        // Re-defining a:root to point at its own descendant forms a cycle.
+        assert_eq!(
+            store.define(TagDefinition {
+                tag_id: "a:root".to_string(),
+                parent: Some("b:child".to_string()),
+                ttl_days: None,
+            }),
+            Err(TagError::Cycle("a:root".to_string()))
+        );
+
+        // The original a:root must survive the rejected re-definition (no dangling
+        // parent for b:child) — proven by a subsequent valid assignment to a:root.
+        store
+            .assign(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "a:root".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: None,
+                provenance: "manual".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("a:root should still exist after rollback: {error}"));
+        assert_eq!(
+            store.active_tags("instrument:AAPL", "2026-05-22"),
+            vec!["a:root".to_string()]
         );
     }
 }

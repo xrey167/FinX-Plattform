@@ -215,7 +215,7 @@ impl TmxMockQuoteFetcher {
     pub fn fetch_mock(params: &Value) -> Result<Vec<TmxQuote>, TmxError> {
         let query = TmxQuoteQuery::from_params(params)?;
         let quote = TmxQuote {
-            symbol: query.symbol.clone(),
+            symbol: query.symbol,
             exchange: "TSX".to_string(),
             last_price: 79.50,
             change: 0.25,

@@ -123,9 +123,18 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
         query: &EquityHistoricalQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
+        // Prefer the caller-supplied interval (parsed once by the shared
+        // `StandardParams` normalization) over the fetcher's configured
+        // default, so `interval=` in the request payload reaches Yahoo.
+        let interval = query.params.interval.as_token();
+        let interval = if interval == DEFAULT_INTERVAL {
+            self.interval.as_str()
+        } else {
+            interval
+        };
         let url = format!(
             "{}/v8/finance/chart/{}?interval={}&range={}",
-            self.base_url, query.symbol, self.interval, self.range
+            self.base_url, query.symbol, interval, self.range
         );
         let client = Client::builder()
             .user_agent(USER_AGENT)

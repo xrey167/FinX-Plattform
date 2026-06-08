@@ -42,12 +42,12 @@
 //! has no subscriber/callback surface, so dispatch is explicit (call-site
 //! driven), not automatic.
 //!
-//! # SQLite stores (`sqlite` feature)
+//! # `SQLite` stores (`sqlite` feature)
 //!
 //! [`sqlite::SqliteStepStore`] and [`sqlite::SqliteRunStore`] use an in-process
-//! SQLite database, suitable for single-node deployments and tests.
+//! `SQLite` database, suitable for single-node deployments and tests.
 //!
-//! # StepFn / handler shape
+//! # `StepFn` / handler shape
 //!
 //! ```rust,ignore
 //! #[async_trait]
@@ -66,7 +66,7 @@
 //! is returned without re-executing the step body.  A *failed* step is never
 //! persisted, so it is re-executed on the next call (resume semantics).
 //!
-//! # RuntimeConfig
+//! # `RuntimeConfig`
 //!
 //! [`RuntimeConfig`] provides application-level settings read from environment
 //! variables (`TDW_FUNCTIONS_APP_ID`, `TDW_FUNCTIONS_SIGNING_SECRET`).

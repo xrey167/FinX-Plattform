@@ -1,8 +1,10 @@
 //! Real Finnhub HTTP fetchers for `tdw_core::Fetcher`.
 //!
-//! Gated by the `http` feature. Two fetchers are provided:
+//! Gated by the `http` feature. Four fetchers are provided:
 //!   - [`FinnhubHttpProfileFetcher`] — company profile via `/stock/profile2`
 //!   - [`FinnhubHttpQuoteSnapshotFetcher`] — last-price quote via `/quote`
+//!   - [`FinnhubHttpSymbolSearchFetcher`] — symbol search via `/search`
+//!   - [`FinnhubHttpCompanyNewsFetcher`] — company news via `/company-news`
 //!
 //! Live calls require `TDW_FINNHUB_API_KEY`. The live integration test is
 //! additionally gated by `TDW_FINNHUB_LIVE=1` so unattended CI stays offline.
@@ -13,7 +15,10 @@ use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{CompanyProfile, QuoteSnapshot};
 
-use crate::{API_KEY_ENV, BASE_URL, FinnhubError, FinnhubProfileQuery, FinnhubQuoteQuery};
+use crate::{
+    API_KEY_ENV, BASE_URL, CompanyNewsItem, FinnhubCompanyNewsQuery, FinnhubError,
+    FinnhubProfileQuery, FinnhubQuoteQuery, FinnhubSearchQuery, SymbolMatch,
+};
 
 const USER_AGENT: &str = "tdw-provider-finnhub/0.1";
 
@@ -56,6 +61,47 @@ struct FinnhubQuoteRaw {
     /// Unix timestamp in seconds.
     #[serde(default)]
     t: i64,
+}
+
+/// Wire shape for the `/search` response envelope.
+#[derive(Deserialize)]
+struct FinnhubSearchRaw {
+    #[serde(default)]
+    result: Vec<FinnhubSearchResultRaw>,
+}
+
+/// Wire shape for a single `/search` result row.
+#[derive(Deserialize)]
+struct FinnhubSearchResultRaw {
+    #[serde(default)]
+    symbol: String,
+    #[serde(rename = "displaySymbol", default)]
+    display_symbol: String,
+    #[serde(default)]
+    description: String,
+    #[serde(rename = "type", default)]
+    kind: String,
+}
+
+/// Wire shape for a single `/company-news` array element.
+#[derive(Deserialize)]
+struct FinnhubCompanyNewsRaw {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    datetime: i64,
+    #[serde(default)]
+    headline: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    related: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -230,5 +276,169 @@ impl Fetcher<FinnhubQuoteQuery, QuoteSnapshot> for FinnhubHttpQuoteSnapshotFetch
             // Finnhub returns seconds; convert to milliseconds for the domain type.
             ts_ms: quote.t * 1_000,
         }])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FinnhubHttpSymbolSearchFetcher
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Finnhub symbol-search fetcher.
+    pub FinnhubHttpSymbolSearchFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FinnhubSearchQuery, SymbolMatch> for FinnhubHttpSymbolSearchFetcher {
+    const PROVIDER: &'static str = "finnhub";
+    const ENDPOINT: &'static str = "symbol_search";
+
+    fn transform_query(params: Value) -> Result<FinnhubSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("finnhub search query must be a string".to_string())
+            })?;
+        FinnhubSearchQuery::new(query).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FinnhubSearchQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let url = format!("{}/search", self.base_url().trim_end_matches('/'));
+        let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
+        let response = client
+            .get(&url)
+            .query(&[("q", query.query.as_str()), ("token", api_key.as_str())])
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("finnhub search extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unreadable>"));
+            return Err(Error::Provider(format!(
+                "finnhub search returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("finnhub search read body: {e}")))
+    }
+
+    fn transform_data(&self, _query: &FinnhubSearchQuery, raw: Bytes) -> Result<Vec<SymbolMatch>> {
+        let envelope: FinnhubSearchRaw = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("finnhub search parse_json: {e}")))?;
+        Ok(envelope
+            .result
+            .into_iter()
+            .map(|r| SymbolMatch {
+                symbol: r.symbol,
+                display_symbol: r.display_symbol,
+                description: r.description,
+                kind: r.kind,
+            })
+            .collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FinnhubHttpCompanyNewsFetcher
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Finnhub company-news fetcher.
+    pub FinnhubHttpCompanyNewsFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FinnhubCompanyNewsQuery, CompanyNewsItem> for FinnhubHttpCompanyNewsFetcher {
+    const PROVIDER: &'static str = "finnhub";
+    const ENDPOINT: &'static str = "company_news";
+
+    fn transform_query(params: Value) -> Result<FinnhubCompanyNewsQuery> {
+        let symbol = params
+            .get("symbol")
+            .or_else(|| params.get("ticker"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("finnhub symbol must be a string".to_string()))?;
+        let from = params
+            .get("from")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("finnhub from date must be a string".to_string()))?;
+        let to = params
+            .get("to")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("finnhub to date must be a string".to_string()))?;
+        FinnhubCompanyNewsQuery::new(symbol, from, to)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FinnhubCompanyNewsQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let url = format!("{}/company-news", self.base_url().trim_end_matches('/'));
+        let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
+        let response = client
+            .get(&url)
+            .query(&[
+                ("symbol", query.symbol.as_str()),
+                ("from", query.from.as_str()),
+                ("to", query.to.as_str()),
+                ("token", api_key.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("finnhub company-news extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unreadable>"));
+            return Err(Error::Provider(format!(
+                "finnhub company-news returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("finnhub company-news read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        _query: &FinnhubCompanyNewsQuery,
+        raw: Bytes,
+    ) -> Result<Vec<CompanyNewsItem>> {
+        let items: Vec<FinnhubCompanyNewsRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("finnhub company-news parse_json: {e}")))?;
+        Ok(items
+            .into_iter()
+            .map(|n| CompanyNewsItem {
+                id: n.id,
+                // Finnhub returns seconds; convert to milliseconds.
+                datetime_ms: n.datetime * 1_000,
+                headline: n.headline,
+                summary: n.summary,
+                source: n.source,
+                url: n.url,
+                category: n.category,
+                related: n.related,
+            })
+            .collect())
     }
 }

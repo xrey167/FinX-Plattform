@@ -199,10 +199,12 @@ impl KnowledgeIndex {
             .collect()
     }
 
+    #[must_use]
     pub fn active_tags(&self, entity_id: &str, as_of: &str) -> Vec<String> {
         self.tags.active_tags(entity_id, as_of)
     }
 
+    #[must_use]
     pub fn neighbors(&self, entity_id: &str) -> Vec<String> {
         self.graph
             .neighbors(entity_id)

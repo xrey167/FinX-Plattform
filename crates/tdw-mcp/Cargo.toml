@@ -31,5 +31,9 @@ tokio = { workspace = true, features = ["rt", "signal"] }
 tdw-app-server = { workspace = true, features = ["transport-http"] }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 
+[[example]]
+name = "tdw_mcp_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

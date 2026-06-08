@@ -1320,8 +1320,9 @@ fn oldest_age_from_row(oldest_leased_at_ms: Option<i64>) -> Option<u64> {
     Some(now_ms.saturating_sub(leased_at))
 }
 
-/// Render the worker's queue stats plus the oldest-lease age as Prometheus
-/// metrics: a labelled `tdw_worker_jobs{state=...}` gauge family (one sample per
+/// Render the worker's queue stats plus the oldest-lease age as Prometheus metrics.
+///
+/// Emits a labelled `tdw_worker_jobs{state=...}` gauge family (one sample per
 /// queue state) and a `tdw_worker_oldest_lease_age_ms` gauge.
 ///
 /// Pure: takes a snapshot so it is unit-testable without a live queue.
@@ -1741,6 +1742,7 @@ impl Default for ServeConfig {
 /// Outcome of a single leased job, applied to the [`ServeReport`] once its
 /// in-flight future resolves. Kept separate from the report so a job future can
 /// be driven concurrently without touching shared mutable state.
+#[derive(Clone, Copy)]
 enum JobOutcome {
     Completed,
     Failed { dead_lettered: bool },

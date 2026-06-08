@@ -14,7 +14,7 @@ doctest = false
 
 [features]
 default = []
-http = ["dep:async-trait","dep:bytes","dep:reqwest","dep:tdw-core","dep:tdw-domain","dep:tokio", "tdw-core/http"]
+http = ["dep:async-trait","dep:bytes","dep:reqwest","dep:tdw-core","dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
@@ -24,7 +24,6 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true, optional = true }
-tdw-domain = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
@@ -36,5 +35,11 @@ name = "http_fetcher"
 path = "tests/http_fetcher.rs"
 required-features = ["http"]
 
+[[example]]
+name = "velodata_basic"
+path = "examples/basic.rs"
+required-features = ["http"]
+
 [lints]
 workspace = true
+

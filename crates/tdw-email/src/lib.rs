@@ -1,13 +1,15 @@
 #![forbid(unsafe_code)]
 
-//! Transactional email — SMTP send and HTML template fill.
+//! Transactional email and marketing broadcast — SMTP send, HTML templates,
+//! and audience-wide broadcast with subscriber management.
 //!
 //! # Features
 //!
 //! | Feature | Effect |
 //! |---------|--------|
-//! | *(none)* | Core types, template engine, `EmailConfig`, `EmailMessage` — always compiled, no I/O |
+//! | *(none)* | Core types, template engine, `EmailConfig`, `EmailMessage`, broadcast models — always compiled, no I/O |
 //! | `smtp` | Enables [`TransactionalMailer`] backed by a pooled lettre async SMTP transport |
+//! | `broadcast` | Enables [`BroadcastClient`] backed by reqwest for marketing API calls |
 //!
 //! # Quick start (smtp feature)
 //!
@@ -31,6 +33,7 @@
 //! mailer.send(&msg).await?;
 //! ```
 
+pub mod broadcast;
 pub mod config;
 pub mod error;
 pub mod message;
@@ -39,10 +42,17 @@ pub mod template;
 #[cfg(feature = "smtp")]
 pub mod mailer;
 
+pub use broadcast::{
+    Broadcast, BroadcastConfig, BroadcastOutcome, BroadcastVisibility, Subscriber, SubscriberList,
+    classify_broadcast_response,
+};
 pub use config::EmailConfig;
-pub use error::EmailError;
+pub use error::{BroadcastError, EmailError};
 pub use message::EmailMessage;
 pub use template::render_template;
 
 #[cfg(feature = "smtp")]
 pub use mailer::TransactionalMailer;
+
+#[cfg(feature = "broadcast")]
+pub use broadcast::BroadcastClient;

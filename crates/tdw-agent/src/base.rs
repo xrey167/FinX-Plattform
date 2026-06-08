@@ -148,7 +148,7 @@ pub enum AdaptivityError {
     },
 }
 
-/// The adaptivity gate for eval feedback: succeeds iff `meta.adaptivity >= `[`Adaptivity::Learning`].
+/// The adaptivity gate for eval feedback: succeeds iff <code>meta.adaptivity >= [Adaptivity::Learning]</code>.
 ///
 /// This guards every feedback mutation so that only `Learning`/`SelfModifying` entities accrue
 /// learned state; a `None`/`Configured` entity is rejected with [`AdaptivityError::NotLearning`].

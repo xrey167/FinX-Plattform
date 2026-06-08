@@ -12,8 +12,8 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tdw_llm::{
-    ChatMessage, ChatRequest, ChatResponse, MessageRole, Usage, validate_chat_request,
-    validate_model_id,
+    ChatMessage, ChatRequest, ChatResponse, ClassifyError, MessageRole, Retryability, Usage,
+    classify_http_status, validate_chat_request, validate_model_id,
 };
 use thiserror::Error;
 
@@ -61,6 +61,24 @@ pub enum AnthropicHttpError {
     InvalidResponse(String),
     #[error("client build error: {0}")]
     ClientBuild(String),
+}
+
+impl ClassifyError for AnthropicHttpError {
+    /// Translate the transport-facing variants into a recoverability
+    /// classification using the shared `tdw-llm` helpers; all other
+    /// (local validation) variants are permanent.
+    ///
+    /// `Network(_)` (a reqwest transport failure) is treated as transient.
+    /// `Http { status, body }` is delegated to
+    /// [`tdw_llm::classify_http_status`], which owns the transient status
+    /// set and the context-overflow heuristic.
+    fn retryability(&self) -> Retryability {
+        match self {
+            Self::Network(_) => Retryability::Transient,
+            Self::Http { status, body } => classify_http_status(status.as_u16(), body),
+            _ => Retryability::Permanent,
+        }
+    }
 }
 
 impl AnthropicHttpClient {
@@ -753,5 +771,30 @@ data: {"type":"message_stop"}
         };
         let mut stream = AnthropicStreamState::new("claude-haiku-4-5-20251001");
         assert!(stream.apply_event(event, &mut |_| {}).is_err());
+    }
+
+    #[test]
+    fn http_error_classification_covers_transient_permanent_and_overflow() {
+        let transient = AnthropicHttpError::Http {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body: String::new(),
+        };
+        assert_eq!(transient.retryability(), Retryability::Transient);
+
+        let permanent = AnthropicHttpError::Http {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: "invalid_request_error".to_string(),
+        };
+        assert_eq!(permanent.retryability(), Retryability::Permanent);
+
+        let overflow = AnthropicHttpError::Http {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: r#"{"error":{"message":"prompt is too long: context length exceeds tokens"}}"#
+                .to_string(),
+        };
+        assert_eq!(overflow.retryability(), Retryability::ContextOverflow);
+
+        let local = AnthropicHttpError::MissingApiKey;
+        assert_eq!(local.retryability(), Retryability::Permanent);
     }
 }
