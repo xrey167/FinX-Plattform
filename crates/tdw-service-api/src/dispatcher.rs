@@ -231,7 +231,7 @@ async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnaps
 }
 
 /// Comma-separated list of quote-snapshot providers available in this build.
-fn available_quote_snapshot_providers() -> &'static str {
+const fn available_quote_snapshot_providers() -> &'static str {
     #[cfg(all(feature = "provider-finnhub", feature = "provider-fmp"))]
     {
         "finnhub, fmp"
@@ -895,7 +895,7 @@ fn udf_run_tool() -> RegisteredTool {
 /// [`dispatch_tool`] executes `udf.run` via the sandbox (which needs the WASM
 /// runtime and structured error mapping). The registry only needs a handler to
 /// construct a [`RegisteredTool`]; the echo behaviour here is inert.
-fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
+const fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(input)
 }
 
@@ -941,7 +941,7 @@ mod tests {
     }
 
     /// Policy whose principal also holds the `udf_runner` role required by the
-    /// `tdw.udf.run` (ToolCall) endpoint — analyst alone is denied there.
+    /// `tdw.udf.run` (`ToolCall`) endpoint — analyst alone is denied there.
     fn udf_runner_policy() -> PolicyEnforcementConfig {
         let mut policy = analyst_policy();
         policy.auth.claims.roles = vec!["analyst".to_string(), "udf_runner".to_string()];

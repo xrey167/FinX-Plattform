@@ -224,7 +224,7 @@ impl From<&crate::Prompt> for McpPrompt {
 }
 
 /// An MCP-exposable entity projected from a registry [`Resource`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpEntity {
     /// An MCP tool.
     Tool(McpTool),

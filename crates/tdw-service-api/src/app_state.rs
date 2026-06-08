@@ -731,7 +731,7 @@ fn select_vector_engine(live: bool) -> Result<Arc<dyn VectorEngine>> {
 /// `TDW_MEILI_API_KEY`), fail-closed on a missing URL or absent
 /// `real-meilisearch` feature. Otherwise the offline `InMemoryLexicalEngine` is
 /// used. This is the first runtime wiring of the real Meilisearch engine
-/// (mirroring how Qdrant / ClickHouse are wired above).
+/// (mirroring how Qdrant / `ClickHouse` are wired above).
 ///
 /// # Errors
 ///

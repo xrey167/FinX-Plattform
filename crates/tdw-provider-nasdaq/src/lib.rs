@@ -77,7 +77,7 @@ impl NasdaqDatasetQuery {
 }
 
 /// A single row returned by the NASDAQ Data Link dataset data endpoint.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NasdaqDataRow {
     pub database: String,
     pub dataset: String,

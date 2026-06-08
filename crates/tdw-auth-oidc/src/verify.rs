@@ -21,8 +21,8 @@ pub const DEFAULT_LEEWAY_SECS: u64 = 60;
 
 /// A verifying (public) key usable for JWT signature checks.
 ///
-/// `pem` carries the PEM-encoded SubjectPublicKeyInfo (for RSA) or the
-/// SEC1/PKCS#8 public key (for EC) the IdP publishes for `kid`. `alg` is the
+/// `pem` carries the PEM-encoded `SubjectPublicKeyInfo` (for RSA) or the
+/// SEC1/PKCS#8 public key (for EC) the `IdP` publishes for `kid`. `alg` is the
 /// JWS algorithm the key is bound to (e.g. `RS256`, `ES256`); a token whose
 /// header algorithm does not match the resolved key's `alg` is rejected.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,7 +255,7 @@ fn map_jwt_error(error: jsonwebtoken::errors::Error) -> VerifyError {
 }
 
 /// The canonical JWS name for a [`jsonwebtoken::Algorithm`].
-fn algorithm_name(algorithm: Algorithm) -> &'static str {
+const fn algorithm_name(algorithm: Algorithm) -> &'static str {
     match algorithm {
         Algorithm::HS256 => "HS256",
         Algorithm::HS384 => "HS384",

@@ -220,7 +220,7 @@ fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Result<Vec<E
                 let value = obs_array
                     .as_array()
                     .and_then(|arr| arr.first())
-                    .and_then(|v| v.as_f64());
+                    .and_then(serde_json::Value::as_f64);
                 if let Some(value) = value {
                     rows.push(EcbObservation {
                         flow: flow.to_string(),

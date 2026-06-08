@@ -193,7 +193,7 @@ impl OpsResponse {
 
     /// `200 OK` Prometheus metrics response.
     #[must_use]
-    pub fn metrics(body: String) -> Self {
+    pub const fn metrics(body: String) -> Self {
         Self {
             status: 200,
             reason: "OK",

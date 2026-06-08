@@ -34,7 +34,7 @@
 //! `cron:<trigger_id>:<fire_slot_ms>`.  Because the fire slot is rounded to the
 //! exact computed next-fire time, retried ticks or duplicate scheduler instances
 //! produce the same id and are deduplicated by the queue's `on conflict do
-//! nothing` semantics (both SQLite and Postgres backends).
+//! nothing` semantics (both `SQLite` and Postgres backends).
 
 #![forbid(unsafe_code)]
 
@@ -226,7 +226,7 @@ impl ScheduleRegistry {
 // Fire-slot detection (pure, time-injectable — enables deterministic tests)
 // ---------------------------------------------------------------------------
 
-/// Compute the set of (trigger, fire_slot_ms) pairs whose next fire time after
+/// Compute the set of (trigger, `fire_slot_ms`) pairs whose next fire time after
 /// `last_tick_ms` falls at or before `now_ms`.
 ///
 /// This is a pure function with no I/O; it is the testable core of the
@@ -427,7 +427,7 @@ fn ms_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
 /// Convert a `DateTime<Utc>` to epoch milliseconds.  Returns `None` on
 /// overflow.
 #[must_use]
-fn datetime_to_ms(dt: &DateTime<Utc>) -> Option<i64> {
+const fn datetime_to_ms(dt: &DateTime<Utc>) -> Option<i64> {
     Some(dt.timestamp_millis())
 }
 

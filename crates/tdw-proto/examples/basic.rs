@@ -64,8 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "decoded tick side = {}",
         TradeSide::try_from(decoded_tick.side)
-            .map(|s| s.as_str_name())
-            .unwrap_or("INVALID")
+            .map_or("INVALID", |s| s.as_str_name())
     );
 
     Ok(())

@@ -374,7 +374,7 @@ impl ToolExecutor {
 
     /// Read-only access to the [`ReceiptLog`], or `None` if recording is disabled.
     #[must_use]
-    pub fn receipts(&self) -> Option<&ReceiptLog> {
+    pub const fn receipts(&self) -> Option<&ReceiptLog> {
         self.receipts.as_ref()
     }
 

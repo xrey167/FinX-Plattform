@@ -107,7 +107,7 @@ pub struct FinraShortInterestRecord {
 }
 
 /// A single weekly OTC summary record parsed from the FINRA pipe-delimited response.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FinraOtcSummaryRecord {
     pub trade_report_date: String,
     pub market_participant_identifier: String,
@@ -117,7 +117,7 @@ pub struct FinraOtcSummaryRecord {
 
 // ── Error type ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Error, PartialEq)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum FinraProviderError {
     #[error("finra limit must be between 1 and {max}, got {got}")]
     InvalidLimit { got: u32, max: u32 },
@@ -493,7 +493,7 @@ mod tests {
             expected: 9,
             got: 4,
         };
-        assert!(e.to_string().contains("9"), "display: {e}");
+        assert!(e.to_string().contains('9'), "display: {e}");
 
         let e = FinraProviderError::ParseField {
             field: "currentShortInterest",

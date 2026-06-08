@@ -30,7 +30,7 @@
 //!
 //! # Security notes
 //!
-//! * Passwords are hashed with **Argon2id** (RustCrypto, pure Rust) using a
+//! * Passwords are hashed with **Argon2id** (`RustCrypto`, pure Rust) using a
 //!   random 16-byte salt per hash. The PHC string is stored in the database.
 //! * The `User` struct and all public APIs **never** include or return the
 //!   raw hash; the hash is internal to each store implementation.
@@ -380,7 +380,7 @@ impl std::fmt::Debug for UserRecord {
 /// email→id lookups.
 #[derive(Debug, Default)]
 pub struct InMemoryUserStore {
-    /// id → record (includes password_hash internally)
+    /// id → record (includes `password_hash` internally)
     records: Mutex<BTreeMap<String, UserRecord>>,
     /// normalized-email → id reverse index
     email_index: Mutex<BTreeMap<String, String>>,
@@ -437,13 +437,10 @@ impl UserStore for InMemoryUserStore {
     }
 
     async fn authenticate(&self, email: &str, password: &str) -> Result<User> {
-        let email = match normalize_email(email) {
-            Ok(e) => e,
-            Err(_) => {
-                // Still run a dummy verify to equalize timing before returning.
-                let _ = verify_password(DUMMY_HASH, password);
-                return Err(IdentityError::InvalidCredentials);
-            }
+        let email = if let Ok(e) = normalize_email(email) { e } else {
+            // Still run a dummy verify to equalize timing before returning.
+            let _ = verify_password(DUMMY_HASH, password);
+            return Err(IdentityError::InvalidCredentials);
         };
 
         let records = self
@@ -455,20 +452,17 @@ impl UserStore for InMemoryUserStore {
             .lock()
             .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
 
-        match email_index.get(&email).and_then(|id| records.get(id)) {
-            Some(record) => {
-                let matched = verify_password(&record.password_hash, password)?;
-                if matched {
-                    Ok(record.user.clone())
-                } else {
-                    Err(IdentityError::InvalidCredentials)
-                }
-            }
-            None => {
-                // Dummy verify to equalize timing with the "found but wrong password" path.
-                let _ = verify_password(DUMMY_HASH, password);
+        if let Some(record) = email_index.get(&email).and_then(|id| records.get(id)) {
+            let matched = verify_password(&record.password_hash, password)?;
+            if matched {
+                Ok(record.user.clone())
+            } else {
                 Err(IdentityError::InvalidCredentials)
             }
+        } else {
+            // Dummy verify to equalize timing with the "found but wrong password" path.
+            let _ = verify_password(DUMMY_HASH, password);
+            Err(IdentityError::InvalidCredentials)
         }
     }
 

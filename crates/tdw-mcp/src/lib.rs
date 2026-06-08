@@ -3963,15 +3963,12 @@ mod tests {
         // The dir-attach test covers the set path deterministically; here we only assert the
         // unset path so a parallel test that sets the var cannot race us. This is best-effort:
         // if some other test in the binary has the var set, treat that as the set path.
-        match std::env::var(REGISTRY_DIR_ENV) {
-            Err(_) => {
-                let resolved = registry_from_env()
-                    .unwrap_or_else(|error| panic!("unset env should not error: {error}"));
-                assert!(resolved.is_none(), "unset env must yield no registry");
-            }
-            Ok(_) => {
-                // The var is set in this process; the unset invariant is not testable here.
-            }
+        if let Err(_) = std::env::var(REGISTRY_DIR_ENV) {
+            let resolved = registry_from_env()
+                .unwrap_or_else(|error| panic!("unset env should not error: {error}"));
+            assert!(resolved.is_none(), "unset env must yield no registry");
+        } else {
+            // The var is set in this process; the unset invariant is not testable here.
         }
     }
 }

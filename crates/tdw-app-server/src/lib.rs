@@ -945,8 +945,8 @@ mod tests {
         /// first argument to `read_sse_events` so those bytes are not silently
         /// discarded.
         ///
-        /// The subscription point is `tx.subscribe()` inside serve_http's accept
-        /// loop (transport_http.rs:63), which runs before the SSE handler task
+        /// The subscription point is `tx.subscribe()` inside `serve_http`'s accept
+        /// loop (`transport_http.rs:63`), which runs before the SSE handler task
         /// is spawned. Waiting for the HTTP header reply means the server has
         /// already subscribed this receiver to the broadcast — guaranteeing zero
         /// event loss for any send that happens after `open_sse` returns.
@@ -1062,7 +1062,7 @@ mod tests {
             collected.unwrap_or_else(|_| panic!("timed out waiting for {expected} SSE events"))
         }
 
-        /// Build an envelope with a fresh, unique `op_id` (UUIDv7 via
+        /// Build an envelope with a fresh, unique `op_id` (`UUIDv7` via
         /// `OpEnvelope::new`) so emitted events can be told apart across the
         /// broadcast. `OpId` has no public string constructor, so callers that
         /// need to assert on identity capture `env.op_id.as_str()`.

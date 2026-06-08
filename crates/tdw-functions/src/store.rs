@@ -55,7 +55,7 @@ impl RunStatus {
 // ---------------------------------------------------------------------------
 
 /// A persisted record of a single function run.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunRecord {
     /// Stable identifier for this run (caller-supplied).
     pub run_id: String,

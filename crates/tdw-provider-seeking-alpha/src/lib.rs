@@ -105,7 +105,7 @@ impl SeekingAlphaRatingsQuery {
 // ---------------------------------------------------------------------------
 
 /// A single analyst article returned by `/analysis/v2/list`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SeekingAlphaArticle {
     pub id: String,
     pub title: String,

@@ -144,9 +144,7 @@ pub fn mcp_transport_from_env(
         Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
             "stdio" => Ok(McpTransport::Stdio),
             "http" | "streamable-http" | "streamable_http" => Ok(McpTransport::Http(
-                http_bind
-                    .map(str::to_string)
-                    .unwrap_or_else(|| tdw_mcp::default_streamable_http_bind().to_string()),
+                http_bind.map_or_else(|| tdw_mcp::default_streamable_http_bind().to_string(), str::to_string),
             )),
             other => Err(format!(
                 "unknown TDW_BACKEND_MCP_TRANSPORT value: {other}; expected stdio|http"
