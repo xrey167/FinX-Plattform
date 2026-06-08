@@ -4581,6 +4581,14 @@ name = "tdw-ml-registry"
 version = "0.1.0"
 
 [[package]]
+name = "tdw-news-compose"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-outbox"
 version = "0.1.0"
 dependencies = [
