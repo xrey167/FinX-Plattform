@@ -31,6 +31,18 @@ jobs:
       - name: Validate live compose model
         run: docker compose --profile live config >/dev/null && echo "compose model OK"
 
+      - name: Pull live profile base images
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 4); do
+            if docker compose --profile live pull --ignore-buildable; then
+              exit 0
+            fi
+            echo "compose pull failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile live pull --ignore-buildable
+
       - name: Bring up the live stack
         run: docker compose --profile live up --build -d
 
