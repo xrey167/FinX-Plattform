@@ -118,7 +118,7 @@ pub struct ModelRouter {
 impl ModelRouter {
     /// Construct an empty router (no providers, no network).
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             providers: BTreeMap::new(),
         }
@@ -259,7 +259,7 @@ mod tests {
         Arc::new(|_provider: &str| false)
     }
 
-    /// Factory that builds a StubModel whose id is the resolved model name.
+    /// Factory that builds a `StubModel` whose id is the resolved model name.
     fn stub_factory() -> ModelFactory {
         Arc::new(|r: &ModelRef| {
             Ok(Arc::new(StubModel {

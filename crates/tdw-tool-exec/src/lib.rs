@@ -727,7 +727,7 @@ fn check_type(expected: &str, value: &Value) -> Result<(), String> {
 }
 
 /// Short JSON type name for error messages.
-fn json_type_name(value: &Value) -> &'static str {
+const fn json_type_name(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
         Value::Bool(_) => "boolean",

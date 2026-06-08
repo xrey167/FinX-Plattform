@@ -99,7 +99,7 @@ impl LoopGuard {
 
     /// Start building a guard with custom thresholds and exemptions.
     #[must_use]
-    pub fn builder() -> LoopGuardBuilder {
+    pub const fn builder() -> LoopGuardBuilder {
         LoopGuardBuilder::new()
     }
 
@@ -175,7 +175,7 @@ impl LoopGuard {
     }
 
     /// Clear any in-progress warning streak.
-    fn reset_warnings(&mut self) {
+    const fn reset_warnings(&mut self) {
         self.warned_signature = None;
         self.warnings_emitted = 0;
     }
@@ -202,7 +202,7 @@ pub struct LoopGuardBuilder {
 impl LoopGuardBuilder {
     /// A builder pre-loaded with the conservative defaults and an empty exemption set.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             capacity: DEFAULT_CAPACITY,
             repeat_threshold: DEFAULT_REPEAT_THRESHOLD,
@@ -231,7 +231,7 @@ impl LoopGuardBuilder {
 
     /// Override the number of `Warn` verdicts emitted before `Refuse`.
     #[must_use]
-    pub fn max_warnings(mut self, max_warnings: u32) -> Self {
+    pub const fn max_warnings(mut self, max_warnings: u32) -> Self {
         self.max_warnings = max_warnings;
         self
     }

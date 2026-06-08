@@ -86,7 +86,7 @@ pub trait ClassifyError {
 /// and the common 5xx server/gateway failures (500/502/503/504). Shared by
 /// the provider HTTP error impls so the set is defined in exactly one place.
 #[must_use]
-pub fn is_transient_http_status(status: u16) -> bool {
+pub const fn is_transient_http_status(status: u16) -> bool {
     matches!(status, 408 | 409 | 429 | 500 | 502 | 503 | 504)
 }
 

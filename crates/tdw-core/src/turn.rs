@@ -36,7 +36,7 @@ pub enum TerminalReason {
 impl TerminalReason {
     /// A stable, lowercase-ish identifier suitable for logs and metrics labels.
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::NaturalStop => "natural_stop",
             Self::IterationLimitReached => "iteration_limit_reached",
@@ -60,7 +60,7 @@ pub struct TurnOutcome {
 impl TurnOutcome {
     /// Construct a [`TurnOutcome`] from its parts.
     #[must_use]
-    pub fn new(reason: TerminalReason, iterations: u32) -> Self {
+    pub const fn new(reason: TerminalReason, iterations: u32) -> Self {
         Self { reason, iterations }
     }
 }
@@ -79,7 +79,7 @@ pub struct IterationBudget {
 impl IterationBudget {
     /// Create a budget that permits at most `max` iterations.
     #[must_use]
-    pub fn new(max: u32) -> Self {
+    pub const fn new(max: u32) -> Self {
         Self { max, used: 0 }
     }
 
@@ -89,7 +89,7 @@ impl IterationBudget {
     ///
     /// Returns [`TerminalReason::IterationLimitReached`] when the budget is
     /// already exhausted; in that case `used` is left unchanged.
-    pub fn tick(&mut self) -> Result<(), TerminalReason> {
+    pub const fn tick(&mut self) -> Result<(), TerminalReason> {
         if self.used >= self.max {
             return Err(TerminalReason::IterationLimitReached);
         }
@@ -99,13 +99,13 @@ impl IterationBudget {
 
     /// How many iterations remain before the budget is exhausted.
     #[must_use]
-    pub fn remaining(&self) -> u32 {
+    pub const fn remaining(&self) -> u32 {
         self.max.saturating_sub(self.used)
     }
 
     /// How many iterations have been consumed so far.
     #[must_use]
-    pub fn used(&self) -> u32 {
+    pub const fn used(&self) -> u32 {
         self.used
     }
 }
@@ -127,7 +127,7 @@ pub struct CostBudget {
 impl CostBudget {
     /// Create a budget with separate caps for input and output tokens.
     #[must_use]
-    pub fn new(limit_input: u32, limit_output: u32) -> Self {
+    pub const fn new(limit_input: u32, limit_output: u32) -> Self {
         Self {
             limit_input,
             limit_output,
@@ -147,7 +147,7 @@ impl CostBudget {
     /// Returns [`TerminalReason::BudgetExhausted`] if applying the spend would
     /// push either running total past its cap; in that case neither total is
     /// modified.
-    pub fn add(&mut self, input_tokens: u32, output_tokens: u32) -> Result<(), TerminalReason> {
+    pub const fn add(&mut self, input_tokens: u32, output_tokens: u32) -> Result<(), TerminalReason> {
         let next_input = self.acc_input.saturating_add(input_tokens);
         let next_output = self.acc_output.saturating_add(output_tokens);
         if next_input > self.limit_input || next_output > self.limit_output {
@@ -160,13 +160,13 @@ impl CostBudget {
 
     /// Accumulated input tokens.
     #[must_use]
-    pub fn used_input(&self) -> u32 {
+    pub const fn used_input(&self) -> u32 {
         self.acc_input
     }
 
     /// Accumulated output tokens.
     #[must_use]
-    pub fn used_output(&self) -> u32 {
+    pub const fn used_output(&self) -> u32 {
         self.acc_output
     }
 }
