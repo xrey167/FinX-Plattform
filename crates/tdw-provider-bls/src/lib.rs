@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn query_rejects_blank_series_id() {
-        let err = BlsSeriesQuery::new(vec!["".to_string()], 2020, 2024)
+        let err = BlsSeriesQuery::new(vec![String::new()], 2020, 2024)
             .expect_err("blank series ID must be rejected");
 
         assert_eq!(err, BlsProviderError::EmptySeriesId);

@@ -301,7 +301,7 @@ mod tests {
     use super::*;
 
     fn fixtures_dir() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/registry")
+        std::path::PathBuf::from("tests/registry")
     }
 
     #[test]

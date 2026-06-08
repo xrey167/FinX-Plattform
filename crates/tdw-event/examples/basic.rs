@@ -38,5 +38,5 @@ fn main() {
     for name in EVENT_SCHEMA_NAMES {
         assert!(bundle.contains_key(name), "missing schema {name}");
     }
-    println!("schema bundle exports: {:?}", EVENT_SCHEMA_NAMES);
+    println!("schema bundle exports: {EVENT_SCHEMA_NAMES:?}");
 }

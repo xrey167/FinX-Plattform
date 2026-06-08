@@ -466,6 +466,12 @@ pub async fn shutdown_signal() {
     }
 }
 
+/// Drive the service loop until shutdown, then drain the relay task.
+///
+/// # Errors
+///
+/// Returns [`SinkError`] if the underlying service loop or event sink fails
+/// while dispatching or draining events.
 pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     mut service_loop: ServiceLoop<D, S>,
     relay: tokio::task::JoinHandle<()>,
@@ -945,8 +951,8 @@ mod tests {
         /// first argument to `read_sse_events` so those bytes are not silently
         /// discarded.
         ///
-        /// The subscription point is `tx.subscribe()` inside serve_http's accept
-        /// loop (transport_http.rs:63), which runs before the SSE handler task
+        /// The subscription point is `tx.subscribe()` inside `serve_http`'s accept
+        /// loop (`transport_http.rs:63`), which runs before the SSE handler task
         /// is spawned. Waiting for the HTTP header reply means the server has
         /// already subscribed this receiver to the broadcast — guaranteeing zero
         /// event loss for any send that happens after `open_sse` returns.
@@ -1062,7 +1068,7 @@ mod tests {
             collected.unwrap_or_else(|_| panic!("timed out waiting for {expected} SSE events"))
         }
 
-        /// Build an envelope with a fresh, unique `op_id` (UUIDv7 via
+        /// Build an envelope with a fresh, unique `op_id` (`UUIDv7` via
         /// `OpEnvelope::new`) so emitted events can be told apart across the
         /// broadcast. `OpId` has no public string constructor, so callers that
         /// need to assert on identity capture `env.op_id.as_str()`.
@@ -1226,6 +1232,11 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn http_slow_subscriber_does_not_starve_others() {
             let result = tokio::time::timeout(Duration::from_secs(20), async {
+                // 2000 ops × 2 events = 4000 events, well above the 1024-slot
+                // broadcast buffer, so any platform that does lag-drop will hit it.
+                const OPS: u64 = 2000;
+                const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
+
                 let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
                 let addr = listener.local_addr().expect("local addr");
 
@@ -1252,11 +1263,6 @@ mod tests {
                 // The meaningful, portable guarantee is that the FAST subscriber
                 // receives every event while the unresponsive peer is connected.
                 let (_slow_stream, _slow_seed) = open_sse(addr).await;
-
-                // 2000 ops × 2 events = 4000 events, well above the 1024-slot
-                // broadcast buffer, so any platform that does lag-drop will hit it.
-                const OPS: u64 = 2000;
-                const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
 
                 // Drain the fast reader concurrently so the server-side write to
                 // the fast connection never blocks while we are POSTing/emitting.

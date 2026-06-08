@@ -98,7 +98,7 @@ impl Ohlcv {
     /// Build a `MarketDataBar` carrying only the OHLCV fields, leaving the
     /// remaining fields to be supplied via struct-update syntax.
     #[must_use]
-    pub fn into_bar_template(self) -> MarketDataBar {
+    pub const fn into_bar_template(self) -> MarketDataBar {
         MarketDataBar {
             symbol: String::new(),
             venue: String::new(),

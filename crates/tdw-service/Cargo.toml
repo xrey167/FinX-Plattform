@@ -44,5 +44,9 @@ tdw-app-server = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api", features = ["real-postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
+[[example]]
+name = "tdw_service_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

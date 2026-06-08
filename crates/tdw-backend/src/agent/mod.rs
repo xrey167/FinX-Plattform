@@ -498,7 +498,7 @@ mod tests {
     fn backend_with_search_tool() -> (std::path::PathBuf, AgentBackend) {
         let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("tdw_backend_agent_{}_{seq}", std::process::id(),));
+            std::env::temp_dir().join(format!("tdw_backend_agent_{}_{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir temp registry dir");
         std::fs::write(dir.join("tool_search.json5"), TOOL_SEARCH_JSON5).expect("write fixture");

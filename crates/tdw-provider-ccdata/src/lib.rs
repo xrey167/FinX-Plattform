@@ -76,7 +76,7 @@ impl CCDataOhlcvQuery {
     ///   `ASSET-CURRENCY` (must contain exactly one `-`, non-empty parts,
     ///   ASCII-alphanumeric characters only in each part).
     pub fn new(market: &str, instrument: &str, limit: u32) -> Result<Self> {
-        let market = normalize_nonempty(market, "market").map_err(|_| CCDataError::EmptyMarket)?;
+        let market = normalize_nonempty(market, "market").map_err(|()| CCDataError::EmptyMarket)?;
         let instrument = validate_instrument(instrument)?;
         Ok(Self {
             market,

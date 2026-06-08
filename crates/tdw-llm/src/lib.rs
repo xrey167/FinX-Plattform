@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod fallback;
+pub mod router;
 pub use fallback::FallbackModel;
+pub use router::{CredentialProbe, ModelFactory, ModelRef, ModelRouter, parse_model_ref};
 
 pub mod reasoning;
 pub use reasoning::{
@@ -33,6 +35,104 @@ pub enum LlmError {
     UnsafeBaseUrl,
     #[error("unsupported provider: {0}")]
     UnsupportedProvider(String),
+    #[error("model ref must be of the form <provider>/<model>")]
+    InvalidModelRef,
+    #[error("no credentials available for provider: {0}")]
+    MissingCredentials(String),
+    #[error("no eligible model: every candidate was unregistered or missing credentials")]
+    NoEligibleModel,
+}
+
+/// Classification of an error's recoverability for retry decisions.
+///
+/// Callers consult this (via [`ClassifyError::retryability`]) to decide
+/// whether a failed LLM request is worth re-attempting. Nothing in this
+/// crate acts on the classification automatically; it is purely advisory
+/// metadata so retry/backoff policy can live in the caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retryability {
+    /// A transient failure (e.g. a transport hiccup or an overload /
+    /// rate-limit response) that is reasonable to retry with backoff.
+    Transient,
+    /// A permanent failure (e.g. a malformed request or auth error) that
+    /// will not succeed on retry without changing the input. This is the
+    /// safe default for anything that cannot be confidently classified.
+    Permanent,
+    /// The request exceeded the model's context/length budget.
+    ///
+    /// Detection is heuristic and provider-wording-dependent: it relies on
+    /// scanning a 4xx error body for context/length markers (see
+    /// [`is_context_overflow_body`]). Unknown or ambiguous bodies are NOT
+    /// classified here; they fall back to [`Retryability::Permanent`]. A
+    /// caller may treat this as recoverable by, for example, trimming the
+    /// prompt before retrying.
+    ContextOverflow,
+}
+
+/// Recoverability classification for an LLM error type.
+///
+/// Implemented for [`LlmError`] in this crate and for the provider HTTP
+/// error types in the `tdw-llm-anthropic` / `tdw-llm-openai-compat`
+/// crates. The implementation is additive: it adds a query method and
+/// changes no existing behavior.
+pub trait ClassifyError {
+    /// Classify this error's recoverability.
+    fn retryability(&self) -> Retryability;
+}
+
+/// HTTP status codes that are treated as transient (worth retrying).
+///
+/// Covers request timeout (408), conflict (409), too-many-requests (429),
+/// and the common 5xx server/gateway failures (500/502/503/504). Shared by
+/// the provider HTTP error impls so the set is defined in exactly one place.
+#[must_use]
+pub fn is_transient_http_status(status: u16) -> bool {
+    matches!(status, 408 | 409 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// Heuristically detect whether a 4xx error body describes a context /
+/// length-budget overflow.
+///
+/// This is a conservative, provider-wording-dependent substring scan: it
+/// reports `true` only when the body mentions `context` together with
+/// either `length` or `token` (case-insensitive). Because provider error
+/// wording varies, any body that does not clearly match is left
+/// unclassified, and callers should fall back to
+/// [`Retryability::Permanent`] for it. Keeping `Permanent` as the fallback
+/// makes a false negative the safe direction.
+#[must_use]
+pub fn is_context_overflow_body(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    body.contains("context") && (body.contains("length") || body.contains("token"))
+}
+
+/// Classify an HTTP failure given its status code and (for 4xx) response
+/// body, using the shared status set and context-overflow heuristic.
+///
+/// Shared by the provider HTTP error impls so the substring scan and the
+/// transient-status set are never duplicated per provider:
+/// - transient statuses (see [`is_transient_http_status`]) ->
+///   [`Retryability::Transient`];
+/// - a 4xx body matching [`is_context_overflow_body`] ->
+///   [`Retryability::ContextOverflow`];
+/// - anything else -> [`Retryability::Permanent`] (the safe default).
+#[must_use]
+pub fn classify_http_status(status: u16, body: &str) -> Retryability {
+    if is_transient_http_status(status) {
+        return Retryability::Transient;
+    }
+    if (400..500).contains(&status) && is_context_overflow_body(body) {
+        return Retryability::ContextOverflow;
+    }
+    Retryability::Permanent
+}
+
+impl ClassifyError for LlmError {
+    /// All current [`LlmError`] variants are local validation failures, so
+    /// they are permanent: retrying without changing the input cannot help.
+    fn retryability(&self) -> Retryability {
+        Retryability::Permanent
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +174,20 @@ pub trait LanguageModel: Send + Sync {
     ///
     /// Returns an error variant if the underlying operation fails.
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse>;
+}
+
+/// Blanket forwarding impl so a boxed [`LanguageModel`] (e.g. an element of a
+/// `Vec<Arc<dyn LanguageModel>>` produced by [`router::ModelRouter::resolve_chain`])
+/// can itself be used wherever a `LanguageModel` is required, such as the
+/// `P`/`S` slots of [`FallbackModel`].
+impl LanguageModel for std::sync::Arc<dyn LanguageModel> {
+    fn model_id(&self) -> &str {
+        (**self).model_id()
+    }
+
+    fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {
+        (**self).complete(request)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,5 +344,66 @@ mod tests {
         assert!(validate_model_id("bad\nmodel").is_err());
         assert!(validate_base_url("https://api.example.com/v1").is_ok());
         assert!(validate_base_url("https://api.example.com/v1 token").is_err());
+    }
+
+    #[test]
+    fn llm_error_variants_are_permanent() {
+        assert_eq!(
+            LlmError::EmptyMessages.retryability(),
+            Retryability::Permanent
+        );
+        assert_eq!(
+            LlmError::UnsupportedProvider("bogus".to_string()).retryability(),
+            Retryability::Permanent
+        );
+    }
+
+    #[test]
+    fn transient_status_set_matches_expected_codes() {
+        for status in [408, 409, 429, 500, 502, 503, 504] {
+            assert!(
+                is_transient_http_status(status),
+                "{status} should be transient"
+            );
+        }
+        for status in [400, 401, 403, 404, 422, 200] {
+            assert!(
+                !is_transient_http_status(status),
+                "{status} should not be transient"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_http_status_maps_429_to_transient() {
+        assert_eq!(classify_http_status(429, ""), Retryability::Transient);
+    }
+
+    #[test]
+    fn classify_http_status_maps_400_to_permanent() {
+        assert_eq!(
+            classify_http_status(400, "bad request"),
+            Retryability::Permanent
+        );
+    }
+
+    #[test]
+    fn classify_http_status_detects_context_overflow_body() {
+        // Synthetic provider-style body mixing case and wording.
+        let body = r#"{"error":{"message":"This model's maximum CONTEXT length is 8192 tokens"}}"#;
+        assert!(is_context_overflow_body(body));
+        assert_eq!(
+            classify_http_status(400, body),
+            Retryability::ContextOverflow
+        );
+    }
+
+    #[test]
+    fn ambiguous_4xx_body_falls_back_to_permanent() {
+        assert!(!is_context_overflow_body("unauthorized"));
+        assert_eq!(
+            classify_http_status(400, "unauthorized"),
+            Retryability::Permanent
+        );
     }
 }

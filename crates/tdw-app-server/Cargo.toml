@@ -43,5 +43,9 @@ tdw-event = { path = "../tdw-event" }
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
 
+[[example]]
+name = "tdw_app_server_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

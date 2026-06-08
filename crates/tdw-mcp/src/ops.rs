@@ -105,18 +105,17 @@ impl McpReadiness {
                 "ready: no daemon dependency (offline tools)\n".to_string(),
             );
         };
-        match addr.to_socket_addr() {
-            Some(socket_addr) => {
-                match TcpStream::connect_timeout(&socket_addr, Duration::from_millis(500)) {
-                    Ok(_) => (true, format!("ready: daemon reachable at {addr}\n")),
-                    Err(error) => (
-                        false,
-                        format!("not ready: daemon unreachable at {addr}: {error}\n"),
-                    ),
-                }
-            }
-            None => (false, format!("not ready: invalid daemon address {addr}\n")),
-        }
+        addr.to_socket_addr().map_or_else(
+            || (false, format!("not ready: invalid daemon address {addr}\n")),
+            |socket_addr| match TcpStream::connect_timeout(&socket_addr, Duration::from_millis(500))
+            {
+                Ok(_) => (true, format!("ready: daemon reachable at {addr}\n")),
+                Err(error) => (
+                    false,
+                    format!("not ready: daemon unreachable at {addr}: {error}\n"),
+                ),
+            },
+        )
     }
 }
 

@@ -213,4 +213,66 @@ mod tests {
             Err(RuleError::Tag(_))
         ));
     }
+
+    #[test]
+    fn json_path_equals_predicate_validates_and_matches_on_exact_label() {
+        let mut engine = RuleEngine::default();
+
+        // Validation: path must start with "$."
+        assert_eq!(
+            engine.hot_reload(vec![TagRule {
+                rule_id: "bad-path".to_string(),
+                tag_id: "asset:equity".to_string(),
+                predicate: RulePredicate::JsonPathEquals {
+                    path: "asset".to_string(),
+                    value: "equity".to_string(),
+                },
+            }]),
+            Err(RuleError::InvalidRule("json_path"))
+        );
+        // Validation: value must be non-empty.
+        assert_eq!(
+            engine.hot_reload(vec![TagRule {
+                rule_id: "empty-value".to_string(),
+                tag_id: "asset:equity".to_string(),
+                predicate: RulePredicate::JsonPathEquals {
+                    path: "$.asset".to_string(),
+                    value: "   ".to_string(),
+                },
+            }]),
+            Err(RuleError::InvalidRule("value"))
+        );
+
+        // Apply: JsonPathEquals matches only when the whole label equals `value`.
+        let mut tags = TagStore::default();
+        tags.define(TagDefinition {
+            tag_id: "asset:equity".to_string(),
+            parent: None,
+            ttl_days: None,
+        })
+        .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        engine
+            .hot_reload(vec![TagRule {
+                rule_id: "equity-exact".to_string(),
+                tag_id: "asset:equity".to_string(),
+                predicate: RulePredicate::JsonPathEquals {
+                    path: "$.asset_class".to_string(),
+                    value: "equity".to_string(),
+                },
+            }])
+            .unwrap_or_else(|error| panic!("rule should reload: {error}"));
+
+        let matched = engine
+            .apply("instrument:1", "equity", &mut tags)
+            .unwrap_or_else(|error| panic!("apply should succeed: {error}"));
+        assert_eq!(matched.len(), 1, "exact label equals value -> assigned");
+
+        let unmatched = engine
+            .apply("instrument:2", "equity-ish", &mut tags)
+            .unwrap_or_else(|error| panic!("apply should succeed: {error}"));
+        assert!(
+            unmatched.is_empty(),
+            "superstring must not match (equality, not contains)"
+        );
+    }
 }

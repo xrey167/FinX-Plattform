@@ -7,11 +7,13 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 serde_json = { workspace = true }
-tdw-config = { workspace = true }
 tdw-protocol = { workspace = true }
-tdw-service-api = { path = "../tdw-service-api" }
 tdw-test-utils = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[[example]]
+name = "tdw_cli_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

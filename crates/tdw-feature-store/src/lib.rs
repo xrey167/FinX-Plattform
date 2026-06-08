@@ -164,4 +164,34 @@ mod tests {
             Err(FeatureError::NonFiniteFeatureValue)
         );
     }
+
+    #[test]
+    fn validate_rejects_bad_entity_date_and_feature_name() {
+        let mut feature = BTreeMap::new();
+        feature.insert("return_1d".to_string(), 0.01);
+
+        // Entity id with a space is invalid.
+        assert_eq!(
+            validate_feature_request("bad id", "2026-05-21", &feature),
+            Err(FeatureError::InvalidEntityId)
+        );
+        // as_of must be a 10-char YYYY-MM-DD with '-' separators.
+        assert_eq!(
+            validate_feature_request("instrument:AAPL", "2026/05/21", &feature),
+            Err(FeatureError::InvalidAsOf)
+        );
+        // Feature names allow only [alnum_-]; a '.' is rejected.
+        let mut dotted = BTreeMap::new();
+        dotted.insert("return.1d".to_string(), 0.01);
+        assert_eq!(
+            validate_feature_request("instrument:AAPL", "2026-05-21", &dotted),
+            Err(FeatureError::InvalidFeatureName)
+        );
+
+        // A clean request validates.
+        assert_eq!(
+            validate_feature_request("instrument:AAPL", "2026-05-21", &feature),
+            Ok(())
+        );
+    }
 }

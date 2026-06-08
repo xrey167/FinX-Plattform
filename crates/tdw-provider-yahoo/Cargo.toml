@@ -40,5 +40,10 @@ name = "http_fetcher"
 path = "tests/http_fetcher.rs"
 required-features = ["http"]
 
+[[example]]
+name = "yahoo_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
+

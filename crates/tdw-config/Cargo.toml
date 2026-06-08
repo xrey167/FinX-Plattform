@@ -19,5 +19,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
+[[example]]
+name = "tdw_config_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

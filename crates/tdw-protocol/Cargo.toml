@@ -20,5 +20,9 @@ thiserror = { workspace = true }
 ulid = { workspace = true }
 uuid = { workspace = true }
 
+[[example]]
+name = "tdw_protocol_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

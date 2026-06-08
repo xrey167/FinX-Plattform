@@ -1,5 +1,5 @@
 //! Offline migration-catalog round-trip: enumerate the embedded Postgres and
-//! ClickHouse migrations and validate them. No network, no docker — the catalog
+//! `ClickHouse` migrations and validate them. No network, no docker — the catalog
 //! is baked into the binary at compile time.
 //!
 //! Run with: `cargo run -p tdw-migration --example tdw-migration-basic`
