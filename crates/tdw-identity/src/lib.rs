@@ -281,6 +281,23 @@ pub struct NewUser {
 // the plaintext password field.
 
 // ---------------------------------------------------------------------------
+// Dormant-projection defaults
+// ---------------------------------------------------------------------------
+
+/// Default dormancy window: a user inactive for **30 days** is considered
+/// dormant.  Convenience default for callers of
+/// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
+/// `dormant_before_ms` cutoff (typically `now_ms - DEFAULT_DORMANT_AFTER_MS`).
+pub const DEFAULT_DORMANT_AFTER_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+
+/// Default re-engagement cooldown: do not re-target a user within **30 days**
+/// of the last re-engagement email.  Convenience default for callers of
+/// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
+/// `reengaged_before_ms` cutoff (typically
+/// `now_ms - DEFAULT_REENGAGEMENT_COOLDOWN_MS`).
+pub const DEFAULT_REENGAGEMENT_COOLDOWN_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+
+// ---------------------------------------------------------------------------
 // UserStore trait
 // ---------------------------------------------------------------------------
 
@@ -344,6 +361,39 @@ pub trait UserStore: Send + Sync {
     /// * [`IdentityError::UserNotFound`] — no user with that `id`.
     /// * [`IdentityError::Store`] — underlying storage failure.
     async fn touch_last_active(&self, id: &str, now_ms: i64) -> Result<()>;
+
+    /// Stamp `last_reengagement_sent_at_ms = now_ms` for the user with `id`.
+    ///
+    /// `updated_at_ms` is bumped to `now_ms` in the same update (mirroring
+    /// [`touch_last_active`](UserStore::touch_last_active)). Called when a
+    /// dormant-user re-engagement email is dispatched so the cooldown window
+    /// in [`find_dormant_users`](UserStore::find_dormant_users) can be honored.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::UserNotFound`] — no user with that `id`.
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn mark_reengagement_sent(&self, id: &str, now_ms: i64) -> Result<()>;
+
+    /// Return users considered dormant and eligible for a re-engagement email:
+    /// `last_active_at_ms` is null OR <= `dormant_before_ms` (inactive long
+    /// enough), AND (`last_reengagement_sent_at_ms` is null OR <=
+    /// `reengaged_before_ms`) (not re-engaged too recently). The caller computes
+    /// the two cutoffs from `now_ms` minus the dormancy / cooldown windows, so
+    /// this store method stays clock-free.
+    ///
+    /// Results are ordered by `last_active_at_ms` ascending (nulls first =
+    /// longest dormant first), capped at `limit` rows.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn find_dormant_users(
+        &self,
+        dormant_before_ms: i64,
+        reengaged_before_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<User>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -507,6 +557,58 @@ impl UserStore for InMemoryUserStore {
             }
             None => Err(IdentityError::UserNotFound),
         }
+    }
+
+    async fn mark_reengagement_sent(&self, id: &str, now_ms: i64) -> Result<()> {
+        let mut records = self
+            .records
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        match records.get_mut(id) {
+            Some(record) => {
+                record.user.last_reengagement_sent_at_ms = Some(now_ms);
+                record.user.updated_at_ms = now_ms;
+                Ok(())
+            }
+            None => Err(IdentityError::UserNotFound),
+        }
+    }
+
+    async fn find_dormant_users(
+        &self,
+        dormant_before_ms: i64,
+        reengaged_before_ms: i64,
+        limit: usize,
+    ) -> Result<Vec<User>> {
+        let records = self
+            .records
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        let mut dormant: Vec<User> = records
+            .values()
+            .filter(|record| {
+                let inactive_long_enough = record
+                    .user
+                    .last_active_at_ms
+                    .is_none_or(|ts| ts <= dormant_before_ms);
+                let not_reengaged_recently = record
+                    .user
+                    .last_reengagement_sent_at_ms
+                    .is_none_or(|ts| ts <= reengaged_before_ms);
+                inactive_long_enough && not_reengaged_recently
+            })
+            .map(|record| record.user.clone())
+            .collect();
+        // Order by last_active_at_ms ascending with nulls first (None sorts
+        // before Some), i.e. longest-dormant first.
+        dormant.sort_by(|a, b| match (a.last_active_at_ms, b.last_active_at_ms) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (Some(left), Some(right)) => left.cmp(&right),
+        });
+        dormant.truncate(limit);
+        Ok(dormant)
     }
 }
 
@@ -1119,6 +1221,58 @@ mod pg {
             } else {
                 Ok(())
             }
+        }
+
+        async fn mark_reengagement_sent(&self, id: &str, now_ms: i64) -> Result<()> {
+            let result = sqlx::query(
+                r#"
+                update system.identity_users
+                set last_reengagement_sent_at_ms = $1,
+                    updated_at_ms = $1
+                where id = $2
+                "#,
+            )
+            .bind(now_ms)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("mark_reengagement_sent: {error}")))?;
+
+            if result.rows_affected() == 0 {
+                Err(IdentityError::UserNotFound)
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn find_dormant_users(
+            &self,
+            dormant_before_ms: i64,
+            reengaged_before_ms: i64,
+            limit: usize,
+        ) -> Result<Vec<User>> {
+            let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+            let rows = sqlx::query(
+                r#"
+                select id, email, display_name,
+                       last_active_at_ms, last_reengagement_sent_at_ms,
+                       created_at_ms, updated_at_ms
+                from system.identity_users
+                where (last_active_at_ms is null or last_active_at_ms <= $1)
+                  and (last_reengagement_sent_at_ms is null
+                       or last_reengagement_sent_at_ms <= $2)
+                order by last_active_at_ms asc nulls first
+                limit $3
+                "#,
+            )
+            .bind(dormant_before_ms)
+            .bind(reengaged_before_ms)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("find_dormant_users: {error}")))?;
+
+            Ok(rows.iter().map(row_to_user).collect())
         }
     }
 
@@ -1789,6 +1943,160 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // InMemoryUserStore — mark_reengagement_sent
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn mark_reengagement_sent_updates_field() {
+        let s = store();
+        s.register(
+            new_user("nora@example.com", "mypassword5"),
+            "uid47".to_string(),
+            NOW_MS,
+        )
+        .await
+        .expect("register");
+
+        let new_ts = NOW_MS + 20_000;
+        s.mark_reengagement_sent("uid47", new_ts)
+            .await
+            .expect("mark");
+
+        let user = s.get_by_id("uid47").await.expect("get");
+        assert_eq!(user.last_reengagement_sent_at_ms, Some(new_ts));
+        assert_eq!(user.updated_at_ms, new_ts);
+        // last_active_at_ms must be untouched.
+        assert!(user.last_active_at_ms.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_reengagement_sent_not_found() {
+        let s = store();
+        let result = s.mark_reengagement_sent("ghost", NOW_MS).await;
+        assert!(matches!(result, Err(IdentityError::UserNotFound)));
+    }
+
+    // -----------------------------------------------------------------------
+    // InMemoryUserStore — find_dormant_users
+    // -----------------------------------------------------------------------
+
+    /// Seed a user and stamp its activity / re-engagement timestamps directly.
+    async fn seed_user(
+        s: &InMemoryUserStore,
+        id: &str,
+        last_active_at_ms: Option<i64>,
+        last_reengagement_sent_at_ms: Option<i64>,
+    ) {
+        s.register(
+            new_user(&format!("{id}@example.com"), "seedpassword"),
+            id.to_string(),
+            NOW_MS,
+        )
+        .await
+        .expect("seed register");
+        if let Some(ts) = last_active_at_ms {
+            s.touch_last_active(id, ts).await.expect("seed active");
+        }
+        if let Some(ts) = last_reengagement_sent_at_ms {
+            s.mark_reengagement_sent(id, ts).await.expect("seed reeng");
+        }
+    }
+
+    #[tokio::test]
+    async fn find_dormant_users_filters_orders_and_caps() {
+        let s = store();
+        // Cutoffs: dormant if last_active <= DORMANT_CUTOFF; eligible if
+        // last_reengagement is null or <= REENGAGED_CUTOFF.
+        const DORMANT_CUTOFF: i64 = NOW_MS;
+        const REENGAGED_CUTOFF: i64 = NOW_MS;
+
+        // never_active: last_active None, never re-engaged -> dormant, sorts first.
+        seed_user(&s, "never_active", None, None).await;
+        // long_dormant: very old activity -> dormant, sorts after nulls, oldest first.
+        seed_user(&s, "long_dormant", Some(NOW_MS - 100_000), None).await;
+        // mid_dormant: older but newer than long_dormant.
+        seed_user(&s, "mid_dormant", Some(NOW_MS - 10_000), None).await;
+        // boundary_dormant: exactly at the cutoff (<= is inclusive) -> dormant.
+        seed_user(&s, "boundary_dormant", Some(DORMANT_CUTOFF), None).await;
+        // recently_active: active after the cutoff -> excluded.
+        seed_user(&s, "recently_active", Some(NOW_MS + 100_000), None).await;
+        // recently_reengaged: dormant but re-engaged after the cooldown cutoff
+        // -> excluded.
+        seed_user(
+            &s,
+            "recently_reengaged",
+            Some(NOW_MS - 50_000),
+            Some(NOW_MS + 100_000),
+        )
+        .await;
+        // old_reengaged: dormant and last re-engaged before the cutoff
+        // (inclusive) -> eligible again.
+        seed_user(
+            &s,
+            "old_reengaged",
+            Some(NOW_MS - 5_000),
+            Some(REENGAGED_CUTOFF),
+        )
+        .await;
+
+        // Pull the full eligible set first (large limit).
+        let all = s
+            .find_dormant_users(DORMANT_CUTOFF, REENGAGED_CUTOFF, 100)
+            .await
+            .expect("find");
+        let ids: Vec<&str> = all.iter().map(|u| u.id.as_str()).collect();
+
+        // Excluded users must not appear.
+        assert!(!ids.contains(&"recently_active"));
+        assert!(!ids.contains(&"recently_reengaged"));
+
+        // Eligible users present.
+        assert!(ids.contains(&"never_active"));
+        assert!(ids.contains(&"long_dormant"));
+        assert!(ids.contains(&"mid_dormant"));
+        assert!(ids.contains(&"boundary_dormant"));
+        assert!(ids.contains(&"old_reengaged"));
+        assert_eq!(ids.len(), 5, "exactly 5 eligible users: {ids:?}");
+
+        // Ordering: null-active first, then ascending last_active.
+        assert_eq!(ids[0], "never_active", "nulls sort first: {ids:?}");
+        // Remaining are ascending by last_active_at_ms.
+        let actives: Vec<i64> = all
+            .iter()
+            .skip(1)
+            .map(|u| u.last_active_at_ms.expect("non-null after nulls"))
+            .collect();
+        let mut sorted = actives.clone();
+        sorted.sort_unstable();
+        assert_eq!(actives, sorted, "ascending by last_active: {actives:?}");
+
+        // limit caps the result count.
+        let capped = s
+            .find_dormant_users(DORMANT_CUTOFF, REENGAGED_CUTOFF, 2)
+            .await
+            .expect("find capped");
+        assert_eq!(capped.len(), 2, "limit must cap results");
+        // The capped set keeps the longest-dormant rows (null first).
+        assert_eq!(capped[0].id, "never_active");
+    }
+
+    #[tokio::test]
+    async fn find_dormant_users_empty_store_returns_empty() {
+        let s = store();
+        let result = s
+            .find_dormant_users(NOW_MS, NOW_MS, 10)
+            .await
+            .expect("find");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn default_dormant_and_cooldown_are_thirty_days() {
+        assert_eq!(DEFAULT_DORMANT_AFTER_MS, 30 * 24 * 60 * 60 * 1_000);
+        assert_eq!(DEFAULT_REENGAGEMENT_COOLDOWN_MS, 30 * 24 * 60 * 60 * 1_000);
+    }
+
+    // -----------------------------------------------------------------------
     // Serde: User JSON round-trip and no hash field
     // -----------------------------------------------------------------------
 
@@ -2365,6 +2673,107 @@ mod tests {
                 .expect("revoke_all");
             let result = store.consume(&token, NOW_MS + 1).await;
             assert!(matches!(result, Err(IdentityError::ResetTokenNotFound)));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PgUserStore dormant-projection integration tests
+    // (gated on TDW_POSTGRES_TEST_URL; no-op when unset).
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "postgres")]
+    mod pg_dormant {
+        use super::*;
+
+        fn pg_url() -> Option<String> {
+            std::env::var("TDW_POSTGRES_TEST_URL").ok()
+        }
+
+        async fn register_pg(store: &PgUserStore, id: &str) {
+            store
+                .register(
+                    new_user(&format!("{id}@example.com"), "securepass1"),
+                    id.to_string(),
+                    NOW_MS,
+                )
+                .await
+                .expect("register");
+        }
+
+        /// 1. mark_reengagement_sent stamps the field on Postgres.
+        #[tokio::test]
+        async fn pg_mark_reengagement_sent_updates_field() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgUserStore::connect(&url).await.expect("connect");
+            let id = "pg-dormant-mark";
+            register_pg(&store, id).await;
+
+            let ts = NOW_MS + 20_000;
+            store.mark_reengagement_sent(id, ts).await.expect("mark");
+
+            let user = store.get_by_id(id).await.expect("get");
+            assert_eq!(user.last_reengagement_sent_at_ms, Some(ts));
+            assert_eq!(user.updated_at_ms, ts);
+        }
+
+        /// 2. mark_reengagement_sent on an unknown id returns UserNotFound.
+        #[tokio::test]
+        async fn pg_mark_reengagement_sent_not_found() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgUserStore::connect(&url).await.expect("connect");
+            let result = store
+                .mark_reengagement_sent("pg-dormant-ghost", NOW_MS)
+                .await;
+            assert!(matches!(result, Err(IdentityError::UserNotFound)));
+        }
+
+        /// 3. find_dormant_users filters, orders, and caps on Postgres.
+        #[tokio::test]
+        async fn pg_find_dormant_users_filters_orders_and_caps() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgUserStore::connect(&url).await.expect("connect");
+
+            // Use a unique prefix so this test is isolated from other rows.
+            let never = "pg-dormant-never";
+            let long = "pg-dormant-long";
+            let recent = "pg-dormant-recent";
+            register_pg(&store, never).await;
+            register_pg(&store, long).await;
+            register_pg(&store, recent).await;
+
+            // never: no activity -> dormant.
+            // long: old activity -> dormant.
+            store
+                .touch_last_active(long, NOW_MS - 100_000)
+                .await
+                .expect("long active");
+            // recent: active after cutoff -> excluded.
+            store
+                .touch_last_active(recent, NOW_MS + 100_000)
+                .await
+                .expect("recent active");
+
+            let rows = store
+                .find_dormant_users(NOW_MS, NOW_MS, 100)
+                .await
+                .expect("find");
+            let ids: Vec<&str> = rows.iter().map(|u| u.id.as_str()).collect();
+
+            assert!(ids.contains(&never), "never present: {ids:?}");
+            assert!(ids.contains(&long), "long present: {ids:?}");
+            assert!(!ids.contains(&recent), "recent excluded: {ids:?}");
+
+            // null-active rows sort before any non-null one; `never` precedes
+            // `long` in the projection.
+            let never_pos = ids.iter().position(|id| *id == never).expect("never pos");
+            let long_pos = ids.iter().position(|id| *id == long).expect("long pos");
+            assert!(never_pos < long_pos, "nulls first: {ids:?}");
         }
     }
 }
