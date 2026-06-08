@@ -473,4 +473,57 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn catalog_validation_covers_each_boundary_error() {
+        let base = Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260101_0001",
+            name: "ok",
+            sql: "create table x ();",
+        };
+
+        assert_eq!(
+            validate_migration_catalog(&[Migration {
+                version: "  ",
+                ..base
+            }]),
+            Err(MigrationCatalogError::EmptyVersion {
+                target: MigrationTarget::Postgres
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration { name: " ", ..base }]),
+            Err(MigrationCatalogError::EmptyName {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration { sql: "   ", ..base }]),
+            Err(MigrationCatalogError::EmptySql {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration {
+                sql: "insert into x values (1);",
+                ..base
+            }]),
+            Err(MigrationCatalogError::NonCreateSql {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+
+        // A leading `--` comment block is stripped before the `create` check.
+        assert!(
+            validate_migration_catalog(&[Migration {
+                sql: "-- header comment\n-- more\ncreate table x ();",
+                ..base
+            }])
+            .is_ok()
+        );
+    }
 }
