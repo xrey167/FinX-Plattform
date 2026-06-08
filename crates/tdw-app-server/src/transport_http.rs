@@ -8,12 +8,20 @@
 
 #![cfg(feature = "transport-http")]
 
+use std::sync::Arc;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
 const MAX_HEADER_BYTES: usize = 8 * 1024;
+
+/// Upper bound on concurrently-handled HTTP connections. Each accepted
+/// connection holds a permit for its lifetime; once this many are live, further
+/// connections are rejected (closed immediately) instead of spawning unbounded
+/// handler tasks — a connection-exhaustion DoS guard (TT1).
+const MAX_CONCURRENT_CONNECTIONS: usize = 256;
 
 /// Spawn an HTTP/1.1 listener on `listener` that:
 /// - `POST /op`     → deserialise body as `OpEnvelope`, submit, respond 202.
@@ -53,16 +61,25 @@ pub async fn serve_http(
         }
     });
 
+    let conn_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+
     loop {
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
             accept = listener.accept() => {
                 let (stream, _peer) = accept?;
+                // Reject (close) the connection when at capacity rather than
+                // spawning an unbounded task. The permit is held by the handler
+                // for the connection's lifetime and released when it ends.
+                let Ok(permit) = Arc::clone(&conn_limit).try_acquire_owned() else {
+                    drop(stream);
+                    continue;
+                };
                 let conn_handle = handle.clone();
                 let subscriber = tx.subscribe();
                 let cancel_conn = cancel.clone();
-                tokio::spawn(handle_http_conn(stream, conn_handle, subscriber, cancel_conn));
+                tokio::spawn(handle_http_conn(stream, conn_handle, subscriber, cancel_conn, permit));
             }
         }
     }
@@ -76,6 +93,9 @@ async fn handle_http_conn(
     handle: crate::SubmissionHandle,
     mut subscriber: broadcast::Receiver<String>,
     cancel: CancellationToken,
+    // Held for the connection's lifetime; dropping it frees a slot in the
+    // connection cap (TT1). Not otherwise used.
+    _permit: OwnedSemaphorePermit,
 ) {
     // Read request headers into a buffer (up to MAX_HEADER_BYTES).
     let mut header_buf = vec![0u8; MAX_HEADER_BYTES];
