@@ -234,3 +234,45 @@ impl JobHandler for FunctionJobHandler {
         result.map(|_| ()).map_err(|e: FunctionError| e.to_string())
     }
 }
+
+// ---------------------------------------------------------------------------
+// RoutingJobHandler
+// ---------------------------------------------------------------------------
+
+/// Routes worker jobs: a decodable [`FunctionJob`] is executed via
+/// [`FunctionJobHandler`]; every other job is delegated to the inner handler.
+///
+/// Lets one serve loop run BOTH function jobs and the existing job types: a
+/// job whose envelope decodes as a [`FunctionJob`] (a `tdw.functions`
+/// [`Op::ToolCall`]) is dispatched to the registry, while any other job is
+/// forwarded unchanged to `inner`.  The [`FunctionJob`] check is
+/// non-destructive — [`extract_function_job`] borrows the job and clones the
+/// envelope arguments, so the same `&WorkerJob` is handed to whichever handler
+/// runs it.
+pub struct RoutingJobHandler<H> {
+    function_handler: FunctionJobHandler,
+    inner: H,
+}
+
+impl<H> RoutingJobHandler<H> {
+    /// Create a router backed by `registry` for function jobs and `inner` for
+    /// everything else.
+    #[must_use]
+    pub const fn new(registry: Arc<FunctionRegistry>, inner: H) -> Self {
+        Self {
+            function_handler: FunctionJobHandler::new(registry),
+            inner,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<H: JobHandler> JobHandler for RoutingJobHandler<H> {
+    async fn handle(&self, job: &WorkerJob) -> Result<(), String> {
+        if extract_function_job(job).is_ok() {
+            self.function_handler.handle(job).await
+        } else {
+            self.inner.handle(job).await
+        }
+    }
+}
