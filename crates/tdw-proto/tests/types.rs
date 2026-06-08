@@ -4,6 +4,11 @@
 //! asserts field preservation.  Empty-message behaviour is also checked because
 //! proto3 encoding elides default-valued fields.
 
+// Round-trip tests assert that float fields survive encode->decode EXACTLY.
+// Exact comparison is intentional: approximation would mask lossy-codec bugs,
+// which is exactly what these characterization tests exist to catch.
+#![allow(clippy::float_cmp)]
+
 use prost::Message;
 use tdw_proto::{
     MarketDataEnvelope, OhlcvBar, OrderBookSnapshot, Payload, PriceLevel, Tick, TradeSide,

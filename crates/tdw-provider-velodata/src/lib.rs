@@ -337,6 +337,7 @@ pub fn oi_query_from_value(params: &Value) -> std::result::Result<VelodataOiQuer
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // exact-value parse assertions; deterministic parser, exact comparison intended
 mod tests {
     use super::*;
 
