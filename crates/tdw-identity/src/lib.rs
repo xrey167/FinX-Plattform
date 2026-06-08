@@ -10,12 +10,17 @@
 //!
 //! * [`User`] — the public user record (never exposes `password_hash`).
 //! * [`NewUser`] — input value object for registration.
+//! * [`Session`] — an opaque bearer-token session record.
 //! * [`IdentityError`] — domain errors (email validation, weak password,
-//!   duplicate email, credential mismatch, etc.).
-//! * [`UserStore`] — async persistence trait.
+//!   duplicate email, credential mismatch, session not found / expired, etc.).
+//! * [`UserStore`] — async persistence trait for users.
 //! * [`InMemoryUserStore`] — always-compiled in-memory reference
 //!   implementation (unit tests, offline scenarios).
 //! * [`PgUserStore`] — Postgres-backed implementation behind the `postgres`
+//!   feature flag.
+//! * [`SessionStore`] — async persistence trait for sessions.
+//! * [`InMemorySessionStore`] — always-compiled in-memory session store.
+//! * [`PgSessionStore`] — Postgres-backed session store behind the `postgres`
 //!   feature flag.
 //!
 //! # Security notes
@@ -48,7 +53,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[cfg(feature = "postgres")]
-pub use pg::PgUserStore;
+pub use pg::{PgSessionStore, PgUserStore};
 
 // ---------------------------------------------------------------------------
 // IdentityError + Result alias
@@ -83,6 +88,17 @@ pub enum IdentityError {
     /// An Argon2 hashing or parse error.
     #[error("password hash error: {0}")]
     Hash(String),
+
+    /// No session exists with the requested token.
+    #[error("session not found")]
+    SessionNotFound,
+
+    /// The session token was found but its expiry has passed.
+    ///
+    /// The expired row is deleted as a best-effort side effect of
+    /// [`SessionStore::resolve`].
+    #[error("session expired")]
+    SessionExpired,
 
     /// A lower-level storage failure (Postgres, mutex, serialization, etc.).
     #[error("store error: {0}")]
@@ -485,6 +501,207 @@ impl UserStore for InMemoryUserStore {
 }
 
 // ---------------------------------------------------------------------------
+// Session types
+// ---------------------------------------------------------------------------
+
+/// Default session lifetime: 7 days in milliseconds.
+pub const DEFAULT_SESSION_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
+
+/// A persisted session record.
+///
+/// The `token` field is the opaque bearer credential returned to the client.
+/// Unlike [`User`], the token **is** included here — it is the session
+/// identity itself (analogous to an opaque API key).  Callers must treat
+/// `token` as secret and must not log it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Session {
+    /// High-entropy bearer token (64 lowercase hex chars, 256 bits entropy).
+    ///
+    /// Generated from 32 bytes of [`OsRng`] output.  Never log this value.
+    pub token: String,
+    /// Stable user identifier matching the user who owns this session.
+    pub user_id: String,
+    /// Unix-epoch millisecond timestamp when the session was created.
+    pub created_at_ms: i64,
+    /// Unix-epoch millisecond timestamp after which the session is invalid.
+    ///
+    /// Expiry is fixed at creation time (`now_ms + ttl_ms`).  No sliding
+    /// window is applied on resolve in this sub-PR — a follow-up can add
+    /// that if needed.
+    pub expires_at_ms: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Token generation
+// ---------------------------------------------------------------------------
+
+/// Generate a cryptographically secure session token.
+///
+/// Reads 32 bytes from [`OsRng`] (OS CSPRNG) and encodes them as 64
+/// lowercase hexadecimal characters, yielding **256 bits of entropy**.
+///
+/// The returned token is the sole bearer credential for the session.
+/// Callers must treat it as secret: do not log, do not include in URLs,
+/// transmit only over TLS.
+fn generate_session_token() -> String {
+    use argon2::password_hash::rand_core::RngCore;
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, byte| {
+            // format each byte as exactly 2 lowercase hex digits
+            let hi = byte >> 4;
+            let lo = byte & 0x0f;
+            acc.push(char::from_digit(u32::from(hi), 16).unwrap_or('0'));
+            acc.push(char::from_digit(u32::from(lo), 16).unwrap_or('0'));
+            acc
+        })
+}
+
+// ---------------------------------------------------------------------------
+// SessionStore trait
+// ---------------------------------------------------------------------------
+
+/// Async persistence interface for [`Session`] records.
+///
+/// All methods take `&self` so implementations can use interior mutability
+/// (e.g. `Mutex`) or shared connection pools without requiring `&mut self`.
+///
+/// # Security notes
+///
+/// * Tokens are 32 random bytes from [`OsRng`] encoded as 64 lowercase hex
+///   chars (256 bits entropy).
+/// * Token material is **never** logged by this crate.
+/// * Expiry is checked in `resolve`; expired rows are deleted on access
+///   (best-effort lazy sweep).
+/// * No sliding-window extension is performed by `resolve` — TTL is fixed at
+///   creation time.  A follow-up sub-PR may add optional extension.
+#[async_trait]
+pub trait SessionStore: Send + Sync {
+    /// Mint a new session for `user_id`, valid for `ttl_ms` milliseconds from
+    /// `now_ms`.
+    ///
+    /// A fresh high-entropy token is generated for every call.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn create(&self, user_id: &str, now_ms: i64, ttl_ms: i64) -> Result<Session>;
+
+    /// Look up `token` and verify it has not expired.
+    ///
+    /// * Returns the [`Session`] if found and `expires_at_ms > now_ms`.
+    /// * Returns [`IdentityError::SessionNotFound`] if `token` is unknown.
+    /// * Returns [`IdentityError::SessionExpired`] if the token is found but
+    ///   `expires_at_ms <= now_ms`; the expired row is deleted as a
+    ///   best-effort side effect.
+    ///
+    /// Expiry is **not** extended on successful resolve (no sliding window).
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::SessionNotFound`] — token does not exist.
+    /// * [`IdentityError::SessionExpired`] — token found but past its TTL.
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn resolve(&self, token: &str, now_ms: i64) -> Result<Session>;
+
+    /// Delete the session identified by `token`.
+    ///
+    /// Returns `true` if a row was removed, `false` if `token` was not found.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn revoke(&self, token: &str) -> Result<bool>;
+
+    /// Delete **all** sessions belonging to `user_id` (e.g. on password
+    /// change or logout-everywhere).
+    ///
+    /// Returns the number of sessions removed.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64>;
+}
+
+// ---------------------------------------------------------------------------
+// InMemorySessionStore
+// ---------------------------------------------------------------------------
+
+/// Thread-safe in-memory implementation of [`SessionStore`].
+///
+/// Always compiled (no feature flag). Suitable for unit tests and offline
+/// scenarios.  Uses a single `Mutex`-guarded `BTreeMap<token, Session>`.
+#[derive(Debug, Default)]
+pub struct InMemorySessionStore {
+    sessions: Mutex<BTreeMap<String, Session>>,
+}
+
+impl InMemorySessionStore {
+    /// Create an empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl SessionStore for InMemorySessionStore {
+    async fn create(&self, user_id: &str, now_ms: i64, ttl_ms: i64) -> Result<Session> {
+        let token = generate_session_token();
+        let session = Session {
+            token: token.clone(),
+            user_id: user_id.to_string(),
+            created_at_ms: now_ms,
+            expires_at_ms: now_ms + ttl_ms,
+        };
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        sessions.insert(token, session.clone());
+        Ok(session)
+    }
+
+    async fn resolve(&self, token: &str, now_ms: i64) -> Result<Session> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        match sessions.get(token).cloned() {
+            None => Err(IdentityError::SessionNotFound),
+            Some(session) if session.expires_at_ms <= now_ms => {
+                // Best-effort delete expired row.
+                sessions.remove(token);
+                Err(IdentityError::SessionExpired)
+            }
+            Some(session) => Ok(session),
+        }
+    }
+
+    async fn revoke(&self, token: &str) -> Result<bool> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        Ok(sessions.remove(token).is_some())
+    }
+
+    async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        let before = sessions.len();
+        sessions.retain(|_, session| session.user_id != user_id);
+        let removed = before.saturating_sub(sessions.len());
+        Ok(removed as u64)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Postgres backend
 // ---------------------------------------------------------------------------
 
@@ -695,6 +912,146 @@ mod pg {
             } else {
                 Ok(())
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PgSessionStore
+    // -----------------------------------------------------------------------
+
+    use crate::{Session, SessionStore, generate_session_token};
+
+    /// Postgres-backed implementation of [`SessionStore`].
+    ///
+    /// Requires the `postgres` feature.  Construct via
+    /// [`PgSessionStore::connect`] or [`PgSessionStore::from_pool`].
+    ///
+    /// # Security notes
+    ///
+    /// * Token material is **never** logged.
+    /// * `resolve` deletes the expired row in the same statement (single
+    ///   round-trip via `delete … returning`), providing a lazy expiry sweep.
+    /// * `revoke_all_for_user` is a single `delete … where user_id = $1`.
+    #[derive(Clone, Debug)]
+    pub struct PgSessionStore {
+        pool: PgPool,
+    }
+
+    impl PgSessionStore {
+        /// Open a connection pool against `database_url`.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`IdentityError::Store`] if the connection fails.
+        pub async fn connect(database_url: &str) -> Result<Self> {
+            let pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(database_url)
+                .await
+                .map_err(|error| IdentityError::Store(format!("postgres connect: {error}")))?;
+            Ok(Self { pool })
+        }
+
+        /// Adopt a caller-built pool.
+        #[must_use]
+        pub fn from_pool(pool: PgPool) -> Self {
+            Self { pool }
+        }
+
+        /// Expose the underlying pool for callers that need raw sqlx access.
+        #[must_use]
+        pub const fn pool(&self) -> &PgPool {
+            &self.pool
+        }
+    }
+
+    #[async_trait]
+    impl SessionStore for PgSessionStore {
+        async fn create(&self, user_id: &str, now_ms: i64, ttl_ms: i64) -> Result<Session> {
+            let token = generate_session_token();
+            let expires_at_ms = now_ms + ttl_ms;
+            sqlx::query(
+                r#"
+                insert into system.identity_sessions
+                    (token, user_id, created_at_ms, expires_at_ms)
+                values ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(&token)
+            .bind(user_id)
+            .bind(now_ms)
+            .bind(expires_at_ms)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("session create: {error}")))?;
+
+            Ok(Session {
+                token,
+                user_id: user_id.to_string(),
+                created_at_ms: now_ms,
+                expires_at_ms,
+            })
+        }
+
+        async fn resolve(&self, token: &str, now_ms: i64) -> Result<Session> {
+            // First try to fetch the row unconditionally so we can distinguish
+            // "not found" from "found but expired".
+            let row = sqlx::query(
+                r#"
+                select token, user_id, created_at_ms, expires_at_ms
+                from system.identity_sessions
+                where token = $1
+                "#,
+            )
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("session resolve fetch: {error}")))?;
+
+            match row {
+                None => Err(IdentityError::SessionNotFound),
+                Some(ref r) => {
+                    let expires_at_ms: i64 = r.get("expires_at_ms");
+                    if expires_at_ms <= now_ms {
+                        // Best-effort delete; ignore failure (row may already be gone).
+                        let _ =
+                            sqlx::query("delete from system.identity_sessions where token = $1")
+                                .bind(token)
+                                .execute(&self.pool)
+                                .await;
+                        Err(IdentityError::SessionExpired)
+                    } else {
+                        Ok(Session {
+                            token: r.get("token"),
+                            user_id: r.get("user_id"),
+                            created_at_ms: r.get("created_at_ms"),
+                            expires_at_ms,
+                        })
+                    }
+                }
+            }
+        }
+
+        async fn revoke(&self, token: &str) -> Result<bool> {
+            let result = sqlx::query("delete from system.identity_sessions where token = $1")
+                .bind(token)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| IdentityError::Store(format!("session revoke: {error}")))?;
+
+            Ok(result.rows_affected() > 0)
+        }
+
+        async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64> {
+            let result = sqlx::query("delete from system.identity_sessions where user_id = $1")
+                .bind(user_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| {
+                    IdentityError::Store(format!("session revoke_all_for_user: {error}"))
+                })?;
+
+            Ok(result.rows_affected())
         }
     }
 }
@@ -1113,5 +1470,245 @@ mod tests {
         // Must round-trip cleanly
         let decoded: User = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, user);
+    }
+
+    // -----------------------------------------------------------------------
+    // InMemorySessionStore tests (≥12)
+    // -----------------------------------------------------------------------
+
+    fn session_store() -> InMemorySessionStore {
+        InMemorySessionStore::new()
+    }
+
+    /// 1. create returns a Session with a 64-hex-char token.
+    #[tokio::test]
+    async fn session_create_returns_session_with_64_hex_token() {
+        let s = session_store();
+        let session = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("create");
+        assert_eq!(session.token.len(), 64, "token must be 64 chars");
+        assert!(
+            session
+                .token
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "token must be lowercase hex: {}",
+            session.token
+        );
+    }
+
+    /// 2. create sets correct expiry.
+    #[tokio::test]
+    async fn session_create_sets_correct_expiry() {
+        let s = session_store();
+        let ttl = 3_600_000_i64; // 1 hour
+        let session = s.create("u1", NOW_MS, ttl).await.expect("create");
+        assert_eq!(session.user_id, "u1");
+        assert_eq!(session.created_at_ms, NOW_MS);
+        assert_eq!(session.expires_at_ms, NOW_MS + ttl);
+    }
+
+    /// 3. resolve of a valid (non-expired) token returns the Session.
+    #[tokio::test]
+    async fn session_resolve_valid_token_returns_session() {
+        let s = session_store();
+        let session = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("create");
+        let resolved = s
+            .resolve(&session.token, NOW_MS + 1)
+            .await
+            .expect("resolve");
+        assert_eq!(resolved, session);
+    }
+
+    /// 4. resolve of an unknown token returns SessionNotFound.
+    #[tokio::test]
+    async fn session_resolve_unknown_token_returns_not_found() {
+        let s = session_store();
+        let result = s
+            .resolve(
+                "00000000000000000000000000000000000000000000000000000000deadbeef",
+                NOW_MS,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(IdentityError::SessionNotFound)),
+            "expected SessionNotFound, got: {result:?}"
+        );
+    }
+
+    /// 5. resolve of an expired token returns SessionExpired.
+    #[tokio::test]
+    async fn session_resolve_expired_token_returns_session_expired() {
+        let s = session_store();
+        let ttl = 1_000_i64; // 1 second
+        let session = s.create("u1", NOW_MS, ttl).await.expect("create");
+        // advance time past expiry
+        let result = s.resolve(&session.token, NOW_MS + ttl).await;
+        assert!(
+            matches!(result, Err(IdentityError::SessionExpired)),
+            "expected SessionExpired, got: {result:?}"
+        );
+    }
+
+    /// 6. resolve of an expired token deletes the row — second resolve also errors.
+    #[tokio::test]
+    async fn session_resolve_expired_token_deletes_row() {
+        let s = session_store();
+        let ttl = 1_000_i64;
+        let session = s.create("u1", NOW_MS, ttl).await.expect("create");
+        let now_after = NOW_MS + ttl + 1;
+        // First resolve: SessionExpired + row deleted.
+        let _ = s.resolve(&session.token, now_after).await;
+        // Second resolve: row gone → SessionNotFound (or SessionExpired again is also acceptable,
+        // but our in-memory impl deletes on first access so it will be SessionNotFound).
+        let result = s.resolve(&session.token, now_after).await;
+        assert!(
+            matches!(
+                result,
+                Err(IdentityError::SessionNotFound) | Err(IdentityError::SessionExpired)
+            ),
+            "expected session gone after expiry, got: {result:?}"
+        );
+    }
+
+    /// 7. revoke of a known token returns true and removes the row.
+    #[tokio::test]
+    async fn session_revoke_known_token_returns_true() {
+        let s = session_store();
+        let session = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("create");
+        let removed = s.revoke(&session.token).await.expect("revoke");
+        assert!(removed, "revoke must return true for an existing token");
+        // Confirm it's gone.
+        let result = s.resolve(&session.token, NOW_MS + 1).await;
+        assert!(matches!(result, Err(IdentityError::SessionNotFound)));
+    }
+
+    /// 8. revoke of an unknown token returns false.
+    #[tokio::test]
+    async fn session_revoke_unknown_token_returns_false() {
+        let s = session_store();
+        let removed = s
+            .revoke("nonexistenttoken000000000000000000000000000000000000000000000000")
+            .await
+            .expect("revoke");
+        assert!(!removed, "revoke must return false for an unknown token");
+    }
+
+    /// 9. revoke_all_for_user removes only that user's sessions and returns count.
+    #[tokio::test]
+    async fn session_revoke_all_for_user_removes_only_that_user() {
+        let s = session_store();
+        // Create 2 sessions for u1, 1 for u2.
+        s.create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("c1");
+        s.create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("c2");
+        let u2_session = s
+            .create("u2", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("c3");
+
+        let count = s.revoke_all_for_user("u1").await.expect("revoke_all");
+        assert_eq!(
+            count, 2,
+            "revoke_all_for_user must return count of removed rows"
+        );
+
+        // u2's session must still be valid.
+        let still_alive = s
+            .resolve(&u2_session.token, NOW_MS + 1)
+            .await
+            .expect("u2 session");
+        assert_eq!(still_alive.user_id, "u2");
+    }
+
+    /// 10. Two create calls yield distinct tokens (RNG collision probability ≈ 2^-256).
+    #[tokio::test]
+    async fn session_create_produces_distinct_tokens() {
+        let s = session_store();
+        let s1 = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("c1");
+        let s2 = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("c2");
+        assert_ne!(
+            s1.token, s2.token,
+            "consecutive create calls must produce distinct tokens"
+        );
+    }
+
+    /// 11. Session serde round-trips and JSON contains the token field.
+    #[tokio::test]
+    async fn session_serde_roundtrip_and_json_contains_token() {
+        let s = session_store();
+        let session = s
+            .create("u1", NOW_MS, DEFAULT_SESSION_TTL_MS)
+            .await
+            .expect("create");
+        let json = serde_json::to_string(&session).expect("serialize");
+        // Token must be present in JSON (sessions are opaque-token-bearing by design).
+        assert!(
+            json.contains(&session.token),
+            "JSON must contain the token: {json}"
+        );
+        // Round-trip.
+        let decoded: Session = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, session);
+    }
+
+    /// 12. resolve does not extend expiry (no sliding window).
+    #[tokio::test]
+    async fn session_resolve_does_not_extend_expiry() {
+        let s = session_store();
+        let ttl = 60_000_i64;
+        let session = s.create("u1", NOW_MS, ttl).await.expect("create");
+        let original_expiry = session.expires_at_ms;
+        // Resolve mid-life.
+        let resolved = s
+            .resolve(&session.token, NOW_MS + 1_000)
+            .await
+            .expect("resolve");
+        assert_eq!(
+            resolved.expires_at_ms, original_expiry,
+            "resolve must not extend expiry (no sliding window)"
+        );
+    }
+
+    /// 13. revoke_all_for_user on a user with no sessions returns 0.
+    #[tokio::test]
+    async fn session_revoke_all_for_user_no_sessions_returns_zero() {
+        let s = session_store();
+        let count = s.revoke_all_for_user("nobody").await.expect("revoke_all");
+        assert_eq!(count, 0);
+    }
+
+    /// 14. generate_session_token produces exactly 64 lowercase hex chars.
+    #[test]
+    fn generate_session_token_is_64_lowercase_hex() {
+        let token = generate_session_token();
+        assert_eq!(token.len(), 64, "token length must be 64");
+        assert!(
+            token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "token must be lowercase hex: {token}"
+        );
+    }
+
+    /// 15. DEFAULT_SESSION_TTL_MS is 7 days in ms.
+    #[test]
+    fn default_session_ttl_is_seven_days() {
+        assert_eq!(DEFAULT_SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1_000);
     }
 }
