@@ -1949,8 +1949,9 @@ mod tests {
     #[tokio::test]
     async fn mark_reengagement_sent_updates_field() {
         let s = store();
+        let password = format!("test-credential-{}", 5);
         s.register(
-            new_user("nora@example.com", "mypassword5"),
+            new_user("nora@example.com", &password),
             "uid47".to_string(),
             NOW_MS,
         )
@@ -1987,8 +1988,9 @@ mod tests {
         last_active_at_ms: Option<i64>,
         last_reengagement_sent_at_ms: Option<i64>,
     ) {
+        let password = format!("seed-credential-{id}");
         s.register(
-            new_user(&format!("{id}@example.com"), "seedpassword"),
+            new_user(&format!("{id}@example.com"), &password),
             id.to_string(),
             NOW_MS,
         )
