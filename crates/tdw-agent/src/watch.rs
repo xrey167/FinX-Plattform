@@ -92,8 +92,8 @@ mod tests {
     fn watcher_starts_on_a_sourced_registry() {
         // Event delivery is async and platform-specific, so it is not asserted here; this
         // confirms the watcher constructs and attaches to a real source directory.
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/registry");
-        let registry = Arc::new(Mutex::new(Registry::load_dir(&dir).expect("load")));
+        let dir = Path::new("tests/registry");
+        let registry = Arc::new(Mutex::new(Registry::load_dir(dir).expect("load")));
         let _watcher = RegistryWatcher::watch(registry).expect("watcher should start");
     }
 }
