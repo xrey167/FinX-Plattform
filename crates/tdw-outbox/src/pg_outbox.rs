@@ -48,10 +48,17 @@ impl PgOutboxStore {
 
     /// Override the table name. Useful for multi-tenant deployments
     /// where each tenant has its own outbox table.
-    #[must_use]
-    pub fn with_table(mut self, table: impl Into<String>) -> Self {
-        self.table = table.into();
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`] if `table` is not a valid SQL identifier.
+    /// The name is `format!`-interpolated into every statement (SQL has no
+    /// bind parameter for identifiers), so it must be validated here.
+    pub fn with_table(mut self, table: impl Into<String>) -> Result<Self> {
+        let table = table.into();
+        tdw_core::safe_sql_identifier(&table)?;
+        self.table = table;
+        Ok(self)
     }
 
     /// Idempotently create the outbox table. Callers should run this

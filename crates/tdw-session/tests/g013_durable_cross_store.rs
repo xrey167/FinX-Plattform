@@ -72,10 +72,18 @@ async fn durable_backends_share_postgres_and_rollout_archive() {
     drop_session_tables(&engine, &session_base).await;
     let _ = fs::remove_file(&rollout_path);
 
-    let outbox = PgOutboxStore::new(engine.clone()).with_table(&outbox_table);
-    let bus = PgEventBus::new(engine.clone()).with_table(&bus_table);
-    let snapshot = PgSnapshotStore::new(engine.clone()).with_table(&snapshot_table);
-    let session = PgSessionStore::new(engine.clone()).with_table(&session_base);
+    let outbox = PgOutboxStore::new(engine.clone())
+        .with_table(&outbox_table)
+        .expect("valid outbox table identifier");
+    let bus = PgEventBus::new(engine.clone())
+        .with_table(&bus_table)
+        .expect("valid bus table identifier");
+    let snapshot = PgSnapshotStore::new(engine.clone())
+        .with_table(&snapshot_table)
+        .expect("valid snapshot table identifier");
+    let session = PgSessionStore::new(engine.clone())
+        .with_table(&session_base)
+        .expect("valid session table identifier");
     let rollout = JsonlRollout::new(&rollout_path);
 
     outbox

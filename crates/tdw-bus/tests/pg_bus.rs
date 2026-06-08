@@ -25,7 +25,9 @@ async fn pg_bus_publishes_and_reads_back_in_order() {
     let engine = PgEngine::connect(&url)
         .await
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
-    let bus = PgEventBus::new(engine.clone()).with_table(table_name());
+    let bus = PgEventBus::new(engine.clone())
+        .with_table(table_name())
+        .expect("valid bus table identifier");
 
     let drop_sql = format!("DROP TABLE IF EXISTS {}", table_name());
     engine

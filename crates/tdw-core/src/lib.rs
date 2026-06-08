@@ -26,6 +26,45 @@ pub enum Error {
     Registry(String),
 }
 
+/// Validate a SQL identifier (e.g. a table name) that must be interpolated
+/// into a statement because SQL has no bind parameter for identifiers.
+///
+/// This is the shared form of the `tdw-storage-clickhouse` reference validator,
+/// intended for every store that derives a table name from operator/config
+/// input — notably the Postgres `with_table` constructors. Accepts ASCII
+/// alphanumerics, `_`, and `.` (for schema-qualified names), requires an
+/// alphabetic or `_` lead, bounds the length, and rejects empty input or
+/// malformed dot placement (leading, trailing, or doubled dots). An identifier
+/// containing `;`, `"`, `--`, whitespace, or a leading digit is rejected, so it
+/// cannot inject SQL when `format!`-interpolated.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] if `name` is not a valid SQL identifier.
+pub fn safe_sql_identifier(name: &str) -> Result<()> {
+    const MAX_LEN: usize = 64;
+    let valid = !name.is_empty()
+        && name.len() <= MAX_LEN
+        && name
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.')
+        && !name.starts_with('.')
+        && !name.ends_with('.')
+        && !name.contains("..");
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::Storage(format!(
+            "invalid SQL identifier {name:?}: expected [A-Za-z_][A-Za-z0-9_.]* \
+             (1..={MAX_LEN} chars, no leading/trailing/doubled dots)"
+        )))
+    }
+}
+
 pub trait QueryParams:
     Clone + Serialize + DeserializeOwned + JsonSchema + Send + Sync + 'static
 {
@@ -366,6 +405,40 @@ mod tests {
     use std::task::{Context, Poll};
 
     use serde_json::json;
+
+    #[test]
+    fn safe_sql_identifier_accepts_valid_names_and_rejects_injection() {
+        for ok in [
+            "tdw_outbox",
+            "tdw_sessions",
+            "_private",
+            "schema.table",
+            "a1.b2.c3",
+            "T",
+        ] {
+            assert!(safe_sql_identifier(ok).is_ok(), "{ok:?} should be valid");
+        }
+        for bad in [
+            "",                       // empty
+            "1bad",                   // leading digit
+            "x; drop table sessions", // statement injection
+            "x\" or \"1\"=\"1",       // quote injection
+            "x--comment",             // comment injection
+            "has space",              // whitespace
+            ".leading",               // leading dot
+            "trailing.",              // trailing dot
+            "a..b",                   // doubled dot
+            "naïve",                  // non-ASCII
+        ] {
+            assert!(
+                safe_sql_identifier(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+        // Length is bounded.
+        assert!(safe_sql_identifier(&"a".repeat(64)).is_ok());
+        assert!(safe_sql_identifier(&"a".repeat(65)).is_err());
+    }
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
     struct Row {

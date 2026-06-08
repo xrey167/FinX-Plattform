@@ -42,7 +42,9 @@ async fn pg_session_full_surface_roundtrip() {
         .await
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
     let base = base_table();
-    let store = PgSessionStore::new(engine.clone()).with_table(&base);
+    let store = PgSessionStore::new(engine.clone())
+        .with_table(&base)
+        .expect("valid session table identifier");
 
     drop_all(&engine, &base).await;
     store
