@@ -451,6 +451,7 @@ mod tests {
             "system.worker_jobs",
             "system.identity_users",
             "system.identity_sessions",
+            "system.identity_reset_tokens",
         ] {
             assert!(
                 postgres_sql.contains(table),
