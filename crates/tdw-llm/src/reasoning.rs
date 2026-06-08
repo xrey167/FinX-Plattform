@@ -104,8 +104,9 @@ pub fn parse_directive(message: &str) -> (Option<ReasoningLevel>, &str) {
     let (token, remainder) = rest.split_at(token_end);
 
     // Unknown level: tolerate by passing the original message through unchanged.
-    ReasoningLevel::parse_token(token)
-        .map_or((None, message), |level| (Some(level), remainder.trim_start()))
+    ReasoningLevel::parse_token(token).map_or((None, message), |level| {
+        (Some(level), remainder.trim_start())
+    })
 }
 
 /// Resolves the effective reasoning level using precedence

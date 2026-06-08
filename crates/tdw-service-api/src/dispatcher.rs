@@ -226,7 +226,8 @@ async fn dispatch_get_quote_snapshot(
 ///
 /// Only feature-enabled providers are compiled in. Offline (default) builds
 /// return an `Err` for any provider, keeping the workspace test set network-free.
-#[allow(unused_variables)] // `symbol` is used only inside the cfg-gated provider block
+#[allow(unused_variables)]
+// `symbol` is used only inside the cfg-gated provider block
 // Awaits the HTTP fetch inside the `#[cfg(feature = "provider-*")]` arms; only the offline (no-provider) build has no await, so `async` is part of the contract callers `.await`.
 #[allow(clippy::unused_async)]
 async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnapshot> {
