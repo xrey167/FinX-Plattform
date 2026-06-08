@@ -649,6 +649,9 @@ async fn dispatch_register_user(
     };
     let payload_value = serde_json::to_value(&payload)
         .map_err(|e| Error::Provider(format!("user.created payload serialize: {e}")))?;
+    // Clone before payload_value is moved into the EventEnvelope below.
+    #[cfg(feature = "functions")]
+    let enqueue_payload = payload_value.clone();
     let (actor, origin, trace) = sample_actor_context("tdw-service-api");
     let envelope: EventEnvelope<Value> = EventEnvelope::new(
         USER_CREATED_EVENT_TYPE,
@@ -664,6 +667,35 @@ async fn dispatch_register_user(
             .lock()
             .map_err(|e| Error::Provider(format!("outbox lock poisoned: {e}")))?;
         outbox.append(envelope);
+    }
+
+    // Enqueue subscribed application-function jobs (e.g. welcome mailer) for
+    // the `user.created` event.  Non-fatal: a failure here is warn-and-continue
+    // so the registration result is never rolled back by a queue hiccup.
+    #[cfg(feature = "functions")]
+    if let Some(enqueuer) = state.function_enqueuer.as_ref() {
+        let run_id_seed = format!("user.created:{}", payload.user_id);
+        match enqueuer.enqueue_for_event(
+            USER_CREATED_EVENT_TYPE,
+            enqueue_payload,
+            &run_id_seed,
+            now_ms,
+        ) {
+            Ok(enqueued) => {
+                tracing::debug!(
+                    user_id = %payload.user_id,
+                    enqueued,
+                    "enqueued user.created function jobs"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    user_id = %payload.user_id,
+                    %error,
+                    "failed to enqueue user.created function jobs — continuing"
+                );
+            }
+        }
     }
 
     // The returned user never carries the password hash (the `User` type has no
@@ -2396,6 +2428,158 @@ mod tests {
                 assert!(error.contains("weak password"), "got: {error}");
             }
             other => panic!("expected Failed for weak password, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // FunctionEnqueuer hook tests (require `functions` feature)
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "functions")]
+    mod function_enqueue_tests {
+        use std::sync::{Arc, Mutex};
+
+        use serde_json::Value;
+        use tdw_protocol::{EventMsg, Op};
+
+        use crate::AppState;
+        use crate::function_enqueue::FunctionEnqueuer;
+
+        use super::{analyst_policy, make_envelope};
+
+        /// Mock enqueuer that records every `enqueue_for_event` call.
+        #[derive(Default)]
+        struct RecordingEnqueuer {
+            calls: Mutex<Vec<(String, i64)>>,
+        }
+
+        impl FunctionEnqueuer for RecordingEnqueuer {
+            fn enqueue_for_event(
+                &self,
+                event_type: &str,
+                _payload: Value,
+                _run_id_seed: &str,
+                now_ms: i64,
+            ) -> Result<usize, String> {
+                self.calls
+                    .lock()
+                    .expect("lock")
+                    .push((event_type.to_string(), now_ms));
+                Ok(1)
+            }
+        }
+
+        /// Mock enqueuer that always fails.
+        struct FailingEnqueuer;
+
+        impl FunctionEnqueuer for FailingEnqueuer {
+            fn enqueue_for_event(
+                &self,
+                _event_type: &str,
+                _payload: Value,
+                _run_id_seed: &str,
+                _now_ms: i64,
+            ) -> Result<usize, String> {
+                Err("queue unavailable".to_string())
+            }
+        }
+
+        /// Build an `AppState` with a wired `FunctionEnqueuer` and analyst policy.
+        async fn functions_state(enqueuer: Arc<dyn FunctionEnqueuer>) -> AppState {
+            let mut state = AppState::in_memory_for_tests()
+                .await
+                .with_policy(analyst_policy());
+            state.function_enqueuer = Some(enqueuer);
+            state
+        }
+
+        /// Happy path: a valid registration triggers the enqueuer with
+        /// `user.created` and the correct `now_ms`.
+        #[tokio::test]
+        async fn register_user_triggers_enqueuer() {
+            use crate::dispatch_op;
+
+            let recorder = Arc::new(RecordingEnqueuer::default());
+            let state = functions_state(Arc::clone(&recorder) as Arc<dyn FunctionEnqueuer>).await;
+
+            let env = make_envelope(Op::RegisterUser {
+                id: "fn-user-1".to_string(),
+                email: "fn@example.com".to_string(),
+                password: "correct horse battery".to_string(),
+                display_name: "FnUser".to_string(),
+                now_ms: 42_000,
+            });
+            let events = dispatch_op(&state, env).await;
+
+            // Registration must succeed.
+            assert!(
+                matches!(&events[1], EventMsg::Completed { .. }),
+                "expected Completed, got {:?}",
+                events[1]
+            );
+
+            // Enqueuer must have been called exactly once with user.created.
+            let calls = recorder.calls.lock().expect("lock");
+            assert_eq!(
+                calls.len(),
+                1,
+                "expected 1 enqueue call, got {}",
+                calls.len()
+            );
+            assert_eq!(calls[0].0, "user.created");
+            assert_eq!(calls[0].1, 42_000);
+        }
+
+        /// Enqueue failure must NOT cause the registration to return `Failed` —
+        /// the hook is strictly warn-and-continue.
+        #[tokio::test]
+        async fn register_user_enqueue_error_does_not_fail_dispatch() {
+            use crate::dispatch_op;
+
+            let state =
+                functions_state(Arc::new(FailingEnqueuer) as Arc<dyn FunctionEnqueuer>).await;
+
+            let env = make_envelope(Op::RegisterUser {
+                id: "fn-user-fail".to_string(),
+                email: "fail-enqueue@example.com".to_string(),
+                password: "correct horse battery".to_string(),
+                display_name: "FailUser".to_string(),
+                now_ms: 1,
+            });
+            let events = dispatch_op(&state, env).await;
+
+            // Despite the enqueue error, the dispatch must still succeed.
+            assert!(
+                matches!(&events[1], EventMsg::Completed { .. }),
+                "expected Completed even with enqueue error, got {:?}",
+                events[1]
+            );
+        }
+
+        /// When `function_enqueuer` is `None` (default), registration succeeds
+        /// and no enqueue path is exercised.
+        #[tokio::test]
+        async fn register_user_no_enqueuer_succeeds() {
+            use crate::dispatch_op;
+
+            let state = AppState::in_memory_for_tests()
+                .await
+                .with_policy(analyst_policy());
+            // function_enqueuer is None by default.
+
+            let env = make_envelope(Op::RegisterUser {
+                id: "fn-user-none".to_string(),
+                email: "none@example.com".to_string(),
+                password: "correct horse battery".to_string(),
+                display_name: "NoneUser".to_string(),
+                now_ms: 1,
+            });
+            let events = dispatch_op(&state, env).await;
+            assert!(
+                matches!(&events[1], EventMsg::Completed { .. }),
+                "expected Completed without enqueuer, got {:?}",
+                events[1]
+            );
         }
     }
 }

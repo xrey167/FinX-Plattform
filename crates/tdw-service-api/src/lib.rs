@@ -23,6 +23,8 @@ mod app_state;
 mod dispatcher;
 mod event_sink;
 pub mod fetch_policy;
+#[cfg(feature = "functions")]
+pub mod function_enqueue;
 mod policy;
 mod provider_resolve;
 mod stream_ingest;
