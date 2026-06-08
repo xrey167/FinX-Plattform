@@ -4462,6 +4462,8 @@ dependencies = [
  "tdw-email",
  "tdw-functions",
  "tdw-identity",
+ "tdw-protocol",
+ "tdw-service-api",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
