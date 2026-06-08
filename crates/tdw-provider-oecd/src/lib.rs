@@ -52,14 +52,13 @@ impl OecdQuery {
     ///
     /// Returns [`OecdProviderError::EmptyDataset`] if `dataset` is blank,
     /// [`OecdProviderError::InvalidDataset`] if it contains unsupported
-    /// characters or exceeds 50 characters, or
-    /// [`OecdProviderError::EmptyFilter`] if `filter` is blank.
+    /// characters or exceeds 50 characters,
+    /// [`OecdProviderError::EmptyFilter`] if `filter` is blank, or
+    /// [`OecdProviderError::InvalidFilter`] if `filter` contains characters
+    /// outside the SDMX key grammar.
     pub fn new(dataset: &str, filter: &str, start_time: &str, end_time: &str) -> Result<Self> {
         let dataset = validate_dataset(dataset)?;
-        let filter = filter.trim().to_string();
-        if filter.is_empty() {
-            return Err(OecdProviderError::EmptyFilter);
-        }
+        let filter = validate_filter(filter)?;
         Ok(Self {
             dataset,
             filter,
@@ -95,6 +94,8 @@ pub enum OecdProviderError {
     InvalidDataset,
     #[error("oecd filter must not be empty")]
     EmptyFilter,
+    #[error("oecd filter contains characters outside the SDMX key grammar")]
+    InvalidFilter,
 }
 
 // ── Provider metadata ─────────────────────────────────────────────────────────
@@ -125,8 +126,9 @@ pub const fn endpoints() -> &'static [ProviderEndpoint] {
 /// Returns an error if `dataset` or `filter` fail validation.
 pub fn sdmx_data_url(query: &OecdQuery) -> Result<String> {
     // Re-validate so callers cannot smuggle an already-built query with a
-    // hand-crafted invalid dataset.
+    // hand-crafted invalid dataset or filter (both land on the URL path).
     validate_dataset(&query.dataset)?;
+    validate_filter(&query.filter)?;
     Ok(format!(
         "{}/{}/{}/OECD?startTime={}&endTime={}&contentType=application/json",
         BASE_URL, query.dataset, query.filter, query.start_time, query.end_time,
@@ -150,6 +152,27 @@ fn validate_dataset(dataset: &str) -> Result<String> {
         return Err(OecdProviderError::InvalidDataset);
     }
     Ok(dataset.to_string())
+}
+
+/// Validate an SDMX dimension filter such as `AUS+AUT.B1_GE.CUR+VOBARSA.Q`.
+///
+/// The filter sits on the request path between `{dataset}` and `/OECD`, so it
+/// is constrained to the SDMX key grammar — ASCII alphanumerics plus the
+/// structural characters OECD uses: `.` (dimension separator), `+` (OR within
+/// a dimension), `_`, and `-`. This excludes `/`, `?`, `&` and `#`, closing the
+/// same path/query-injection gap `dataset` was already protected against.
+fn validate_filter(filter: &str) -> Result<String> {
+    let filter = filter.trim();
+    if filter.is_empty() {
+        return Err(OecdProviderError::EmptyFilter);
+    }
+    if !filter
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
+    {
+        return Err(OecdProviderError::InvalidFilter);
+    }
+    Ok(filter.to_string())
 }
 
 // ── Mock fetcher (no-http, always-offline) ────────────────────────────────────
@@ -256,6 +279,22 @@ mod tests {
             OecdQuery::new("QNA", "", "2020", "2023").expect_err("empty filter must fail"),
             OecdProviderError::EmptyFilter,
         );
+    }
+
+    #[test]
+    fn query_rejects_filter_with_injection_characters() {
+        // The filter is interpolated into the path between `{dataset}` and
+        // `/OECD`; `/`, `?` and `&` would inject path segments / query params.
+        for bad in ["AUS/../x", "AUS?evil=1", "AUS&drop=1", "AUS OECD"] {
+            assert_eq!(
+                OecdQuery::new("QNA", bad, "2020", "2023")
+                    .expect_err("filter with injection chars must fail"),
+                OecdProviderError::InvalidFilter,
+                "filter {bad:?} should be rejected",
+            );
+        }
+        // Legitimate SDMX dimension-key notation still parses.
+        assert!(OecdQuery::new("QNA", "AUS+AUT.B1_GE.CUR+VOBARSA.Q", "2020", "2023").is_ok());
     }
 
     // ── sdmx_data_url ─────────────────────────────────────────────────────
