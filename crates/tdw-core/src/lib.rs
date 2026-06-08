@@ -16,6 +16,7 @@ use thiserror::Error;
 pub mod compaction;
 #[cfg(feature = "http")]
 pub mod http_support;
+pub mod turn;
 
 pub mod query_params;
 
