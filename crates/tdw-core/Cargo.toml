@@ -28,6 +28,10 @@ serde_json = { workspace = true }
 tdw-llm = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+futures-util = { workspace = true }
+tokio = { workspace = true }
+
 [[example]]
 # Unique target name (per-crate) pointing at the standard examples/basic.rs.
 # A shared `basic` name across crates collides on one output path under a

@@ -902,4 +902,75 @@ mod tests {
         };
         assert!(bad_country.validate().is_err());
     }
+
+    #[test]
+    fn reference_id_error_display_renders_both_variants() {
+        let wrong = ReferenceIdError::WrongLength {
+            field: "isin",
+            expected: 12,
+            actual: 9,
+        };
+        assert_eq!(wrong.to_string(), "isin must be 12 characters, got 9");
+
+        let empty = ReferenceIdError::Empty { field: "issuer_id" };
+        assert_eq!(empty.to_string(), "issuer_id must not be empty");
+
+        // The error also satisfies std::error::Error (no source).
+        let dynamic: &dyn std::error::Error = &empty;
+        assert!(dynamic.source().is_none());
+    }
+
+    #[test]
+    fn order_event_validates_clean_and_rejects_empty_order_id() {
+        let event = OrderEvent {
+            order_id: "O-1".to_string(),
+            account_id: "ACC-1".to_string(),
+            symbol: "AAPL".to_string(),
+            side: OrderSide::Buy,
+            status: OrderStatus::PartiallyFilled,
+            quantity: 100.0,
+            filled_quantity: 40.0,
+            limit_price: Some(150.0),
+            event_ts: "2026-05-21T20:00:00Z".to_string(),
+        };
+        assert!(event.validate().is_ok());
+
+        let bad = OrderEvent {
+            order_id: String::new(),
+            ..event.clone()
+        };
+        assert!(bad.validate().is_err());
+
+        let bad_qty = OrderEvent {
+            quantity: -1.0,
+            ..event
+        };
+        assert!(bad_qty.validate().is_err());
+    }
+
+    #[test]
+    fn news_sentiment_enforces_score_bounds() {
+        let base = NewsSentiment {
+            id: "n1".to_string(),
+            headline: "Markets rally".to_string(),
+            body: "...".to_string(),
+            published_at: "2026-05-21T12:00:00Z".to_string(),
+            symbols: vec!["AAPL".to_string()],
+            sentiment_score: 0.5,
+            source: "wire".to_string(),
+        };
+        assert!(base.validate().is_ok());
+
+        let too_high = NewsSentiment {
+            sentiment_score: 1.5,
+            ..base.clone()
+        };
+        assert!(too_high.validate().is_err());
+
+        let too_low = NewsSentiment {
+            sentiment_score: -1.5,
+            ..base
+        };
+        assert!(too_low.validate().is_err());
+    }
 }
