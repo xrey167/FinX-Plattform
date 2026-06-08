@@ -9,7 +9,7 @@
 //! All functions are pure (no I/O, no async, no provider calls). The values
 //! returned by [`to_params`] are *advisory* hints: `thinking_budget_tokens`
 //! mirrors the Anthropic extended-thinking budget and `reasoning_effort` mirrors
-//! the OpenAI reasoning-effort knob. Wiring these into the concrete client crates
+//! the `OpenAI` reasoning-effort knob. Wiring these into the concrete client crates
 //! is intentionally deferred to a follow-up; nothing here performs a network call.
 
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ pub struct ReasoningConfig {
 /// Provider-advisory parameters derived from a [`ReasoningLevel`].
 ///
 /// These are plain data. `thinking_budget_tokens` mirrors the Anthropic
-/// extended-thinking budget and `reasoning_effort` mirrors the OpenAI
+/// extended-thinking budget and `reasoning_effort` mirrors the `OpenAI`
 /// reasoning-effort string. Both are advisory and are not consumed by any client
 /// crate in this unit.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,7 +77,7 @@ pub struct ReasoningParams {
     pub temperature: f32,
     /// Advisory Anthropic extended-thinking budget in tokens, if applicable.
     pub thinking_budget_tokens: Option<u32>,
-    /// Advisory OpenAI reasoning-effort hint, if applicable.
+    /// Advisory `OpenAI` reasoning-effort hint, if applicable.
     pub reasoning_effort: Option<&'static str>,
 }
 
@@ -123,7 +123,7 @@ pub fn resolve(inline: Option<ReasoningLevel>, cfg: &ReasoningConfig) -> Reasoni
 /// [`clamp_temperature`]). For [`ReasoningLevel::Off`], both
 /// `thinking_budget_tokens` and `reasoning_effort` are `None`.
 #[must_use]
-pub fn to_params(level: ReasoningLevel) -> ReasoningParams {
+pub const fn to_params(level: ReasoningLevel) -> ReasoningParams {
     let (temperature, thinking_budget_tokens, reasoning_effort) = match level {
         ReasoningLevel::Off => (0.0, None, None),
         ReasoningLevel::Low => (0.5, Some(1_024), Some("low")),
@@ -143,7 +143,7 @@ pub fn to_params(level: ReasoningLevel) -> ReasoningParams {
 /// `NaN` is mapped to `0.0` (the conservative floor) so callers never propagate a
 /// non-comparable temperature to a provider.
 #[must_use]
-pub fn clamp_temperature(temperature: f32) -> f32 {
+pub const fn clamp_temperature(temperature: f32) -> f32 {
     if temperature.is_nan() {
         return 0.0;
     }

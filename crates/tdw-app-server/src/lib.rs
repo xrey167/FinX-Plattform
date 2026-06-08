@@ -1235,6 +1235,7 @@ mod tests {
                 // 2000 ops × 2 events = 4000 events, well above the 1024-slot
                 // broadcast buffer, so any platform that does lag-drop will hit it.
                 const OPS: u64 = 2000;
+                #[allow(clippy::cast_possible_truncation)] // OPS is the const 2000
                 const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
 
                 let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

@@ -63,7 +63,7 @@ pub fn is_logical_endpoint(endpoint: &str) -> bool {
 /// pair must match a key wired into the ingest dispatch table for that provider
 /// to be reachable.
 pub fn logical_endpoint_table() -> BTreeMap<&'static str, Vec<ProviderCandidate>> {
-    fn candidate(provider: &'static str, endpoint: &'static str) -> ProviderCandidate {
+    const fn candidate(provider: &'static str, endpoint: &'static str) -> ProviderCandidate {
         ProviderCandidate { provider, endpoint }
     }
 
@@ -214,7 +214,7 @@ mod tests {
     fn offline_registry(provider: &str, endpoint: &str) -> bool {
         matches!(
             (provider, endpoint),
-            ("fileset", "equity_historical") | ("yahoo", "equity_historical")
+            ("fileset" | "yahoo", "equity_historical")
         )
     }
 

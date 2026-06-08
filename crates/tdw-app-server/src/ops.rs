@@ -123,6 +123,9 @@ pub fn render_prometheus(metrics: &[Metric]) -> String {
 
 /// Format a metric value: integers render without a decimal point, otherwise the
 /// default `f64` formatting is used.
+// value is finite and whole (guarded below); the f64->i64 cast is display-only
+// metric formatting where a saturating cast on out-of-range values is acceptable.
+#[allow(clippy::cast_possible_truncation)]
 fn format_value(value: f64) -> String {
     if value.fract() == 0.0 && value.is_finite() {
         format!("{}", value as i64)

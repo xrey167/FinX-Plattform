@@ -74,7 +74,9 @@ impl StepStore for InMemoryStepStore {
             .records
             .lock()
             .map_err(|error| FunctionError::Store(format!("mutex poisoned: {error}")))?;
-        Ok(guard.get(&(run_id.to_string(), step.to_string())).cloned())
+        let value = guard.get(&(run_id.to_string(), step.to_string())).cloned();
+        drop(guard);
+        Ok(value)
     }
 
     async fn put(&self, run_id: &str, step: &str, value: &Value) -> Result<(), FunctionError> {
@@ -86,6 +88,7 @@ impl StepStore for InMemoryStepStore {
         guard
             .entry((run_id.to_string(), step.to_string()))
             .or_insert_with(|| value.clone());
+        drop(guard);
         Ok(())
     }
 

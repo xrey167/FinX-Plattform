@@ -446,6 +446,10 @@ impl InMemoryUserStore {
 
 #[async_trait]
 impl UserStore for InMemoryUserStore {
+    // `records` and `email_index` are intentionally held together across the
+    // contains_key check and the paired inserts to keep registration atomic
+    // (prevents a duplicate-email race). Tightening would break that invariant.
+    #[allow(clippy::significant_drop_tightening)]
     async fn register(&self, new: NewUser, id: String, now_ms: i64) -> Result<User> {
         let email = normalize_email(&new.email)?;
         validate_password(&new.password)?;
@@ -625,7 +629,7 @@ pub const DEFAULT_SESSION_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 /// Unlike [`User`], the token **is** included here — it is the session
 /// identity itself (analogous to an opaque API key).  Callers must treat
 /// `token` as secret and must not log it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// High-entropy bearer token (64 lowercase hex chars, 256 bits entropy).
     ///
@@ -830,7 +834,7 @@ pub const DEFAULT_RESET_TOKEN_TTL_MS: i64 = 60 * 60 * 1_000;
 /// password-reset email link).  Like [`Session`], the token **is** included
 /// here — it is the reset identity itself.  Callers must treat `token` as
 /// secret and must not log it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResetToken {
     /// High-entropy token (64 lowercase hex chars, 256 bits entropy).
     ///
@@ -858,6 +862,7 @@ pub struct ResetToken {
 /// The returned token is the sole credential for the reset flow.
 /// Callers must treat it as secret: do not log, transmit only over TLS,
 /// and embed in single-use links that expire quickly.
+#[must_use]
 pub fn generate_reset_token() -> String {
     use argon2::password_hash::rand_core::RngCore;
     let mut bytes = [0u8; 32];
@@ -2184,7 +2189,7 @@ mod tests {
         assert_eq!(resolved, session);
     }
 
-    /// 4. resolve of an unknown token returns SessionNotFound.
+    /// 4. resolve of an unknown token returns `SessionNotFound`.
     #[tokio::test]
     async fn session_resolve_unknown_token_returns_not_found() {
         let s = session_store();
@@ -2200,7 +2205,7 @@ mod tests {
         );
     }
 
-    /// 5. resolve of an expired token returns SessionExpired.
+    /// 5. resolve of an expired token returns `SessionExpired`.
     #[tokio::test]
     async fn session_resolve_expired_token_returns_session_expired() {
         let s = session_store();
@@ -2229,7 +2234,7 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(IdentityError::SessionNotFound) | Err(IdentityError::SessionExpired)
+                Err(IdentityError::SessionNotFound | IdentityError::SessionExpired)
             ),
             "expected session gone after expiry, got: {result:?}"
         );
@@ -2261,7 +2266,7 @@ mod tests {
         assert!(!removed, "revoke must return false for an unknown token");
     }
 
-    /// 9. revoke_all_for_user removes only that user's sessions and returns count.
+    /// 9. `revoke_all_for_user` removes only that user's sessions and returns count.
     #[tokio::test]
     async fn session_revoke_all_for_user_removes_only_that_user() {
         let s = session_store();
@@ -2346,7 +2351,7 @@ mod tests {
         );
     }
 
-    /// 13. revoke_all_for_user on a user with no sessions returns 0.
+    /// 13. `revoke_all_for_user` on a user with no sessions returns 0.
     #[tokio::test]
     async fn session_revoke_all_for_user_no_sessions_returns_zero() {
         let s = session_store();
@@ -2354,7 +2359,7 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    /// 14. generate_session_token produces exactly 64 lowercase hex chars.
+    /// 14. `generate_session_token` produces exactly 64 lowercase hex chars.
     #[test]
     fn generate_session_token_is_64_lowercase_hex() {
         let token = generate_session_token();
@@ -2365,7 +2370,7 @@ mod tests {
         );
     }
 
-    /// 15. DEFAULT_SESSION_TTL_MS is 7 days in ms.
+    /// 15. `DEFAULT_SESSION_TTL_MS` is 7 days in ms.
     #[test]
     fn default_session_ttl_is_seven_days() {
         assert_eq!(DEFAULT_SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1_000);
@@ -2402,7 +2407,7 @@ mod tests {
         assert_eq!(consumed, issued);
     }
 
-    /// 2. consume is single-use: the second consume fails with ResetTokenNotFound.
+    /// 2. consume is single-use: the second consume fails with `ResetTokenNotFound`.
     #[tokio::test]
     async fn reset_consume_twice_fails() {
         let s = reset_token_store();
@@ -2424,7 +2429,7 @@ mod tests {
         );
     }
 
-    /// 3. consume of an expired token returns ResetTokenExpired.
+    /// 3. consume of an expired token returns `ResetTokenExpired`.
     #[tokio::test]
     async fn reset_consume_expired_returns_expired() {
         let s = reset_token_store();
@@ -2440,7 +2445,7 @@ mod tests {
         );
     }
 
-    /// 4. consume of an expired token deletes the row — second consume is NotFound.
+    /// 4. consume of an expired token deletes the row — second consume is `NotFound`.
     #[tokio::test]
     async fn reset_consume_expired_deletes_row() {
         let s = reset_token_store();
@@ -2458,7 +2463,7 @@ mod tests {
         );
     }
 
-    /// 5. consume of an unknown token returns ResetTokenNotFound.
+    /// 5. consume of an unknown token returns `ResetTokenNotFound`.
     #[tokio::test]
     async fn reset_consume_unknown_returns_not_found() {
         let s = reset_token_store();
@@ -2474,7 +2479,7 @@ mod tests {
         );
     }
 
-    /// 6. revoke_all_for_user clears only that user's outstanding tokens.
+    /// 6. `revoke_all_for_user` clears only that user's outstanding tokens.
     #[tokio::test]
     async fn reset_revoke_all_for_user_clears_them() {
         let s = reset_token_store();
@@ -2522,14 +2527,14 @@ mod tests {
         assert_eq!(survivor.user_id, "u2");
     }
 
-    /// 7. revoke_all_for_user on a user with no tokens is a no-op (Ok).
+    /// 7. `revoke_all_for_user` on a user with no tokens is a no-op (Ok).
     #[tokio::test]
     async fn reset_revoke_all_for_user_no_tokens_ok() {
         let s = reset_token_store();
         s.revoke_all_for_user("nobody").await.expect("revoke_all");
     }
 
-    /// 8. generate_reset_token produces exactly 64 lowercase hex chars.
+    /// 8. `generate_reset_token` produces exactly 64 lowercase hex chars.
     #[test]
     fn generate_reset_token_is_64_lowercase_hex() {
         let token = generate_reset_token();
@@ -2540,7 +2545,7 @@ mod tests {
         );
     }
 
-    /// 9. Two generate_reset_token calls yield distinct tokens.
+    /// 9. Two `generate_reset_token` calls yield distinct tokens.
     #[test]
     fn generate_reset_token_produces_distinct_tokens() {
         let t1 = generate_reset_token();
@@ -2548,7 +2553,7 @@ mod tests {
         assert_ne!(t1, t2, "consecutive tokens must differ");
     }
 
-    /// 10. DEFAULT_RESET_TOKEN_TTL_MS is 1 hour in ms.
+    /// 10. `DEFAULT_RESET_TOKEN_TTL_MS` is 1 hour in ms.
     #[test]
     fn default_reset_token_ttl_is_one_hour() {
         assert_eq!(DEFAULT_RESET_TOKEN_TTL_MS, 60 * 60 * 1_000);

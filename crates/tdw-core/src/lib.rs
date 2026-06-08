@@ -442,6 +442,10 @@ pub mod date {
     /// Convert a count of days since the Unix epoch (1970-01-01) into a
     /// `(year, month, day)` civil date using the Howard-Hinnant algorithm.
     #[must_use]
+    // month is 1..=12 and day is 1..=31 by the Howard-Hinnant algorithm, so the
+    // i64->u32 casts cannot truncate or lose sign. const fn cannot use try_from,
+    // and the math must stay byte-identical to the former inlined versions.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub const fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
         let days = days_since_epoch + 719_468;
         let era = days.div_euclid(146_097);

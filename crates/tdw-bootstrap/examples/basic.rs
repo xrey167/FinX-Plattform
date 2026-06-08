@@ -30,16 +30,10 @@ fn main() {
     let missing: Vec<&str> = REQUIRED
         .iter()
         .copied()
-        .filter(|name| {
-            std::env::var(name)
-                .map(|v| v.trim().is_empty())
-                .unwrap_or(true)
-        })
+        .filter(|name| std::env::var(name).map_or(true, |v| v.trim().is_empty()))
         .collect();
     for name in REQUIRED {
-        let present = std::env::var(name)
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
+        let present = std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
         println!(
             "required {name}: {}",
             if present { "set" } else { "MISSING" }
@@ -48,9 +42,7 @@ fn main() {
 
     // Optional backends: each is skipped unless its *_URL is set.
     for (name, step) in OPTIONAL_BACKENDS {
-        let enabled = std::env::var(name)
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false);
+        let enabled = std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
         println!(
             "optional {name}: {} (step {step} {})",
             if enabled { "set" } else { "unset" },

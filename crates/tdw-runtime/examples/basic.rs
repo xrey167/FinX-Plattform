@@ -92,7 +92,7 @@ fn main() -> Result<()> {
                 stage, fraction, ..
             } => stages.push(format!("{stage}:{fraction:.1}")),
             ProgressOrResult::Done(object) => {
-                stages.push(format!("done:{}", object.rows[0].symbol))
+                stages.push(format!("done:{}", object.rows[0].symbol));
             }
             _ => {}
         }

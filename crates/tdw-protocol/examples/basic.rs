@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Construct the terminal event the daemon would emit for this op, then
     //    record it as a replay frame (what rollout/replay persist).
     let event = EventMsg::Completed {
-        op_id: decoded.op_id.clone(),
+        op_id: decoded.op_id,
         summary: Some("ok".to_string()),
         result: None,
     };

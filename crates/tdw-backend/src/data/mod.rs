@@ -338,6 +338,7 @@ impl Backend {
         store
             .upsert_at(memory, &now)
             .map_err(|error| BackendError::Memory(error.to_string()))?;
+        drop(store);
         Ok(())
     }
 
@@ -469,6 +470,7 @@ impl Backend {
     pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
         let mut index = self.index.lock().await;
         index.index_document(doc).await?;
+        drop(index);
         Ok(())
     }
 

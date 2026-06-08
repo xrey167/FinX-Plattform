@@ -292,6 +292,7 @@ pub struct CompanyNewsItem {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // exact-value parse assertions; deterministic parser, exact comparison intended
 mod tests {
     use super::*;
 

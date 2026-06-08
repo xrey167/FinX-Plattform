@@ -815,7 +815,7 @@ mod tests {
 
     /// Build a `TdwConfig` whose daemon binds `addr` over TCP and whose
     /// durable stores are fully in-memory/temp, exactly as the production
-    /// `load_config` daemon-boot overrides do (an in-memory SQLite session
+    /// `load_config` daemon-boot overrides do (an in-memory `SQLite` session
     /// store + a temp rollout dir). Using the raw `TdwConfig::default()` here
     /// would point the session store at `~/.tdw/session.sqlite`, so
     /// `AppState::from_config` would fail and the daemon would never bind.
