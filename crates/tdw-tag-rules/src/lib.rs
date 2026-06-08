@@ -97,10 +97,7 @@ fn validate_rule(rule: &TagRule) -> Result<(), RuleError> {
     }
     match &rule.predicate {
         RulePredicate::SqlContains { sql, needle } => {
-            if sql.contains(';')
-                || sql.contains("--")
-                || sql.to_ascii_lowercase().contains(" drop ")
-            {
+            if sql.contains(';') || sql.contains("--") || contains_dangerous_sql_keyword(sql) {
                 return Err(RuleError::UnsafeSql);
             }
             if needle.trim().is_empty() {
@@ -123,6 +120,32 @@ fn validate_rule(rule: &TagRule) -> Result<(), RuleError> {
         }
     }
     Ok(())
+}
+
+/// Reject a SQL fragment that contains a destructive DML/DDL keyword as a WHOLE
+/// word. Tokenizes on non-identifier characters (`[A-Za-z0-9_]` are word chars),
+/// so `"drop table x"`, `"(drop"`, and `"x drop"` are all caught while identifiers
+/// that merely embed a keyword (`"dropped"`, `"updated_at"`, `"last_update"`) are
+/// not. This closes a bypass in the previous space-bounded `" drop "` check, which
+/// missed a leading/adjacent keyword such as `"drop table tags"`.
+fn contains_dangerous_sql_keyword(sql: &str) -> bool {
+    sql.to_ascii_lowercase()
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|token| {
+            matches!(
+                token,
+                "drop"
+                    | "delete"
+                    | "insert"
+                    | "update"
+                    | "alter"
+                    | "truncate"
+                    | "exec"
+                    | "merge"
+                    | "grant"
+                    | "revoke"
+            )
+        })
 }
 
 fn is_identifier(value: &str) -> bool {
@@ -274,5 +297,36 @@ mod tests {
             unmatched.is_empty(),
             "superstring must not match (equality, not contains)"
         );
+    }
+
+    #[test]
+    fn sql_keyword_denylist_catches_leading_keywords_but_not_substrings() {
+        let mut engine = RuleEngine::default();
+        let rule = |sql: &str| TagRule {
+            rule_id: "r".to_string(),
+            tag_id: "asset:equity".to_string(),
+            predicate: RulePredicate::SqlContains {
+                sql: sql.to_string(),
+                needle: "AAPL".to_string(),
+            },
+        };
+
+        // A destructive keyword with no surrounding spaces (leading or adjacent to
+        // punctuation) is now rejected — the old `" drop "` check let these through.
+        assert_eq!(
+            engine.hot_reload(vec![rule("drop table tags")]),
+            Err(RuleError::UnsafeSql)
+        );
+        assert_eq!(
+            engine.hot_reload(vec![rule("select * from (delete from t)")]),
+            Err(RuleError::UnsafeSql)
+        );
+
+        // Identifiers that merely embed a keyword as a substring are NOT false-flagged.
+        engine
+            .hot_reload(vec![rule("select dropped_count, updated_at from t")])
+            .unwrap_or_else(|error| {
+                panic!("benign keyword-substring sql should pass: {error:?}")
+            });
     }
 }
