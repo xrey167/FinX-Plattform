@@ -230,11 +230,11 @@ pub fn verify_jwt_strict(
 
     decode::<VerifiedClaims>(token, &decoding, &validation)
         .map(|data| data.claims)
-        .map_err(map_jwt_error)
+        .map_err(|error| map_jwt_error(&error))
 }
 
 /// Map a [`jsonwebtoken`] error kind onto our fail-closed [`VerifyError`].
-fn map_jwt_error(error: jsonwebtoken::errors::Error) -> VerifyError {
+fn map_jwt_error(error: &jsonwebtoken::errors::Error) -> VerifyError {
     use jsonwebtoken::errors::ErrorKind;
     match error.kind() {
         ErrorKind::ExpiredSignature => VerifyError::Expired,

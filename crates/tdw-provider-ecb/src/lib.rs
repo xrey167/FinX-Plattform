@@ -49,8 +49,10 @@ impl EcbDataQuery {
         start_period: impl Into<String>,
         end_period: impl Into<String>,
     ) -> Result<Self> {
-        let flow = validate_flow(flow.into())?;
-        let key = validate_key(key.into())?;
+        let flow: String = flow.into();
+        let flow = validate_flow(&flow)?;
+        let key: String = key.into();
+        let key = validate_key(&key)?;
         Ok(Self {
             flow,
             key,
@@ -97,14 +99,14 @@ pub fn data_request_path(
     start_period: &str,
     end_period: &str,
 ) -> Result<String> {
-    let flow = validate_flow(flow.to_string())?;
-    let key = validate_key(key.to_string())?;
+    let flow = validate_flow(flow)?;
+    let key = validate_key(key)?;
     Ok(format!(
         "/data/{flow}/{key}?format=jsondata&startPeriod={start_period}&endPeriod={end_period}"
     ))
 }
 
-fn validate_flow(flow: String) -> Result<String> {
+fn validate_flow(flow: &str) -> Result<String> {
     let flow = flow.trim().to_string();
     if flow.is_empty() {
         return Err(EcbProviderError::EmptyFlow);
@@ -115,7 +117,7 @@ fn validate_flow(flow: String) -> Result<String> {
     Ok(flow)
 }
 
-fn validate_key(key: String) -> Result<String> {
+fn validate_key(key: &str) -> Result<String> {
     let key = key.trim().to_string();
     if key.is_empty() {
         return Err(EcbProviderError::EmptyKey);
@@ -169,10 +171,10 @@ pub fn parse_ecb_json(raw: &[u8], flow: &str, key: &str) -> Result<Vec<EcbObserv
         // stand-in is wrong; use a dedicated variant instead.
         EcbProviderError::EmptyFlow
     })?;
-    parse_ecb_value(&v, flow, key)
+    Ok(parse_ecb_value(&v, flow, key))
 }
 
-fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Result<Vec<EcbObservation>> {
+fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Vec<EcbObservation> {
     // Extract the time-period values array from the structure block.
     let dates: Vec<String> = v
         .pointer("/structure/dimensions/observation")
@@ -194,7 +196,7 @@ fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Result<Vec<E
     let mut rows = Vec::new();
 
     let Some(datasets) = v.get("dataSets").and_then(|ds| ds.as_array()) else {
-        return Ok(rows);
+        return rows;
     };
 
     for dataset in datasets {
@@ -232,7 +234,7 @@ fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Result<Vec<E
 
     // Sort by date for deterministic output.
     rows.sort_by(|a, b| a.date.cmp(&b.date));
-    Ok(rows)
+    rows
 }
 
 #[cfg(test)]

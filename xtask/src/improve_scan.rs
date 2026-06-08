@@ -682,10 +682,9 @@ fn parse_ledger_front_matter(content: &str) -> Vec<(String, String)> {
             }
         }
     }
-    match outcome {
-        Some(outcome) => items.into_iter().map(|id| (id, outcome.clone())).collect(),
-        None => Vec::new(),
-    }
+    outcome.map_or_else(Vec::new, |outcome| {
+        items.into_iter().map(|id| (id, outcome.clone())).collect()
+    })
 }
 
 // ---------------------------------------------------------------------------

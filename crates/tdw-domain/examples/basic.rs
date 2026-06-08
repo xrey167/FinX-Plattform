@@ -35,10 +35,7 @@ fn main() {
     }
 
     // A malformed record is rejected (negative price violates range(min = 0.0)).
-    let bad = MarketDataBar {
-        close: -1.0,
-        ..bar
-    };
+    let bad = MarketDataBar { close: -1.0, ..bar };
     println!("negative-close bar rejected: {}", bad.validate().is_err());
 
     // Reference-id newtypes parse-then-construct: bad ids never exist.

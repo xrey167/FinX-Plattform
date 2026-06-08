@@ -606,10 +606,7 @@ pub fn run_stdio_json_rpc() -> i32 {
 #[must_use]
 pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32 {
     let stdin = std::io::stdin();
-    let base = match daemon {
-        Some(config) => McpServer::with_daemon_config(config),
-        None => McpServer::new(),
-    };
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
     let mut server = match attach_env_registry(base) {
         Ok(server) => server,
         Err(error) => {
@@ -745,10 +742,8 @@ pub fn registry_from_dir(dir: &Path) -> Result<Registry, RegistryConfigError> {
 ///
 /// Returns [`RegistryConfigError`] when the variable is set but the directory cannot be loaded.
 pub fn registry_from_env() -> Result<Option<Registry>, RegistryConfigError> {
-    match non_empty_env(REGISTRY_DIR_ENV) {
-        Some(dir) => registry_from_dir(Path::new(&dir)).map(Some),
-        None => Ok(None),
-    }
+    non_empty_env(REGISTRY_DIR_ENV)
+        .map_or(Ok(None), |dir| registry_from_dir(Path::new(&dir)).map(Some))
 }
 
 /// Attach the [`registry_from_env`] registry to `server` when [`REGISTRY_DIR_ENV`] is set.
@@ -1031,10 +1026,7 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
     // `/ready` reachability probe, before `daemon` is moved into the server.
     let daemon_tcp_addr = daemon_tcp_addr_for_readiness(daemon.as_ref());
 
-    let base = match daemon {
-        Some(config) => McpServer::with_daemon_config(config),
-        None => McpServer::new(),
-    };
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
     let server = match attach_env_registry(base) {
         Ok(server) => Arc::new(Mutex::new(server)),
         Err(error) => {

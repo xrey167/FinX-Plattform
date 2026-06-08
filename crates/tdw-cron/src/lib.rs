@@ -127,7 +127,7 @@ impl CronSchedule {
         self.schedule
             .after(&now_dt)
             .next()
-            .and_then(|dt| datetime_to_ms(&dt))
+            .map(|dt| datetime_to_ms(&dt))
     }
 }
 
@@ -424,11 +424,10 @@ fn ms_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(secs, nanos).single()
 }
 
-/// Convert a `DateTime<Utc>` to epoch milliseconds.  Returns `None` on
-/// overflow.
+/// Convert a `DateTime<Utc>` to epoch milliseconds.
 #[must_use]
-const fn datetime_to_ms(dt: &DateTime<Utc>) -> Option<i64> {
-    Some(dt.timestamp_millis())
+const fn datetime_to_ms(dt: &DateTime<Utc>) -> i64 {
+    dt.timestamp_millis()
 }
 
 // ---------------------------------------------------------------------------

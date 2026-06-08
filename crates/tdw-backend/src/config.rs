@@ -115,9 +115,9 @@ fn env_value(name: &str) -> Option<String> {
 /// Returns the offending value's message if it is not one of the accepted
 /// spellings.
 pub fn surfaces_from_env(value: Option<&str>) -> Result<Surfaces, String> {
-    match value {
-        None => Ok(Surfaces::default()),
-        Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+    value.map_or_else(
+        || Ok(Surfaces::default()),
+        |raw| match raw.trim().to_ascii_lowercase().as_str() {
             "daemon-only" | "daemon_only" | "daemon" => Ok(Surfaces::DaemonOnly),
             "mcp-only" | "mcp_only" | "mcp" => Ok(Surfaces::McpOnly),
             "both" => Ok(Surfaces::Both),
@@ -125,7 +125,7 @@ pub fn surfaces_from_env(value: Option<&str>) -> Result<Surfaces, String> {
                 "unknown TDW_BACKEND_SURFACES value: {other}; expected daemon-only|mcp-only|both"
             )),
         },
-    }
+    )
 }
 
 /// Parse a `TDW_BACKEND_MCP_TRANSPORT` value (plus an optional HTTP bind) into
@@ -139,18 +139,21 @@ pub fn mcp_transport_from_env(
     transport: Option<&str>,
     http_bind: Option<&str>,
 ) -> Result<McpTransport, String> {
-    match transport {
-        None => Ok(McpTransport::default()),
-        Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+    transport.map_or_else(
+        || Ok(McpTransport::default()),
+        |raw| match raw.trim().to_ascii_lowercase().as_str() {
             "stdio" => Ok(McpTransport::Stdio),
-            "http" | "streamable-http" | "streamable_http" => Ok(McpTransport::Http(
-                http_bind.map_or_else(|| tdw_mcp::default_streamable_http_bind().to_string(), str::to_string),
-            )),
+            "http" | "streamable-http" | "streamable_http" => {
+                Ok(McpTransport::Http(http_bind.map_or_else(
+                    || tdw_mcp::default_streamable_http_bind().to_string(),
+                    str::to_string,
+                )))
+            }
             other => Err(format!(
                 "unknown TDW_BACKEND_MCP_TRANSPORT value: {other}; expected stdio|http"
             )),
         },
-    }
+    )
 }
 
 #[cfg(test)]

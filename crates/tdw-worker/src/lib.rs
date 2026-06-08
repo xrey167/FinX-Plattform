@@ -1742,6 +1742,7 @@ impl Default for ServeConfig {
 /// Outcome of a single leased job, applied to the [`ServeReport`] once its
 /// in-flight future resolves. Kept separate from the report so a job future can
 /// be driven concurrently without touching shared mutable state.
+#[derive(Clone, Copy)]
 enum JobOutcome {
     Completed,
     Failed { dead_lettered: bool },

@@ -113,8 +113,8 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             provider,
             symbol,
             table,
-        } => dispatch_stream_start(state, policy, provider, symbol, table.clone()).await,
-        Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id).await,
+        } => dispatch_stream_start(state, policy, provider, symbol, table.clone()),
+        Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id),
         #[cfg(feature = "alerts")]
         Op::CreateAlert {
             symbol,
@@ -261,7 +261,7 @@ const fn available_quote_snapshot_providers() -> &'static str {
 /// Returns [`Error::Provider`] if policy enforcement fails, if `provider` is
 /// not `binance`, or if the stream cannot be started (e.g. invalid symbol or a
 /// stream with the same id is already running).
-async fn dispatch_stream_start(
+fn dispatch_stream_start(
     state: &AppState,
     policy: &PolicyEnforcementConfig,
     provider: &str,
@@ -300,7 +300,7 @@ async fn dispatch_stream_start(
 ///
 /// Returns [`Error::Provider`] if policy enforcement fails or if the internal
 /// streams registry lock is poisoned.
-async fn dispatch_stream_stop(
+fn dispatch_stream_stop(
     state: &AppState,
     policy: &PolicyEnforcementConfig,
     stream_id: &str,

@@ -695,8 +695,8 @@ fn dispatch_command(
         .spawn()
         .map_err(|error| ExecError::Backend(format!("failed to spawn command: {error}")))?;
 
-    let stdout_reader = spawn_reader(child.stdout.take());
-    let stderr_reader = spawn_reader(child.stderr.take());
+    let stdout_reader = child.stdout.take().map(spawn_reader);
+    let stderr_reader = child.stderr.take().map(spawn_reader);
 
     let timeout = policy.timeout;
     let started = Instant::now();
@@ -738,16 +738,14 @@ fn dispatch_command(
 }
 
 /// Spawn a thread that drains a piped stream into a byte buffer.
-fn spawn_reader<R>(stream: Option<R>) -> Option<thread::JoinHandle<Vec<u8>>>
+fn spawn_reader<R>(mut stream: R) -> thread::JoinHandle<Vec<u8>>
 where
     R: std::io::Read + Send + 'static,
 {
-    stream.map(|mut stream| {
-        thread::spawn(move || {
-            let mut buffer = Vec::new();
-            let _ = stream.read_to_end(&mut buffer);
-            buffer
-        })
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = stream.read_to_end(&mut buffer);
+        buffer
     })
 }
 

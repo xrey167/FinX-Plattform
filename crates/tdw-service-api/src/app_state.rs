@@ -74,7 +74,7 @@ impl SessionBackend {
             Self::Sqlite(store) => store
                 .upsert_session(record)
                 .await
-                .map_err(session_storage_err),
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.upsert_session(record).await,
         }
@@ -85,7 +85,10 @@ impl SessionBackend {
     /// Returns an error variant if the underlying operation fails.
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<()> {
         match self {
-            Self::Sqlite(store) => store.append_cost(entry).await.map_err(session_storage_err),
+            Self::Sqlite(store) => store
+                .append_cost(entry)
+                .await
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.append_cost(entry).await,
         }
@@ -99,7 +102,7 @@ impl SessionBackend {
             Self::Sqlite(store) => store
                 .cost_entries(session_id)
                 .await
-                .map_err(session_storage_err),
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.cost_entries(session_id).await,
         }
@@ -148,7 +151,7 @@ impl RolloutBackend {
 }
 
 /// Map a `tdw-session` error onto the unified [`tdw_core::Error`].
-fn session_storage_err(error: SessionError) -> Error {
+fn session_storage_err(error: &SessionError) -> Error {
     Error::Storage(error.to_string())
 }
 
