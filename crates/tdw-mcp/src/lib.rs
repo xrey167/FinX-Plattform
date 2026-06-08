@@ -1768,6 +1768,13 @@ struct ToolDescriptor {
 }
 
 fn tool_descriptors() -> Vec<ToolDescriptor> {
+    let mut descriptors = tool_descriptors_evidence();
+    descriptors.extend(tool_descriptors_client_and_daemon());
+    descriptors
+}
+
+/// First group of built-in MCP tool descriptors (providers through KG/tag evidence).
+fn tool_descriptors_evidence() -> Vec<ToolDescriptor> {
     vec![
         tool(
             "tdw.providers.list",
@@ -1832,6 +1839,12 @@ fn tool_descriptors() -> Vec<ToolDescriptor> {
             "Return deterministic KG, resolver, tag-rule, live bus, and feature-store evidence.",
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
+    ]
+}
+
+/// Second group of built-in MCP tool descriptors (client-event evidence plus daemon tools).
+fn tool_descriptors_client_and_daemon() -> Vec<ToolDescriptor> {
+    vec![
         tool(
             "tdw.client_event.sample",
             "Client Event Evidence",
