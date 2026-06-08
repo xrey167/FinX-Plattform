@@ -19,10 +19,6 @@ use serde_json::{Value, json};
 #[cfg(feature = "alerts")]
 use tdw_alerts::{AlertDirection, NewAlert, PriceAlert};
 use tdw_app_server::Dispatcher;
-#[cfg(feature = "identity")]
-use tdw_event::{EventEnvelope, sample_actor_context};
-#[cfg(feature = "identity")]
-use tdw_identity::{IdentityError, NewUser};
 #[cfg_attr(
     not(any(
         feature = "provider-akshare",
@@ -41,7 +37,11 @@ use tdw_identity::{IdentityError, NewUser};
 use tdw_core::Fetcher;
 use tdw_core::{Error, Result};
 use tdw_domain::QuoteSnapshot;
+#[cfg(feature = "identity")]
+use tdw_event::{EventEnvelope, sample_actor_context};
 use tdw_hooks::SystemHookHandlerBackend;
+#[cfg(feature = "identity")]
+use tdw_identity::{IdentityError, NewUser};
 use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
@@ -624,9 +624,7 @@ async fn dispatch_register_user(
         )
         .await
         .map_err(|error| match error {
-            IdentityError::EmailTaken => {
-                Error::Provider("email already registered".to_string())
-            }
+            IdentityError::EmailTaken => Error::Provider("email already registered".to_string()),
             IdentityError::WeakPassword(reason) => {
                 Error::Provider(format!("weak password: {reason}"))
             }
@@ -2355,10 +2353,7 @@ mod tests {
         let events = dispatch_op(&state, second).await;
         match &events[1] {
             EventMsg::Failed { error, .. } => {
-                assert!(
-                    error.contains("email already registered"),
-                    "got: {error}"
-                );
+                assert!(error.contains("email already registered"), "got: {error}");
             }
             other => panic!("expected Failed for duplicate email, got {other:?}"),
         }
