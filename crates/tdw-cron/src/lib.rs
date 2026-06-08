@@ -698,7 +698,10 @@ mod tests {
         let job = build_job(&trigger, fire_ms).expect("build should succeed");
 
         assert_eq!(job.job_id, fire_job_id("t1", fire_ms));
-        assert_eq!(job.not_before_ms, fire_ms as u64);
+        // fire_ms is a positive timestamp, so the u64 cast cannot lose sign.
+        #[allow(clippy::cast_sign_loss)]
+        let expected_not_before = fire_ms as u64;
+        assert_eq!(job.not_before_ms, expected_not_before);
         assert_eq!(job.queue, "default");
         assert_eq!(job.max_attempts, 3);
         assert_eq!(job.priority, 0);

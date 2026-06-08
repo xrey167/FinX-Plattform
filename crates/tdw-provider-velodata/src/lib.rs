@@ -292,7 +292,7 @@ pub fn funding_query_from_value(
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map_or(100, |v| v as u32);
+        .map_or(100, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataFundingQuery::new(exchange, symbol, limit).map_err(|e| e.to_string())
 }
 
@@ -311,7 +311,7 @@ pub fn liquidations_query_from_value(
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map_or(24, |v| v as u32);
+        .map_or(24, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataLiquidationsQuery::new(symbol, limit).map_err(|e| e.to_string())
 }
 
@@ -328,7 +328,7 @@ pub fn oi_query_from_value(params: &Value) -> std::result::Result<VelodataOiQuer
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map_or(24, |v| v as u32);
+        .map_or(24, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataOiQuery::new(symbol, limit).map_err(|e| e.to_string())
 }
 
