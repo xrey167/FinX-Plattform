@@ -215,6 +215,13 @@ pub struct AppState {
     /// in unconditionally. Mirrors [`alert_store`](Self::alert_store).
     #[cfg(feature = "identity")]
     pub user_store: Arc<dyn UserStore>,
+    /// Optional hook to enqueue subscribed application-function jobs when a
+    /// `user.created` event is emitted.  Defaults to `None` (off by default);
+    /// callers wire a concrete [`crate::function_enqueue::FunctionEnqueuer`]
+    /// impl to activate the path.  Present only when the `functions` feature
+    /// is enabled; absent in default builds.
+    #[cfg(feature = "functions")]
+    pub function_enqueuer: Option<Arc<dyn crate::function_enqueue::FunctionEnqueuer>>,
 }
 
 impl AppState {
@@ -260,6 +267,8 @@ impl AppState {
             alert_store: Arc::new(InMemoryAlertStore::new()),
             #[cfg(feature = "identity")]
             user_store: Arc::new(InMemoryUserStore::new()),
+            #[cfg(feature = "functions")]
+            function_enqueuer: None,
         })
     }
 

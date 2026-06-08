@@ -166,6 +166,19 @@ identity = ["dep:tdw-identity"]
 ## container restarts. Mirrors the `alerts-postgres` feature pattern.
 identity-postgres = ["identity", "tdw-identity/postgres", "real-postgres"]
 
+## Enable the dispatcher hook that enqueues subscribed application-function
+## jobs (welcome mailer, etc.) when a `user.created` event is emitted.
+## Requires `identity` (the event is only emitted when that feature is on).
+## The `AppState::function_enqueuer` field defaults to `None`; callers must
+## wire a concrete `FunctionEnqueuer` impl to activate the path.
+##
+## NOTE: No production `FunctionEnqueuer` impl ships in this crate.
+## `tdw-worker/Cargo.toml:42` has an unconditional back-dep on
+## `tdw-service-api`, so pulling `tdw-functions`/`tdw-worker` here would
+## create a Cargo manifest-level cycle.  The production `RouterEnqueuer` is
+## a follow-up in a cycle-free wiring crate.
+functions = ["identity", "dep:tracing"]
+
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
 ## providers; this adds live HTTP fetchers when explicitly enabled. Yahoo is the
@@ -304,6 +317,7 @@ tdw-tools = { workspace = true }
 tdw-tui = { workspace = true }
 tdw-udf = { path = "../tdw-udf" }
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
