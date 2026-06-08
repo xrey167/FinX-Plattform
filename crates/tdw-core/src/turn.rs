@@ -147,7 +147,11 @@ impl CostBudget {
     /// Returns [`TerminalReason::BudgetExhausted`] if applying the spend would
     /// push either running total past its cap; in that case neither total is
     /// modified.
-    pub const fn add(&mut self, input_tokens: u32, output_tokens: u32) -> Result<(), TerminalReason> {
+    pub const fn add(
+        &mut self,
+        input_tokens: u32,
+        output_tokens: u32,
+    ) -> Result<(), TerminalReason> {
         let next_input = self.acc_input.saturating_add(input_tokens);
         let next_output = self.acc_output.saturating_add(output_tokens);
         if next_input > self.limit_input || next_output > self.limit_output {

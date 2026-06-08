@@ -862,7 +862,7 @@ pub struct ResetToken {
 /// The returned token is the sole credential for the reset flow.
 /// Callers must treat it as secret: do not log, transmit only over TLS,
 /// and embed in single-use links that expire quickly.
-#[must_use] 
+#[must_use]
 pub fn generate_reset_token() -> String {
     use argon2::password_hash::rand_core::RngCore;
     let mut bytes = [0u8; 32];
