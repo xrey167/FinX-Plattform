@@ -4,7 +4,10 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher};
+pub use http_fetcher::{
+    FinnhubHttpCompanyNewsFetcher, FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher,
+    FinnhubHttpSymbolSearchFetcher,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -58,12 +61,71 @@ impl FinnhubQuoteQuery {
     }
 }
 
+/// Query for a symbol search from the Finnhub `/search` endpoint.
+///
+/// Unlike the symbol-keyed queries, the search term is free text (it may
+/// contain spaces) so it is validated as non-blank only, not via
+/// [`normalize_symbol`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FinnhubSearchQuery {
+    pub query: String,
+}
+
+impl FinnhubSearchQuery {
+    /// Construct a validated symbol-search query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FinnhubError::EmptyQuery`] if `query` is blank after trimming.
+    pub fn new(query: &str) -> Result<Self> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(FinnhubError::EmptyQuery);
+        }
+        Ok(Self {
+            query: query.to_string(),
+        })
+    }
+}
+
+/// Query for company news from the Finnhub `/company-news` endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FinnhubCompanyNewsQuery {
+    pub symbol: String,
+    pub from: String,
+    pub to: String,
+}
+
+impl FinnhubCompanyNewsQuery {
+    /// Construct a validated company-news query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FinnhubError::EmptySymbol`] or [`FinnhubError::InvalidSymbol`]
+    /// if `symbol` is invalid (see [`FinnhubProfileQuery::new`]), or
+    /// [`FinnhubError::InvalidDate`] if `from`/`to` are not `YYYY-MM-DD` dates or
+    /// `from` is later than `to`.
+    pub fn new(symbol: &str, from: &str, to: &str) -> Result<Self> {
+        let symbol = normalize_symbol(symbol)?;
+        let from = validate_iso_date(from)?;
+        let to = validate_iso_date(to)?;
+        if from > to {
+            return Err(FinnhubError::InvalidDate);
+        }
+        Ok(Self { symbol, from, to })
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FinnhubError {
     #[error("finnhub symbol must not be empty")]
     EmptySymbol,
     #[error("finnhub symbol contains unsupported characters")]
     InvalidSymbol,
+    #[error("finnhub search query must not be empty")]
+    EmptyQuery,
+    #[error("finnhub date must be a YYYY-MM-DD value")]
+    InvalidDate,
     #[error("finnhub provider error: {0}")]
     Provider(String),
 }
@@ -80,6 +142,29 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
         return Err(FinnhubError::InvalidSymbol);
     }
     Ok(symbol.to_ascii_uppercase())
+}
+
+/// Validate that `date` is a `YYYY-MM-DD` calendar date string.
+///
+/// This performs a shape check only (length 10, digits in the right places,
+/// dashes at positions 4 and 7); it does not verify the date is real. ISO dates
+/// in this form compare lexically, which the company-news query relies on.
+fn validate_iso_date(date: &str) -> Result<String> {
+    let date = date.trim();
+    if date.len() != 10 {
+        return Err(FinnhubError::InvalidDate);
+    }
+    let ok = date.as_bytes().iter().enumerate().all(|(i, &b)| {
+        if i == 4 || i == 7 {
+            b == b'-'
+        } else {
+            b.is_ascii_digit()
+        }
+    });
+    if !ok {
+        return Err(FinnhubError::InvalidDate);
+    }
+    Ok(date.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +253,40 @@ pub struct FinnhubQuoteRow {
     pub t: i64,
 }
 
+/// A single symbol-search match from the Finnhub `/search` endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SymbolMatch {
+    /// Exchange ticker symbol (e.g. `AAPL`).
+    pub symbol: String,
+    /// Display symbol shown to end users.
+    pub display_symbol: String,
+    /// Human-readable description (e.g. `APPLE INC`).
+    pub description: String,
+    /// Instrument type (e.g. `Common Stock`); the wire `type` field.
+    pub kind: String,
+}
+
+/// A single company-news article from the Finnhub `/company-news` endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CompanyNewsItem {
+    /// Finnhub article id.
+    pub id: i64,
+    /// Publication time in Unix milliseconds (wire `datetime` seconds * 1000).
+    pub datetime_ms: i64,
+    /// Article headline.
+    pub headline: String,
+    /// Article summary.
+    pub summary: String,
+    /// News source name.
+    pub source: String,
+    /// Article URL.
+    pub url: String,
+    /// Article category.
+    pub category: String,
+    /// Related symbols (comma-separated as supplied by Finnhub).
+    pub related: String,
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests (no feature gate required)
 // ---------------------------------------------------------------------------
@@ -253,10 +372,66 @@ mod tests {
                 .to_string()
                 .contains("unsupported")
         );
+        assert!(FinnhubError::EmptyQuery.to_string().contains("empty"));
+        assert!(FinnhubError::InvalidDate.to_string().contains("YYYY-MM-DD"));
         assert!(
             FinnhubError::Provider("timeout".to_string())
                 .to_string()
                 .contains("timeout")
+        );
+    }
+
+    #[test]
+    fn search_query_trims_but_preserves_free_text() {
+        let q = FinnhubSearchQuery::new("  apple inc  ")
+            .unwrap_or_else(|e| panic!("query should build: {e}"));
+        assert_eq!(q.query, "apple inc");
+    }
+
+    #[test]
+    fn search_query_rejects_blank() {
+        assert_eq!(FinnhubSearchQuery::new(""), Err(FinnhubError::EmptyQuery));
+        assert_eq!(
+            FinnhubSearchQuery::new("   "),
+            Err(FinnhubError::EmptyQuery)
+        );
+    }
+
+    #[test]
+    fn company_news_query_normalises_symbol_and_keeps_dates() {
+        let q = FinnhubCompanyNewsQuery::new("aapl", "2024-01-01", "2024-01-31")
+            .unwrap_or_else(|e| panic!("query should build: {e}"));
+        assert_eq!(q.symbol, "AAPL");
+        assert_eq!(q.from, "2024-01-01");
+        assert_eq!(q.to, "2024-01-31");
+    }
+
+    #[test]
+    fn company_news_query_rejects_invalid_symbol() {
+        assert_eq!(
+            FinnhubCompanyNewsQuery::new("", "2024-01-01", "2024-01-31"),
+            Err(FinnhubError::EmptySymbol)
+        );
+        assert_eq!(
+            FinnhubCompanyNewsQuery::new("AAPL/../x", "2024-01-01", "2024-01-31"),
+            Err(FinnhubError::InvalidSymbol)
+        );
+    }
+
+    #[test]
+    fn company_news_query_rejects_bad_dates() {
+        assert_eq!(
+            FinnhubCompanyNewsQuery::new("AAPL", "2024/01/01", "2024-01-31"),
+            Err(FinnhubError::InvalidDate)
+        );
+        assert_eq!(
+            FinnhubCompanyNewsQuery::new("AAPL", "2024-1-1", "2024-01-31"),
+            Err(FinnhubError::InvalidDate)
+        );
+        // from later than to is rejected.
+        assert_eq!(
+            FinnhubCompanyNewsQuery::new("AAPL", "2024-02-01", "2024-01-31"),
+            Err(FinnhubError::InvalidDate)
         );
     }
 }
