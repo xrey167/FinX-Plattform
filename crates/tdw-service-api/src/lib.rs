@@ -277,6 +277,39 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
+    register_extended_providers(&mut registry)?;
+    Ok(registry)
+}
+
+/// Register the second half of the built-in provider catalog (geckoterminal onward).
+///
+/// `registry` is only mutated when at least one of the corresponding provider
+/// features is enabled, so it is unused under the default (offline) feature set.
+#[cfg_attr(
+    not(any(
+        feature = "provider-geckoterminal",
+        feature = "provider-glassnode",
+        feature = "provider-huggingface",
+        feature = "provider-nasdaq",
+        feature = "provider-oecd",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-seeking-alpha",
+        feature = "provider-tiingo",
+        feature = "provider-tmx",
+        feature = "provider-tradier",
+        feature = "provider-trading-economics",
+        feature = "provider-velodata",
+        feature = "provider-binance-http",
+    )),
+    allow(
+        unused_variables,
+        clippy::unnecessary_wraps,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )
+)]
+fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     #[cfg(feature = "provider-geckoterminal")]
     registry.register(GeckoTerminalHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-glassnode")]
@@ -321,7 +354,7 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(VelodataHttpOiFetcher::registry_entry())?;
     #[cfg(feature = "provider-binance-http")]
     registry.register(BinanceHttpTickerPriceFetcher::registry_entry())?;
-    Ok(registry)
+    Ok(())
 }
 
 /// # Errors
@@ -809,6 +842,20 @@ pub fn parity_layer_sample() -> Result<Value> {
         json!({ "snapshot_version": snapshot.version }),
     ));
 
+    parity_layer_evidence(snapshot.version, time_travel_rows, stream_offset)
+}
+
+/// Assemble the parity-layer evidence payload from the snapshot version,
+/// time-travel row count, and stream offset.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
+fn parity_layer_evidence(
+    snapshot_version: u64,
+    time_travel_rows: usize,
+    stream_offset: u64,
+) -> Result<Value> {
     let mut graph = DirectedGraph::default();
     graph.add_edge("account", "position");
     graph.add_edge("position", "instrument");
@@ -839,7 +886,7 @@ pub fn parity_layer_sample() -> Result<Value> {
     let manifest = TableManifest {
         format: TableFormat::Iceberg,
         table: "raw.market_data_bar".to_string(),
-        version: snapshot.version,
+        version: snapshot_version,
         files: vec![TableFile {
             path: "s3://bucket/market/ohlcv.parquet".to_string(),
             checksum: simple_checksum("s3://bucket/market/ohlcv.parquet"),
@@ -856,6 +903,43 @@ pub fn parity_layer_sample() -> Result<Value> {
         "aapl",
     )
     .map_err(|error| Error::Provider(error.to_string()))?;
+    let (claims, auth_policy, define, masked_account) = parity_auth_mask_evidence()?;
+
+    Ok(json!({
+        "snapshot_version": snapshot_version,
+        "time_travel_rows": time_travel_rows,
+        "stream_offset": stream_offset,
+        "live_query_event_type": "stream.market_data_bar",
+        "graph_path": graph.traverse("account"),
+        "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
+        "copy_checksum": copy_plan.checksum,
+        "pipe_offset": pipe.last_offset,
+        "table_manifest_ok": manifest.verify_checksums(),
+        "udf_output": udf_output,
+        "jwt_valid": validate_claims(
+            &claims,
+            &[JwksKey { kid: "k1".to_string(), alg: "RS256".to_string() }],
+            "https://issuer",
+            "tdw"
+        ),
+        "authorized": authorize(
+            &Principal { subject: "alice".to_string(), roles: claims.roles },
+            &auth_policy
+        ),
+        "define_hook": define.compile_hook().name,
+        "define_key": define.idempotency_key(),
+        "mask_hook": masking_hook().name,
+        "masked_account": masked_account,
+    }))
+}
+
+/// Build the JWT claims, auth policy, define event, and masked account fields
+/// used by the parity-layer evidence payload.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
+fn parity_auth_mask_evidence() -> Result<(JwtClaims, AuthPolicy, DefineEvent, String)> {
     let claims = JwtClaims {
         sub: "alice".to_string(),
         iss: "https://issuer".to_string(),
@@ -888,32 +972,7 @@ pub fn parity_layer_sample() -> Result<Value> {
         .cloned()
         .ok_or_else(|| Error::Provider("masked account_id missing".to_string()))?;
 
-    Ok(json!({
-        "snapshot_version": snapshot.version,
-        "time_travel_rows": time_travel_rows,
-        "stream_offset": stream_offset,
-        "live_query_event_type": "stream.market_data_bar",
-        "graph_path": graph.traverse("account"),
-        "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
-        "copy_checksum": copy_plan.checksum,
-        "pipe_offset": pipe.last_offset,
-        "table_manifest_ok": manifest.verify_checksums(),
-        "udf_output": udf_output,
-        "jwt_valid": validate_claims(
-            &claims,
-            &[JwksKey { kid: "k1".to_string(), alg: "RS256".to_string() }],
-            "https://issuer",
-            "tdw"
-        ),
-        "authorized": authorize(
-            &Principal { subject: "alice".to_string(), roles: claims.roles },
-            &auth_policy
-        ),
-        "define_hook": define.compile_hook().name,
-        "define_key": define.idempotency_key(),
-        "mask_hook": masking_hook().name,
-        "masked_account": masked_account,
-    }))
+    Ok((claims, auth_policy, define, masked_account))
 }
 
 #[must_use]

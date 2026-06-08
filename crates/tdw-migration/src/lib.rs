@@ -155,6 +155,13 @@ pub fn postgres_migrations() -> Vec<Migration> {
 
 #[must_use]
 pub fn clickhouse_migrations() -> Vec<Migration> {
+    let mut migrations = clickhouse_migrations_core();
+    migrations.extend(clickhouse_migrations_analytics());
+    migrations
+}
+
+/// First half of the `ClickHouse` migration catalog (database init through raw book).
+fn clickhouse_migrations_core() -> Vec<Migration> {
     vec![
         Migration {
             target: MigrationTarget::ClickHouse,
@@ -240,6 +247,12 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
             name: "raw_book",
             sql: include_str!("../../../migrations/clickhouse/20260528_0010_raw_book.sql"),
         },
+    ]
+}
+
+/// Second half of the `ClickHouse` migration catalog (trading calendar through analytics UDFs).
+fn clickhouse_migrations_analytics() -> Vec<Migration> {
+    vec![
         Migration {
             target: MigrationTarget::ClickHouse,
             version: "20260528_0011",
