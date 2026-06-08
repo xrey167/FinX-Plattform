@@ -853,12 +853,12 @@ mod tests {
     /// connect a few times so the spawned daemon has a moment to bind. Returns
     /// once the daemon emits a terminal `Completed` event for the op.
     async fn submit_loopback_shutdown(addr: String) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         loop {
             let attempt_addr = addr.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let client = DaemonClient::new(
-                    DaemonClientConfig::tcp(attempt_addr).with_timeout(Duration::from_secs(1)),
+                    DaemonClientConfig::tcp(attempt_addr).with_timeout(Duration::from_secs(5)),
                 );
                 client.submit_and_wait(&shutdown_envelope())
             })

@@ -900,16 +900,16 @@ mod tests {
         // A loopback client submits a Shutdown op and must observe a terminal
         // event. `serve` returns after binding, but the spawned accept loop can
         // still be a few scheduler ticks behind on loaded CI runners.
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
         let submission = loop {
             let client_addr = addr.clone();
             let attempt = tokio::task::spawn_blocking(move || {
                 let client = DaemonClient::new(
-                    DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(2)),
+                    DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(5)),
                 );
                 client.submit_and_wait(&make_envelope(Op::Shutdown))
             });
-            match tokio::time::timeout(Duration::from_secs(3), attempt)
+            match tokio::time::timeout(Duration::from_secs(6), attempt)
                 .await
                 .expect("loopback submit must not hang")
                 .expect("spawn_blocking join")
