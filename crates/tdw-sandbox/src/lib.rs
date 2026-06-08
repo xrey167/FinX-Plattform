@@ -469,6 +469,19 @@ mod tests {
             oversized_source,
             Err(SandboxError::InvalidRequest("source"))
         );
+
+        // Symmetric to the oversized-source case: an oversized input is rejected
+        // before dispatch (guards against a regression dropping the input bound).
+        let oversized_input = sandbox.run(UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            input: "x".repeat(MAX_UDF_INPUT_BYTES + 1),
+            allow_network: false,
+            allow_filesystem: false,
+            wasm_limits: None,
+        });
+        assert_eq!(oversized_input, Err(SandboxError::InvalidRequest("input")));
     }
 
     #[test]
