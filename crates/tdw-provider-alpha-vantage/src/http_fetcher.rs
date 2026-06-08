@@ -151,6 +151,8 @@ impl Fetcher<AlphaVantageQuery, MarketDataBar> for AlphaVantageHttpFetcher {
         ];
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Provider(format!("alpha_vantage client build: {e}")))?;
         let response = client

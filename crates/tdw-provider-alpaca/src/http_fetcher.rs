@@ -145,6 +145,8 @@ impl Fetcher<AlpacaStockBarsQuery, MarketDataBar> for AlpacaHttpStockBarsFetcher
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|error| Error::Provider(format!("alpaca client: {error}")))?;
         let response = client

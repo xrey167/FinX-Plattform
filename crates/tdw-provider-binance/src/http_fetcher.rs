@@ -83,6 +83,8 @@ impl Fetcher<BinanceTickerPriceQuery, BinanceTickerPrice> for BinanceHttpTickerP
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|error| Error::Provider(format!("binance client: {error}")))?;
         let response = client

@@ -81,6 +81,8 @@ fn read_api_key() -> Result<String> {
 fn build_client() -> Result<Client> {
     Client::builder()
         .user_agent(USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| Error::Provider(format!("benzinga client build: {e}")))
 }

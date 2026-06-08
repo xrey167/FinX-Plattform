@@ -123,6 +123,8 @@ impl Fetcher<AkShareQuery, MarketDataBar> for AkShareHttpFetcher {
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Provider(format!("akshare client build: {e}")))?;
         let response = client

@@ -119,6 +119,8 @@ impl Fetcher<CboeOptionsQuery, CboeOptionContract> for CboeHttpOptionsFetcher {
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Provider(format!("cboe options client build: {e}")))?;
 
@@ -222,6 +224,8 @@ impl Fetcher<CboeIndexQuery, CboeIndexQuote> for CboeHttpIndexFetcher {
 
         let client = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::Provider(format!("cboe index client build: {e}")))?;
 
