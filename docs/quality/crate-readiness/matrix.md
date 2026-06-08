@@ -126,6 +126,7 @@ Refreshed during G001-crate-by-crate-release-blocker-inven on 2026-06-07 from `c
 | [tdw-udf-js](tdw-udf-js.md) | crate-by-crate release audit | example, lib | none | none | none | 2 | README, ARCHITECTURE, examples, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-udf-python](tdw-udf-python.md) | crate-by-crate release audit | example, lib | none | none | none | 2 | README, ARCHITECTURE, examples, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-udf-wasm](tdw-udf-wasm.md) | crate-by-crate release audit | example, lib | none | tdw-sandbox | default; wasmi=[dep:wasmi] | 20 | README, ARCHITECTURE, examples, worksheet | Current worksheet. | Ready with follow-ups |
+| [tdw-watchlist-compose](tdw-watchlist-compose.md) | crate-by-crate release audit | lib | none | none | none | 21 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-worker](tdw-worker.md) | crate-by-crate release audit | bin, lib, test | tdw-app-client, tdw-app-server, tdw-protocol, tdw-service-api | tdw-cron | default; postgres=[sqlx/postgres] | 29 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-workflow-engine](tdw-workflow-engine.md) | crate-by-crate release audit | lib | tdw-agent | tdw-backend, tdw-service-api | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
 | [xtask](xtask.md) | crate-by-crate release audit | bin | tdw-agent, tdw-config, tdw-event, tdw-migration, tdw-protocol, tdw-sql-codegen | none | none | 25 | worksheet | Current worksheet. | Ready with follow-ups |
