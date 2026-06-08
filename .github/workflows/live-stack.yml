@@ -76,17 +76,17 @@ jobs:
           docker compose --profile live logs tdw-bootstrap
           exit 1
 
-      - name: Daemon policy attached (dispatches resolve, #109)
+      - name: Daemon readiness probe
         run: |
           set -euo pipefail
           for i in $(seq 1 30); do
-            if docker compose --profile live logs tdw-service-daemon 2>&1 | grep -qi "policy attached"; then
-              echo "daemon reports a policy attached"
+            if docker compose --profile live exec -T tdw-service-daemon curl -fsS http://127.0.0.1:9102/ready; then
+              echo "daemon readiness probe passed"
               exit 0
             fi
             sleep 3
           done
-          echo "daemon did not report a policy attached"
+          echo "daemon readiness probe did not pass"
           docker compose --profile live logs tdw-service-daemon
           exit 1
 
