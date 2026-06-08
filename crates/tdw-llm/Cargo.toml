@@ -18,6 +18,9 @@ tdw-config = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 # Unique example binary name (the workspace builds examples into one shared
 # target dir, where a bare `basic` would collide across crates).
 [[example]]
