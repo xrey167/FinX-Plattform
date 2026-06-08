@@ -92,6 +92,12 @@ pub struct AlertEvalDeps {
 /// Returns `{"processed": <eligible count>, "triggered": <actually fired
 /// count>}`.
 #[must_use]
+// Cohesive builder: the entire body is a single `FunctionDef::from_fn` call whose
+// async closure threads four `ctx.step(...)` stages, each with its own `move` capture
+// of cloned `deps`. The stages share the per-run `now_ms` clock boundary and the
+// borrowed `ctx`; lifting any stage into a helper would have to reconstruct that
+// closure/capture chain, so it is kept inline to preserve behavior exactly.
+#[allow(clippy::too_many_lines)]
 pub fn alert_evaluation_function(deps: AlertEvalDeps) -> FunctionDef {
     FunctionDef::from_fn(
         "price-alert-evaluation",

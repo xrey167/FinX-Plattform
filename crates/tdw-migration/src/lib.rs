@@ -49,6 +49,13 @@ pub enum MigrationCatalogError {
 
 #[must_use]
 pub fn postgres_migrations() -> Vec<Migration> {
+    let mut migrations = postgres_migrations_core();
+    migrations.extend(postgres_migrations_reference());
+    migrations
+}
+
+/// First half of the Postgres migration catalog (schema init through worker queue).
+fn postgres_migrations_core() -> Vec<Migration> {
     vec![
         Migration {
             target: MigrationTarget::Postgres,
@@ -100,6 +107,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "worker_queue",
             sql: include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql"),
         },
+    ]
+}
+
+/// Second half of the Postgres migration catalog (reference master through identity tokens).
+fn postgres_migrations_reference() -> Vec<Migration> {
+    vec![
         Migration {
             target: MigrationTarget::Postgres,
             version: "20260528_0001",
