@@ -126,4 +126,36 @@ mod tests {
             Err(StringFnError::UnsafePattern)
         );
     }
+
+    #[test]
+    fn rejects_invalid_names_and_empty_pipelines() {
+        // Non-identifier names are rejected before steps are inspected.
+        for bad in ["", "has space", "semi;colon"] {
+            assert_eq!(
+                validate_pipeline(&StringPipeline {
+                    name: bad.to_string(),
+                    steps: vec![StringFn::Trim],
+                }),
+                Err(StringFnError::InvalidPipelineName)
+            );
+        }
+
+        // A valid name with no steps is an empty pipeline.
+        assert_eq!(
+            validate_pipeline(&StringPipeline {
+                name: "normalize".to_string(),
+                steps: Vec::new(),
+            }),
+            Err(StringFnError::EmptyPipeline)
+        );
+    }
+
+    #[test]
+    fn applies_lowercase_step() {
+        let pipeline = StringPipeline {
+            name: "normalize".to_string(),
+            steps: vec![StringFn::Lowercase],
+        };
+        assert_eq!(apply_pipeline("AApL", &pipeline), Ok("aapl".to_string()));
+    }
 }

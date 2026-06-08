@@ -119,4 +119,39 @@ mod tests {
             Err(RewriteError::UnsafePattern)
         );
     }
+
+    #[test]
+    fn enabled_rules_chain_in_order_and_invalid_rule_id_is_rejected() {
+        // Sequential application: rule 2 operates on rule 1's output (a -> b -> c).
+        let plan = RewritePlan {
+            rules: vec![
+                RewriteRule {
+                    rule_id: "a-to-b".to_string(),
+                    find: "a".to_string(),
+                    replace: "b".to_string(),
+                    enabled: true,
+                },
+                RewriteRule {
+                    rule_id: "b-to-c".to_string(),
+                    find: "b".to_string(),
+                    replace: "c".to_string(),
+                    enabled: true,
+                },
+            ],
+        };
+        assert_eq!(apply_rewrites("a", &plan), Ok("c".to_string()));
+
+        // InvalidRuleId is the one error variant not covered elsewhere.
+        assert_eq!(
+            validate_plan(&RewritePlan {
+                rules: vec![RewriteRule {
+                    rule_id: "bad id".to_string(),
+                    find: "x".to_string(),
+                    replace: "y".to_string(),
+                    enabled: true,
+                }],
+            }),
+            Err(RewriteError::InvalidRuleId)
+        );
+    }
 }
