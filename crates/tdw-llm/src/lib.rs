@@ -35,6 +35,8 @@ pub enum LlmError {
     UnsafeBaseUrl,
     #[error("unsupported provider: {0}")]
     UnsupportedProvider(String),
+    #[error("fallback chain must contain at least one model")]
+    EmptyFallbackChain,
     #[error("model ref must be of the form <provider>/<model>")]
     InvalidModelRef,
     #[error("no credentials available for provider: {0}")]
@@ -178,8 +180,8 @@ pub trait LanguageModel: Send + Sync {
 
 /// Blanket forwarding impl so a boxed [`LanguageModel`] (e.g. an element of a
 /// `Vec<Arc<dyn LanguageModel>>` produced by [`router::ModelRouter::resolve_chain`])
-/// can itself be used wherever a `LanguageModel` is required, such as the
-/// `P`/`S` slots of [`FallbackModel`].
+/// can itself be used wherever a `LanguageModel` is required, such as in a
+/// [`FallbackModel`] chain.
 impl LanguageModel for std::sync::Arc<dyn LanguageModel> {
     fn model_id(&self) -> &str {
         (**self).model_id()
