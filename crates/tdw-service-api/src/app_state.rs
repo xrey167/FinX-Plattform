@@ -481,6 +481,7 @@ impl AppState {
             .lock()
             .map_err(|_| Error::Provider("streams registry lock poisoned".to_string()))?;
         streams.insert(stream_id.clone(), StreamControl { cancel, handle });
+        drop(streams);
         Ok(stream_id)
     }
 

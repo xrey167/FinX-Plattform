@@ -167,6 +167,7 @@ impl RunStore for InMemoryRunStore {
             record.result = result;
             record.updated_at_ms = updated_at_ms;
         }
+        drop(guard);
         Ok(())
     }
 }

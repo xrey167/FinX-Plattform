@@ -446,6 +446,10 @@ impl InMemoryUserStore {
 
 #[async_trait]
 impl UserStore for InMemoryUserStore {
+    // `records` and `email_index` are intentionally held together across the
+    // contains_key check and the paired inserts to keep registration atomic
+    // (prevents a duplicate-email race). Tightening would break that invariant.
+    #[allow(clippy::significant_drop_tightening)]
     async fn register(&self, new: NewUser, id: String, now_ms: i64) -> Result<User> {
         let email = normalize_email(&new.email)?;
         validate_password(&new.password)?;
