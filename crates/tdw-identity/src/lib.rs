@@ -285,13 +285,17 @@ pub struct NewUser {
 // ---------------------------------------------------------------------------
 
 /// Default dormancy window: a user inactive for **30 days** is considered
-/// dormant.  Convenience default for callers of
+/// dormant.
+///
+/// Convenience default for callers of
 /// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
 /// `dormant_before_ms` cutoff (typically `now_ms - DEFAULT_DORMANT_AFTER_MS`).
 pub const DEFAULT_DORMANT_AFTER_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 
 /// Default re-engagement cooldown: do not re-target a user within **30 days**
-/// of the last re-engagement email.  Convenience default for callers of
+/// of the last re-engagement email.
+///
+/// Convenience default for callers of
 /// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
 /// `reengaged_before_ms` cutoff (typically
 /// `now_ms - DEFAULT_REENGAGEMENT_COOLDOWN_MS`).
@@ -2028,11 +2032,12 @@ mod tests {
 
     #[tokio::test]
     async fn find_dormant_users_filters_orders_and_caps() {
-        let s = store();
         // Cutoffs: dormant if last_active <= DORMANT_CUTOFF; eligible if
         // last_reengagement is null or <= REENGAGED_CUTOFF.
         const DORMANT_CUTOFF: i64 = NOW_MS;
         const REENGAGED_CUTOFF: i64 = NOW_MS;
+
+        let s = store();
 
         // never_active: last_active None, never re-engaged -> dormant, sorts first.
         seed_user(&s, "never_active", None, None).await;

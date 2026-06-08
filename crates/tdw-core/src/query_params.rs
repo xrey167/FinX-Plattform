@@ -391,12 +391,14 @@ fn parse_limit_field(params: &Value) -> Result<Option<u32>> {
         )));
     }
     let limit = u32::try_from(raw).ok().filter(|value| *value <= MAX_LIMIT);
-    match limit {
-        Some(limit) => Ok(Some(limit)),
-        None => Err(Error::InvalidQuery(format!(
-            "limit {raw} exceeds the maximum of {MAX_LIMIT}"
-        ))),
-    }
+    limit.map_or_else(
+        || {
+            Err(Error::InvalidQuery(format!(
+                "limit {raw} exceeds the maximum of {MAX_LIMIT}"
+            )))
+        },
+        |limit| Ok(Some(limit)),
+    )
 }
 
 fn wrong_type(key: &str, expected: &str) -> Error {
@@ -530,7 +532,7 @@ mod tests {
 
     #[test]
     fn from_value_rejects_wrong_types_and_bad_limits() {
-        assert!(StandardParams::from_value(&json!({ "start_date": 20260101 })).is_err());
+        assert!(StandardParams::from_value(&json!({ "start_date": 20_260_101 })).is_err());
         assert!(StandardParams::from_value(&json!({ "interval": 60 })).is_err());
         assert!(StandardParams::from_value(&json!({ "limit": -5 })).is_err());
         assert!(StandardParams::from_value(&json!({ "limit": "many" })).is_err());
