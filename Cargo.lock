@@ -4513,6 +4513,7 @@ name = "tdw-llm"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-config",
  "thiserror 2.0.18",
  "tracing",
