@@ -44,6 +44,8 @@ use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry, run_w
 
 #[cfg(feature = "alerts")]
 use tdw_alerts::{AlertStore, InMemoryAlertStore};
+#[cfg(feature = "identity")]
+use tdw_identity::{InMemoryUserStore, UserStore};
 
 const DEFAULT_BUS_CAPACITY: usize = 1024;
 const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
@@ -202,6 +204,13 @@ pub struct AppState {
     /// dependency is not pulled in unconditionally.
     #[cfg(feature = "alerts")]
     pub alert_store: Arc<dyn AlertStore>,
+    /// First-party user (identity) persistence store. Always `InMemoryUserStore`
+    /// unless the `identity-postgres` feature is enabled **and** a Postgres URL
+    /// is configured at runtime. Present only when the `identity` feature is
+    /// enabled; absent in default offline builds so the dependency is not pulled
+    /// in unconditionally. Mirrors [`alert_store`](Self::alert_store).
+    #[cfg(feature = "identity")]
+    pub user_store: Arc<dyn UserStore>,
 }
 
 impl AppState {
@@ -245,6 +254,8 @@ impl AppState {
             streams: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "alerts")]
             alert_store: Arc::new(InMemoryAlertStore::new()),
+            #[cfg(feature = "identity")]
+            user_store: Arc::new(InMemoryUserStore::new()),
         })
     }
 

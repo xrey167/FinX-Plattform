@@ -5328,6 +5328,7 @@ dependencies = [
  "tdw-feature-store",
  "tdw-graph",
  "tdw-hooks",
+ "tdw-identity",
  "tdw-kg",
  "tdw-knowledge",
  "tdw-llm",

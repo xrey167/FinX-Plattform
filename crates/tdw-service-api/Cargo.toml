@@ -154,6 +154,18 @@ alerts = ["dep:tdw-alerts"]
 ## Used by the `live` compose stack so alerts survive container restarts.
 alerts-postgres = ["alerts", "tdw-alerts/postgres", "real-postgres"]
 
+## Enable the user-registration dispatcher arm (`RegisterUser`) + the
+## `user.created` event emission, behind the first-party `tdw-identity` store.
+## When the `postgres` feature on `tdw-identity` is absent the store falls back
+## to the in-memory implementation (suitable for tests and offline builds).
+## Mirrors the `alerts` feature pattern.
+identity = ["dep:tdw-identity"]
+
+## Like `identity` but wires the real `PgUserStore` instead of
+## `InMemoryUserStore`. Used by the `live` compose stack so users survive
+## container restarts. Mirrors the `alerts-postgres` feature pattern.
+identity-postgres = ["identity", "tdw-identity/postgres", "real-postgres"]
+
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
 ## providers; this adds live HTTP fetchers when explicitly enabled. Yahoo is the
@@ -226,6 +238,7 @@ tdw-exec = { workspace = true }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-graph = { path = "../tdw-graph" }
 tdw-hooks = { path = "../tdw-hooks" }
+tdw-identity = { path = "../tdw-identity", optional = true }
 tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }

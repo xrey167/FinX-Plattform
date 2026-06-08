@@ -263,6 +263,22 @@ pub enum Op {
         id: String,
         active: bool,
     },
+    /// Register a new first-party user (email/password onboarding). The
+    /// dispatcher validates and hashes the password via the `tdw-identity`
+    /// store and emits a `user.created` event on success. `password` is the
+    /// plaintext credential — it is hashed by the store and is **never**
+    /// returned or logged; the created `User` record never carries the hash.
+    /// `id` and `now_ms` are caller-supplied (the identity crate has no
+    /// UUID/clock dependency). Serializes as `register_user`. Like the alert
+    /// ops, this variant is always present in the protocol; the dispatcher arm
+    /// that services it is gated by the `identity` feature on `tdw-service-api`.
+    RegisterUser {
+        id: String,
+        email: String,
+        password: String,
+        display_name: String,
+        now_ms: i64,
+    },
     Shutdown,
 }
 
