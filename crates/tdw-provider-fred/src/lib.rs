@@ -85,7 +85,7 @@ impl FredSeriesObservationsQuery {
 
 /// Query for a standardized catalog-backed endpoint (macro or rate cluster).
 ///
-/// The caller supplies an OpenBB `command` path (e.g. `"economy/cpi"` or
+/// The caller supplies an `OpenBB` `command` path (e.g. `"economy/cpi"` or
 /// `"fixedincome/rate/sofr"`); the query resolves it against [`catalog`] to the
 /// concrete FRED `series_id` and carries the shared `start_date`/`end_date`/
 /// `limit` normalization. Used by both [`http_fetcher::FredHttpMacroSeriesFetcher`]

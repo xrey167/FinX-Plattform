@@ -1,12 +1,12 @@
-//! Clean-room catalog mapping OpenBB economy / fixedincome command paths to the
+//! Clean-room catalog mapping `OpenBB` economy / fixedincome command paths to the
 //! FRED data series that back them (gap-matrix item **L2.3**).
 //!
-//! Each [`FredEndpoint`] standardizes one OpenBB Platform command (per the
+//! Each [`FredEndpoint`] standardizes one `OpenBB` Platform command (per the
 //! `docs/roadmap/openbb-surface-domains.md` economy + fixedincome tables) onto a
 //! concrete FRED `series/observations` series id plus the metadata needed to
 //! populate a [`tdw_domain::MacroSeries`] or [`tdw_domain::RateObservation`]
 //! row. The series ids are public St. Louis Fed identifiers (facts, not source):
-//! e.g. `CPIAUCSL` for headline CPI, `SOFR` for the Secured Overnight Financing
+//! e.g. `CPIAUCSL` for headline `CPI`, `SOFR` for the Secured Overnight Financing
 //! Rate, `T10Y2Y` for the 10y-2y Treasury constant-maturity spread.
 //!
 //! This module is intentionally dependency-free (no `http` feature, no
@@ -30,7 +30,7 @@ pub enum FredModel {
 
 /// One standardized FRED-backed endpoint.
 ///
-/// `command` is the OpenBB Platform command path it standardizes (e.g.
+/// `command` is the `OpenBB` Platform command path it standardizes (e.g.
 /// `"economy/cpi"`, `"fixedincome/rate/sofr"`). `series_id` is the FRED series
 /// that backs it. The remaining fields carry the static normalization metadata
 /// that the fetchers copy onto each emitted row.
@@ -50,7 +50,7 @@ pub struct FredEndpoint {
     pub unit: &'static str,
     /// Maturity tenor for rate/spread endpoints (e.g. `"10y"`), else `""`.
     pub maturity: &'static str,
-    /// ISO 4217 currency the value is denominated in (`"USD"`, `"EUR"`, `"GBP"`).
+    /// `ISO 4217` currency the value is denominated in (`"USD"`, `"EUR"`, `"GBP"`).
     pub currency: &'static str,
 }
 
@@ -58,7 +58,7 @@ impl FredEndpoint {
     /// The maturity tenor as an [`Option`], `None` when this endpoint carries no
     /// tenor (the catalog stores `""` for "not applicable").
     #[must_use]
-    pub fn maturity_opt(&self) -> Option<&'static str> {
+    pub const fn maturity_opt(&self) -> Option<&'static str> {
         if self.maturity.is_empty() {
             None
         } else {
@@ -380,7 +380,7 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
     },
 ];
 
-/// Resolve a catalog entry by its OpenBB `command` path.
+/// Resolve a catalog entry by its `OpenBB` `command` path.
 ///
 /// Returns the matching [`FredEndpoint`] or `None` when the command is not in
 /// the standardized catalog (callers fall back to the generic `fred_series`
