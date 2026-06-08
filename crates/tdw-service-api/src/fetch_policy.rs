@@ -49,9 +49,9 @@ impl CacheTier {
     ///
     /// Only `EquityHistorical` is a cacheable data fetch (end-of-day bars), so
     /// it maps to [`CacheTier::EndOfDay`]. Every non-data endpoint
-    /// (`RunQuery`, `IngestBatch`, `ToolCall`, `UdfRun`, `AlertManage`) is not a
-    /// cached fetch and maps to [`CacheTier::Realtime`] so it is never served
-    /// from cache by this layer.
+    /// (`RunQuery`, `IngestBatch`, `ToolCall`, `UdfRun`, `AlertManage`,
+    /// `UserRegister`) is not a cached fetch and maps to [`CacheTier::Realtime`]
+    /// so it is never served from cache by this layer.
     #[must_use]
     pub const fn for_endpoint(endpoint: ServiceEndpoint) -> Self {
         match endpoint {
@@ -60,7 +60,8 @@ impl CacheTier {
             | ServiceEndpoint::IngestBatch
             | ServiceEndpoint::ToolCall
             | ServiceEndpoint::UdfRun
-            | ServiceEndpoint::AlertManage => Self::Realtime,
+            | ServiceEndpoint::AlertManage
+            | ServiceEndpoint::UserRegister => Self::Realtime,
         }
     }
 }

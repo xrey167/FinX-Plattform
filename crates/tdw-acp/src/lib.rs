@@ -182,6 +182,21 @@ fn validate_op(op: &Op) -> Result<()> {
         Op::ListAlerts {} => Ok(()),
         Op::DeleteAlert { id } => validate_token("id", id),
         Op::SetAlertActive { id, .. } => validate_token("id", id),
+        Op::RegisterUser {
+            id,
+            email,
+            display_name,
+            ..
+        } => {
+            // `password` is deliberately not validated here: it is opaque
+            // credential material (may legitimately contain spaces and the
+            // punctuation `validate_token` rejects), and the identity store
+            // enforces its own length policy. `id` is a structural token;
+            // `email`/`display_name` are free-form display text.
+            validate_token("id", id)?;
+            validate_display_text("email", email)?;
+            validate_display_text("display_name", display_name)
+        }
         Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }

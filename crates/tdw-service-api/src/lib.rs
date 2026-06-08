@@ -26,6 +26,8 @@ pub mod fetch_policy;
 mod policy;
 mod provider_resolve;
 mod stream_ingest;
+#[cfg(feature = "identity")]
+pub mod user_events;
 
 pub use app_state::{AppState, OidcPolicyError};
 pub use dispatcher::dispatch_op;

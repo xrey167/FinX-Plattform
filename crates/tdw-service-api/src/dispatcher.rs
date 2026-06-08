@@ -19,6 +19,10 @@ use serde_json::{Value, json};
 #[cfg(feature = "alerts")]
 use tdw_alerts::{AlertDirection, NewAlert, PriceAlert};
 use tdw_app_server::Dispatcher;
+#[cfg(feature = "identity")]
+use tdw_event::{EventEnvelope, sample_actor_context};
+#[cfg(feature = "identity")]
+use tdw_identity::{IdentityError, NewUser};
 #[cfg_attr(
     not(any(
         feature = "provider-akshare",
@@ -140,6 +144,34 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
         | Op::DeleteAlert { .. }
         | Op::SetAlertActive { .. } => Err(Error::Provider(
             "alert ops require the `alerts` feature; rebuild tdw-service-api with --features alerts"
+                .to_string(),
+        )),
+        #[cfg(feature = "identity")]
+        Op::RegisterUser {
+            id,
+            email,
+            password,
+            display_name,
+            now_ms,
+        } => {
+            dispatch_register_user(
+                state,
+                policy,
+                id.clone(),
+                email.clone(),
+                password.clone(),
+                display_name.clone(),
+                *now_ms,
+            )
+            .await
+        }
+        // When the `identity` feature is disabled this variant is unreachable
+        // from the daemon (the ACP validation layer still parses it), so we
+        // return a descriptive error rather than silently dropping the request.
+        #[cfg(not(feature = "identity"))]
+        Op::RegisterUser { .. } => Err(Error::Provider(
+            "user registration requires the `identity` feature; rebuild tdw-service-api with \
+             --features identity"
                 .to_string(),
         )),
         Op::ApprovalResponse { .. } => Ok(json!({ "acknowledged": "approval_response" })),
@@ -537,6 +569,110 @@ async fn dispatch_set_alert_active(
             "evidence": evidence,
             "id": id,
             "active": active,
+        }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Register a new first-party user and emit a `user.created` event.
+///
+/// Mirrors the alert-create handler: a sync policy guard runs first
+/// ([`ServiceEndpoint::UserRegister`]), then the async store call. The password
+/// is validated and hashed inside the `tdw-identity` store; the returned
+/// [`tdw_identity::User`] **never** carries the hash, and this handler never
+/// logs or returns the password or hash. On success a [`UserCreatedPayload`]
+/// is emitted onto the daemon outbox under [`USER_CREATED_EVENT_TYPE`] via the
+/// same `tdw-event` envelope path the rest of the service uses, then the
+/// created user is returned (response-masked).
+///
+/// [`UserCreatedPayload`]: crate::user_events::UserCreatedPayload
+/// [`USER_CREATED_EVENT_TYPE`]: crate::user_events::USER_CREATED_EVENT_TYPE
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if registration is
+/// rejected by the store (invalid email, weak password, duplicate email), or if
+/// the store write otherwise fails. Identity errors are mapped to
+/// [`Error::Provider`] the same way alert-store errors are.
+#[cfg(feature = "identity")]
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_register_user(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    id: String,
+    email: String,
+    password: String,
+    display_name: String,
+    now_ms: i64,
+) -> Result<Value> {
+    use crate::user_events::{USER_CREATED_EVENT_TYPE, UserCreatedPayload};
+
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::UserRegister, &mut backend)?;
+
+    let user = state
+        .user_store
+        .register(
+            NewUser {
+                email,
+                password,
+                display_name,
+            },
+            id,
+            now_ms,
+        )
+        .await
+        .map_err(|error| match error {
+            IdentityError::EmailTaken => {
+                Error::Provider("email already registered".to_string())
+            }
+            IdentityError::WeakPassword(reason) => {
+                Error::Provider(format!("weak password: {reason}"))
+            }
+            IdentityError::InvalidEmail(reason) => {
+                Error::Provider(format!("invalid email: {reason}"))
+            }
+            // Map any remaining identity error generically; the message never
+            // includes the password or hash (none of these variants carry it).
+            other => Error::Provider(format!("user store register: {other}")),
+        })?;
+
+    // Emit the `user.created` domain event onto the daemon outbox — the same
+    // relay path the EventSink uses for EventMsgs. The payload carries only the
+    // non-secret projection (id / email / created_at); never the password hash.
+    let payload = UserCreatedPayload {
+        user_id: user.id.clone(),
+        email: user.email.clone(),
+        created_at_ms: user.created_at_ms,
+    };
+    let payload_value = serde_json::to_value(&payload)
+        .map_err(|e| Error::Provider(format!("user.created payload serialize: {e}")))?;
+    let (actor, origin, trace) = sample_actor_context("tdw-service-api");
+    let envelope: EventEnvelope<Value> = EventEnvelope::new(
+        USER_CREATED_EVENT_TYPE,
+        actor,
+        origin,
+        trace,
+        "2026-05-28T00:00:00Z",
+        payload_value,
+    );
+    {
+        let mut outbox = state
+            .outbox
+            .lock()
+            .map_err(|e| Error::Provider(format!("outbox lock poisoned: {e}")))?;
+        outbox.append(envelope);
+    }
+
+    // The returned user never carries the password hash (the `User` type has no
+    // such field), so the masked response is safe to surface to the caller.
+    Ok(mask_json_response(
+        json!({
+            "evidence": evidence,
+            "user": serde_json::to_value(&user)
+                .map_err(|e| Error::Provider(format!("user serialize: {e}")))?,
+            "event_type": USER_CREATED_EVENT_TYPE,
         }),
         &policy.mask_rules,
     ))
@@ -2112,6 +2248,141 @@ mod tests {
                 assert!(error.contains("\"Above\" or \"Below\""), "got: {error}");
             }
             other => panic!("expected Failed for bad condition, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // User-registration dispatcher tests (require `identity` feature)
+    // -----------------------------------------------------------------------
+
+    /// `AppState` pre-wired with a fresh `InMemoryUserStore` and an analyst
+    /// policy (the gate `UserRegister` reuses for this slice).
+    #[cfg(feature = "identity")]
+    async fn identity_state() -> AppState {
+        AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy())
+    }
+
+    /// Happy path: a valid registration returns the persisted user (with no
+    /// `password`/`password_hash` field leaked) AND emits a `user.created`
+    /// envelope onto the outbox carrying the right non-secret payload.
+    #[cfg(feature = "identity")]
+    #[tokio::test]
+    async fn register_user_persists_and_emits_user_created_event() {
+        use crate::user_events::USER_CREATED_EVENT_TYPE;
+
+        let state = identity_state().await;
+        let env = make_envelope(Op::RegisterUser {
+            id: "user-1".to_string(),
+            email: "  Alice@Example.com ".to_string(),
+            password: "correct horse battery".to_string(),
+            display_name: "Alice".to_string(),
+            now_ms: 1_700_000_000_000,
+        });
+        let events = dispatch_op(&state, env).await;
+
+        assert_eq!(events.len(), 2);
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["evidence"]["principal"], "alice");
+                assert_eq!(value["evidence"]["endpoint"], "tdw.user.register");
+                // Persisted user is returned with the normalized email.
+                assert_eq!(value["user"]["id"], "user-1");
+                assert_eq!(value["user"]["email"], "alice@example.com");
+                assert_eq!(value["user"]["display_name"], "Alice");
+                assert_eq!(value["user"]["created_at_ms"], 1_700_000_000_000_i64);
+                assert_eq!(value["event_type"], USER_CREATED_EVENT_TYPE);
+                // No secret material ever surfaces.
+                assert!(
+                    value["user"].get("password").is_none(),
+                    "password must never be returned, got: {value}"
+                );
+                assert!(
+                    value["user"].get("password_hash").is_none(),
+                    "password_hash must never be returned, got: {value}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // A `user.created` envelope with the non-secret payload was relayed to
+        // the outbox (the same path the EventSink uses).
+        let pending = state
+            .outbox
+            .lock()
+            .unwrap_or_else(|e| panic!("outbox lock: {e}"))
+            .pending_after(0);
+        let created = pending
+            .iter()
+            .find(|record| record.envelope.event_type == USER_CREATED_EVENT_TYPE)
+            .unwrap_or_else(|| panic!("a user.created envelope must be emitted; got {pending:?}"));
+        let payload = &created.envelope.payload;
+        assert_eq!(payload["user_id"], "user-1");
+        assert_eq!(payload["email"], "alice@example.com");
+        assert_eq!(payload["created_at_ms"], 1_700_000_000_000_i64);
+        // The event payload must not carry secret material either.
+        assert!(payload.get("password").is_none());
+        assert!(payload.get("password_hash").is_none());
+    }
+
+    /// A second registration with the same (normalized) email is rejected with
+    /// the duplicate-email contract (mapped from `IdentityError::EmailTaken`).
+    #[cfg(feature = "identity")]
+    #[tokio::test]
+    async fn register_user_duplicate_email_fails() {
+        let state = identity_state().await;
+        let first = make_envelope(Op::RegisterUser {
+            id: "user-1".to_string(),
+            email: "dup@example.com".to_string(),
+            password: "correct horse battery".to_string(),
+            display_name: "First".to_string(),
+            now_ms: 1,
+        });
+        let events = dispatch_op(&state, first).await;
+        assert!(matches!(&events[1], EventMsg::Completed { .. }));
+
+        let second = make_envelope(Op::RegisterUser {
+            id: "user-2".to_string(),
+            email: "DUP@example.com".to_string(),
+            password: "another good password".to_string(),
+            display_name: "Second".to_string(),
+            now_ms: 2,
+        });
+        let events = dispatch_op(&state, second).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("email already registered"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed for duplicate email, got {other:?}"),
+        }
+    }
+
+    /// A password below the length policy is rejected with the weak-password
+    /// contract (mapped from `IdentityError::WeakPassword`).
+    #[cfg(feature = "identity")]
+    #[tokio::test]
+    async fn register_user_weak_password_fails() {
+        let state = identity_state().await;
+        let env = make_envelope(Op::RegisterUser {
+            id: "user-weak".to_string(),
+            email: "weak@example.com".to_string(),
+            password: "short".to_string(),
+            display_name: "Weak".to_string(),
+            now_ms: 1,
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(error.contains("weak password"), "got: {error}");
+            }
+            other => panic!("expected Failed for weak password, got {other:?}"),
         }
     }
 }

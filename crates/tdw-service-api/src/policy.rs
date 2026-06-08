@@ -23,6 +23,13 @@ pub enum ServiceEndpoint {
     /// same gate as query/ingest — so any authenticated analyst can manage
     /// their own alerts without a separate privilege.
     AlertManage,
+    /// User registration (`RegisterUser`). Registration is an onboarding op:
+    /// in production it would be a **public**, unauthenticated endpoint
+    /// (anyone can sign up). This integration slice does not introduce a new
+    /// auth mechanism, so for now it reuses the same `analyst` gate as the
+    /// alert ops; a production deployment would move this to a public path
+    /// (no required role) once anonymous ingress is wired.
+    UserRegister,
 }
 
 impl ServiceEndpoint {
@@ -34,14 +41,20 @@ impl ServiceEndpoint {
             Self::ToolCall => "tdw.udf.run",
             Self::UdfRun => "udf.run",
             Self::AlertManage => "tdw.alert.manage",
+            Self::UserRegister => "tdw.user.register",
         }
     }
 
     const fn required_role(self) -> &'static str {
         match self {
-            Self::EquityHistorical | Self::RunQuery | Self::IngestBatch | Self::AlertManage => {
-                "analyst"
-            }
+            // `UserRegister` is an onboarding op that would be public in
+            // production; for now it reuses the same `analyst` gate as the
+            // alert ops (no new auth mechanism is introduced here).
+            Self::EquityHistorical
+            | Self::RunQuery
+            | Self::IngestBatch
+            | Self::AlertManage
+            | Self::UserRegister => "analyst",
             Self::ToolCall | Self::UdfRun => "udf_runner",
         }
     }
@@ -54,6 +67,7 @@ impl ServiceEndpoint {
             Self::ToolCall => "runtime.tool_call",
             Self::UdfRun => "runtime.udf_run",
             Self::AlertManage => "market.price_alerts",
+            Self::UserRegister => "system.identity_users",
         }
     }
 }
