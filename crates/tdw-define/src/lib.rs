@@ -62,14 +62,12 @@ fn is_action_name(value: &str) -> bool {
 }
 
 fn is_table_name(value: &str) -> bool {
-    let mut parts = value.split('.');
-    let Some(schema) = parts.next() else {
-        return false;
-    };
-    let Some(table) = parts.next() else {
-        return false;
-    };
-    parts.next().is_none() && is_table_part(schema) && is_table_part(table)
+    match value.split_once('.') {
+        Some((schema, table)) => {
+            !table.contains('.') && is_table_part(schema) && is_table_part(table)
+        }
+        None => false,
+    }
 }
 
 fn is_table_part(value: &str) -> bool {

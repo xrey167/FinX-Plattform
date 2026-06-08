@@ -198,6 +198,73 @@ fn config_layer_kind_precedence_is_monotonic() {
 }
 
 #[test]
+fn merge_layers_reports_merged_error_on_type_mismatch() {
+    // `paths` is an object in the schema; overlaying it with a string produces a
+    // merged document that fails to deserialize into TdwConfig, exercising the
+    // `from_value(merged)` error branch in merge_layers.
+    let layers = vec![ConfigLayer::new(
+        ConfigLayerKind::CliFlags,
+        "cli",
+        json!({ "paths": "not-an-object" }),
+    )];
+
+    let error = merge_layers(&layers).expect_err("type mismatch must error");
+    assert!(matches!(error, ConfigError::Json { name, .. } if name == "merged"));
+}
+
+#[test]
+fn merge_layers_rejects_scalar_top_level_document() {
+    // A scalar overlay replaces the whole object base (deep_merge's catch-all
+    // arm) and then fails to deserialize as a struct.
+    let layers = vec![ConfigLayer::new(
+        ConfigLayerKind::CliFlags,
+        "cli",
+        json!(42),
+    )];
+
+    let error = merge_layers(&layers).expect_err("scalar document must fail typecheck");
+    assert!(matches!(error, ConfigError::Json { name, .. } if name == "merged"));
+}
+
+#[test]
+fn object_overlay_replaces_scalar_field_then_fails_typecheck() {
+    // `profile` is a string in the default config. Overlaying it with an object
+    // exercises merge_object's replace-non-object-base branch, and the resulting
+    // object-valued `profile` then fails to deserialize as String.
+    let layers = vec![ConfigLayer::new(
+        ConfigLayerKind::CliFlags,
+        "cli",
+        json!({ "profile": { "nested": "value" } }),
+    )];
+
+    let error = merge_layers(&layers).expect_err("object over scalar must fail typecheck");
+    assert!(matches!(error, ConfigError::Json { name, .. } if name == "merged"));
+}
+
+#[test]
+fn config_error_json_display_includes_layer_name() {
+    // Build a Json error indirectly via a merge type mismatch and assert its
+    // Display rendering names the offending layer.
+    let layers = vec![ConfigLayer::new(
+        ConfigLayerKind::CliFlags,
+        "cli",
+        json!({ "paths": 1 }),
+    )];
+    let error = merge_layers(&layers).expect_err("type mismatch must error");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("invalid JSON conversion for layer merged"),
+        "Json error display should name the layer, got: {rendered}"
+    );
+}
+
+#[test]
+fn config_schema_describes_tdw_config_object() {
+    let schema = config_schema();
+    assert!(schema.is_object(), "schema should be a JSON object");
+}
+
+#[test]
 fn schema_bundle_exports_named_schemas() {
     let bundle = schema_bundle();
     assert!(bundle.contains_key("tdw_config"));

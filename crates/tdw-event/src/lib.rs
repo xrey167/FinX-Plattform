@@ -212,4 +212,57 @@ mod tests {
             assert!(bundle.contains_key(name), "missing schema: {name}");
         }
     }
+
+    #[test]
+    fn grandchild_inherits_root_correlation_id() {
+        let root = sample_event("service");
+        let child = root.child_event("hook.first", json!({ "step": 1 }));
+        // Child's correlation_id was filled from the root's event_id.
+        assert_eq!(child.correlation_id, Some(root.event_id.clone()));
+
+        // Grandchild must KEEP the existing correlation_id (the or_else branch
+        // is not taken because correlation_id is already Some), while causation
+        // points at its direct parent and depth keeps climbing.
+        let grandchild = child.child_event("hook.second", json!({ "step": 2 }));
+        assert_eq!(grandchild.correlation_id, child.correlation_id);
+        assert_eq!(grandchild.correlation_id, Some(root.event_id));
+        assert_eq!(grandchild.causation_id, Some(child.event_id));
+        assert_eq!(grandchild.depth, 2);
+        assert_eq!(
+            grandchild.trace.parent_span_id,
+            Some(child.trace.span_id.clone())
+        );
+    }
+
+    #[test]
+    fn trace_context_child_links_parent_span() {
+        let root = TraceContext {
+            trace_id: "t1".to_string(),
+            span_id: "root".to_string(),
+            parent_span_id: None,
+        };
+        let child = root.child("child-span");
+        assert_eq!(child.trace_id, "t1");
+        assert_eq!(child.span_id, "child-span");
+        assert_eq!(child.parent_span_id, Some("root".to_string()));
+    }
+
+    #[test]
+    fn envelope_rejects_empty_required_fields() {
+        let mut event = sample_event("mcp");
+        event.event_type = String::new();
+        assert!(event.validate().is_err());
+    }
+
+    #[test]
+    fn event_schema_ref_round_trips_json() {
+        let reference = EventSchemaRef {
+            event_type: "ingress.received".to_string(),
+            schema_name: "event_envelope".to_string(),
+            schema_version: "1.0.0".to_string(),
+        };
+        let json = serde_json::to_string(&reference).expect("serialize");
+        let parsed: EventSchemaRef = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, reference);
+    }
 }
