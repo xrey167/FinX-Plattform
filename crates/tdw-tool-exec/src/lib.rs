@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tdw_agent::{EntityKind, Registry, Tool, ToolImplementation, entity_from_resource};
+use tdw_agent::{EntityKind, Registry, Tool, ToolEffect, ToolImplementation, entity_from_resource};
 use tdw_tools::{RegisteredTool, ToolDefinition, ToolHandler, ToolRegistry};
 use thiserror::Error;
 
@@ -28,6 +28,9 @@ pub use receipt::{ChainBreak, ChainStatus, GENESIS_PREV_HASH, ReceiptLog, ToolRe
 /// Env var holding the comma-separated allow-list of bare command names permitted for
 /// `Command` execution. Unset/empty means *deny all* command execution.
 const ALLOWED_COMMANDS_ENV: &str = "TDW_TOOL_EXEC_ALLOWED_COMMANDS";
+/// Env var selecting the [`AutonomyLevel`] (`full` | `supervised` | `readonly`). Unset or
+/// unparsable means [`AutonomyLevel::Full`] (today's behavior: every effect is allowed).
+const AUTONOMY_ENV: &str = "TDW_TOOL_EXEC_AUTONOMY";
 /// Env var overriding the command execution timeout, in whole seconds.
 const TIMEOUT_SECS_ENV: &str = "TDW_TOOL_EXEC_TIMEOUT_SECS";
 /// Default command execution timeout when [`TIMEOUT_SECS_ENV`] is unset/unparsable.
@@ -63,6 +66,94 @@ pub enum ExecError {
     /// The tool resource could not be re-typed, or arguments were malformed.
     #[error("bad arguments: {0}")]
     BadArguments(String),
+    /// The tool's declared [`ToolEffect`] risk exceeds what the configured [`AutonomyLevel`]
+    /// permits, so execution was refused *before dispatch*. This is a visible, recoverable
+    /// observation (the agent loop can surface it and choose to escalate autonomy), not a
+    /// silent failure.
+    #[error("tool {tool} blocked: effect {effect} exceeds autonomy level {level}")]
+    Blocked {
+        /// The registry tool name that was refused.
+        tool: String,
+        /// The tool's declared effect (`read-only` | `write-safe` | `destructive`).
+        effect: &'static str,
+        /// The active autonomy level (`full` | `supervised` | `read-only`).
+        level: &'static str,
+    },
+}
+
+/// How much of a tool's declared [`ToolEffect`] risk the executor is permitted to run before
+/// dispatch, mirroring readonly/supervised/full autonomy tiers.
+///
+/// The default is [`AutonomyLevel::Full`], which allows every effect — so an executor that does
+/// not opt in behaves exactly as it did before this gate existed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutonomyLevel {
+    /// Allow every effect (`ReadOnly`, `WriteSafe`, `Destructive`). Behavior-preserving default.
+    #[default]
+    Full,
+    /// Allow `ReadOnly` and `WriteSafe`; refuse `Destructive`.
+    Supervised,
+    /// Allow only `ReadOnly`; refuse `WriteSafe` and `Destructive`.
+    ReadOnly,
+}
+
+impl AutonomyLevel {
+    /// Stable lowercase label for this level, used in [`ExecError::Blocked`] and logging.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Supervised => "supervised",
+            Self::ReadOnly => "read-only",
+        }
+    }
+
+    /// Resolve the level from the `TDW_TOOL_EXEC_AUTONOMY` environment variable.
+    ///
+    /// Accepts `full`, `supervised`, or `readonly`/`read-only` (case-insensitive). Any unset,
+    /// empty, or unrecognized value falls back to [`AutonomyLevel::Full`], preserving today's
+    /// behavior unless an operator explicitly opts in.
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var(AUTONOMY_ENV)
+            .ok()
+            .map_or(Self::Full, |raw| Self::parse(&raw))
+    }
+
+    /// Parse a textual level, defaulting to [`AutonomyLevel::Full`] for unrecognized input.
+    ///
+    /// Factored out of [`AutonomyLevel::from_env`] so the mapping can be tested without
+    /// mutating process-global environment variables.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "supervised" => Self::Supervised,
+            "readonly" | "read-only" => Self::ReadOnly,
+            // "full" and anything unrecognized => behavior-preserving default.
+            _ => Self::Full,
+        }
+    }
+
+    /// Decide whether a tool with the given declared `effect` may run at this level.
+    ///
+    /// `ReadOnly` permits only `ToolEffect::ReadOnly`; `Supervised` additionally permits
+    /// `WriteSafe`; `Full` permits everything.
+    const fn permits(self, effect: ToolEffect) -> bool {
+        match self {
+            Self::Full => true,
+            Self::Supervised => !matches!(effect, ToolEffect::Destructive),
+            Self::ReadOnly => matches!(effect, ToolEffect::ReadOnly),
+        }
+    }
+}
+
+/// Stable lowercase label for a [`ToolEffect`], used in [`ExecError::Blocked`].
+const fn effect_label(effect: ToolEffect) -> &'static str {
+    match effect {
+        ToolEffect::ReadOnly => "read-only",
+        ToolEffect::WriteSafe => "write-safe",
+        ToolEffect::Destructive => "destructive",
+    }
 }
 
 /// The structured result of a successful tool execution.
@@ -148,16 +239,32 @@ impl Default for CommandPolicy {
 /// Holds an in-process [`ToolRegistry`] for `Builtin` handlers; `Command { background: false }`
 /// runs via a hardened direct [`std::process::Command`] governed by a [`CommandPolicy`].
 ///
+/// The [`AutonomyLevel`] gate (default [`AutonomyLevel::Full`]) is consulted before dispatch and
+/// refuses tools whose declared [`ToolEffect`] risk exceeds the level.
+///
 /// Optionally records an append-only, hash-chained [`ReceiptLog`] of successful
 /// executions (off by default; opt in via [`ToolExecutor::with_receipts`]). When
 /// recording is enabled the executor is **not** `Sync` and must not be shared across
 /// threads for concurrent `execute` (see [`ReceiptLog`]).
-#[derive(Default)]
 pub struct ToolExecutor {
     builtins: ToolRegistry,
     command_policy: CommandPolicy,
+    autonomy: AutonomyLevel,
     /// `None` = receipt recording disabled (default); `Some(log)` = recording.
     receipts: Option<ReceiptLog>,
+}
+
+impl Default for ToolExecutor {
+    fn default() -> Self {
+        Self {
+            builtins: ToolRegistry::default(),
+            command_policy: CommandPolicy::default(),
+            // Production default: read the level from the environment (defaults to `Full`
+            // when unset), mirroring `CommandPolicy::from_env`.
+            autonomy: AutonomyLevel::from_env(),
+            receipts: None,
+        }
+    }
 }
 
 impl ToolExecutor {
@@ -171,6 +278,16 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_command_policy(mut self, policy: CommandPolicy) -> Self {
         self.command_policy = policy;
+        self
+    }
+
+    /// Set the [`AutonomyLevel`] gate consulted before dispatch.
+    ///
+    /// Defaults to [`AutonomyLevel::Full`] (every effect allowed), so calling this is an
+    /// explicit opt-in to a stricter posture.
+    #[must_use]
+    pub const fn with_autonomy(mut self, level: AutonomyLevel) -> Self {
+        self.autonomy = level;
         self
     }
 
@@ -223,8 +340,9 @@ impl ToolExecutor {
     /// Returns [`ExecError::ToolNotFound`] if no `tool` named `name` is registered,
     /// [`ExecError::Unbound`] for an unbound tool, [`ExecError::NotYetSupported`] for a
     /// deferred variant, [`ExecError::NotPermitted`] for a command rejected by policy,
-    /// [`ExecError::BadArguments`] for a malformed tool resource or command, or
-    /// [`ExecError::Backend`] for a process failure.
+    /// [`ExecError::BadArguments`] for a malformed tool resource or command,
+    /// [`ExecError::Blocked`] when the tool's declared effect exceeds the configured
+    /// [`AutonomyLevel`], or [`ExecError::Backend`] for a process failure.
     pub fn execute(
         &self,
         registry: &Registry,
@@ -236,6 +354,17 @@ impl ToolExecutor {
             .ok_or_else(|| ExecError::ToolNotFound(name.to_string()))?;
         let tool: Tool = entity_from_resource(resource)
             .map_err(|error| ExecError::BadArguments(error.to_string()))?;
+
+        // Risk gate: refuse before dispatch if the tool's declared effect exceeds the
+        // configured autonomy level. `Full` (the default) permits everything, so this is a
+        // no-op unless an embedder opted in.
+        if !self.autonomy.permits(tool.effect) {
+            return Err(ExecError::Blocked {
+                tool: name.to_string(),
+                effect: effect_label(tool.effect),
+                level: self.autonomy.as_str(),
+            });
+        }
 
         let result = match tool.implementation {
             ToolImplementation::Unbound => Err(ExecError::Unbound),
@@ -474,6 +603,18 @@ mod tests {
             open_world: false,
             implementation,
         }
+    }
+
+    /// Like [`tool_with_impl`] but with an explicit declared [`ToolEffect`], for exercising the
+    /// autonomy gate.
+    fn tool_with_effect(
+        name: &str,
+        effect: ToolEffect,
+        implementation: ToolImplementation,
+    ) -> Tool {
+        let mut tool = tool_with_impl(name, implementation);
+        tool.effect = effect;
+        tool
     }
 
     fn registry_with(tool: &Tool) -> Registry {
@@ -715,6 +856,166 @@ mod tests {
             .execute(&registry, "tool.exec.bg", &serde_json::json!({}))
             .expect_err("background command must defer");
         assert!(matches!(error, ExecError::NotYetSupported(_)));
+    }
+
+    #[test]
+    fn destructive_tool_under_supervised_is_blocked() {
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        // Allow-list the shell so a non-blocked path WOULD run: the block must come from the
+        // autonomy gate, not the command policy.
+        let executor = ToolExecutor::new()
+            .with_command_policy(allow(&[shell_bin()]))
+            .with_autonomy(AutonomyLevel::Supervised);
+
+        let error = executor
+            .execute(&registry, "tool.exec.destructive", &serde_json::json!({}))
+            .expect_err("destructive tool under supervised must be blocked");
+        assert!(matches!(
+            error,
+            ExecError::Blocked {
+                ref tool,
+                effect: "destructive",
+                level: "supervised",
+            } if tool == "tool.exec.destructive"
+        ));
+    }
+
+    #[test]
+    fn destructive_tool_under_full_runs() {
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive.full",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        // Full is the explicit value here; behavior must match the unconfigured default.
+        let executor = ToolExecutor::new()
+            .with_command_policy(allow(&[shell_bin()]))
+            .with_autonomy(AutonomyLevel::Full);
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.destructive.full",
+                &serde_json::json!({}),
+            )
+            .unwrap_or_else(|error| panic!("destructive tool under full should run: {error}"));
+        assert_eq!(outcome.structured["exitCode"], 0);
+    }
+
+    #[test]
+    fn destructive_tool_under_default_full_runs() {
+        // Behavior-preservation guard: an executor that never opts into a stricter level still
+        // runs a destructive tool (default autonomy == Full).
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive.default",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new().with_command_policy(allow(&[shell_bin()]));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.destructive.default",
+                &serde_json::json!({}),
+            )
+            .unwrap_or_else(|error| {
+                panic!("default-autonomy destructive tool should run: {error}")
+            });
+        assert_eq!(outcome.structured["exitCode"], 0);
+    }
+
+    #[test]
+    fn read_only_tool_under_read_only_runs() {
+        let tool = tool_with_effect(
+            "tool.exec.ro",
+            ToolEffect::ReadOnly,
+            ToolImplementation::Builtin {
+                handler: "tool.exec.ro.handler".to_string(),
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.ro.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_autonomy(AutonomyLevel::ReadOnly);
+
+        let outcome = executor
+            .execute(&registry, "tool.exec.ro", &serde_json::json!({ "ok": 1 }))
+            .unwrap_or_else(|error| panic!("read-only tool under read-only should run: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({ "ok": 1 }));
+    }
+
+    #[test]
+    fn write_safe_tool_under_read_only_is_blocked() {
+        let tool = tool_with_effect(
+            "tool.exec.ws",
+            ToolEffect::WriteSafe,
+            ToolImplementation::Builtin {
+                handler: "tool.exec.ws.handler".to_string(),
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.ws.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_autonomy(AutonomyLevel::ReadOnly);
+
+        let error = executor
+            .execute(&registry, "tool.exec.ws", &serde_json::json!({}))
+            .expect_err("write-safe tool under read-only must be blocked");
+        assert!(matches!(
+            error,
+            ExecError::Blocked {
+                effect: "write-safe",
+                level: "read-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn autonomy_parse_maps_known_levels_and_defaults_to_full() {
+        // Exercise the parsing logic without mutating process-global env (mirrors the
+        // CommandPolicy test note).
+        assert_eq!(AutonomyLevel::parse("full"), AutonomyLevel::Full);
+        assert_eq!(
+            AutonomyLevel::parse("Supervised"),
+            AutonomyLevel::Supervised
+        );
+        assert_eq!(AutonomyLevel::parse("readonly"), AutonomyLevel::ReadOnly);
+        assert_eq!(AutonomyLevel::parse("read-only"), AutonomyLevel::ReadOnly);
+        assert_eq!(
+            AutonomyLevel::parse("  READONLY  "),
+            AutonomyLevel::ReadOnly
+        );
+        // Unrecognized / empty => behavior-preserving default.
+        assert_eq!(AutonomyLevel::parse("bogus"), AutonomyLevel::Full);
+        assert_eq!(AutonomyLevel::parse(""), AutonomyLevel::Full);
+        // Default trait impl is also Full.
+        assert_eq!(AutonomyLevel::default(), AutonomyLevel::Full);
     }
 
     #[test]
