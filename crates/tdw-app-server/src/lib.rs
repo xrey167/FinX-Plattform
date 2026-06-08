@@ -321,16 +321,21 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
                 .next_sequence
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Err(e) = self.sink.persist_event(&env, event, seq).await {
-                // Don't bury a durability failure in stderr: bump a metric and
-                // surface it on the event stream so a health check / consumer
-                // can observe the audit/replay gap. The op still completes
+                // Don't bury a durability failure: bump a metric and surface a
+                // signal on the event stream so a health check / consumer can
+                // observe the audit/replay gap. The op still completes
                 // (persistence is best-effort here).
                 self.persist_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // The raw error stays SERVER-SIDE only: the event stream fans
+                // out to external transport clients, so the client-facing
+                // payload carries just the (non-sensitive) sequence — never the
+                // raw sink error, which can leak DB URLs / paths / query text.
+                eprintln!("[ServiceLoop] persist_event failed (seq={seq}): {e}");
                 let _ = self.events.send(EventMsg::DomainEvent {
                     op_id: env.op_id.clone(),
                     event_type: "service.persist_event_failed".to_string(),
-                    payload: serde_json::json!({ "sequence": seq, "error": e.to_string() }),
+                    payload: serde_json::json!({ "sequence": seq }),
                 });
             }
             let _ = self.events.send(event.clone());
@@ -338,10 +343,12 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
         if let Err(e) = self.sink.record_cost(&env, "in-memory").await {
             self.cost_failures
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Raw error server-side only; client event carries no error detail.
+            eprintln!("[ServiceLoop] record_cost failed: {e}");
             let _ = self.events.send(EventMsg::DomainEvent {
                 op_id: env.op_id.clone(),
                 event_type: "service.record_cost_failed".to_string(),
-                payload: serde_json::json!({ "error": e.to_string() }),
+                payload: serde_json::Value::Null,
             });
         }
         Some(emitted)
