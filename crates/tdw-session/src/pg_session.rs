@@ -269,8 +269,10 @@ impl PgSessionStore {
         permission_id: &PermissionId,
         decision: ApprovalDecision,
     ) -> Result<Option<PendingApprovalRecord>, Error> {
+        // Mirror the sqlite store's first-decision-wins guard: `decision IS NULL`
+        // prevents a late caller from silently overwriting a resolved approval.
         let sql = format!(
-            "UPDATE {} SET decision = $1 WHERE permission_id = $2",
+            "UPDATE {} SET decision = $1 WHERE permission_id = $2 AND decision IS NULL",
             self.approval_table()
         );
         self.engine
