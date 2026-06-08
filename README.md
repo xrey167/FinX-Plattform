@@ -23,13 +23,6 @@ Concretely the workspace contains:
 
 The full crate roster and per-crate audit state lives in [`docs/quality/crate-readiness/matrix.md`](docs/quality/crate-readiness/matrix.md).
 
-## Why "clean-room"
-
-This repo is intentionally isolated from an earlier project called FinX-XR:
-
-- crate names use the `tdw-*` prefix; no `finx-*` dependencies exist or are permitted;
-- no `tdw-provider-openbb` crate exists;
-- no trait signatures, tests, or code are copied from FinX-XR.
 
 The boundary is enforced by `cargo run -p xtask -- clean-room-audit`, which runs in CI on every PR.
 
