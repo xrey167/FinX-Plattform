@@ -4454,6 +4454,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-functions-app"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-email",
+ "tdw-functions",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-graph"
 version = "0.1.0"
 dependencies = [
