@@ -264,6 +264,20 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
     dispatcher: D,
     sink: S,
     next_sequence: std::sync::atomic::AtomicU64,
+    persist_failures: std::sync::atomic::AtomicU64,
+    cost_failures: std::sync::atomic::AtomicU64,
+}
+
+/// Snapshot of durability-sink failure counts surfaced by [`ServiceLoop`] for
+/// health/metrics. Non-zero values mean events or cost records failed to
+/// persist while the op still completed (persistence here is best-effort), so a
+/// health check / metrics scrape can detect a silent durability/audit/cost gap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ServiceLoopFailures {
+    /// Count of `persist_event` failures since the loop started.
+    pub persist_event: u64,
+    /// Count of `record_cost` failures since the loop started.
+    pub record_cost: u64,
 }
 
 impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
@@ -279,6 +293,20 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
             dispatcher,
             sink,
             next_sequence: std::sync::atomic::AtomicU64::new(1),
+            persist_failures: std::sync::atomic::AtomicU64::new(0),
+            cost_failures: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Current durability-sink failure counts (see [`ServiceLoopFailures`]).
+    /// Intended for a health endpoint / metrics scrape so a sink outage is
+    /// observable rather than hidden.
+    #[must_use]
+    pub fn failure_counts(&self) -> ServiceLoopFailures {
+        use std::sync::atomic::Ordering;
+        ServiceLoopFailures {
+            persist_event: self.persist_failures.load(Ordering::Relaxed),
+            record_cost: self.cost_failures.load(Ordering::Relaxed),
         }
     }
 
@@ -293,12 +321,28 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
                 .next_sequence
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Err(e) = self.sink.persist_event(&env, event, seq).await {
-                eprintln!("[ServiceLoop] persist_event error (seq={seq}): {e}");
+                // Don't bury a durability failure in stderr: bump a metric and
+                // surface it on the event stream so a health check / consumer
+                // can observe the audit/replay gap. The op still completes
+                // (persistence is best-effort here).
+                self.persist_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let _ = self.events.send(EventMsg::DomainEvent {
+                    op_id: env.op_id.clone(),
+                    event_type: "service.persist_event_failed".to_string(),
+                    payload: serde_json::json!({ "sequence": seq, "error": e.to_string() }),
+                });
             }
             let _ = self.events.send(event.clone());
         }
         if let Err(e) = self.sink.record_cost(&env, "in-memory").await {
-            eprintln!("[ServiceLoop] record_cost error: {e}");
+            self.cost_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = self.events.send(EventMsg::DomainEvent {
+                op_id: env.op_id.clone(),
+                event_type: "service.record_cost_failed".to_string(),
+                payload: serde_json::json!({ "error": e.to_string() }),
+            });
         }
         Some(emitted)
     }
@@ -546,6 +590,59 @@ mod tests {
             },
             op,
         )
+    }
+
+    struct FailingSink;
+
+    #[async_trait::async_trait]
+    impl EventSink for FailingSink {
+        async fn persist_event(
+            &self,
+            _env: &OpEnvelope,
+            _event: &EventMsg,
+            _sequence: u64,
+        ) -> SinkResult<()> {
+            Err(SinkError("persist boom".to_string()))
+        }
+
+        async fn record_cost(&self, _env: &OpEnvelope, _backend: &str) -> SinkResult<()> {
+            Err(SinkError("cost boom".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_once_surfaces_sink_failures_via_counts_and_events() {
+        let (handle, mut events, mut loop_runner) = service_channel(FakeDispatcher, FailingSink);
+        handle
+            .submit(make_envelope(Op::Shutdown))
+            .expect("submit accepted");
+
+        let emitted = loop_runner
+            .run_once()
+            .await
+            .expect("run_once yields events");
+        assert_eq!(emitted.len(), 1, "FakeDispatcher emits one event");
+
+        // Both durability failures are now counted (not silently swallowed).
+        let counts = loop_runner.failure_counts();
+        assert_eq!(counts.persist_event, 1);
+        assert_eq!(counts.record_cost, 1);
+
+        // ...and surfaced on the event stream so a consumer/health check sees
+        // them. Order: persist-failure signal, the dispatched event, then the
+        // cost-failure signal.
+        let first = events.recv().await.expect("persist failure event");
+        assert!(matches!(
+            &first,
+            EventMsg::DomainEvent { event_type, .. } if event_type == "service.persist_event_failed"
+        ));
+        let second = events.recv().await.expect("dispatched event");
+        assert!(matches!(second, EventMsg::Started { .. }));
+        let third = events.recv().await.expect("cost failure event");
+        assert!(matches!(
+            &third,
+            EventMsg::DomainEvent { event_type, .. } if event_type == "service.record_cost_failed"
+        ));
     }
 
     #[tokio::test]
