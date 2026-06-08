@@ -22,6 +22,11 @@
 //! * [`InMemorySessionStore`] — always-compiled in-memory session store.
 //! * [`PgSessionStore`] — Postgres-backed session store behind the `postgres`
 //!   feature flag.
+//! * [`ResetToken`] — a single-use, short-lived password-reset token record.
+//! * [`ResetTokenStore`] — async persistence trait for reset tokens.
+//! * [`InMemoryResetTokenStore`] — always-compiled in-memory reset-token store.
+//! * [`PgResetTokenStore`] — Postgres-backed reset-token store behind the
+//!   `postgres` feature flag.
 //!
 //! # Security notes
 //!
@@ -53,7 +58,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[cfg(feature = "postgres")]
-pub use pg::{PgSessionStore, PgUserStore};
+pub use pg::{PgResetTokenStore, PgSessionStore, PgUserStore};
 
 // ---------------------------------------------------------------------------
 // IdentityError + Result alias
@@ -99,6 +104,17 @@ pub enum IdentityError {
     /// [`SessionStore::resolve`].
     #[error("session expired")]
     SessionExpired,
+
+    /// No reset token exists with the requested value.
+    #[error("reset token not found")]
+    ResetTokenNotFound,
+
+    /// The reset token was found but its expiry has passed.
+    ///
+    /// The expired row is deleted as a best-effort side effect of
+    /// [`ResetTokenStore::consume`].
+    #[error("reset token expired")]
+    ResetTokenExpired,
 
     /// A lower-level storage failure (Postgres, mutex, serialization, etc.).
     #[error("store error: {0}")]
@@ -702,6 +718,203 @@ impl SessionStore for InMemorySessionStore {
 }
 
 // ---------------------------------------------------------------------------
+// Reset-token types
+// ---------------------------------------------------------------------------
+
+/// Default reset-token lifetime: 1 hour in milliseconds.
+///
+/// Reset tokens are deliberately short-lived (unlike the 7-day session TTL):
+/// they are single-use credentials emailed to a user to prove control of their
+/// inbox and should expire quickly to limit the blast radius of a leaked link.
+pub const DEFAULT_RESET_TOKEN_TTL_MS: i64 = 60 * 60 * 1_000;
+
+/// A persisted single-use password-reset token record.
+///
+/// The `token` field is the opaque credential delivered to the user (e.g. in a
+/// password-reset email link).  Like [`Session`], the token **is** included
+/// here — it is the reset identity itself.  Callers must treat `token` as
+/// secret and must not log it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResetToken {
+    /// High-entropy token (64 lowercase hex chars, 256 bits entropy).
+    ///
+    /// Generated from 32 bytes of [`OsRng`] output.  Never log this value.
+    pub token: String,
+    /// Stable user identifier matching the user this token resets.
+    pub user_id: String,
+    /// Unix-epoch millisecond timestamp when the token was issued.
+    pub created_at_ms: i64,
+    /// Unix-epoch millisecond timestamp after which the token is invalid.
+    ///
+    /// Expiry is fixed at issue time (`now_ms + ttl_ms`).
+    pub expires_at_ms: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Reset-token generation
+// ---------------------------------------------------------------------------
+
+/// Generate a cryptographically secure password-reset token.
+///
+/// Reads 32 bytes from [`OsRng`] (OS CSPRNG) and encodes them as 64
+/// lowercase hexadecimal characters, yielding **256 bits of entropy**.
+///
+/// The returned token is the sole credential for the reset flow.
+/// Callers must treat it as secret: do not log, transmit only over TLS,
+/// and embed in single-use links that expire quickly.
+pub fn generate_reset_token() -> String {
+    use argon2::password_hash::rand_core::RngCore;
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, byte| {
+            // format each byte as exactly 2 lowercase hex digits
+            let hi = byte >> 4;
+            let lo = byte & 0x0f;
+            acc.push(char::from_digit(u32::from(hi), 16).unwrap_or('0'));
+            acc.push(char::from_digit(u32::from(lo), 16).unwrap_or('0'));
+            acc
+        })
+}
+
+// ---------------------------------------------------------------------------
+// ResetTokenStore trait
+// ---------------------------------------------------------------------------
+
+/// Async persistence interface for [`ResetToken`] records.
+///
+/// All methods take `&self` so implementations can use interior mutability
+/// (e.g. `Mutex`) or shared connection pools without requiring `&mut self`.
+///
+/// # Security notes
+///
+/// * Tokens are 32 random bytes from [`OsRng`] encoded as 64 lowercase hex
+///   chars (256 bits entropy).
+/// * Token material is **never** logged by this crate.
+/// * Tokens are **single-use**: a successful [`consume`](ResetTokenStore::consume)
+///   deletes the row so the token cannot be replayed.
+/// * Expiry is checked in `consume`; expired rows are deleted on access
+///   (best-effort lazy sweep).
+#[async_trait]
+pub trait ResetTokenStore: Send + Sync {
+    /// Persist a reset `token` for `user_id`, valid for `ttl_ms` milliseconds
+    /// from `now_ms`.
+    ///
+    /// The caller supplies the token (e.g. from [`generate_reset_token`]) and
+    /// `now_ms`; the crate has no UUID/clock dependency.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn issue(
+        &self,
+        token: String,
+        user_id: String,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<ResetToken>;
+
+    /// Look up `token`, verify it has not expired, and consume it (single-use).
+    ///
+    /// * Returns the [`ResetToken`] if found and `expires_at_ms > now_ms`,
+    ///   **deleting** the row so it cannot be reused.
+    /// * Returns [`IdentityError::ResetTokenNotFound`] if `token` is unknown.
+    /// * Returns [`IdentityError::ResetTokenExpired`] if the token is found but
+    ///   `expires_at_ms <= now_ms`; the expired row is deleted as a
+    ///   best-effort side effect.
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::ResetTokenNotFound`] — token does not exist.
+    /// * [`IdentityError::ResetTokenExpired`] — token found but past its TTL.
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn consume(&self, token: &str, now_ms: i64) -> Result<ResetToken>;
+
+    /// Delete **all** outstanding reset tokens belonging to `user_id` (e.g.
+    /// after a successful reset or a password change).
+    ///
+    /// # Errors
+    ///
+    /// * [`IdentityError::Store`] — underlying storage failure.
+    async fn revoke_all_for_user(&self, user_id: &str) -> Result<()>;
+}
+
+// ---------------------------------------------------------------------------
+// InMemoryResetTokenStore
+// ---------------------------------------------------------------------------
+
+/// Thread-safe in-memory implementation of [`ResetTokenStore`].
+///
+/// Always compiled (no feature flag). Suitable for unit tests and offline
+/// scenarios.  Uses a single `Mutex`-guarded `BTreeMap<token, ResetToken>`.
+#[derive(Debug, Default)]
+pub struct InMemoryResetTokenStore {
+    tokens: Mutex<BTreeMap<String, ResetToken>>,
+}
+
+impl InMemoryResetTokenStore {
+    /// Create an empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ResetTokenStore for InMemoryResetTokenStore {
+    async fn issue(
+        &self,
+        token: String,
+        user_id: String,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<ResetToken> {
+        let reset = ResetToken {
+            token: token.clone(),
+            user_id,
+            created_at_ms: now_ms,
+            expires_at_ms: now_ms + ttl_ms,
+        };
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        tokens.insert(token, reset.clone());
+        Ok(reset)
+    }
+
+    async fn consume(&self, token: &str, now_ms: i64) -> Result<ResetToken> {
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        match tokens.get(token).cloned() {
+            None => Err(IdentityError::ResetTokenNotFound),
+            Some(reset) if reset.expires_at_ms <= now_ms => {
+                // Best-effort delete expired row.
+                tokens.remove(token);
+                Err(IdentityError::ResetTokenExpired)
+            }
+            Some(reset) => {
+                // Single-use: delete on successful consume.
+                tokens.remove(token);
+                Ok(reset)
+            }
+        }
+    }
+
+    async fn revoke_all_for_user(&self, user_id: &str) -> Result<()> {
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
+        tokens.retain(|_, reset| reset.user_id != user_id);
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Postgres backend
 // ---------------------------------------------------------------------------
 
@@ -1052,6 +1265,151 @@ mod pg {
                 })?;
 
             Ok(result.rows_affected())
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // PgResetTokenStore
+    // -----------------------------------------------------------------------
+
+    use crate::{ResetToken, ResetTokenStore};
+
+    /// Postgres-backed implementation of [`ResetTokenStore`].
+    ///
+    /// Requires the `postgres` feature.  Construct via
+    /// [`PgResetTokenStore::connect`] or [`PgResetTokenStore::from_pool`].
+    ///
+    /// # Security notes
+    ///
+    /// * Token material is **never** logged.
+    /// * `consume` is single-use: a valid token is deleted in the same
+    ///   statement (`delete … returning`), so it cannot be replayed.
+    /// * Expired rows are deleted on access (best-effort lazy sweep).
+    /// * `revoke_all_for_user` is a single `delete … where user_id = $1`.
+    #[derive(Clone, Debug)]
+    pub struct PgResetTokenStore {
+        pool: PgPool,
+    }
+
+    impl PgResetTokenStore {
+        /// Open a connection pool against `database_url`.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`IdentityError::Store`] if the connection fails.
+        pub async fn connect(database_url: &str) -> Result<Self> {
+            let pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(database_url)
+                .await
+                .map_err(|error| IdentityError::Store(format!("postgres connect: {error}")))?;
+            Ok(Self { pool })
+        }
+
+        /// Adopt a caller-built pool.
+        #[must_use]
+        pub fn from_pool(pool: PgPool) -> Self {
+            Self { pool }
+        }
+
+        /// Expose the underlying pool for callers that need raw sqlx access.
+        #[must_use]
+        pub const fn pool(&self) -> &PgPool {
+            &self.pool
+        }
+    }
+
+    #[async_trait]
+    impl ResetTokenStore for PgResetTokenStore {
+        async fn issue(
+            &self,
+            token: String,
+            user_id: String,
+            now_ms: i64,
+            ttl_ms: i64,
+        ) -> Result<ResetToken> {
+            let expires_at_ms = now_ms + ttl_ms;
+            sqlx::query(
+                r#"
+                insert into system.identity_reset_tokens
+                    (token, user_id, created_at_ms, expires_at_ms)
+                values ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(&token)
+            .bind(&user_id)
+            .bind(now_ms)
+            .bind(expires_at_ms)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("reset token issue: {error}")))?;
+
+            Ok(ResetToken {
+                token,
+                user_id,
+                created_at_ms: now_ms,
+                expires_at_ms,
+            })
+        }
+
+        async fn consume(&self, token: &str, now_ms: i64) -> Result<ResetToken> {
+            // First try to fetch the row unconditionally so we can distinguish
+            // "not found" from "found but expired".
+            let row = sqlx::query(
+                r#"
+                select token, user_id, created_at_ms, expires_at_ms
+                from system.identity_reset_tokens
+                where token = $1
+                "#,
+            )
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| IdentityError::Store(format!("reset token consume fetch: {error}")))?;
+
+            match row {
+                None => Err(IdentityError::ResetTokenNotFound),
+                Some(ref r) => {
+                    let expires_at_ms: i64 = r.get("expires_at_ms");
+                    if expires_at_ms <= now_ms {
+                        // Best-effort delete; ignore failure (row may already be gone).
+                        let _ = sqlx::query(
+                            "delete from system.identity_reset_tokens where token = $1",
+                        )
+                        .bind(token)
+                        .execute(&self.pool)
+                        .await;
+                        Err(IdentityError::ResetTokenExpired)
+                    } else {
+                        // Single-use: delete on successful consume.
+                        sqlx::query("delete from system.identity_reset_tokens where token = $1")
+                            .bind(token)
+                            .execute(&self.pool)
+                            .await
+                            .map_err(|error| {
+                                IdentityError::Store(format!("reset token consume delete: {error}"))
+                            })?;
+                        Ok(ResetToken {
+                            token: r.get("token"),
+                            user_id: r.get("user_id"),
+                            created_at_ms: r.get("created_at_ms"),
+                            expires_at_ms,
+                        })
+                    }
+                }
+            }
+        }
+
+        async fn revoke_all_for_user(&self, user_id: &str) -> Result<()> {
+            sqlx::query("delete from system.identity_reset_tokens where user_id = $1")
+                .bind(user_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|error| {
+                    IdentityError::Store(format!("reset token revoke_all_for_user: {error}"))
+                })?;
+
+            Ok(())
         }
     }
 }
@@ -1710,5 +2068,312 @@ mod tests {
     #[test]
     fn default_session_ttl_is_seven_days() {
         assert_eq!(DEFAULT_SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // InMemoryResetTokenStore tests
+    // -----------------------------------------------------------------------
+
+    fn reset_token_store() -> InMemoryResetTokenStore {
+        InMemoryResetTokenStore::new()
+    }
+
+    /// 1. issue + consume happy path returns the same token and clears it.
+    #[tokio::test]
+    async fn reset_issue_then_consume_returns_token() {
+        let s = reset_token_store();
+        let token = generate_reset_token();
+        let issued = s
+            .issue(
+                token.clone(),
+                "u1".to_string(),
+                NOW_MS,
+                DEFAULT_RESET_TOKEN_TTL_MS,
+            )
+            .await
+            .expect("issue");
+        assert_eq!(issued.token, token);
+        assert_eq!(issued.user_id, "u1");
+        assert_eq!(issued.created_at_ms, NOW_MS);
+        assert_eq!(issued.expires_at_ms, NOW_MS + DEFAULT_RESET_TOKEN_TTL_MS);
+
+        let consumed = s.consume(&token, NOW_MS + 1).await.expect("consume");
+        assert_eq!(consumed, issued);
+    }
+
+    /// 2. consume is single-use: the second consume fails with ResetTokenNotFound.
+    #[tokio::test]
+    async fn reset_consume_twice_fails() {
+        let s = reset_token_store();
+        let token = generate_reset_token();
+        s.issue(
+            token.clone(),
+            "u1".to_string(),
+            NOW_MS,
+            DEFAULT_RESET_TOKEN_TTL_MS,
+        )
+        .await
+        .expect("issue");
+
+        let _ = s.consume(&token, NOW_MS + 1).await.expect("first consume");
+        let result = s.consume(&token, NOW_MS + 1).await;
+        assert!(
+            matches!(result, Err(IdentityError::ResetTokenNotFound)),
+            "expected ResetTokenNotFound on second consume, got: {result:?}"
+        );
+    }
+
+    /// 3. consume of an expired token returns ResetTokenExpired.
+    #[tokio::test]
+    async fn reset_consume_expired_returns_expired() {
+        let s = reset_token_store();
+        let token = generate_reset_token();
+        let ttl = 1_000_i64;
+        s.issue(token.clone(), "u1".to_string(), NOW_MS, ttl)
+            .await
+            .expect("issue");
+        let result = s.consume(&token, NOW_MS + ttl).await;
+        assert!(
+            matches!(result, Err(IdentityError::ResetTokenExpired)),
+            "expected ResetTokenExpired, got: {result:?}"
+        );
+    }
+
+    /// 4. consume of an expired token deletes the row — second consume is NotFound.
+    #[tokio::test]
+    async fn reset_consume_expired_deletes_row() {
+        let s = reset_token_store();
+        let token = generate_reset_token();
+        let ttl = 1_000_i64;
+        s.issue(token.clone(), "u1".to_string(), NOW_MS, ttl)
+            .await
+            .expect("issue");
+        let now_after = NOW_MS + ttl + 1;
+        let _ = s.consume(&token, now_after).await;
+        let result = s.consume(&token, now_after).await;
+        assert!(
+            matches!(result, Err(IdentityError::ResetTokenNotFound)),
+            "expected ResetTokenNotFound after expiry delete, got: {result:?}"
+        );
+    }
+
+    /// 5. consume of an unknown token returns ResetTokenNotFound.
+    #[tokio::test]
+    async fn reset_consume_unknown_returns_not_found() {
+        let s = reset_token_store();
+        let result = s
+            .consume(
+                "00000000000000000000000000000000000000000000000000000000deadbeef",
+                NOW_MS,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(IdentityError::ResetTokenNotFound)),
+            "expected ResetTokenNotFound, got: {result:?}"
+        );
+    }
+
+    /// 6. revoke_all_for_user clears only that user's outstanding tokens.
+    #[tokio::test]
+    async fn reset_revoke_all_for_user_clears_them() {
+        let s = reset_token_store();
+        let t1 = generate_reset_token();
+        let t2 = generate_reset_token();
+        let t_other = generate_reset_token();
+        s.issue(
+            t1.clone(),
+            "u1".to_string(),
+            NOW_MS,
+            DEFAULT_RESET_TOKEN_TTL_MS,
+        )
+        .await
+        .expect("t1");
+        s.issue(
+            t2.clone(),
+            "u1".to_string(),
+            NOW_MS,
+            DEFAULT_RESET_TOKEN_TTL_MS,
+        )
+        .await
+        .expect("t2");
+        s.issue(
+            t_other.clone(),
+            "u2".to_string(),
+            NOW_MS,
+            DEFAULT_RESET_TOKEN_TTL_MS,
+        )
+        .await
+        .expect("t_other");
+
+        s.revoke_all_for_user("u1").await.expect("revoke_all");
+
+        // u1's tokens are gone.
+        assert!(matches!(
+            s.consume(&t1, NOW_MS + 1).await,
+            Err(IdentityError::ResetTokenNotFound)
+        ));
+        assert!(matches!(
+            s.consume(&t2, NOW_MS + 1).await,
+            Err(IdentityError::ResetTokenNotFound)
+        ));
+        // u2's token survives.
+        let survivor = s.consume(&t_other, NOW_MS + 1).await.expect("u2 token");
+        assert_eq!(survivor.user_id, "u2");
+    }
+
+    /// 7. revoke_all_for_user on a user with no tokens is a no-op (Ok).
+    #[tokio::test]
+    async fn reset_revoke_all_for_user_no_tokens_ok() {
+        let s = reset_token_store();
+        s.revoke_all_for_user("nobody").await.expect("revoke_all");
+    }
+
+    /// 8. generate_reset_token produces exactly 64 lowercase hex chars.
+    #[test]
+    fn generate_reset_token_is_64_lowercase_hex() {
+        let token = generate_reset_token();
+        assert_eq!(token.len(), 64, "token length must be 64");
+        assert!(
+            token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "token must be lowercase hex: {token}"
+        );
+    }
+
+    /// 9. Two generate_reset_token calls yield distinct tokens.
+    #[test]
+    fn generate_reset_token_produces_distinct_tokens() {
+        let t1 = generate_reset_token();
+        let t2 = generate_reset_token();
+        assert_ne!(t1, t2, "consecutive tokens must differ");
+    }
+
+    /// 10. DEFAULT_RESET_TOKEN_TTL_MS is 1 hour in ms.
+    #[test]
+    fn default_reset_token_ttl_is_one_hour() {
+        assert_eq!(DEFAULT_RESET_TOKEN_TTL_MS, 60 * 60 * 1_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // PgResetTokenStore integration tests (gated on TDW_POSTGRES_TEST_URL).
+    //
+    // These no-op (return early) when TDW_POSTGRES_TEST_URL is unset, so the
+    // default `cargo test --features postgres` run stays green without a live
+    // database.  Set the env var to a reachable Postgres URL with the
+    // `system.identity_reset_tokens` migration applied to exercise them.
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "postgres")]
+    mod pg_reset {
+        use super::*;
+
+        fn pg_url() -> Option<String> {
+            std::env::var("TDW_POSTGRES_TEST_URL").ok()
+        }
+
+        /// 1. issue + consume happy path against Postgres.
+        #[tokio::test]
+        async fn pg_reset_issue_then_consume() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgResetTokenStore::connect(&url).await.expect("connect");
+            let token = generate_reset_token();
+            store
+                .revoke_all_for_user("pg-reset-u1")
+                .await
+                .expect("cleanup");
+            let issued = store
+                .issue(
+                    token.clone(),
+                    "pg-reset-u1".to_string(),
+                    NOW_MS,
+                    DEFAULT_RESET_TOKEN_TTL_MS,
+                )
+                .await
+                .expect("issue");
+            assert_eq!(issued.token, token);
+            let consumed = store.consume(&token, NOW_MS + 1).await.expect("consume");
+            assert_eq!(consumed, issued);
+        }
+
+        /// 2. consume is single-use on Postgres.
+        #[tokio::test]
+        async fn pg_reset_consume_twice_fails() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgResetTokenStore::connect(&url).await.expect("connect");
+            let token = generate_reset_token();
+            store
+                .issue(
+                    token.clone(),
+                    "pg-reset-u2".to_string(),
+                    NOW_MS,
+                    DEFAULT_RESET_TOKEN_TTL_MS,
+                )
+                .await
+                .expect("issue");
+            let _ = store.consume(&token, NOW_MS + 1).await.expect("first");
+            let result = store.consume(&token, NOW_MS + 1).await;
+            assert!(matches!(result, Err(IdentityError::ResetTokenNotFound)));
+        }
+
+        /// 3. expired token returns ResetTokenExpired on Postgres.
+        #[tokio::test]
+        async fn pg_reset_consume_expired() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgResetTokenStore::connect(&url).await.expect("connect");
+            let token = generate_reset_token();
+            let ttl = 1_000_i64;
+            store
+                .issue(token.clone(), "pg-reset-u3".to_string(), NOW_MS, ttl)
+                .await
+                .expect("issue");
+            let result = store.consume(&token, NOW_MS + ttl).await;
+            assert!(matches!(result, Err(IdentityError::ResetTokenExpired)));
+        }
+
+        /// 4. unknown token returns ResetTokenNotFound on Postgres.
+        #[tokio::test]
+        async fn pg_reset_consume_unknown() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgResetTokenStore::connect(&url).await.expect("connect");
+            let result = store
+                .consume(
+                    "00000000000000000000000000000000000000000000000000000000deadbeef",
+                    NOW_MS,
+                )
+                .await;
+            assert!(matches!(result, Err(IdentityError::ResetTokenNotFound)));
+        }
+
+        /// 5. revoke_all_for_user clears outstanding tokens on Postgres.
+        #[tokio::test]
+        async fn pg_reset_revoke_all_for_user() {
+            let Some(url) = pg_url() else {
+                return;
+            };
+            let store = PgResetTokenStore::connect(&url).await.expect("connect");
+            let token = generate_reset_token();
+            store
+                .issue(
+                    token.clone(),
+                    "pg-reset-u4".to_string(),
+                    NOW_MS,
+                    DEFAULT_RESET_TOKEN_TTL_MS,
+                )
+                .await
+                .expect("issue");
+            store
+                .revoke_all_for_user("pg-reset-u4")
+                .await
+                .expect("revoke_all");
+            let result = store.consume(&token, NOW_MS + 1).await;
+            assert!(matches!(result, Err(IdentityError::ResetTokenNotFound)));
+        }
     }
 }

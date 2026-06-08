@@ -142,6 +142,14 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "identity_sessions",
             sql: include_str!("../../../migrations/postgres/20260608_0001_identity_sessions.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260608_0002",
+            name: "identity_reset_tokens",
+            sql: include_str!(
+                "../../../migrations/postgres/20260608_0002_identity_reset_tokens.sql"
+            ),
+        },
     ]
 }
 
