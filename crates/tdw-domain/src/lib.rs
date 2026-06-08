@@ -2,7 +2,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 pub const BOM_SCHEMA_NAMES: [&str; 11] = [
     "market_data",
@@ -57,6 +57,7 @@ pub enum TimeGranularity {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[validate(schema(function = "validate_bar_ohlc"))]
 pub struct MarketDataBar {
     #[validate(length(min = 1))]
     pub symbol: String,
@@ -93,6 +94,7 @@ pub struct Tick {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[validate(schema(function = "validate_quote_spread"))]
 pub struct Quote {
     #[validate(length(min = 1))]
     pub symbol: String,
@@ -172,6 +174,7 @@ pub struct FxRate {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+#[validate(schema(function = "validate_equity_ohlc"))]
 pub struct EquityHistoricalData {
     #[validate(length(min = 1))]
     pub symbol: String,
@@ -187,6 +190,37 @@ pub struct EquityHistoricalData {
     pub close: f64,
     #[validate(range(min = 0))]
     pub volume: u64,
+}
+
+/// Cross-field OHLC invariant shared by [`MarketDataBar`] and
+/// [`EquityHistoricalData`]: open and close must nest within `[low, high]`,
+/// which also implies `low <= high`. Per-field `range(min = 0.0)` already runs
+/// first (schema validators are skipped on field errors), so this only guards
+/// against inverted/incoherent bars — e.g. `high = 50, low = 100` — that would
+/// otherwise flow into downstream RSI/return/VWAP analytics as clean data.
+fn check_ohlc(open: f64, high: f64, low: f64, close: f64) -> Result<(), ValidationError> {
+    if low <= open && low <= close && open <= high && close <= high {
+        Ok(())
+    } else {
+        Err(ValidationError::new("ohlc_inverted"))
+    }
+}
+
+fn validate_bar_ohlc(bar: &MarketDataBar) -> Result<(), ValidationError> {
+    check_ohlc(bar.open, bar.high, bar.low, bar.close)
+}
+
+fn validate_equity_ohlc(row: &EquityHistoricalData) -> Result<(), ValidationError> {
+    check_ohlc(row.open, row.high, row.low, row.close)
+}
+
+/// A quote must not be crossed: the bid cannot exceed the ask.
+fn validate_quote_spread(quote: &Quote) -> Result<(), ValidationError> {
+    if quote.bid <= quote.ask {
+        Ok(())
+    } else {
+        Err(ValidationError::new("quote_crossed"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
@@ -720,6 +754,69 @@ mod tests {
         };
 
         assert!(row.validate().is_ok());
+    }
+
+    #[test]
+    fn cross_field_validators_reject_inverted_bars_and_crossed_quotes() {
+        // An inverted bar (high < low, and open/close outside [low, high]) passes
+        // every per-field range check yet is incoherent — the schema validator
+        // must reject it.
+        let inverted_bar = MarketDataBar {
+            symbol: "AAPL".to_string(),
+            venue: "XNAS".to_string(),
+            granularity: TimeGranularity::Day,
+            ts: "2026-05-21T00:00:00Z".to_string(),
+            open: 100.0,
+            high: 50.0,
+            low: 100.0,
+            close: 100.0,
+            volume: 1_000.0,
+            source: "fixture".to_string(),
+        };
+        assert!(
+            inverted_bar.validate().is_err(),
+            "high < low must be rejected"
+        );
+
+        // open above high is incoherent even when high >= low.
+        let open_above_high = MarketDataBar {
+            open: 105.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            ..inverted_bar.clone()
+        };
+        assert!(
+            open_above_high.validate().is_err(),
+            "open above high must be rejected"
+        );
+
+        // A crossed quote (bid > ask) must be rejected.
+        let crossed = Quote {
+            symbol: "AAPL".to_string(),
+            venue: "XNAS".to_string(),
+            ts: "2026-05-21T20:00:00Z".to_string(),
+            bid: 100.6,
+            ask: 100.4,
+            bid_size: 12.0,
+            ask_size: 8.0,
+        };
+        assert!(crossed.validate().is_err(), "bid > ask must be rejected");
+
+        // An inverted equity bar is rejected through the shared OHLC check.
+        let inverted_equity = EquityHistoricalData {
+            symbol: "AAPL".to_string(),
+            date: "2026-05-21".to_string(),
+            open: 100.0,
+            high: 90.0,
+            low: 95.0,
+            close: 100.0,
+            volume: 1_000,
+        };
+        assert!(
+            inverted_equity.validate().is_err(),
+            "inverted equity bar must be rejected"
+        );
     }
 
     #[test]
