@@ -1,23 +1,23 @@
 {
   "version": 1,
-  "createdAt": "2026-06-06T22:03:11.163Z",
-  "updatedAt": "2026-06-06T22:03:41.452Z",
+  "createdAt": "2026-06-07T10:54:15.786Z",
+  "updatedAt": "2026-06-07T10:54:25.119Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
   "codexGoalMode": "aggregate",
   "goals": [
     {
-      "id": "G001-implement-and-ship-all-missing-parts",
-      "title": "Implement and ship all missing parts needed to bring FinX-Plattform t...",
-      "objective": "Implement and ship all missing parts needed to bring FinX-Plattform to release 1.0. Treat release 1.0 as a verified production-readiness milestone, not a cosmetic version bump. Preserve the clean-room boundary: no finx-* crates or dependencies, no copied FinX-XR code, no tdw-provider-openbb. Work in the sibling worktree work/release-1-0 and land by PR. First audit the current repo, docs, batch backlog, roadmap, TODOs, and verification gates to identify real blockers. Then implement missing release-critical platform parts in small story slices, keeping offline deterministic tests by default and env-gated live/integration tests where required. Finish with release docs/version evidence, full AGENTS.md verification, clean-room audit, final cleanup/review gate, branch push, PR creation, and gh pr status review.",
+      "id": "G001-crate-by-crate-release-blocker-inven",
+      "title": "Crate-by-crate release blocker inventory",
+      "objective": "Generate a current cargo-metadata crate roster, join it with existing crate-readiness worksheets, batch backlog, TODO/panic/unimplemented scans, test/doc presence, dependency/runtime feature wiring, and open PR/worktree evidence. Produce a structured crate-by-crate release blocker matrix under docs/quality, separating true release blockers from non-blocking follow-ups and already-covered open PRs. Add follow-up ultragoal stories for the highest-priority implementation gaps found.",
       "status": "in_progress",
       "attempt": 1,
-      "createdAt": "2026-06-06T22:03:11.163Z",
-      "updatedAt": "2026-06-06T22:03:41.452Z",
-      "startedAt": "2026-06-06T22:03:41.452Z"
+      "createdAt": "2026-06-07T10:54:15.786Z",
+      "updatedAt": "2026-06-07T10:54:25.119Z",
+      "startedAt": "2026-06-07T10:54:25.119Z"
     }
   ],
   "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail.",
-  "activeGoalId": "G001-implement-and-ship-all-missing-parts"
+  "activeGoalId": "G001-crate-by-crate-release-blocker-inven"
 }
