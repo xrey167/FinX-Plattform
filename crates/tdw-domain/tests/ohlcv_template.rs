@@ -4,6 +4,13 @@
 
 use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 
+fn assert_f64_eq(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < f64::EPSILON,
+        "expected {expected}, got {actual}"
+    );
+}
+
 #[test]
 fn into_bar_template_carries_ohlcv_and_leaves_metadata_empty() {
     let ohlcv = Ohlcv {
@@ -16,11 +23,11 @@ fn into_bar_template_carries_ohlcv_and_leaves_metadata_empty() {
 
     let template = ohlcv.into_bar_template();
 
-    assert_eq!(template.open, 1.0);
-    assert_eq!(template.high, 2.5);
-    assert_eq!(template.low, 0.5);
-    assert_eq!(template.close, 2.0);
-    assert_eq!(template.volume, 1_000.0);
+    assert_f64_eq(template.open, 1.0);
+    assert_f64_eq(template.high, 2.5);
+    assert_f64_eq(template.low, 0.5);
+    assert_f64_eq(template.close, 2.0);
+    assert_f64_eq(template.volume, 1_000.0);
 
     // Metadata fields are placeholders awaiting struct-update completion.
     assert!(template.symbol.is_empty());
@@ -51,5 +58,5 @@ fn into_bar_template_supports_struct_update_completion() {
 
     assert_eq!(bar.symbol, "AAPL");
     assert_eq!(bar.granularity, TimeGranularity::Minute);
-    assert_eq!(bar.close, 11.0);
+    assert_f64_eq(bar.close, 11.0);
 }
