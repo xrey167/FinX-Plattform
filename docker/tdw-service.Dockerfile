@@ -32,4 +32,3 @@ COPY --from=builder /app/target/release/tdw-service /usr/local/bin/tdw-service
 USER tdw
 WORKDIR /home/tdw
 ENTRYPOINT ["/usr/local/bin/tdw-service"]
-CMD ["--smoke", "AAPL"]
