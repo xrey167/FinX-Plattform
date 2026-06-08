@@ -226,4 +226,44 @@ mod tests {
         );
         assert!(!kg.manual_merge("instrument:AAPL", "instrument:AAPL", ""));
     }
+
+    #[test]
+    fn validate_entity_and_relationship_reject_each_bad_field() {
+        assert_eq!(
+            validate_entity(&Entity {
+                entity_id: "instrument:AAPL".to_string(),
+                kind: EntityKind::Instrument,
+                label: "  ".to_string(),
+                aliases: Vec::new(),
+            }),
+            Err(KnowledgeGraphError::EmptyLabel)
+        );
+        assert_eq!(
+            validate_entity(&Entity {
+                entity_id: "instrument:AAPL".to_string(),
+                kind: EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: vec![" ".to_string()],
+            }),
+            Err(KnowledgeGraphError::InvalidAlias)
+        );
+        assert_eq!(
+            validate_relationship(&Relationship {
+                from: "a:1".to_string(),
+                to: "b:2".to_string(),
+                rel_type: "bad type".to_string(),
+                provenance: "fixture".to_string(),
+            }),
+            Err(KnowledgeGraphError::InvalidRelationship)
+        );
+        assert_eq!(
+            validate_relationship(&Relationship {
+                from: "a:1".to_string(),
+                to: "b:2".to_string(),
+                rel_type: "rel".to_string(),
+                provenance: " ".to_string(),
+            }),
+            Err(KnowledgeGraphError::EmptyProvenance)
+        );
+    }
 }

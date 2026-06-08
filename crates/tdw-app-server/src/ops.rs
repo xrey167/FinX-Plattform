@@ -193,7 +193,7 @@ impl OpsResponse {
 
     /// `200 OK` Prometheus metrics response.
     #[must_use]
-    pub fn metrics(body: String) -> Self {
+    pub const fn metrics(body: String) -> Self {
         Self {
             status: 200,
             reason: "OK",
@@ -263,11 +263,12 @@ pub fn classify_route(method: &str, target: &str) -> OpsRoute {
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
-/// Cheap, cloneable counters for the daemon's dispatch surface: terminal
-/// outcome totals plus an in-flight gauge. Shared (`Arc`) between the
-/// `ServiceLoop` (which records each dispatch) and the daemon's `/metrics`
-/// listener (which renders a snapshot). All updates are `Relaxed` atomics — the
-/// values are monitoring signals, not synchronization points.
+/// Cheap, cloneable counters for the daemon's dispatch surface.
+///
+/// Tracks terminal outcome totals plus an in-flight gauge. Shared (`Arc`)
+/// between the `ServiceLoop` (which records each dispatch) and the daemon's
+/// `/metrics` listener (which renders a snapshot). All updates are `Relaxed`
+/// atomics — the values are monitoring signals, not synchronization points.
 #[derive(Clone, Default)]
 pub struct DaemonMetrics {
     inner: Arc<DaemonMetricsInner>,

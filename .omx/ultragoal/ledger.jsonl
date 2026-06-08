@@ -1,2 +1,3 @@
-{"ts":"2026-06-06T22:03:11.163Z","event":"plan_created","message":"1 goal(s) created"}
-{"ts":"2026-06-06T22:03:41.452Z","event":"goal_started","goalId":"G001-implement-and-ship-all-missing-parts","status":"in_progress","message":"Attempt 1"}
+{"ts":"2026-06-07T10:54:15.786Z","event":"plan_created","message":"1 goal(s) created"}
+{"ts":"2026-06-07T10:54:25.119Z","event":"goal_started","goalId":"G001-crate-by-crate-release-blocker-inven","status":"in_progress","message":"Attempt 1"}
+{"ts":"2026-06-07T11:07:35.275Z","event":"goal_resumed","goalId":"G001-crate-by-crate-release-blocker-inven","status":"in_progress","message":"Resuming active ultragoal"}

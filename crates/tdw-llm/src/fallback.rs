@@ -33,7 +33,7 @@ where
 {
     /// Construct a new [`FallbackModel`] from a primary and a secondary model.
     #[must_use]
-    pub fn new(primary: P, secondary: S) -> Self {
+    pub const fn new(primary: P, secondary: S) -> Self {
         Self { primary, secondary }
     }
 }
@@ -136,6 +136,9 @@ mod tests {
                     LlmError::InvalidBaseUrl => LlmError::InvalidBaseUrl,
                     LlmError::UnsafeBaseUrl => LlmError::UnsafeBaseUrl,
                     LlmError::UnsupportedProvider(p) => LlmError::UnsupportedProvider(p.clone()),
+                    LlmError::InvalidModelRef => LlmError::InvalidModelRef,
+                    LlmError::MissingCredentials(p) => LlmError::MissingCredentials(p.clone()),
+                    LlmError::NoEligibleModel => LlmError::NoEligibleModel,
                 }),
             }
         }

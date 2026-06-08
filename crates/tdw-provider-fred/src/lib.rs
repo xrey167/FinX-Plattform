@@ -8,6 +8,7 @@ pub use http_fetcher::FredHttpSeriesObservationsFetcher;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tdw_core::query_params::StandardParams;
 use thiserror::Error;
 
 pub const PROVIDER_ID: &str = "fred";
@@ -35,6 +36,11 @@ pub struct ProviderRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FredSeriesObservationsQuery {
     pub series_id: String,
+    /// Shared date/limit normalization parsed from the same caller payload as
+    /// `series_id`. FRED maps `start_date`/`end_date`/`limit` onto its
+    /// `observation_start`/`observation_end`/`limit` request parameters.
+    #[serde(default, flatten)]
+    pub params: StandardParams,
 }
 
 impl FredSeriesObservationsQuery {
@@ -44,6 +50,29 @@ impl FredSeriesObservationsQuery {
     pub fn new(series_id: &str) -> Result<Self> {
         Ok(Self {
             series_id: normalize_series_id(series_id)?,
+            params: StandardParams::default(),
+        })
+    }
+
+    /// Build a query from a raw caller payload, normalizing both the
+    /// `series_id` and the shared `start_date`/`end_date`/`limit` parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant when the `series_id` is missing/invalid or the
+    /// shared parameters fail validation.
+    pub fn from_value(params: &serde_json::Value) -> std::result::Result<Self, tdw_core::Error> {
+        let series_id = params
+            .get("series_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                tdw_core::Error::InvalidQuery("fred series_id must be a string".to_string())
+            })?;
+        let series_id = normalize_series_id(series_id)
+            .map_err(|error| tdw_core::Error::InvalidQuery(error.to_string()))?;
+        Ok(Self {
+            series_id,
+            params: StandardParams::from_value(params)?,
         })
     }
 }
@@ -134,7 +163,42 @@ mod tests {
             .unwrap_or_else(|error| panic!("query should build: {error}"));
 
         assert_eq!(query.series_id, "UNRATE");
+        assert_eq!(query.params, StandardParams::default());
         assert!(FredSeriesObservationsQuery::new(" ").is_err());
         assert!(FredSeriesObservationsQuery::new("GDP&limit=1").is_err());
+    }
+
+    #[test]
+    fn from_value_normalizes_series_id_and_shared_params() {
+        let query = FredSeriesObservationsQuery::from_value(&serde_json::json!({
+            "series_id": "gdp",
+            "start_date": "2020-01-01",
+            "end_date": "2024-12-31",
+            "limit": 25
+        }))
+        .unwrap_or_else(|error| panic!("query should build: {error}"));
+
+        assert_eq!(query.series_id, "GDP");
+        assert_eq!(
+            query.params.start_date.map(|d| d.to_string()).as_deref(),
+            Some("2020-01-01")
+        );
+        assert_eq!(
+            query.params.end_date.map(|d| d.to_string()).as_deref(),
+            Some("2024-12-31")
+        );
+        assert_eq!(query.params.limit, Some(25));
+
+        // Shared validation rejects an inverted date range.
+        assert!(
+            FredSeriesObservationsQuery::from_value(&serde_json::json!({
+                "series_id": "gdp",
+                "start_date": "2024-01-01",
+                "end_date": "2020-01-01"
+            }))
+            .is_err()
+        );
+        // Missing series_id is still an error.
+        assert!(FredSeriesObservationsQuery::from_value(&serde_json::json!({})).is_err());
     }
 }

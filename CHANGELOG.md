@@ -14,20 +14,21 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
-## [1.1.0] - pending
+## [1.1.0] - 2026-06-08
 
-Security, observability, and production-readiness release on top of `v1.0.0`.
-Hardens authentication (cryptographic OIDC, constant-time token comparison,
-loopback-default daemon bind), wires real storage/compute engines into the
-`live` profile by default, completes registry-driven dispatch, lands the
-worker dead-letter operator surface, and adds CI live-stack/multiarch coverage,
-on top of a workspace-wide documentation and lint-debt sweep.
-
-> **Drafted from a draining merge train.** This section consolidates everything
-> merged after `v1.0.0` (PR #148) as of drafting. Several PRs were still
-> open/queued at draft time and are listed under *Pending — close before tag*
-> below; the final pre-tag touch-up reconciles them with
-> `git log v1.0.0..HEAD --oneline` before the `v1.1.0` tag is cut.
+Security, observability, feature-platform, and production-readiness release on
+top of `v1.0.0`. Hardens authentication (cryptographic OIDC, constant-time token
+comparison, loopback-default daemon bind), wires real storage/compute engines
+into the `live` profile by default, completes registry-driven dispatch, lands
+the worker dead-letter operator surface and full ops/health surface, and adds
+the first OpenBB-gap-closure layer (standardized result envelope, cluster data
+models, shared query params, logical-endpoint resolution, symbology). It also
+builds out the application feature platform — alert engine, transactional and
+broadcast email, news aggregation, a multi-step function/cron spine, first-party
+identity/session/password stores, the Finnhub provider, an LLM fallback/router
+with error classification, and tool-execution autonomy gating with a hash-chained
+receipt log — on top of a workspace-wide documentation, self-improve, and
+dependency-hygiene sweep.
 
 ### Added
 
@@ -55,12 +56,45 @@ on top of a workspace-wide documentation and lint-debt sweep.
   backend, already a vetted transitive dependency). The existing structural
   claim/JWKS checks remain as a pre-filter. Remote JWKS fetch stays out of
   scope: verifying keys are supplied from the configured JWKS.
-- **Standalone test-policy workflow + pre-release fuzz/loom recipe** (#152).
-  A dedicated `test-policy` GitHub workflow plus the documented
-  `cargo run -p xtask -- prerelease-check` recipe that runs the stable
-  corpus-replay fuzz harnesses and the `tdw-app-server` loom relay model as the
-  release readiness gate. Adds 21 characterization tests for the vendored
-  `tdw-proto` prost types (#151).
+- **Ops/health surface + graceful drain** (#161, G002). `/health`, `/ready`,
+  and `/metrics` endpoints plus coordinated graceful drain for the daemon,
+  worker, and MCP server, so the deployed stack is probe- and shutdown-aware.
+- **Price-alert engine** (#180, #187, #199). A `PriceAlert` domain model with a
+  Postgres migration and alert stores (#180), a `tdw-alert-evaluator` price-alert
+  evaluation function on a 5-minute cron (#187), and owner-scoped alert CRUD
+  daemon ops in `tdw-service-api` (#199).
+- **Function/cron spine** (#177, #185, #186). A `tdw-cron` recurring-trigger
+  spine over the worker queue (#177), a multi-step `tdw-functions` registry with
+  per-step memoization (#185), and cron/event triggers wired to worker-job
+  execution (#186).
+- **Transactional + broadcast email** (#183, #201). `tdw-email` transactional
+  SMTP send with HTML template fill (#183), plus a marketing/broadcast client
+  behind a `broadcast` feature (#201).
+- **News aggregation policy layer** (#204). A new `tdw-news-compose` crate that
+  aggregates and composes news under an explicit policy layer.
+- **First-party identity stores** (#193, #205). A first-party user + password
+  store using argon2 (#193) and a session store (#205) in `tdw-identity`.
+- **Finnhub provider** (`tdw-provider-finnhub`, #192). Company profile and quote
+  fetchers following the canonical provider pattern.
+- **LLM fallback, router, and error classification** (#169, #194, #195).
+  `tdw-llm` gains a `FallbackModel` primary→secondary provider wrapper (#169), a
+  credential-aware provider router (#195), and retryable-vs-permanent error
+  classification (#194).
+- **Tool-execution autonomy gating + receipt log** (#196, #197, #198).
+  `tdw-tool-exec` gates execution on `ToolEffect` risk via an opt-in
+  `AutonomyLevel` (#196), keeps an opt-in hash-chained tool-receipt log (#197),
+  and validates call arguments against an opt-in arg schema before dispatch
+  (#198).
+- **FunctionRegistry over HTTP** (#188). `tdw-app-server` exposes the
+  `FunctionRegistry` over HTTP with HMAC request signing.
+- **Live `QuoteSnapshot` read path** (#179). A `QuoteSnapshot` domain type plus
+  an uncached live read path for quote data.
+- **OpenBB-gap-closure layer 1** (#176, #173, #190, #191). The first layer of
+  the OpenBB clean-room gap-closure plan (analysis + layered plan in #176): a
+  standardized result envelope and cluster data models, shared query-param
+  normalization with a yahoo/fred pilot (L1.3, #191), logical-endpoint provider
+  resolution (L1.5, #190), and a pure ticker-symbology normalization crate
+  `tdw-symbology` (#173).
 
 ### Changed
 
@@ -86,6 +120,10 @@ on top of a workspace-wide documentation and lint-debt sweep.
   smoke path; the CI tools job covers the `tdw-cli`/`tdw-mcp` surface; the
   release workflow gains an `aarch64-unknown-linux-gnu` build leg; and container
   images are now built multiarch.
+- **CI: concurrency groups** (#200) cancel superseded PR runs so only the latest
+  push per branch consumes runners.
+- **`jsonwebtoken` 9.3.1 → 10.4.0** on the `rust_crypto` backend (#163), keeping
+  the OIDC verifier on a current, maintained JWT implementation.
 
 ### Security
 
@@ -94,6 +132,14 @@ on top of a workspace-wide documentation and lint-debt sweep.
   posture. See *Upgrade notes* in
   [`docs/release/v1.1.0-notes.md`](docs/release/v1.1.0-notes.md) for the
   breaking-for-exposed-deployments details.
+- `cargo-deny` now ignores `RUSTSEC-2026-0173` (proc-macro-error2 unmaintained),
+  a build-time-only transitive advisory with no runtime exposure (#202).
+
+### Performance
+
+- **Verification wall time halved** (#178). Test-target gating, a doctest-harness
+  purge, and fixture shrinking cut workspace verification wall time by ~54% over
+  three self-improve iterations, without reducing coverage.
 
 ### Docs
 
@@ -101,27 +147,25 @@ on top of a workspace-wide documentation and lint-debt sweep.
   [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the single source of truth
   for every `TDW_*` variable, with a rewritten `.env.example`, a
   `secrets-and-tls.md` runbook, and `compose-setup` helper scripts.
+- **Comprehensive per-crate README/ARCHITECTURE/examples across all crates**
+  (#164–#168, #170–#172). A workspace-wide documentation sweep adding a README,
+  an ARCHITECTURE note, and runnable examples to every crate — provider crates
+  (batches A/B/C, including the ws and proto crates), domain/data, storage and
+  persistence, AI (llm/embed/agent/udf), service/binary, and core infra.
+- **OpenBB clean-room gap analysis + layered closure plan** (#176). A roadmap
+  document that scopes the OpenBB feature gap and the layered plan to close it.
 - **Lint-debt sweep.** `missing_const_for_fn` resolved across 16 crates
   (#156, #160) and `too_long_first_doc_paragraph` across 4 crates (#162).
+- **Release roster + 1.0 gap-audit closure.** Crate-readiness roster sync (#182)
+  and the 1.0 gap-audit closure (#159).
 
-### Pending — close before tag
+### Internal
 
-These PRs were still open/queued at draft time. Reconcile against
-`git log v1.0.0..HEAD --oneline` and fold the merged ones into the sections
-above before cutting the `v1.1.0` tag:
-
-- **#161** — `feat(ops)`: `/health` `/ready` `/metrics` endpoints + graceful
-  drain for daemon, worker, and MCP (G002). *(Adds observability surface; move
-  to Added once merged.)*
-- **#158-adjacent / #159** — `chore(release)`: 1.0 gap-audit closure (other
-  session).
-- **#169** — `feat(tdw-llm)`: `FallbackModel` primary→secondary provider
-  wrapper. *(Added once merged.)*
-- **#163** — `fix(deps)`: bump `jsonwebtoken` 9.3.1 → 10.4.0 on the
-  `rust_crypto` backend. *(Changed/Security once merged.)*
-- **#164–#168, #170–#172** — `docs`: README + ARCHITECTURE + examples sweep for
-  all 113 crates (providers A/B/C, domain, storage, AI, services, core).
-  *(Docs once merged.)*
+- **Self-improve campaigns.** Provider HTTP fetchers deduplicated via a shared
+  core (−60% duplication, #175); workspace verification time reduced (−54%, #178,
+  see *Performance*); line coverage raised across `tdw-backend`/`tdw-service-api`/
+  `tdw-core` (#181) and daemon-serving paths covered (#203); and 17
+  code-reference-free workspace dependency edges removed (351 → 334, #184).
 
 ## [1.0.0] - 2026-06-07
 
@@ -537,8 +581,8 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...HEAD
-[1.1.0]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.10.0...v1.0.0
 [0.10.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.8.0...v0.9.0

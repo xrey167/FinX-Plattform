@@ -20,5 +20,9 @@ doctest = false
 # or system `protoc` — the generated code is committed.
 prost = { workspace = true }
 
+[[example]]
+name = "tdw_proto_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

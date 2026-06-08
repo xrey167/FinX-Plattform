@@ -31,5 +31,9 @@ tdw-service-api = { path = "../tdw-service-api" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 
+[[example]]
+name = "tdw_worker_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

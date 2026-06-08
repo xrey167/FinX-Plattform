@@ -271,7 +271,7 @@ pub fn validate_request(request: &EvalRunRequest) -> Result<(), EvalRunError> {
 pub struct StubLanguageModel;
 
 impl LanguageModel for StubLanguageModel {
-    fn model_id(&self) -> &str {
+    fn model_id(&self) -> &'static str {
         "stub-echo"
     }
 

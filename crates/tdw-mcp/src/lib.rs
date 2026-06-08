@@ -440,11 +440,15 @@ impl McpServer {
                     // category message and log the detail server-side (decision 3).
                     eprintln!("tdw-mcp: registry tool {name} error: {other}");
                     let category = match other {
-                        tdw_tool_exec::ExecError::NotPermitted(_) => {
+                        tdw_tool_exec::ExecError::NotPermitted(_)
+                        | tdw_tool_exec::ExecError::Blocked { .. } => {
                             "registry tool execution not permitted"
                         }
                         tdw_tool_exec::ExecError::BadArguments(_) => {
                             "invalid registry tool definition"
+                        }
+                        tdw_tool_exec::ExecError::InvalidArguments { .. } => {
+                            "invalid registry tool arguments"
                         }
                         tdw_tool_exec::ExecError::ToolNotFound(_)
                         | tdw_tool_exec::ExecError::HandlerNotFound(_) => {
@@ -602,10 +606,7 @@ pub fn run_stdio_json_rpc() -> i32 {
 #[must_use]
 pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32 {
     let stdin = std::io::stdin();
-    let base = match daemon {
-        Some(config) => McpServer::with_daemon_config(config),
-        None => McpServer::new(),
-    };
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
     let mut server = match attach_env_registry(base) {
         Ok(server) => server,
         Err(error) => {
@@ -741,10 +742,8 @@ pub fn registry_from_dir(dir: &Path) -> Result<Registry, RegistryConfigError> {
 ///
 /// Returns [`RegistryConfigError`] when the variable is set but the directory cannot be loaded.
 pub fn registry_from_env() -> Result<Option<Registry>, RegistryConfigError> {
-    match non_empty_env(REGISTRY_DIR_ENV) {
-        Some(dir) => registry_from_dir(Path::new(&dir)).map(Some),
-        None => Ok(None),
-    }
+    non_empty_env(REGISTRY_DIR_ENV)
+        .map_or(Ok(None), |dir| registry_from_dir(Path::new(&dir)).map(Some))
 }
 
 /// Attach the [`registry_from_env`] registry to `server` when [`REGISTRY_DIR_ENV`] is set.
@@ -1027,10 +1026,7 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
     // `/ready` reachability probe, before `daemon` is moved into the server.
     let daemon_tcp_addr = daemon_tcp_addr_for_readiness(daemon.as_ref());
 
-    let base = match daemon {
-        Some(config) => McpServer::with_daemon_config(config),
-        None => McpServer::new(),
-    };
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
     let server = match attach_env_registry(base) {
         Ok(server) => Arc::new(Mutex::new(server)),
         Err(error) => {
@@ -3959,15 +3955,12 @@ mod tests {
         // The dir-attach test covers the set path deterministically; here we only assert the
         // unset path so a parallel test that sets the var cannot race us. This is best-effort:
         // if some other test in the binary has the var set, treat that as the set path.
-        match std::env::var(REGISTRY_DIR_ENV) {
-            Err(_) => {
-                let resolved = registry_from_env()
-                    .unwrap_or_else(|error| panic!("unset env should not error: {error}"));
-                assert!(resolved.is_none(), "unset env must yield no registry");
-            }
-            Ok(_) => {
-                // The var is set in this process; the unset invariant is not testable here.
-            }
+        if std::env::var(REGISTRY_DIR_ENV).is_err() {
+            let resolved = registry_from_env()
+                .unwrap_or_else(|error| panic!("unset env should not error: {error}"));
+            assert!(resolved.is_none(), "unset env must yield no registry");
+        } else {
+            // The var is set in this process; the unset invariant is not testable here.
         }
     }
 }

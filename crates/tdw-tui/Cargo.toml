@@ -16,5 +16,9 @@ doctest = false
 ratatui = { workspace = true }
 tdw-protocol = { workspace = true }
 
+[[example]]
+name = "tdw_tui_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

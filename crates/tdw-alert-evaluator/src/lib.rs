@@ -103,8 +103,7 @@ pub fn alert_evaluation_function(deps: AlertEvalDeps) -> FunctionDef {
                 // this single timestamp so replays remain deterministic.
                 let now_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-                    .unwrap_or(0);
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
 
                 // ----------------------------------------------------------
                 // Step 1: load eligible alerts
