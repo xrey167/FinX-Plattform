@@ -419,3 +419,84 @@ fn ohlcv_bar_encoding_is_deterministic() {
     let b = encode(&bar);
     assert_eq!(a, b, "repeated encodes must produce identical bytes");
 }
+
+// ---------------------------------------------------------------------------
+// PT1 — golden wire bytes pin field tags
+//
+// Round-trip tests are self-consistent regardless of the proto field numbers:
+// if a field's tag changed in the .proto, both the generated encoder and
+// decoder would use the new tag and the round-trip would still pass — yet the
+// bytes would be incompatible with already-persisted data and peer services.
+// These assertions pin the concrete on-wire tags so a field-number change
+// fails loudly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn golden_wire_bytes_pin_field_tags() {
+    // PriceLevel { price: 1.0, quantity: 2.0 } — pins price=field 1 and
+    // quantity=field 2, both `double` (wire type 1, fixed64 little-endian):
+    //   0x09 = tag (1<<3)|1, then IEEE-754 1.0; 0x11 = tag (2<<3)|1, then 2.0.
+    let level = PriceLevel {
+        price: 1.0,
+        quantity: 2.0,
+    };
+    assert_eq!(
+        encode(&level),
+        vec![
+            0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F, // price = 1.0
+            0x11, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, // quantity = 2.0
+        ],
+        "PriceLevel field tags/layout must be stable on the wire"
+    );
+
+    // OhlcvBar symbol="A" — pins symbol=field 1 (string, wire type 2):
+    //   0x0A = tag (1<<3)|2, 0x01 = len 1, 0x41 = 'A'.
+    let bar = OhlcvBar {
+        symbol: "A".to_string(),
+        ..OhlcvBar::default()
+    };
+    assert_eq!(encode(&bar), vec![0x0A, 0x01, 0x41], "OhlcvBar.symbol tag");
+
+    // Tick trade_id="A" — pins trade_id=field 7 (string):
+    //   0x3A = tag (7<<3)|2, 0x01 = len 1, 0x41 = 'A'.
+    let tick = Tick {
+        trade_id: "A".to_string(),
+        ..Tick::default()
+    };
+    assert_eq!(encode(&tick), vec![0x3A, 0x01, 0x41], "Tick.trade_id tag");
+}
+
+// ---------------------------------------------------------------------------
+// PT2 — special f64 values and unknown enum discriminants
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ohlcv_bar_round_trips_special_float_values() {
+    // proto3 `double` carries IEEE-754 specials; they must survive the codec.
+    let bar = OhlcvBar {
+        open: f64::INFINITY,
+        high: f64::NEG_INFINITY,
+        low: f64::NAN,
+        ..OhlcvBar::default()
+    };
+    let decoded: OhlcvBar = decode(&encode(&bar));
+    assert_eq!(decoded.open, f64::INFINITY, "+Inf");
+    assert_eq!(decoded.high, f64::NEG_INFINITY, "-Inf");
+    // NaN != NaN, so equality fails — must compare via is_nan().
+    assert!(decoded.low.is_nan(), "NaN must round-trip as NaN");
+}
+
+#[test]
+fn tick_preserves_unknown_side_discriminant() {
+    // `side` decodes as i32, and proto3 open enums round-trip an unknown
+    // discriminant verbatim rather than clamping it to 0.
+    let tick = Tick {
+        side: 99,
+        ..Tick::default()
+    };
+    let decoded: Tick = decode(&encode(&tick));
+    assert_eq!(
+        decoded.side, 99,
+        "unknown enum discriminant must be preserved"
+    );
+}
