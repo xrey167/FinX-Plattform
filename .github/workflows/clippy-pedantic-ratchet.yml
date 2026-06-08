@@ -1,0 +1,31 @@
+name: Clippy pedantic+nursery ratchet
+
+# Keeps the clippy `pedantic` + `nursery` warning count from re-accumulating.
+# These groups are not denied by the main `-D warnings` lint job, so without
+# this guard every merge can silently re-add pedantic/nursery debt. This job
+# fails if a PR raises the count above the committed baseline (ci/clippy-
+# pedantic-baseline.txt); it never blocks reductions. See ci/clippy-pedantic-
+# ratchet.py for the bootstrap (AUTO) -> enforcing flow.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A later push to a PR cancels the in-flight ratchet run for the same ref.
+concurrency:
+  group: clippy-pedantic-ratchet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ratchet:
+    name: pedantic+nursery ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Ratchet pedantic+nursery warning count
+        run: python3 ci/clippy-pedantic-ratchet.py
