@@ -4461,8 +4461,10 @@ dependencies = [
  "serde_json",
  "tdw-email",
  "tdw-functions",
+ "tdw-identity",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

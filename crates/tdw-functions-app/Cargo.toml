@@ -17,9 +17,11 @@ smtp = ["tdw-email/smtp", "dep:tokio"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 tdw-functions = { path = "../tdw-functions" }
 tdw-email = { path = "../tdw-email" }
+tdw-identity = { path = "../tdw-identity" }
 tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
