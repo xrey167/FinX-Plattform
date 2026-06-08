@@ -384,6 +384,40 @@
           "type": "object"
         },
         {
+          "description": "Register a new first-party user (email/password onboarding). The\ndispatcher validates and hashes the password via the `tdw-identity`\nstore and emits a `user.created` event on success. `password` is the\nplaintext credential — it is hashed by the store and is **never**\nreturned or logged; the created `User` record never carries the hash.\n`id` and `now_ms` are caller-supplied (the identity crate has no\nUUID/clock dependency). Serializes as `register_user`. Like the alert\nops, this variant is always present in the protocol; the dispatcher arm\nthat services it is gated by the `identity` feature on `tdw-service-api`.",
+          "properties": {
+            "display_name": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "now_ms": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "password": {
+              "type": "string"
+            },
+            "type": {
+              "const": "register_user",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "email",
+            "password",
+            "display_name",
+            "now_ms"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "type": {
               "const": "shutdown",
