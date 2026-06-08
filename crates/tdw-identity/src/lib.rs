@@ -1283,7 +1283,7 @@ mod pg {
     ///
     /// * Token material is **never** logged.
     /// * `consume` is single-use: a valid token is deleted in the same
-    ///   statement (`delete … returning`), so it cannot be replayed.
+    ///   statement (`delete returning`), so it cannot be replayed.
     /// * Expired rows are deleted on access (best-effort lazy sweep).
     /// * `revoke_all_for_user` is a single `delete … where user_id = $1`.
     #[derive(Clone, Debug)]
@@ -1353,50 +1353,47 @@ mod pg {
         }
 
         async fn consume(&self, token: &str, now_ms: i64) -> Result<ResetToken> {
-            // First try to fetch the row unconditionally so we can distinguish
-            // "not found" from "found but expired".
-            let row = sqlx::query(
+            let consumed = sqlx::query(
                 r#"
-                select token, user_id, created_at_ms, expires_at_ms
-                from system.identity_reset_tokens
-                where token = $1
+                delete from system.identity_reset_tokens
+                where token = $1 and expires_at_ms > $2
+                returning token, user_id, created_at_ms, expires_at_ms
                 "#,
             )
             .bind(token)
+            .bind(now_ms)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|error| IdentityError::Store(format!("reset token consume fetch: {error}")))?;
+            .map_err(|error| IdentityError::Store(format!("reset token consume: {error}")))?;
 
-            match row {
-                None => Err(IdentityError::ResetTokenNotFound),
-                Some(ref r) => {
-                    let expires_at_ms: i64 = r.get("expires_at_ms");
-                    if expires_at_ms <= now_ms {
-                        // Best-effort delete; ignore failure (row may already be gone).
-                        let _ = sqlx::query(
-                            "delete from system.identity_reset_tokens where token = $1",
-                        )
-                        .bind(token)
-                        .execute(&self.pool)
-                        .await;
-                        Err(IdentityError::ResetTokenExpired)
-                    } else {
-                        // Single-use: delete on successful consume.
-                        sqlx::query("delete from system.identity_reset_tokens where token = $1")
-                            .bind(token)
-                            .execute(&self.pool)
-                            .await
-                            .map_err(|error| {
-                                IdentityError::Store(format!("reset token consume delete: {error}"))
-                            })?;
-                        Ok(ResetToken {
-                            token: r.get("token"),
-                            user_id: r.get("user_id"),
-                            created_at_ms: r.get("created_at_ms"),
-                            expires_at_ms,
-                        })
-                    }
-                }
+            if let Some(row) = consumed {
+                return Ok(ResetToken {
+                    token: row.get("token"),
+                    user_id: row.get("user_id"),
+                    created_at_ms: row.get("created_at_ms"),
+                    expires_at_ms: row.get("expires_at_ms"),
+                });
+            }
+
+            let expired = sqlx::query(
+                r#"
+                delete from system.identity_reset_tokens
+                where token = $1 and expires_at_ms <= $2
+                returning token
+                "#,
+            )
+            .bind(token)
+            .bind(now_ms)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|error| {
+                IdentityError::Store(format!("reset token consume expired sweep: {error}"))
+            })?;
+
+            if expired.is_some() {
+                Err(IdentityError::ResetTokenExpired)
+            } else {
+                Err(IdentityError::ResetTokenNotFound)
             }
         }
 
