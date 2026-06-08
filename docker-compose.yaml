@@ -183,6 +183,7 @@ services:
       dockerfile: docker/tdw-service.Dockerfile
       args:
         FEATURES: real-engines,udf-wasm
+    command: []
     profiles: ["live"]
     depends_on:
       postgres:
