@@ -246,6 +246,7 @@ impl SqliteSessionStore {
             insert into cost_ledger
                 (session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend)
             values (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            on conflict (session_id, operation_id) do nothing
             ",
         )
         .bind(&entry.session_id)
@@ -306,7 +307,14 @@ create table if not exists cost_ledger (
     bytes_scanned integer not null,
     rows_read integer not null,
     rows_written integer not null,
-    backend text not null
+    backend text not null,
+    -- A cost entry is keyed by its natural (session, operation) identity. The
+    -- op pipeline is at-least-once, so a retried append_cost must not
+    -- double-count. This uniqueness is what lets append_cost use
+    -- `on conflict do nothing` as an idempotent no-op instead of a dup row.
+    -- NB keep this comment free of the statement-separator char, since
+    -- SQLITE_MIGRATION is split naively on it before each exec.
+    unique (session_id, operation_id)
 );
 ";
 
@@ -484,6 +492,53 @@ mod tests {
                 .expect("approval exists")
                 .decision,
             Some(ApprovalDecision::AllowOnce)
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_append_cost_is_idempotent_per_operation() {
+        let store = SqliteSessionStore::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("store connects: {error}"));
+        let session_id = SessionId::new("session-cost").expect("session id");
+        store
+            .upsert_session(&SessionRecord {
+                session_id: session_id.as_str().to_string(),
+                status: SessionStatus::Active,
+                created_at: "2026-05-22T00:00:00Z".to_string(),
+                updated_at: "2026-05-22T00:00:00Z".to_string(),
+            })
+            .await
+            .unwrap_or_else(|error| panic!("session persists: {error}"));
+
+        let cost = CostLedgerEntry {
+            session_id: session_id.as_str().to_string(),
+            operation_id: "op-retry".to_string(),
+            tokens: 10,
+            bytes_scanned: 100,
+            rows_read: 5,
+            rows_written: 1,
+            backend: "sqlite".to_string(),
+        };
+
+        // An at-least-once pipeline can deliver the same op twice. Both appends
+        // succeed (no error), but the natural-key uniqueness + `on conflict do
+        // nothing` means the cost is recorded exactly once — no double-count.
+        store
+            .append_cost(&cost)
+            .await
+            .unwrap_or_else(|error| panic!("first append: {error}"));
+        store.append_cost(&cost).await.unwrap_or_else(|error| {
+            panic!("duplicate append must be a no-op, not an error: {error}")
+        });
+
+        assert_eq!(
+            store
+                .cost_entries(&session_id)
+                .await
+                .unwrap_or_else(|error| panic!("cost entries load: {error}")),
+            vec![cost],
+            "duplicate (session_id, operation_id) must not double-count",
         );
     }
 

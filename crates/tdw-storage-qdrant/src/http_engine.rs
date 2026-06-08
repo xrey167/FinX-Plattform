@@ -154,6 +154,21 @@ impl QdrantHttpEngine {
             .map_err(|error| Error::Storage(format!("qdrant create_collection: {error}")))?;
         if !create_response.status().is_success() {
             let status = create_response.status();
+            // The exists-check and this create PUT are separate awaits, and the
+            // engine is shared across daemon connections, so two concurrent
+            // first-upserts can both see exists=false and both issue the create.
+            // The race-loser gets 409 Conflict ("collection already exists").
+            // Qdrant collection creation is effectively idempotent, so a 409 is
+            // not a real failure — treat it as success (still verifying the
+            // vector size, exactly as the exists branch does, so a colliding
+            // collection with an incompatible dimension is caught).
+            if create_conflict_is_benign(status) {
+                self.verify_vector_size(name, vector_size).await?;
+                if let Ok(mut seen) = self.ensured.lock() {
+                    seen.insert(name.to_string());
+                }
+                return Ok(());
+            }
             let body = create_response.text().await.unwrap_or_default();
             return Err(Error::Storage(format!(
                 "qdrant create_collection returned {status}: {body}"
@@ -206,6 +221,17 @@ impl QdrantHttpEngine {
 fn existing_vector_size(body: &Value) -> Option<u64> {
     body.pointer("/result/config/params/vectors/size")
         .and_then(Value::as_u64)
+}
+
+/// Whether a non-success status from the create-collection `PUT` is a benign
+/// "collection already exists" race rather than a genuine failure.
+///
+/// Only `409 Conflict` qualifies — the status Qdrant returns when a concurrent
+/// first-upsert created the collection between our exists-check and this PUT.
+/// Every other non-success status (4xx auth/validation, 5xx server) remains a
+/// real error, so this predicate must stay strictly `== CONFLICT`.
+fn create_conflict_is_benign(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::CONFLICT
 }
 
 #[derive(Deserialize)]
@@ -322,8 +348,27 @@ impl VectorEngine for QdrantHttpEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::existing_vector_size;
+    use super::{create_conflict_is_benign, existing_vector_size};
     use serde_json::json;
+
+    #[test]
+    fn only_409_conflict_is_treated_as_benign_already_exists() {
+        use reqwest::StatusCode;
+        // A creation race-loser gets 409 and must be treated as success.
+        assert!(create_conflict_is_benign(StatusCode::CONFLICT));
+        // Every other non-success status is a genuine failure and must still
+        // surface as an error (guards against broadening this to !is_success()).
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(!create_conflict_is_benign(status), "{status} must error");
+        }
+    }
 
     #[test]
     fn existing_vector_size_reads_single_vector_config() {

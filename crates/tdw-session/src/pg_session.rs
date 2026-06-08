@@ -21,7 +21,7 @@
 //! CREATE TABLE tdw_sessions                  (session_id TEXT PK, status TEXT, created_at TEXT, updated_at TEXT);
 //! CREATE TABLE tdw_sessions_permission_state (session_id TEXT PK, rules_json TEXT);
 //! CREATE TABLE tdw_sessions_pending_approvals(permission_id TEXT PK, session_id TEXT, action TEXT, pattern TEXT, decision TEXT NULL);
-//! CREATE TABLE tdw_sessions_cost_ledger      (id BIGSERIAL PK, session_id TEXT, operation_id TEXT, tokens BIGINT, bytes_scanned BIGINT, rows_read BIGINT, rows_written BIGINT, backend TEXT);
+//! CREATE TABLE tdw_sessions_cost_ledger      (id BIGSERIAL PK, session_id TEXT, operation_id TEXT, tokens BIGINT, bytes_scanned BIGINT, rows_read BIGINT, rows_written BIGINT, backend TEXT, UNIQUE(session_id, operation_id));
 //! ```
 
 use serde_json::{Value, json};
@@ -121,7 +121,8 @@ impl PgSessionStore {
                 bytes_scanned BIGINT NOT NULL, \
                 rows_read BIGINT NOT NULL, \
                 rows_written BIGINT NOT NULL, \
-                backend TEXT NOT NULL\
+                backend TEXT NOT NULL, \
+                UNIQUE (session_id, operation_id)\
             )",
             self.cost_table()
         );
@@ -314,7 +315,8 @@ impl PgSessionStore {
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<(), Error> {
         let sql = format!(
             "INSERT INTO {} (session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (session_id, operation_id) DO NOTHING",
             self.cost_table()
         );
         self.engine
