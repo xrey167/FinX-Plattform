@@ -160,4 +160,40 @@ mod tests {
             AuthorizationDecision::Deny(AuthorizationDenyReason::InvalidRole)
         );
     }
+
+    #[test]
+    fn denies_empty_required_role_and_missing_role_with_exact_reason() {
+        let base = AuthPolicy {
+            table: "analytics.gold_daily_returns".to_string(),
+            required_role: "analyst".to_string(),
+            row_filter: None,
+        };
+
+        // Policy with a blank required_role.
+        assert_eq!(
+            authorize_with_decision(
+                &Principal {
+                    subject: "alice".to_string(),
+                    roles: vec!["analyst".to_string()],
+                },
+                &AuthPolicy {
+                    required_role: "  ".to_string(),
+                    ..base.clone()
+                },
+            ),
+            AuthorizationDecision::Deny(AuthorizationDenyReason::EmptyRequiredRole)
+        );
+
+        // Valid subject/table/roles, but the principal lacks the required role.
+        assert_eq!(
+            authorize_with_decision(
+                &Principal {
+                    subject: "alice".to_string(),
+                    roles: vec!["guest".to_string()],
+                },
+                &base,
+            ),
+            AuthorizationDecision::Deny(AuthorizationDenyReason::MissingRequiredRole)
+        );
+    }
 }

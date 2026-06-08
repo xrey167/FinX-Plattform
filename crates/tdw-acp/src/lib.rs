@@ -325,4 +325,40 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn read_only_sql_gate_accepts_selects_and_rejects_writes_and_comments() {
+        let q = |sql: &str| AcpRequest::SubmitOp {
+            session_id: SessionId::new("session-1").expect("session id"),
+            op: Op::RunQuery {
+                sql: sql.to_string(),
+                plan_id: None,
+                cost_hint: None,
+            },
+        };
+
+        // A plain select and a single trailing-semicolon select are allowed.
+        assert!(validate_request(&q("select 1")).is_ok());
+        assert!(validate_request(&q("select * from raw.orders;")).is_ok());
+
+        // A non-select statement is rejected by the read-only prefix check.
+        assert_eq!(
+            validate_request(&q("update raw.orders set filled = 1")),
+            Err(AcpValidationError::InvalidQuery {
+                reason: "only read-only select statements are supported"
+            })
+        );
+        // An inline comment token is rejected as an unsafe SQL token.
+        assert_eq!(
+            validate_request(&q("select 1 -- sneaky")),
+            Err(AcpValidationError::InvalidQuery {
+                reason: "unsafe SQL tokens are not allowed"
+            })
+        );
+        // Empty SQL is an empty field.
+        assert_eq!(
+            validate_request(&q("   ")),
+            Err(AcpValidationError::EmptyField { field: "sql" })
+        );
+    }
 }

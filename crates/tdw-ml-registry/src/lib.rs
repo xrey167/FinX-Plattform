@@ -140,4 +140,46 @@ mod tests {
             Err(ModelRegistryError::DuplicateModel)
         );
     }
+
+    #[test]
+    fn validate_rejects_bad_version_artifact_uri_and_owner() {
+        let base = ModelRegistration {
+            model_id: "embedding/local-hash".to_string(),
+            kind: ModelKind::Embedding,
+            version: "0.1.0".to_string(),
+            artifact_uri: "s3://models/local-hash".to_string(),
+            owner: "team".to_string(),
+        };
+
+        assert_eq!(
+            validate_registration(&ModelRegistration {
+                version: "  ".to_string(),
+                ..base.clone()
+            }),
+            Err(ModelRegistryError::InvalidVersion)
+        );
+        // Scheme outside the {s3,https,file} allowlist.
+        assert_eq!(
+            validate_registration(&ModelRegistration {
+                artifact_uri: "ftp://models/x".to_string(),
+                ..base.clone()
+            }),
+            Err(ModelRegistryError::InvalidArtifactUri)
+        );
+        // Path traversal inside an allowed scheme.
+        assert_eq!(
+            validate_registration(&ModelRegistration {
+                artifact_uri: "s3://models/../secret".to_string(),
+                ..base.clone()
+            }),
+            Err(ModelRegistryError::InvalidArtifactUri)
+        );
+        assert_eq!(
+            validate_registration(&ModelRegistration {
+                owner: " ".to_string(),
+                ..base
+            }),
+            Err(ModelRegistryError::InvalidOwner)
+        );
+    }
 }
