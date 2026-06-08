@@ -15,10 +15,8 @@ doctest = false
 [dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
-validator = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+validator = { workspace = true }
 
 [lints]
 workspace = true
