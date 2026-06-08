@@ -128,4 +128,72 @@ mod tests {
         assert!(drifted.validate().is_err());
         assert!(!drifted.verify_checksums());
     }
+
+    #[test]
+    fn validate_reports_the_specific_error_variant() {
+        let path = "s3://stage/ohlcv.parquet".to_string();
+        let base = TableManifest {
+            format: TableFormat::Delta,
+            table: "raw.market_data_bar".to_string(),
+            version: 1,
+            files: vec![TableFile {
+                path: path.clone(),
+                checksum: simple_checksum(&path),
+            }],
+        };
+
+        // ChecksumMismatch carries the offending path and both checksums.
+        let drifted = TableManifest {
+            files: vec![TableFile {
+                path: path.clone(),
+                checksum: 1,
+            }],
+            ..base.clone()
+        };
+        assert_eq!(
+            drifted.validate(),
+            Err(TableManifestError::ChecksumMismatch {
+                path: path.clone(),
+                expected: simple_checksum(&path),
+                actual: 1,
+            })
+        );
+
+        // Each shape violation maps to its own dedicated variant.
+        assert_eq!(
+            TableManifest {
+                table: String::new(),
+                ..base.clone()
+            }
+            .validate(),
+            Err(TableManifestError::EmptyTable)
+        );
+        assert_eq!(
+            TableManifest {
+                version: 0,
+                ..base.clone()
+            }
+            .validate(),
+            Err(TableManifestError::EmptyVersion)
+        );
+        assert_eq!(
+            TableManifest {
+                files: Vec::new(),
+                ..base.clone()
+            }
+            .validate(),
+            Err(TableManifestError::EmptyFiles)
+        );
+        assert_eq!(
+            TableManifest {
+                files: vec![TableFile {
+                    path: "   ".to_string(),
+                    checksum: 0,
+                }],
+                ..base
+            }
+            .validate(),
+            Err(TableManifestError::EmptyFilePath)
+        );
+    }
 }
