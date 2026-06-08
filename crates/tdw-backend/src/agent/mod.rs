@@ -646,6 +646,8 @@ mod tests {
                 tags: Vec::new(),
             }],
             endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
         };
         backend.upsert_agent(card);
 

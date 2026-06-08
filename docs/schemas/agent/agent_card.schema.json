@@ -25,6 +25,44 @@
         }
       ]
     },
+    "AgentRuntime": {
+      "description": "Optional per-agent runtime overrides for scoped delegation.\n\nEvery field is additive and `None` by default, so existing `*.json5` cards and golden\nsnapshots deserialize byte-identically. Holds only `Option<String>`/`Option<u32>`, so it\nderives `Eq` like the sibling [`SlashArg`]; it carries no validation invariants.",
+      "properties": {
+        "max_iterations": {
+          "description": "Maximum agent iterations; `None` inherits from the caller.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Preferred model identifier; `None` inherits from the caller.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "Preferred provider (e.g. an LLM vendor key); `None` inherits from the caller.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout_secs": {
+          "description": "Per-invocation timeout in seconds; `None` inherits from the caller.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AgentSkill": {
       "properties": {
         "input_schema": true,
@@ -304,9 +342,27 @@
     "meta": {
       "$ref": "#/$defs/EntityMeta"
     },
+    "runtime": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional runtime overrides (provider/model/timeout/iterations) for this agent."
+    },
     "skills": {
       "items": {
         "$ref": "#/$defs/AgentSkill"
+      },
+      "type": "array"
+    },
+    "tool_scope": {
+      "description": "Allowlist of tools this agent may use. Empty (the default) inherits nothing — an agent\nwith no declared scope grants no tools and hands no tools to its delegates.",
+      "items": {
+        "type": "string"
       },
       "type": "array"
     }
