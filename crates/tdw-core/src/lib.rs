@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+#[cfg(feature = "compaction")]
+pub mod compaction;
 #[cfg(feature = "http")]
 pub mod http_support;
 pub mod turn;
