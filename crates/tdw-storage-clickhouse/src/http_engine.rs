@@ -16,10 +16,26 @@
 //! rejects non-null `params` with a clear error so callers know to
 //! extend the binding surface deliberately.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::{Client, Url};
 use serde_json::Value;
 use tdw_core::{Error, OlapEngine, Result};
+
+/// Cap on how long establishing a connection may take. A stalled/black-holed
+/// endpoint fails fast here instead of hanging the calling op (CHH1).
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Generous overall request timeout — analytical queries can legitimately run
+/// for minutes, so this is only a backstop against a truly wedged connection,
+/// not a query-latency budget (CHH1).
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Default cap on a `query_json` response body (256 MiB). Bounds memory so a
+/// huge result set cannot OOM the process; tune via
+/// [`ClickHouseHttpEngine::with_max_response_bytes`] (CHH2).
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 
 /// Production `ClickHouse` backend. Construct via
 /// [`ClickHouseHttpEngine::new`].
@@ -29,6 +45,7 @@ pub struct ClickHouseHttpEngine {
     base_url: Url,
     user: Option<String>,
     password: Option<String>,
+    max_response_bytes: usize,
 }
 
 impl ClickHouseHttpEngine {
@@ -45,6 +62,8 @@ impl ClickHouseHttpEngine {
             .map_err(|error| Error::Storage(format!("clickhouse endpoint: {error}")))?;
         let client = Client::builder()
             .user_agent("tdw-storage-clickhouse/0.1")
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
             .build()
             .map_err(|error| Error::Storage(format!("clickhouse client: {error}")))?;
         Ok(Self {
@@ -52,7 +71,17 @@ impl ClickHouseHttpEngine {
             base_url,
             user,
             password,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         })
+    }
+
+    /// Override the maximum `query_json` response size (default 256 MiB). A
+    /// response exceeding this is rejected rather than buffered, so a large
+    /// result set cannot OOM the process.
+    #[must_use]
+    pub const fn with_max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
+        self
     }
 
     fn request(&self, query: &str) -> reqwest::RequestBuilder {
@@ -113,7 +142,7 @@ impl OlapEngine for ClickHouseHttpEngine {
         // `meta` (schema) and `data` (rows). The default response is
         // tab-separated text and would need a separate parser.
         let formatted = format!("{sql} FORMAT JSON");
-        let response = self
+        let mut response = self
             .request(&formatted)
             .send()
             .await
@@ -125,11 +154,58 @@ impl OlapEngine for ClickHouseHttpEngine {
                 "clickhouse query_json returned {status}: {body}"
             )));
         }
-        let body = response
-            .text()
+        // Read the body incrementally with a hard cap so an unexpectedly large
+        // OLAP result set cannot OOM the process (CHH2). `text()` would buffer
+        // the whole response unconditionally.
+        let mut body: Vec<u8> = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|error| Error::Storage(format!("clickhouse read body: {error}")))?;
-        serde_json::from_str(&body)
+            .map_err(|error| Error::Storage(format!("clickhouse read body: {error}")))?
+        {
+            if would_exceed_cap(body.len(), chunk.len(), self.max_response_bytes) {
+                return Err(Error::Storage(format!(
+                    "clickhouse query_json result exceeds the {}-byte cap",
+                    self.max_response_bytes
+                )));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8(body)
+            .map_err(|error| Error::Storage(format!("clickhouse body utf8: {error}")))?;
+        serde_json::from_str(&text)
             .map_err(|error| Error::Storage(format!("clickhouse parse_json: {error}")))
+    }
+}
+
+/// Whether appending `incoming` bytes to an already-buffered `current` would
+/// exceed `max`. Uses a saturating add so a malicious/huge `incoming` cannot
+/// wrap and bypass the cap.
+fn would_exceed_cap(current: usize, incoming: usize, max: usize) -> bool {
+    current.saturating_add(incoming) > max
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn would_exceed_cap_guards_the_boundary() {
+        // Exactly at the cap is allowed; one over is rejected.
+        assert!(!would_exceed_cap(90, 10, 100));
+        assert!(would_exceed_cap(90, 11, 100));
+        // A huge incoming chunk cannot wrap past the cap.
+        assert!(would_exceed_cap(1, usize::MAX, 100));
+        // Empty additions never exceed.
+        assert!(!would_exceed_cap(100, 0, 100));
+    }
+
+    #[test]
+    fn new_sets_a_default_response_cap() {
+        let engine =
+            ClickHouseHttpEngine::new("http://127.0.0.1:8123", None, None).expect("engine builds");
+        assert_eq!(engine.max_response_bytes, DEFAULT_MAX_RESPONSE_BYTES);
+        let tuned = engine.with_max_response_bytes(1_024);
+        assert_eq!(tuned.max_response_bytes, 1_024);
     }
 }
