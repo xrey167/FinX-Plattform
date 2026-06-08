@@ -5,7 +5,10 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpProfileFetcher,
+    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpSplitsFetcher,
+    FmpHttpStatementFetcher,
 };
 
 use schemars::JsonSchema;
@@ -58,6 +61,16 @@ impl FmpStatement {
             Self::Cashflow => "cash-flow-statement",
         }
     }
+
+    /// Return the FMP API path segment for this statement's growth-rate sibling.
+    #[must_use]
+    pub const fn as_growth_path_segment(self) -> &'static str {
+        match self {
+            Self::Income => "income-statement-growth",
+            Self::Balance => "balance-sheet-statement-growth",
+            Self::Cashflow => "cash-flow-statement-growth",
+        }
+    }
 }
 
 /// Query for fundamental financial statements from FMP.
@@ -83,6 +96,123 @@ impl FmpFundamentalsQuery {
             symbol: normalize_symbol(symbol)?,
             statement,
             limit,
+        })
+    }
+}
+
+/// Reporting period for the fundamentals cluster endpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FmpPeriod {
+    Annual,
+    Quarter,
+}
+
+impl FmpPeriod {
+    /// Return the FMP `period` query-parameter value for this variant.
+    #[must_use]
+    pub const fn as_param(self) -> &'static str {
+        match self {
+            Self::Annual => "annual",
+            Self::Quarter => "quarter",
+        }
+    }
+
+    /// Parse an FMP `period` value, defaulting unknown/missing to annual.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        match value {
+            Some("quarter") => Self::Quarter,
+            _ => Self::Annual,
+        }
+    }
+}
+
+/// Query for a financial statement (balance / income / cash) and its optional
+/// growth-rate sibling from FMP.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpStatementQuery {
+    pub symbol: String,
+    pub statement: FmpStatement,
+    /// When `true`, hit the `*-statement-growth` endpoint instead of the
+    /// statement itself.
+    pub growth: bool,
+    pub period: FmpPeriod,
+    pub limit: u32,
+}
+
+impl FmpStatementQuery {
+    /// Construct a validated statement query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(
+        symbol: &str,
+        statement: FmpStatement,
+        growth: bool,
+        period: FmpPeriod,
+        limit: u32,
+    ) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            statement,
+            growth,
+            period,
+            limit,
+        })
+    }
+}
+
+/// Query for the per-period fundamentals endpoints that take a `period` and
+/// `limit` (key-metrics, ratios).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpFundamentalQuery {
+    pub symbol: String,
+    pub period: FmpPeriod,
+    pub limit: u32,
+}
+
+impl FmpFundamentalQuery {
+    /// Construct a validated per-period fundamentals query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(symbol: &str, period: FmpPeriod, limit: u32) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            period,
+            limit,
+        })
+    }
+}
+
+/// Query for the symbol-only fundamentals endpoints (peers, profile,
+/// dividends, splits, historical earnings).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpSymbolQuery {
+    pub symbol: String,
+}
+
+impl FmpSymbolQuery {
+    /// Construct a validated symbol-only query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] if `symbol` is blank, or
+    /// [`FmpError::InvalidSymbol`] if it contains unsupported characters.
+    pub fn new(symbol: &str) -> Result<Self> {
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
         })
     }
 }
@@ -354,6 +484,48 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].symbol, "AAPL");
         assert_eq!(rows[0].revenue, 391_035_000_000);
+    }
+
+    #[test]
+    fn statement_query_validates_and_selects_growth_segment() {
+        let q = FmpStatementQuery::new("aapl", FmpStatement::Balance, true, FmpPeriod::Quarter, 3)
+            .unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.symbol, "AAPL");
+        assert!(q.growth);
+        assert_eq!(q.period, FmpPeriod::Quarter);
+        assert_eq!(q.period.as_param(), "quarter");
+        assert_eq!(
+            q.statement.as_growth_path_segment(),
+            "balance-sheet-statement-growth"
+        );
+        assert_eq!(
+            FmpStatementQuery::new("AAPL", FmpStatement::Income, false, FmpPeriod::Annual, 0),
+            Err(FmpError::InvalidLimit)
+        );
+    }
+
+    #[test]
+    fn fundamental_and_symbol_queries_validate() {
+        let f = FmpFundamentalQuery::new("aapl", FmpPeriod::Annual, 5)
+            .unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(f.symbol, "AAPL");
+        assert_eq!(f.period, FmpPeriod::Annual);
+        assert_eq!(
+            FmpFundamentalQuery::new("AAPL", FmpPeriod::Annual, 0),
+            Err(FmpError::InvalidLimit)
+        );
+
+        let s = FmpSymbolQuery::new("brk.b").unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(s.symbol, "BRK.B");
+        assert_eq!(FmpSymbolQuery::new(""), Err(FmpError::EmptySymbol));
+    }
+
+    #[test]
+    fn period_parses_param_with_annual_default() {
+        assert_eq!(FmpPeriod::from_param(Some("quarter")), FmpPeriod::Quarter);
+        assert_eq!(FmpPeriod::from_param(Some("annual")), FmpPeriod::Annual);
+        assert_eq!(FmpPeriod::from_param(None), FmpPeriod::Annual);
+        assert_eq!(FmpPeriod::from_param(Some("bogus")), FmpPeriod::Annual);
     }
 
     #[test]
