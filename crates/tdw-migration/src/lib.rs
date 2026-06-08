@@ -130,6 +130,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "function_steps",
             sql: include_str!("../../../migrations/postgres/20260607_0002_function_steps.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0003",
+            name: "identity_users",
+            sql: include_str!("../../../migrations/postgres/20260607_0003_identity_users.sql"),
+        },
     ]
 }
 
@@ -429,6 +435,7 @@ mod tests {
             "system.tag_rule",
             "system.feature_snapshot",
             "system.worker_jobs",
+            "system.identity_users",
         ] {
             assert!(
                 postgres_sql.contains(table),
