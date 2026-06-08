@@ -34,8 +34,10 @@ pub struct VerifyingKey {
 
 /// Standard JWT claims the verifier deserializes and returns on success.
 ///
-/// `exp`/`nbf`/`iat` are validated by [`jsonwebtoken`] itself; `iss`/`aud` are
-/// validated against the caller-supplied expected values.
+/// These claims are returned only after the token's signature has been
+/// cryptographically verified against the resolved verifying key; `exp`/`nbf`
+/// (with leeway) are then enforced by [`jsonwebtoken`] itself, and `iss`/`aud`
+/// are validated against the caller-supplied expected values.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerifiedClaims {
     pub sub: String,
