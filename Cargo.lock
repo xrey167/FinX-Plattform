@@ -3597,6 +3597,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-agent",
+ "tdw-core",
  "tokio",
  "tokio-util",
 ]
@@ -3899,6 +3900,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tdw-core",
  "tdw-event",
  "tdw-protocol",
  "thiserror 2.0.18",

@@ -665,12 +665,12 @@ fn validate_handler(hook: &HookSpec) -> Result<(), HookError> {
             }
         }
         HandlerKind::Prompt { prompt_path } => {
-            if prompt_path.is_empty()
-                || prompt_path.contains("..")
-                || prompt_path
-                    .chars()
-                    .any(|character| character.is_control() || character == '\0')
-            {
+            // A `contains("..")` check alone let an absolute path (`/etc/shadow`,
+            // `C:\…`) through, turning `load_prompt`'s `read_to_string` into an
+            // arbitrary-file-read. Require a safe relative path (Component-based:
+            // no `..`, no absolute root, no drive prefix) so reads stay within
+            // the working tree.
+            if tdw_core::safe_relative_path(prompt_path).is_err() {
                 return Err(HookError::InvalidSpec(hook.name.clone(), "prompt_path"));
             }
         }
@@ -998,6 +998,32 @@ mod tests {
 
         let rules = PermissionRules::default();
         assert_eq!(rules.evaluate("tdw.query.run\nall"), PermissionEffect::Deny);
+    }
+
+    #[test]
+    fn prompt_handler_rejects_absolute_and_traversal_paths() {
+        // The HK3 bypass: an absolute path contains no ".." yet load_prompt
+        // would read it verbatim and return its body. Component-based
+        // validation now rejects absolute paths and drive prefixes too.
+        for bad in ["/etc/shadow", "../../secret", "C:\\Windows\\win.ini"] {
+            let hook = HookSpec::new("p", 1, TransactionMode::InTransaction).with_handler(
+                HandlerKind::Prompt {
+                    prompt_path: bad.to_string(),
+                },
+            );
+            assert_eq!(
+                validate_hook_spec(&hook),
+                Err(HookError::InvalidSpec("p".to_string(), "prompt_path")),
+                "{bad:?} must be rejected",
+            );
+        }
+        // A relative path within the working tree still validates.
+        let ok = HookSpec::new("p", 1, TransactionMode::InTransaction).with_handler(
+            HandlerKind::Prompt {
+                prompt_path: "crates/tdw-hooks/src/tool_prompt.txt".to_string(),
+            },
+        );
+        assert!(validate_hook_spec(&ok).is_ok());
     }
 
     #[test]

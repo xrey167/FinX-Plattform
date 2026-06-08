@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::path::{Component, Path};
 use std::pin::Pin;
 
 use async_trait::async_trait;
@@ -61,6 +62,74 @@ pub fn safe_sql_identifier(name: &str) -> Result<()> {
         Err(Error::Storage(format!(
             "invalid SQL identifier {name:?}: expected [A-Za-z_][A-Za-z0-9_.]* \
              (1..={MAX_LEN} chars, no leading/trailing/doubled dots)"
+        )))
+    }
+}
+
+/// Validate a single safe path *segment* (a filename with no directory parts)
+/// before it is interpolated into a path, e.g. `dir.join(format!("{name}.json5"))`.
+///
+/// Requires a non-empty, control-free string that contains no `/` or `\` and
+/// resolves to exactly one [`Component::Normal`] equal to the input — so `.`,
+/// `..`, absolute roots, and Windows drive prefixes are all rejected. Use for
+/// values that must stay a single filename (e.g. an agent-store memory name)
+/// so a crafted name cannot write or delete outside the store directory.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] if `name` is not a safe single path segment.
+pub fn safe_path_segment(name: &str) -> Result<()> {
+    let mut components = Path::new(name).components();
+    let single_normal = matches!(
+        components.next(),
+        Some(Component::Normal(segment)) if segment == std::ffi::OsStr::new(name)
+    ) && components.next().is_none();
+    if !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.chars().any(char::is_control)
+        && single_normal
+    {
+        Ok(())
+    } else {
+        Err(Error::Storage(format!(
+            "invalid path segment {name:?}: must be a single filename with no \
+             separators, traversal, root, or control characters"
+        )))
+    }
+}
+
+/// Validate a safe *relative* path that must stay within a trusted base
+/// directory before it is opened or joined onto that base.
+///
+/// Mirrors the `tdw-storage-fs` reference validator: rejects empty/control or
+/// backslash-bearing inputs and any path whose [`Component`]s include
+/// [`Component::CurDir`] (`.`), [`Component::ParentDir`] (`..`),
+/// [`Component::RootDir`] (a leading `/`), or [`Component::Prefix`] (a Windows
+/// drive). Multi-segment relative paths like `a/b` are allowed. This is
+/// stronger than a `contains("..")` check because it also blocks absolute
+/// paths (e.g. `/etc/shadow`) and drive prefixes.
+///
+/// # Errors
+///
+/// Returns [`Error::Storage`] if `path` is not a safe relative path.
+pub fn safe_relative_path(path: &str) -> Result<()> {
+    let traversal = Path::new(path).components().any(|component| {
+        matches!(
+            component,
+            Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    });
+    if !path.trim().is_empty()
+        && !path.contains('\\')
+        && !path.chars().any(char::is_control)
+        && !traversal
+    {
+        Ok(())
+    } else {
+        Err(Error::Storage(format!(
+            "invalid relative path {path:?}: must be a non-empty, control-free \
+             relative path with no '..', absolute root, or drive prefix"
         )))
     }
 }
@@ -438,6 +507,50 @@ mod tests {
         // Length is bounded.
         assert!(safe_sql_identifier(&"a".repeat(64)).is_ok());
         assert!(safe_sql_identifier(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn safe_path_segment_accepts_filenames_and_rejects_traversal() {
+        for ok in ["buf", "note", "research.note", "a_b-c", ".hidden"] {
+            assert!(safe_path_segment(ok).is_ok(), "{ok:?} should be valid");
+        }
+        for bad in [
+            "",            // empty
+            "..",          // parent
+            ".",           // current
+            "a/b",         // separator (subdir)
+            "a\\b",        // windows separator
+            "../escape",   // traversal
+            "/etc/shadow", // absolute
+            "a\0b",        // NUL / control
+        ] {
+            assert!(
+                safe_path_segment(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn safe_relative_path_allows_subdirs_and_rejects_absolute_and_traversal() {
+        for ok in ["prompts/foo.txt", "a/b/c", "single.txt"] {
+            assert!(safe_relative_path(ok).is_ok(), "{ok:?} should be valid");
+        }
+        for bad in [
+            "",            // empty
+            "  ",          // blank
+            "../secret",   // traversal
+            "a/../b",      // embedded traversal
+            "/etc/shadow", // absolute (the HK3 bypass)
+            "./relative",  // current-dir prefix
+            "a\\b",        // backslash
+            "line\nbreak", // control char
+        ] {
+            assert!(
+                safe_relative_path(bad).is_err(),
+                "{bad:?} should be rejected"
+            );
+        }
     }
 
     #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]

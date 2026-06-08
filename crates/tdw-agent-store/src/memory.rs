@@ -47,6 +47,9 @@ pub enum MemoryStoreError {
     },
     /// A memory could not be serialized back to its resource form.
     Serialize(String),
+    /// A memory `name` is not a safe filename stem, so it cannot be mapped to a
+    /// backing file without risking a write/delete outside the store directory.
+    InvalidName(String),
 }
 
 impl std::fmt::Display for MemoryStoreError {
@@ -55,6 +58,7 @@ impl std::fmt::Display for MemoryStoreError {
             Self::Io { path, source } => write!(formatter, "io error for {path}: {source}"),
             Self::Parse { path, detail } => write!(formatter, "parse error for {path}: {detail}"),
             Self::Serialize(detail) => write!(formatter, "serialize error: {detail}"),
+            Self::InvalidName(name) => write!(formatter, "invalid memory name: {name}"),
         }
     }
 }
@@ -172,6 +176,12 @@ impl MemoryStore {
             memory.last_consolidated = Some(now.to_string());
         }
         let name = memory.meta.base.name.clone();
+        // The name is the map key AND the backing-file stem (`{name}.json5`).
+        // `EntityMeta` only length-checks it, so enforce a safe single segment
+        // here before it can reach `file_path_for` — otherwise a name like
+        // `../../evil` or `foo/bar` would write/delete outside the store dir.
+        tdw_core::safe_path_segment(&name)
+            .map_err(|_| MemoryStoreError::InvalidName(name.clone()))?;
         // Preserve a previously-known backing path; otherwise assign one in the dir.
         let path = self
             .entries
@@ -555,6 +565,34 @@ mod tests {
             Some(now.to_string()),
             "the consolidation breadcrumb survives a reload"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upsert_at_rejects_path_traversal_names() {
+        let dir = unique_temp_dir("traversal");
+        let now = "2026-05-10T00:00:00Z";
+        let mut store = MemoryStore::load_dir(&dir).expect("load empty dir");
+
+        // A name with traversal/separator parts would otherwise resolve to a
+        // path outside `dir` for fs::write / fs::remove_file. Each must be
+        // rejected with InvalidName before any path is derived or stored.
+        for bad in ["../../evil", "foo/bar", "..", "/abs"] {
+            let result = store.upsert_at(memory(bad, Retention::Working, Some(now)), now);
+            assert!(
+                matches!(result, Err(MemoryStoreError::InvalidName(_))),
+                "name {bad:?} must be rejected, got {result:?}"
+            );
+            // The rejected name must not have been inserted into the store.
+            assert!(store.get(bad).is_none(), "{bad:?} must not be stored");
+        }
+
+        // A normal single-segment name still works.
+        store
+            .upsert_at(memory("research.note", Retention::Working, Some(now)), now)
+            .expect("valid name persists");
+        assert!(store.get("research.note").is_some());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
