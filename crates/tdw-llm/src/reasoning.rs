@@ -103,11 +103,10 @@ pub fn parse_directive(message: &str) -> (Option<ReasoningLevel>, &str) {
     let token_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let (token, remainder) = rest.split_at(token_end);
 
-    match ReasoningLevel::parse_token(token) {
-        Some(level) => (Some(level), remainder.trim_start()),
-        // Unknown level: tolerate by passing the original message through unchanged.
-        None => (None, message),
-    }
+    // Unknown level: tolerate by passing the original message through unchanged.
+    ReasoningLevel::parse_token(token).map_or((None, message), |level| {
+        (Some(level), remainder.trim_start())
+    })
 }
 
 /// Resolves the effective reasoning level using precedence

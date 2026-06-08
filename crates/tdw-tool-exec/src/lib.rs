@@ -259,7 +259,7 @@ pub struct FailureBudget {
 impl FailureBudget {
     /// A new budget allowing up to `cap` failures per tool.
     #[must_use]
-    pub fn new(cap: u32) -> Self {
+    pub const fn new(cap: u32) -> Self {
         Self {
             per_tool: BTreeMap::new(),
             cap,

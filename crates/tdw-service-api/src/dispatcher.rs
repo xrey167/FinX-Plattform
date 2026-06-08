@@ -226,7 +226,10 @@ async fn dispatch_get_quote_snapshot(
 ///
 /// Only feature-enabled providers are compiled in. Offline (default) builds
 /// return an `Err` for any provider, keeping the workspace test set network-free.
-#[allow(unused_variables)] // `symbol` is used only inside the cfg-gated provider block
+#[allow(unused_variables)]
+// `symbol` is used only inside the cfg-gated provider block
+// Awaits the HTTP fetch inside the `#[cfg(feature = "provider-*")]` arms; only the offline (no-provider) build has no await, so `async` is part of the contract callers `.await`.
+#[allow(clippy::unused_async)]
 async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnapshot> {
     #[cfg(feature = "provider-finnhub")]
     if provider == "finnhub" {
@@ -1029,6 +1032,8 @@ fn udf_run_tool() -> RegisteredTool {
 /// [`dispatch_tool`] executes `udf.run` via the sandbox (which needs the WASM
 /// runtime and structured error mapping). The registry only needs a handler to
 /// construct a [`RegisteredTool`]; the echo behaviour here is inert.
+// Signature is fixed by the `ToolHandler = fn(Value) -> tdw_tools::Result<Value>` alias that `RegisteredTool::new` requires; the `Result` cannot be unwrapped away.
+#[allow(clippy::unnecessary_wraps)]
 const fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(input)
 }

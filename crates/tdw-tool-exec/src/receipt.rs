@@ -278,9 +278,11 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) {
 
 /// Hash a JSON value via its canonical encoding.
 fn hash_value(value: &Value) -> u64 {
-    let bytes = to_canonical_bytes(value);
     let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    // `to_canonical_bytes` is consumed directly by `Hash::hash`; inlining avoids a
+    // clippy::collection_is_never_read false positive (the lint doesn't count
+    // `Hash::hash` as reading the Vec, though it does).
+    to_canonical_bytes(value).hash(&mut hasher);
     hasher.finish()
 }
 

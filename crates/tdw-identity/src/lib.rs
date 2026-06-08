@@ -285,13 +285,17 @@ pub struct NewUser {
 // ---------------------------------------------------------------------------
 
 /// Default dormancy window: a user inactive for **30 days** is considered
-/// dormant.  Convenience default for callers of
+/// dormant.
+///
+/// Convenience default for callers of
 /// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
 /// `dormant_before_ms` cutoff (typically `now_ms - DEFAULT_DORMANT_AFTER_MS`).
 pub const DEFAULT_DORMANT_AFTER_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 
 /// Default re-engagement cooldown: do not re-target a user within **30 days**
-/// of the last re-engagement email.  Convenience default for callers of
+/// of the last re-engagement email.
+///
+/// Convenience default for callers of
 /// [`UserStore::find_dormant_users`]; the store method itself takes an explicit
 /// `reengaged_before_ms` cutoff (typically
 /// `now_ms - DEFAULT_REENGAGEMENT_COOLDOWN_MS`).
@@ -603,6 +607,7 @@ impl UserStore for InMemoryUserStore {
             })
             .map(|record| record.user.clone())
             .collect();
+        drop(records);
         // Order by last_active_at_ms ascending with nulls first (None sorts
         // before Some), i.e. longest-dormant first.
         dormant.sort_by(|a, b| match (a.last_active_at_ms, b.last_active_at_ms) {
@@ -778,9 +783,14 @@ impl SessionStore for InMemorySessionStore {
             .lock()
             .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
         sessions.insert(token, session.clone());
+        drop(sessions);
         Ok(session)
     }
 
+    // The `sessions` guard intentionally spans the get-then-remove
+    // check-then-act: an expired session is looked up and conditionally
+    // deleted under one lock. Tightening would race a concurrent resolve.
+    #[allow(clippy::significant_drop_tightening)]
     async fn resolve(&self, token: &str, now_ms: i64) -> Result<Session> {
         let mut sessions = self
             .sessions
@@ -805,6 +815,11 @@ impl SessionStore for InMemorySessionStore {
         Ok(sessions.remove(token).is_some())
     }
 
+    // The `sessions` guard intentionally spans the len-before / retain /
+    // len-after sequence so the removed-count is measured atomically against
+    // a single, consistent snapshot of the map. Tightening would race the
+    // count.
+    #[allow(clippy::significant_drop_tightening)]
     async fn revoke_all_for_user(&self, user_id: &str) -> Result<u64> {
         let mut sessions = self
             .sessions
@@ -982,9 +997,14 @@ impl ResetTokenStore for InMemoryResetTokenStore {
             .lock()
             .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
         tokens.insert(token, reset.clone());
+        drop(tokens);
         Ok(reset)
     }
 
+    // The `tokens` guard intentionally spans the get-then-remove
+    // check-then-act: a single-use token is looked up and deleted under one
+    // lock so it cannot be consumed twice. Tightening would race that.
+    #[allow(clippy::significant_drop_tightening)]
     async fn consume(&self, token: &str, now_ms: i64) -> Result<ResetToken> {
         let mut tokens = self
             .tokens
@@ -1011,6 +1031,7 @@ impl ResetTokenStore for InMemoryResetTokenStore {
             .lock()
             .map_err(|error| IdentityError::Store(format!("mutex poisoned: {error}")))?;
         tokens.retain(|_, reset| reset.user_id != user_id);
+        drop(tokens);
         Ok(())
     }
 }
@@ -2011,11 +2032,12 @@ mod tests {
 
     #[tokio::test]
     async fn find_dormant_users_filters_orders_and_caps() {
-        let s = store();
         // Cutoffs: dormant if last_active <= DORMANT_CUTOFF; eligible if
         // last_reengagement is null or <= REENGAGED_CUTOFF.
         const DORMANT_CUTOFF: i64 = NOW_MS;
         const REENGAGED_CUTOFF: i64 = NOW_MS;
+
+        let s = store();
 
         // never_active: last_active None, never re-engaged -> dormant, sorts first.
         seed_user(&s, "never_active", None, None).await;

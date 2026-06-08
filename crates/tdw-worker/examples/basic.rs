@@ -42,9 +42,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         job
     })?;
     let lease2 = queue.lease_next("worker-a")?.expect("job-2 ready");
-    let status = queue.fail(&lease2.job_id, "boom", 0)?;
-    println!("job-2 after 1 failed attempt: {status:?}");
-    assert_eq!(status, WorkerJobStatus::DeadLettered);
+    let job_status = queue.fail(&lease2.job_id, "boom", 0)?;
+    println!("job-2 after 1 failed attempt: {job_status:?}");
+    assert_eq!(job_status, WorkerJobStatus::DeadLettered);
     println!("dead letters: {}", queue.dead_letters().len());
 
     Ok(())

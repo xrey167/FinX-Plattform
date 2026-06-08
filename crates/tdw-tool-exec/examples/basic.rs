@@ -19,7 +19,8 @@ use tdw_tool_exec::{ExecError, SchemaValidation, ToolExecutor};
 
 /// A builtin handler: echoes its input back under `echoed`.
 /// The `fn(Value) -> tdw_tools::Result<Value>` shape is fixed by `ToolHandler`.
-#[allow(clippy::needless_pass_by_value)]
+// Both the by-value `Value` and the `Result` wrapper are dictated by the `ToolHandler` alias `with_builtin` requires; neither can be changed without breaking registration.
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 fn echo_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(json!({ "echoed": input }))
 }

@@ -280,7 +280,7 @@ pub fn funding_request_path(
 /// # Errors
 ///
 /// Propagates currency validation errors.
-pub fn stub_instruments(currency: &str, kind: DeribitKind) -> Result<Vec<DeribitInstrument>> {
+pub fn stub_instruments(currency: &str, kind: &DeribitKind) -> Result<Vec<DeribitInstrument>> {
     let currency = normalize_currency(currency)?;
     Ok(vec![DeribitInstrument {
         instrument_name: format!("{currency}-19JAN24-40000-C"),
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn stub_instruments_returns_active_contract() {
-        let instruments = stub_instruments("BTC", DeribitKind::Option)
+        let instruments = stub_instruments("BTC", &DeribitKind::Option)
             .unwrap_or_else(|e| panic!("stub should succeed: {e}"));
         assert!(!instruments.is_empty());
         assert!(instruments[0].instrument_name.starts_with("BTC"));
@@ -564,8 +564,8 @@ mod tests {
 
     #[test]
     fn stub_instruments_propagates_currency_error() {
-        assert!(stub_instruments("", DeribitKind::Option).is_err());
-        assert!(stub_instruments("BTC1", DeribitKind::Option).is_err());
+        assert!(stub_instruments("", &DeribitKind::Option).is_err());
+        assert!(stub_instruments("BTC1", &DeribitKind::Option).is_err());
     }
 
     #[test]

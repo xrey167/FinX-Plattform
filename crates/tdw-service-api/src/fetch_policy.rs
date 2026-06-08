@@ -93,9 +93,8 @@ pub const fn decide(
     now_ms: i64,
     last_fetched_at_ms: Option<i64>,
 ) -> FetchDecision {
-    let last = match last_fetched_at_ms {
-        Some(last) => last,
-        None => return FetchDecision::Fetch,
+    let Some(last) = last_fetched_at_ms else {
+        return FetchDecision::Fetch;
     };
     let age = now_ms - last;
     if age < 0 || tier.ttl_ms() == 0 || age >= tier.ttl_ms() {

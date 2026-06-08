@@ -128,6 +128,8 @@ impl RolloutBackend {
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
+    // The `Pg` arm awaits the DB when the `daemon-postgres` feature is built; only the offline (Jsonl-only) build has no await, so `async` is part of the public contract.
+    #[allow(clippy::unused_async)]
     pub async fn append(&self, record: &RolloutRecord) -> Result<()> {
         match self {
             Self::Jsonl(rollout) => rollout
@@ -141,6 +143,8 @@ impl RolloutBackend {
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
+    // The `Pg` arm awaits the DB when the `daemon-postgres` feature is built; only the offline (Jsonl-only) build has no await, so `async` is part of the public contract.
+    #[allow(clippy::unused_async)]
     pub async fn read_all(&self) -> Result<Vec<RolloutRecord>> {
         match self {
             Self::Jsonl(rollout) => rollout
