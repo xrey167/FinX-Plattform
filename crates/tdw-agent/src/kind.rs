@@ -268,4 +268,19 @@ mod tests {
             .collect();
         assert_eq!(capable, vec![EntityKind::Agent]);
     }
+
+    #[test]
+    fn is_data_kind_matches_the_knowledge_group() {
+        // `is_data_kind` and the `Group::Knowledge` arm enumerate the same kinds
+        // as two independent lists. Pin their equivalence for every kind so a
+        // silent divergence is caught — and any *intended* future divergence
+        // becomes a deliberate, visible change to this assertion.
+        for kind in EntityKind::ALL {
+            assert_eq!(
+                kind.is_data_kind(),
+                kind.group() == Group::Knowledge,
+                "is_data_kind disagrees with Group::Knowledge for {kind:?}"
+            );
+        }
+    }
 }

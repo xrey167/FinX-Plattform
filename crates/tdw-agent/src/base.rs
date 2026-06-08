@@ -449,6 +449,13 @@ mod tests {
             Source::Internal
         );
         assert_eq!(Reference::Literal(json!(1)).source(), Source::Internal);
+        // Secret is the counter-intuitive case: Internal even though the backing
+        // vault may be an external provider. Pin it so a reclassification to
+        // External (which would change Origin source semantics) fails CI.
+        assert_eq!(
+            Reference::Secret("vault/key".to_string()).source(),
+            Source::Internal
+        );
     }
 
     #[test]
@@ -518,5 +525,27 @@ mod tests {
             false,
         );
         assert!(meta.validate_all().is_err());
+    }
+
+    #[test]
+    fn entity_meta_rejects_empty_id_and_version() {
+        let origin = Origin {
+            tier: Tier::System,
+            source: Source::Internal,
+        };
+        // Empty `id` — a top-level validator, a different path from the nested
+        // `name` one already covered.
+        let empty_id = EntityMeta::new("valid_name", "", "0.1.0", origin, Adaptivity::None, false);
+        assert!(
+            empty_id.validate_all().is_err(),
+            "empty id must be rejected"
+        );
+        // Empty `version`.
+        let empty_version =
+            EntityMeta::new("valid_name", "id1", "", origin, Adaptivity::None, false);
+        assert!(
+            empty_version.validate_all().is_err(),
+            "empty version must be rejected"
+        );
     }
 }
