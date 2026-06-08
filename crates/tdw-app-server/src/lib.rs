@@ -107,10 +107,24 @@ pub fn validate_endpoint(endpoint: &DaemonEndpoint) -> EndpointResult<()> {
 }
 
 fn validate_tcp_address(address: &str) -> EndpointResult<()> {
-    address
-        .parse::<SocketAddr>()
-        .map(|_| ())
-        .map_err(|_| EndpointError::InvalidTcpAddress)
+    if address.parse::<SocketAddr>().is_ok() {
+        return Ok(());
+    }
+
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return Err(EndpointError::InvalidTcpAddress);
+    };
+    if host.is_empty()
+        || host.contains(':')
+        || host.contains('/')
+        || host.contains('\\')
+        || host.chars().any(char::is_whitespace)
+        || port.parse::<u16>().is_err()
+    {
+        return Err(EndpointError::InvalidTcpAddress);
+    }
+
+    Ok(())
 }
 
 fn validate_uds_address(address: &str) -> EndpointResult<()> {
@@ -1317,6 +1331,13 @@ mod tests {
             validate_endpoint(&DaemonEndpoint {
                 transport: DaemonTransport::Tcp,
                 address: "127.0.0.1:8787".to_string(),
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_endpoint(&DaemonEndpoint {
+                transport: DaemonTransport::Tcp,
+                address: "tdw-service-daemon:7878".to_string(),
             })
             .is_ok()
         );
