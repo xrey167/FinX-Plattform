@@ -142,6 +142,8 @@ impl Fetcher<PolygonAggregatesQuery, MarketDataBar> for PolygonHttpAggregatesFet
         ];
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|error| Error::Provider(format!("polygon client: {error}")))?;

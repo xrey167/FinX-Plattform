@@ -27,6 +27,8 @@ const USER_AGENT: &str = "tdw-provider-velodata/0.1";
 
 async fn get_bytes(url: &str, api_key: &str) -> Result<Bytes> {
     let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| Error::Provider(format!("velodata: build client: {e}")))?;

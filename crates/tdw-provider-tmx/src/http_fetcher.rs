@@ -32,6 +32,8 @@ const USER_AGENT: &str = "tdw-provider-tmx/0.1";
 
 fn build_client() -> Result<Client> {
     Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .user_agent(USER_AGENT)
         .build()
         .map_err(|error| Error::Provider(format!("tmx client build: {error}")))

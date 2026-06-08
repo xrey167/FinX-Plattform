@@ -146,6 +146,8 @@ impl Fetcher<OecdQuery, OecdObservation> for OecdHttpDataFetcher {
             .map_err(|e| Error::Provider(format!("oecd build_url: {e}")))?;
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("oecd client build: {e}")))?;

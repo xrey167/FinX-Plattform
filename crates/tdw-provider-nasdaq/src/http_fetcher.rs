@@ -135,6 +135,8 @@ impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
         }
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|error| Error::Provider(format!("nasdaq client: {error}")))?;
