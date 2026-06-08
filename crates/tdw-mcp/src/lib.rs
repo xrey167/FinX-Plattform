@@ -447,6 +447,9 @@ impl McpServer {
                         tdw_tool_exec::ExecError::BadArguments(_) => {
                             "invalid registry tool definition"
                         }
+                        tdw_tool_exec::ExecError::InvalidArguments { .. } => {
+                            "invalid registry tool arguments"
+                        }
                         tdw_tool_exec::ExecError::ToolNotFound(_)
                         | tdw_tool_exec::ExecError::HandlerNotFound(_) => {
                             "registry tool not available"
