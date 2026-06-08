@@ -19,6 +19,14 @@ use tokio_util::sync::CancellationToken;
 /// reader/writer tasks — a connection-exhaustion DoS guard (TT1).
 const MAX_CONCURRENT_CONNECTIONS: usize = 256;
 
+/// Deadline to receive a frame's body once its length prefix has been read.
+/// A client that announces a frame length then dribbles or stalls the body is
+/// dropped (TT2 / slow-loris). The deadline deliberately starts only after the
+/// 4-byte length is read — waiting for the *next* frame is left untimed so a
+/// connection that is idle on the read side while receiving events (a normal
+/// long-lived subscriber) is never dropped.
+const FRAME_BODY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Spawn a TCP listener that forwards inbound `OpEnvelope` frames into `handle`
 /// and streams `EventMsg` frames from `events` back to connected clients.
 ///
@@ -159,6 +167,12 @@ pub async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
         return Ok(None);
     }
     let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf).await?;
-    Ok(Some(buf))
+    match tokio::time::timeout(FRAME_BODY_TIMEOUT, r.read_exact(&mut buf)).await {
+        Ok(Ok(_)) => Ok(Some(buf)),
+        Ok(Err(e)) => Err(e),
+        Err(_elapsed) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "frame body read timed out",
+        )),
+    }
 }

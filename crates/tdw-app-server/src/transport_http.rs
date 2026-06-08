@@ -17,6 +17,13 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_HEADER_BYTES: usize = 8 * 1024;
 
+/// Per-read deadline on the inbound request (headers + body). A slow-loris
+/// client that dribbles or stalls its request is dropped instead of holding
+/// the connection (and its permit) open indefinitely (TT2). This bounds only
+/// the request-read phase; the GET /events SSE phase that follows is
+/// write-only, so long-lived event subscribers are unaffected.
+const REQUEST_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Upper bound on concurrently-handled HTTP connections. Each accepted
 /// connection holds a permit for its lifetime; once this many are live, further
 /// connections are rejected (closed immediately) instead of spawning unbounded
@@ -110,9 +117,14 @@ async fn handle_http_conn(
                 .await;
             return;
         }
-        let n = match stream.read(&mut header_buf[filled..]).await {
-            Ok(0) | Err(_) => return, // EOF or error
-            Ok(n) => n,
+        let n = match tokio::time::timeout(
+            REQUEST_READ_TIMEOUT,
+            stream.read(&mut header_buf[filled..]),
+        )
+        .await
+        {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => return, // EOF, error, or read timed out
+            Ok(Ok(n)) => n,
         };
         filled += n;
         if let Some(pos) = find_header_end(&header_buf[..filled]) {
@@ -155,10 +167,10 @@ async fn handle_http_conn(
             let mut body = body_already_read.to_vec();
             while body.len() < content_length {
                 let mut tmp = vec![0u8; content_length - body.len()];
-                match stream.read(&mut tmp).await {
-                    Ok(0) => break,
-                    Ok(n) => body.extend_from_slice(&tmp[..n]),
-                    Err(_) => return,
+                match tokio::time::timeout(REQUEST_READ_TIMEOUT, stream.read(&mut tmp)).await {
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(n)) => body.extend_from_slice(&tmp[..n]),
+                    Ok(Err(_)) | Err(_) => return,
                 }
             }
 
