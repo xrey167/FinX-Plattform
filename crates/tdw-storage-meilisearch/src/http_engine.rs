@@ -26,6 +26,12 @@ use tdw_core::{Error, LexicalDoc, LexicalEngine, Result, ScoredDoc, TextQuery};
 
 const TASK_POLL_INTERVAL_MS: u64 = 200;
 const TASK_POLL_MAX_ATTEMPTS: u32 = 60;
+/// Cap on connection establishment so a stalled/black-holed Meilisearch
+/// endpoint fails fast instead of hanging the calling op (ME2/IO1).
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-request timeout — bounds any single index/search/wait_for_task request
+/// so one hung poll cannot exceed the logical task-poll budget (ME2/IO1).
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Production Meilisearch backend.
 #[derive(Clone)]
@@ -59,6 +65,8 @@ impl MeilisearchHttpEngine {
             .map_err(|error| Error::Storage(format!("meilisearch endpoint: {error}")))?;
         let client = Client::builder()
             .user_agent("tdw-storage-meilisearch/0.1")
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
             .build()
             .map_err(|error| Error::Storage(format!("meilisearch client: {error}")))?;
         Ok(Self {

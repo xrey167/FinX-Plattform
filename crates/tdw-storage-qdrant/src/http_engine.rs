@@ -18,12 +18,20 @@
 
 use std::collections::HashSet;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tdw_core::{Error, Result, ScoredPoint, VectorEngine, VectorPoint, VectorQuery};
+
+/// Cap on connection establishment so a stalled/black-holed Qdrant endpoint
+/// fails fast instead of hanging the calling op (QD2/IO1).
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-request timeout — a backstop against a wedged-but-connected socket on
+/// any single ensure/upsert/search request (QD2/IO1).
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Production Qdrant backend.
 pub struct QdrantHttpEngine {
@@ -60,6 +68,8 @@ impl QdrantHttpEngine {
             .map_err(|error| Error::Storage(format!("qdrant endpoint: {error}")))?;
         let client = Client::builder()
             .user_agent("tdw-storage-qdrant/0.1")
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
             .build()
             .map_err(|error| Error::Storage(format!("qdrant client: {error}")))?;
         Ok(Self {
