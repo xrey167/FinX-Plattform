@@ -167,7 +167,7 @@ jobs:
 
       - name: tdw-cli one-shot smoke against the tools profile
         timeout-minutes: 15
-        run: docker compose --profile tools run --rm --build tdw-cli AAPL
+        run: docker compose --profile tools run --rm --build tdw-cli --smoke AAPL
 
       - name: tdw-mcp Streamable HTTP smoke
         timeout-minutes: 15

@@ -243,8 +243,11 @@ services:
     profiles: ["live"]
     command: ["--streamable-http", "0.0.0.0:8788"]
     depends_on:
+      # The MCP ops /ready probe checks daemon reachability; do not make
+      # `docker compose up -d` fail on a transient daemon health race before
+      # the workflow's explicit MCP wait loop can run.
       tdw-service-daemon:
-        condition: service_healthy
+        condition: service_started
     environment:
       TDW_PROFILE: docker
       # Required (no default): a non-loopback MCP bind on a host-published port
