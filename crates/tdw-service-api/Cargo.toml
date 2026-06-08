@@ -295,5 +295,9 @@ tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 
+[[example]]
+name = "tdw_service_api_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
