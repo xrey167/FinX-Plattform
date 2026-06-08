@@ -151,4 +151,32 @@ mod tests {
 
         assert!(plan.validate().is_err());
     }
+
+    #[test]
+    fn new_reports_each_remaining_boundary_error() {
+        let ok_stage = || StageLocation {
+            name: "market-stage".to_string(),
+            uri: "s3://bucket/market".to_string(),
+        };
+
+        assert_eq!(
+            CopyIntoPlan::new(
+                StageLocation {
+                    uri: "  ".to_string(),
+                    ..ok_stage()
+                },
+                "raw.market_data_bar",
+                vec!["ohlcv.parquet".to_string()],
+            ),
+            Err(StagePlanError::EmptyStageUri)
+        );
+        assert_eq!(
+            CopyIntoPlan::new(ok_stage(), "  ", vec!["ohlcv.parquet".to_string()]),
+            Err(StagePlanError::EmptyTargetTable)
+        );
+        assert_eq!(
+            CopyIntoPlan::new(ok_stage(), "raw.market_data_bar", vec!["   ".to_string()]),
+            Err(StagePlanError::EmptyFilePath)
+        );
+    }
 }
