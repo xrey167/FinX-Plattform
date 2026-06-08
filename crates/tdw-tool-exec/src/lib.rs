@@ -29,6 +29,10 @@ const ALLOWED_COMMANDS_ENV: &str = "TDW_TOOL_EXEC_ALLOWED_COMMANDS";
 const TIMEOUT_SECS_ENV: &str = "TDW_TOOL_EXEC_TIMEOUT_SECS";
 /// Default command execution timeout when [`TIMEOUT_SECS_ENV`] is unset/unparsable.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
+/// Default cap on captured stdout/stderr (16 MiB each). Bounds memory so a
+/// high-throughput command cannot OOM the executor within the timeout window
+/// (TE2). The timeout bounds duration; this bounds rate × duration.
+const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 /// How often the timeout loop polls the child process for exit.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// Windows `CREATE_NO_WINDOW` process-creation flag (avoids a console flash).
@@ -82,16 +86,32 @@ pub struct CommandPolicy {
     allowed: Option<Vec<String>>,
     /// Per-command wall-clock timeout before the child is killed.
     timeout: Duration,
+    /// Cap on captured stdout/stderr bytes (each), bounding memory use.
+    max_output_bytes: usize,
 }
 
 impl CommandPolicy {
     /// Build a policy from explicit values (primarily for tests / embedders).
     ///
     /// `allowed = None` denies all command execution; `Some(list)` permits exactly the bare
-    /// command names in `list`.
+    /// command names in `list`. The output cap defaults to [`DEFAULT_MAX_OUTPUT_BYTES`]
+    /// (override with [`CommandPolicy::with_max_output_bytes`]).
     #[must_use]
     pub fn new(allowed: Option<Vec<String>>, timeout: Duration) -> Self {
-        Self { allowed, timeout }
+        Self {
+            allowed,
+            timeout,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+        }
+    }
+
+    /// Override the per-stream captured-output cap (default 16 MiB). Output
+    /// beyond the cap is dropped and the result marked truncated, so a chatty
+    /// command cannot exhaust memory.
+    #[must_use]
+    pub const fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
+        self.max_output_bytes = max_output_bytes;
+        self
     }
 
     /// Build a policy from the `TDW_TOOL_EXEC_ALLOWED_COMMANDS` / `TDW_TOOL_EXEC_TIMEOUT_SECS`
@@ -117,7 +137,11 @@ impl CommandPolicy {
                 Duration::from_secs(DEFAULT_TIMEOUT_SECS),
                 Duration::from_secs,
             );
-        Self { allowed, timeout }
+        Self {
+            allowed,
+            timeout,
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+        }
     }
 
     /// Deny-by-default allow-list check for a bare `command` name.
@@ -312,8 +336,9 @@ fn dispatch_command(
         .spawn()
         .map_err(|error| ExecError::Backend(format!("failed to spawn command: {error}")))?;
 
-    let stdout_reader = spawn_reader(child.stdout.take());
-    let stderr_reader = spawn_reader(child.stderr.take());
+    let cap = policy.max_output_bytes;
+    let stdout_reader = spawn_reader(child.stdout.take(), cap);
+    let stderr_reader = spawn_reader(child.stderr.take(), cap);
 
     let timeout = policy.timeout;
     let started = Instant::now();
@@ -347,22 +372,39 @@ fn dispatch_command(
 
     Ok(ToolOutcome {
         structured: serde_json::json!({
-            "stdout": String::from_utf8_lossy(&stdout),
-            "stderr": String::from_utf8_lossy(&stderr),
+            "stdout": capped_lossy(&stdout, cap),
+            "stderr": capped_lossy(&stderr, cap),
             "exitCode": exit_code,
         }),
     })
 }
 
-/// Spawn a thread that drains a piped stream into a byte buffer.
-fn spawn_reader<R>(stream: Option<R>) -> Option<thread::JoinHandle<Vec<u8>>>
+/// Lossily decode captured output, trimming to `cap` bytes and appending a
+/// truncation marker when the reader hit the cap (it buffers `cap + 1`).
+fn capped_lossy(bytes: &[u8], cap: usize) -> String {
+    if bytes.len() > cap {
+        let mut text = String::from_utf8_lossy(&bytes[..cap]).into_owned();
+        text.push_str("… (truncated)");
+        text
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+/// Spawn a thread that drains a piped stream into a byte buffer, reading at
+/// most `cap + 1` bytes so a chatty command cannot exhaust memory (TE2). The
+/// extra byte lets [`capped_lossy`] detect that truncation occurred.
+fn spawn_reader<R>(stream: Option<R>, cap: usize) -> Option<thread::JoinHandle<Vec<u8>>>
 where
     R: std::io::Read + Send + 'static,
 {
-    stream.map(|mut stream| {
+    stream.map(|stream| {
         thread::spawn(move || {
+            use std::io::Read as _;
             let mut buffer = Vec::new();
-            let _ = stream.read_to_end(&mut buffer);
+            let _ = stream
+                .take((cap as u64).saturating_add(1))
+                .read_to_end(&mut buffer);
             buffer
         })
     })
@@ -395,6 +437,39 @@ mod tests {
 
     fn allow(names: &[&str]) -> CommandPolicy {
         policy(Some(names), Duration::from_secs(30))
+    }
+
+    #[test]
+    fn spawn_reader_bounds_capture_to_cap_plus_one() {
+        use std::io::Cursor;
+        // A stream larger than the cap is read to at most cap + 1 bytes, so a
+        // chatty command can never buffer unbounded output into memory.
+        let handle = spawn_reader(Some(Cursor::new(vec![b'a'; 1000])), 100)
+            .expect("a present stream yields a reader thread");
+        let captured = handle.join().expect("reader thread joins");
+        assert_eq!(captured.len(), 101, "reads at most cap + 1 bytes");
+        // An absent stream yields no reader.
+        assert!(spawn_reader(None::<Cursor<Vec<u8>>>, 100).is_none());
+    }
+
+    #[test]
+    fn capped_lossy_marks_truncation_at_the_cap() {
+        // Over the cap: trimmed to `cap` bytes plus a truncation marker.
+        let truncated = capped_lossy(&[b'a'; 101], 100);
+        assert_eq!(truncated, format!("{}… (truncated)", "a".repeat(100)));
+        // Within the cap: returned verbatim, no marker.
+        assert_eq!(capped_lossy(b"hello", 100), "hello");
+    }
+
+    #[test]
+    fn command_policy_defaults_and_overrides_output_cap() {
+        assert_eq!(allow(&["echo"]).max_output_bytes, DEFAULT_MAX_OUTPUT_BYTES);
+        assert_eq!(
+            allow(&["echo"])
+                .with_max_output_bytes(2_048)
+                .max_output_bytes,
+            2_048
+        );
     }
 
     /// `(command, args)` for a shell that runs `script`, portable across CI runners.
@@ -721,7 +796,11 @@ mod tests {
         let traversal_registry = registry_with(&traversal);
         let traversal_exec = ToolExecutor::new().with_command_policy(allow(&["../evil"]));
         assert!(matches!(
-            traversal_exec.execute(&traversal_registry, "tool.exec.trav", &serde_json::json!({})),
+            traversal_exec.execute(
+                &traversal_registry,
+                "tool.exec.trav",
+                &serde_json::json!({})
+            ),
             Err(ExecError::BadArguments(_))
         ));
     }
