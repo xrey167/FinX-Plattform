@@ -3,8 +3,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    process::Command,
-    time::Duration,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -199,6 +200,7 @@ pub struct SystemHookHandlerBackend {
     mcp_handlers: BTreeMap<(String, String), McpHookHandler>,
     http_bearer_token: Option<String>,
     http_timeout: Duration,
+    command_timeout: Duration,
     max_response_bytes: usize,
 }
 
@@ -209,6 +211,7 @@ impl SystemHookHandlerBackend {
             mcp_handlers: BTreeMap::new(),
             http_bearer_token: None,
             http_timeout: Duration::from_secs(5),
+            command_timeout: Duration::from_secs(30),
             max_response_bytes: 64 * 1024,
         }
     }
@@ -226,6 +229,12 @@ impl SystemHookHandlerBackend {
     #[must_use]
     pub const fn with_http_timeout(mut self, timeout: Duration) -> Self {
         self.http_timeout = timeout;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_command_timeout(mut self, timeout: Duration) -> Self {
+        self.command_timeout = timeout;
         self
     }
 
@@ -255,17 +264,66 @@ impl HookHandlerBackend for SystemHookHandlerBackend {
         args: &[String],
         payload: Value,
     ) -> Result<Value, HookError> {
-        let output = Command::new(command)
+        let mut child = Command::new(command)
             .args(args)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|error| HookError::HandlerFailed(command.to_string(), error.to_string()))?;
+
+        // Drain stdout/stderr on dedicated threads, each capped at
+        // `max_response_bytes + 1`, so a chatty child can neither deadlock on a
+        // full pipe buffer while we wait nor buffer unbounded output into memory
+        // (the same bound `call_http` applies, now on the command surface).
+        let cap = self.max_response_bytes;
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdout_reader = thread::spawn(move || read_capped(stdout_pipe, cap));
+        let stderr_reader = thread::spawn(move || read_capped(stderr_pipe, cap));
+
+        // Wait for exit with an upper bound; kill the child if it overruns so a
+        // hung hook command cannot block hook execution indefinitely.
+        let deadline = Instant::now() + self.command_timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break None;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    return Err(HookError::HandlerFailed(
+                        command.to_string(),
+                        error.to_string(),
+                    ));
+                }
+            }
+        };
+
+        // The child has exited or been killed, so both pipes are closing —
+        // joining the readers drains whatever they captured (up to the cap).
+        let stdout = stdout_reader.join().unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_default();
+
+        let Some(status) = status else {
+            return Err(HookError::HandlerFailed(
+                command.to_string(),
+                format!("command timed out after {:?}", self.command_timeout),
+            ));
+        };
+
         Ok(json!({
             "command": command,
             "args": args,
-            "success": output.status.success(),
-            "status": output.status.code(),
-            "stdout": capped_utf8(&output.stdout, self.max_response_bytes),
-            "stderr": capped_utf8(&output.stderr, self.max_response_bytes),
+            "success": status.success(),
+            "status": status.code(),
+            "stdout": capped_utf8(&stdout, self.max_response_bytes),
+            "stderr": capped_utf8(&stderr, self.max_response_bytes),
             "payload": payload,
         }))
     }
@@ -739,6 +797,20 @@ fn hook_handler_payload(outcome: &HookRuntimeOutcome, envelope: &EventEnvelope<V
     })
 }
 
+/// Read a child pipe to EOF while buffering at most `max + 1` bytes, so a
+/// command emitting unbounded output cannot exhaust memory. The extra byte lets
+/// [`capped_utf8`] detect that truncation occurred. A read error yields whatever
+/// was captured so far (best effort; the command status is reported separately).
+fn read_capped(pipe: Option<impl Read>, max: usize) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    if let Some(pipe) = pipe {
+        let _ = pipe
+            .take((max as u64).saturating_add(1))
+            .read_to_end(&mut buffer);
+    }
+    buffer
+}
+
 fn capped_utf8(bytes: &[u8], max_bytes: usize) -> String {
     let keep = bytes.len().min(max_bytes);
     let mut text = String::from_utf8_lossy(&bytes[..keep]).to_string();
@@ -868,6 +940,45 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("rustc")
+        );
+    }
+
+    #[test]
+    fn read_capped_bounds_buffer_to_cap_plus_one() {
+        use std::io::Cursor;
+        // A reader with more than `cap` bytes is truncated to `cap + 1` so the
+        // process can never buffer unbounded output into memory.
+        let out = read_capped(Some(Cursor::new(vec![b'x'; 1000])), 100);
+        assert_eq!(out.len(), 101, "reads at most cap + 1 bytes");
+        // capped_utf8 then trims to the cap and flags the truncation.
+        let text = capped_utf8(&out, 100);
+        assert_eq!(text.len(), 103, "100 chars + the '...' marker");
+        assert!(text.ends_with("..."));
+        // A missing pipe yields empty output rather than panicking.
+        assert!(read_capped(None::<Cursor<Vec<u8>>>, 100).is_empty());
+    }
+
+    #[test]
+    fn run_command_times_out_and_kills_a_hung_child() {
+        // A command that sleeps far longer than the tiny timeout we set.
+        // Expressed per-platform so the test is portable.
+        #[cfg(windows)]
+        let (cmd, args): (&str, Vec<String>) = (
+            "ping",
+            vec!["-n".to_string(), "30".to_string(), "127.0.0.1".to_string()],
+        );
+        #[cfg(not(windows))]
+        let (cmd, args): (&str, Vec<String>) = ("sleep", vec!["30".to_string()]);
+
+        let mut backend =
+            SystemHookHandlerBackend::new().with_command_timeout(Duration::from_millis(100));
+        let error = backend
+            .run_command(cmd, &args, json!({}))
+            .expect_err("a hung command must time out rather than block");
+        assert!(
+            matches!(&error, HookError::HandlerFailed(failed, message)
+                if failed == cmd && message.contains("timed out")),
+            "expected a timeout error, got: {error:?}"
         );
     }
 
