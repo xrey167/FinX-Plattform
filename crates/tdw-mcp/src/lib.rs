@@ -1108,7 +1108,7 @@ fn spawn_mcp_ops(
     std::thread::Builder::new()
         .name("tdw-mcp-ops".to_string())
         .spawn(move || {
-            if let Err(error) = ops::serve_ops_blocking(&bind, metrics, readiness, shutdown) {
+            if let Err(error) = ops::serve_ops_blocking(&bind, &metrics, &readiness, &shutdown) {
                 eprintln!("tdw-mcp ops listener error: {error}");
             }
         })

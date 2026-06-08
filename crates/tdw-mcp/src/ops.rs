@@ -144,9 +144,9 @@ impl ToSocketAddr for str {
 /// non-blocking mode. Per-connection errors are swallowed.
 pub fn serve_ops_blocking(
     bind: &str,
-    metrics: McpMetrics,
-    readiness: McpReadiness,
-    shutdown: Shutdown,
+    metrics: &McpMetrics,
+    readiness: &McpReadiness,
+    shutdown: &Shutdown,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind)?;
     listener.set_nonblocking(true)?;
@@ -155,7 +155,7 @@ pub fn serve_ops_blocking(
     while !shutdown.is_triggered() {
         match listener.accept() {
             Ok((stream, _peer)) => {
-                handle_conn(stream, &metrics, &readiness);
+                handle_conn(stream, metrics, readiness);
             }
             Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));

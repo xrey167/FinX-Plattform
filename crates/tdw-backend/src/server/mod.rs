@@ -191,7 +191,9 @@ async fn spawn_uds(
 }
 
 // UDS is explicit: fail startup instead of silently binding a different transport.
+// `async` must match the feature-enabled `spawn_uds` signature above; both are `.await`ed at the same call site.
 #[cfg(not(all(unix, feature = "transport-uds")))]
+#[allow(clippy::unused_async)]
 async fn spawn_uds(
     _config: &TdwConfig,
     _handle: SubmissionHandle,
@@ -222,7 +224,9 @@ async fn spawn_http(
 }
 
 // HTTP/SSE is explicit: fail startup instead of silently binding a different transport.
+// `async` must match the feature-enabled `spawn_http` signature above; both are `.await`ed at the same call site.
 #[cfg(not(feature = "transport-http"))]
+#[allow(clippy::unused_async)]
 async fn spawn_http(
     _config: &TdwConfig,
     _handle: SubmissionHandle,

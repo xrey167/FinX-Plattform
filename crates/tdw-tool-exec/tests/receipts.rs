@@ -12,7 +12,8 @@ use tdw_agent::{
 };
 use tdw_tool_exec::{ChainBreak, ChainStatus, GENESIS_PREV_HASH, ReceiptLog, ToolExecutor};
 
-#[allow(clippy::needless_pass_by_value)]
+// Both the by-value `Value` and the `Result` wrapper are dictated by the `ToolHandler` alias `with_builtin` requires; neither can be changed without breaking registration.
+#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
 fn echo_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(json!({ "echoed": input }))
 }
