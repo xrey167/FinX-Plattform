@@ -5314,6 +5314,7 @@ dependencies = [
  "tdw-actor",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-alerts",
  "tdw-app-client",
  "tdw-app-server",
  "tdw-auth",
@@ -5399,6 +5400,7 @@ dependencies = [
  "tdw-udf",
  "tdw-workflow-engine",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
