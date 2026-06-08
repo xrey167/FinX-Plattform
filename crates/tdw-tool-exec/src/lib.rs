@@ -13,10 +13,13 @@
 //! (later phases): `Http`/`Mcp` are honestly deferred because a fresh backend has neither
 //! credential wiring nor server resolution, so they cannot run yet.
 
+pub mod loop_guard;
+
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub use loop_guard::{GuardDecision, LoopGuard, LoopGuardBuilder};
 use serde_json::Value;
 use tdw_agent::{EntityKind, Registry, Tool, ToolEffect, ToolImplementation, entity_from_resource};
 use tdw_tools::{RegisteredTool, ToolDefinition, ToolHandler, ToolRegistry};
