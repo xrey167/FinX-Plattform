@@ -36,7 +36,7 @@ pub enum FredModel {
 /// that the fetchers copy onto each emitted row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FredEndpoint {
-    /// OpenBB command path this endpoint standardizes.
+    /// `OpenBB` command path this endpoint standardizes.
     pub command: &'static str,
     /// FRED series id backing the command (e.g. `"CPIAUCSL"`).
     pub series_id: &'static str,

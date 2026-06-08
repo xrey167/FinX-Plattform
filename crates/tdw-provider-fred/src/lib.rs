@@ -92,7 +92,7 @@ impl FredSeriesObservationsQuery {
 /// and [`http_fetcher::FredHttpRateObservationFetcher`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FredCatalogQuery {
-    /// The resolved OpenBB command path.
+    /// The resolved `OpenBB` command path.
     pub command: String,
     /// The FRED series id the command resolves to.
     pub series_id: String,
