@@ -201,7 +201,7 @@ pub struct FunctionJobHandler {
 impl FunctionJobHandler {
     /// Create a handler backed by `registry`.
     #[must_use]
-    pub fn new(registry: Arc<FunctionRegistry>) -> Self {
+    pub const fn new(registry: Arc<FunctionRegistry>) -> Self {
         Self { registry }
     }
 }
