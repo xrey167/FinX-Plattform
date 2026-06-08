@@ -414,55 +414,8 @@ impl McpServer {
 
         let progress_token = progress_token(params);
 
-        // Listed registry tools (not built-ins) are dispatched through the tool-execution
-        // backend, which resolves each tool's `implementation` binding. `Unbound` tools fall
-        // through to the existing `-32601` "not yet executable" path below; an execution
-        // failure (the tool ran but errored) is surfaced as an `isError` tool result.
-        if let Some(registry) = self.registry.as_ref()
-            && self.is_listed_registry_tool(name)
-        {
-            match self.executor.execute(registry, name, &arguments) {
-                Ok(outcome) => {
-                    return vec![success_message(id, &tool_result(&outcome.structured))];
-                }
-                Err(tdw_tool_exec::ExecError::Unbound) => {
-                    return vec![error_message(
-                        JsonRpcProblem::new(
-                            id.clone(),
-                            -32601,
-                            format!("registry tool not yet executable: {name}"),
-                        )
-                        .with_data(json!({ "tool": name })),
-                    )];
-                }
-                Err(other) => {
-                    // Do not leak the raw executor error to the client: map it to a generic
-                    // category message and log the detail server-side (decision 3).
-                    eprintln!("tdw-mcp: registry tool {name} error: {other}");
-                    let category = match other {
-                        tdw_tool_exec::ExecError::NotPermitted(_)
-                        | tdw_tool_exec::ExecError::Blocked { .. } => {
-                            "registry tool execution not permitted"
-                        }
-                        tdw_tool_exec::ExecError::BadArguments(_) => {
-                            "invalid registry tool definition"
-                        }
-                        tdw_tool_exec::ExecError::InvalidArguments { .. } => {
-                            "invalid registry tool arguments"
-                        }
-                        tdw_tool_exec::ExecError::ToolNotFound(_)
-                        | tdw_tool_exec::ExecError::HandlerNotFound(_) => {
-                            "registry tool not available"
-                        }
-                        tdw_tool_exec::ExecError::NotYetSupported(_) => {
-                            "registry tool not yet executable"
-                        }
-                        tdw_tool_exec::ExecError::Backend(_)
-                        | tdw_tool_exec::ExecError::Unbound => "registry tool execution failed",
-                    };
-                    return vec![success_message(id, &tool_error_result(category))];
-                }
-            }
+        if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
+            return messages;
         }
 
         let result = execute_tool(&self.daemon, name, &arguments);
@@ -508,6 +461,69 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// Dispatch a listed registry tool (not a built-in) through the tool-execution backend.
+    ///
+    /// Returns `Some(messages)` when `name` is a listed registry tool (the resolved response,
+    /// whether success or error); returns `None` when it is not, so the caller falls through
+    /// to the built-in `execute_tool` path. The tool-execution backend resolves each tool's
+    /// `implementation` binding. `Unbound` tools fall through to the existing `-32601` "not
+    /// yet executable" path below; an execution failure (the tool ran but errored) is
+    /// surfaced as an `isError` tool result.
+    fn dispatch_registry_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if let Some(registry) = self.registry.as_ref()
+            && self.is_listed_registry_tool(name)
+        {
+            match self.executor.execute(registry, name, arguments) {
+                Ok(outcome) => {
+                    return Some(vec![success_message(id, &tool_result(&outcome.structured))]);
+                }
+                Err(tdw_tool_exec::ExecError::Unbound) => {
+                    return Some(vec![error_message(
+                        JsonRpcProblem::new(
+                            id.clone(),
+                            -32601,
+                            format!("registry tool not yet executable: {name}"),
+                        )
+                        .with_data(json!({ "tool": name })),
+                    )]);
+                }
+                Err(other) => {
+                    // Do not leak the raw executor error to the client: map it to a generic
+                    // category message and log the detail server-side (decision 3).
+                    eprintln!("tdw-mcp: registry tool {name} error: {other}");
+                    let category = match other {
+                        tdw_tool_exec::ExecError::NotPermitted(_)
+                        | tdw_tool_exec::ExecError::Blocked { .. } => {
+                            "registry tool execution not permitted"
+                        }
+                        tdw_tool_exec::ExecError::BadArguments(_) => {
+                            "invalid registry tool definition"
+                        }
+                        tdw_tool_exec::ExecError::InvalidArguments { .. } => {
+                            "invalid registry tool arguments"
+                        }
+                        tdw_tool_exec::ExecError::ToolNotFound(_)
+                        | tdw_tool_exec::ExecError::HandlerNotFound(_) => {
+                            "registry tool not available"
+                        }
+                        tdw_tool_exec::ExecError::NotYetSupported(_) => {
+                            "registry tool not yet executable"
+                        }
+                        tdw_tool_exec::ExecError::Backend(_)
+                        | tdw_tool_exec::ExecError::Unbound => "registry tool execution failed",
+                    };
+                    return Some(vec![success_message(id, &tool_error_result(category))]);
+                }
+            }
+        }
+        None
     }
 
     /// True when `name` is exposed by the attached registry's `tool` resources and is NOT a

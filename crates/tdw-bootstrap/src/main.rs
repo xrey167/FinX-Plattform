@@ -100,44 +100,9 @@ async fn main() -> ExitCode {
     log_step("env", "ok", Some("required env vars present"));
 
     // Postgres connect + schemas.
-    let engine = match PgEngine::connect(&postgres_url).await {
-        Ok(engine) => engine,
-        Err(error) => {
-            log_step("postgres-connect", "failed", Some(&error.to_string()));
-            return ExitCode::from(3);
-        }
-    };
-    log_step("postgres-connect", "ok", None);
-
-    if let Err(error) = PgOutboxStore::new(engine.clone()).ensure_schema().await {
-        log_step("outbox-schema", "failed", Some(&error.to_string()));
-        return ExitCode::from(4);
+    if let Some(code) = bootstrap_postgres(&postgres_url).await {
+        return code;
     }
-    log_step("outbox-schema", "ok", Some("tdw_outbox"));
-
-    if let Err(error) = PgSnapshotStore::new(engine.clone()).ensure_schema().await {
-        log_step("snapshot-schema", "failed", Some(&error.to_string()));
-        return ExitCode::from(4);
-    }
-    log_step("snapshot-schema", "ok", Some("tdw_snapshot"));
-
-    if let Err(error) = PgEventBus::new(engine.clone()).ensure_schema().await {
-        log_step("bus-schema", "failed", Some(&error.to_string()));
-        return ExitCode::from(4);
-    }
-    log_step("bus-schema", "ok", Some("tdw_bus"));
-
-    if let Err(error) = PgSessionStore::new(engine.clone()).ensure_schema().await {
-        log_step("session-schema", "failed", Some(&error.to_string()));
-        return ExitCode::from(4);
-    }
-    log_step(
-        "session-schema",
-        "ok",
-        Some(
-            "tdw_sessions + tdw_sessions_permission_state + tdw_sessions_pending_approvals + tdw_sessions_cost_ledger",
-        ),
-    );
 
     // S3 / MinIO marker write.
     let s3 = S3Engine::from_endpoint(
@@ -188,6 +153,67 @@ async fn main() -> ExitCode {
     // Optional search/OLAP/vector schema bootstrap. Each backend is skipped
     // unless its endpoint env var is set, so the minimal Postgres + S3 live
     // profile keeps working unchanged.
+    if let Some(code) = bootstrap_clickhouse().await {
+        return code;
+    }
+
+    if let Some(code) = bootstrap_qdrant().await {
+        return code;
+    }
+
+    if let Some(code) = bootstrap_meilisearch().await {
+        return code;
+    }
+
+    log_step("done", "ok", Some("data backend live"));
+    ExitCode::SUCCESS
+}
+
+/// Connect to Postgres and apply all required schemas; returns `Some(exit_code)` on failure.
+async fn bootstrap_postgres(postgres_url: &str) -> Option<ExitCode> {
+    let engine = match PgEngine::connect(postgres_url).await {
+        Ok(engine) => engine,
+        Err(error) => {
+            log_step("postgres-connect", "failed", Some(&error.to_string()));
+            return Some(ExitCode::from(3));
+        }
+    };
+    log_step("postgres-connect", "ok", None);
+
+    if let Err(error) = PgOutboxStore::new(engine.clone()).ensure_schema().await {
+        log_step("outbox-schema", "failed", Some(&error.to_string()));
+        return Some(ExitCode::from(4));
+    }
+    log_step("outbox-schema", "ok", Some("tdw_outbox"));
+
+    if let Err(error) = PgSnapshotStore::new(engine.clone()).ensure_schema().await {
+        log_step("snapshot-schema", "failed", Some(&error.to_string()));
+        return Some(ExitCode::from(4));
+    }
+    log_step("snapshot-schema", "ok", Some("tdw_snapshot"));
+
+    if let Err(error) = PgEventBus::new(engine.clone()).ensure_schema().await {
+        log_step("bus-schema", "failed", Some(&error.to_string()));
+        return Some(ExitCode::from(4));
+    }
+    log_step("bus-schema", "ok", Some("tdw_bus"));
+
+    if let Err(error) = PgSessionStore::new(engine.clone()).ensure_schema().await {
+        log_step("session-schema", "failed", Some(&error.to_string()));
+        return Some(ExitCode::from(4));
+    }
+    log_step(
+        "session-schema",
+        "ok",
+        Some(
+            "tdw_sessions + tdw_sessions_permission_state + tdw_sessions_pending_approvals + tdw_sessions_cost_ledger",
+        ),
+    );
+    None
+}
+
+/// Optional `ClickHouse` schema bootstrap; returns `Some(exit_code)` on failure.
+async fn bootstrap_clickhouse() -> Option<ExitCode> {
     if let Ok(clickhouse_url) = env::var("TDW_CLICKHOUSE_URL") {
         let user = env::var("TDW_CLICKHOUSE_USER").ok();
         let password = env::var("TDW_CLICKHOUSE_PASSWORD").ok();
@@ -195,7 +221,7 @@ async fn main() -> ExitCode {
             Ok(engine) => engine,
             Err(error) => {
                 log_step("clickhouse-connect", "failed", Some(&error.to_string()));
-                return ExitCode::from(7);
+                return Some(ExitCode::from(7));
             }
         };
         let statements = [
@@ -209,7 +235,7 @@ async fn main() -> ExitCode {
         for statement in &statements {
             if let Err(error) = engine.execute(statement).await {
                 log_step("clickhouse-schema", "failed", Some(&error.to_string()));
-                return ExitCode::from(7);
+                return Some(ExitCode::from(7));
             }
         }
         log_step(
@@ -218,7 +244,11 @@ async fn main() -> ExitCode {
             Some("database tdw + _tdw_bootstrap_marker"),
         );
     }
+    None
+}
 
+/// Optional Qdrant collection bootstrap; returns `Some(exit_code)` on failure.
+async fn bootstrap_qdrant() -> Option<ExitCode> {
     if let Ok(qdrant_url) = env::var("TDW_QDRANT_URL") {
         let api_key = env::var("TDW_QDRANT_API_KEY").ok();
         let vector_size = env::var("TDW_QDRANT_VECTOR_SIZE")
@@ -229,7 +259,7 @@ async fn main() -> ExitCode {
             Ok(engine) => engine,
             Err(error) => {
                 log_step("qdrant-connect", "failed", Some(&error.to_string()));
-                return ExitCode::from(8);
+                return Some(ExitCode::from(8));
             }
         };
         if let Err(error) = engine
@@ -237,7 +267,7 @@ async fn main() -> ExitCode {
             .await
         {
             log_step("qdrant-collection", "failed", Some(&error.to_string()));
-            return ExitCode::from(8);
+            return Some(ExitCode::from(8));
         }
         log_step(
             "qdrant-collection",
@@ -245,25 +275,27 @@ async fn main() -> ExitCode {
             Some(&format!("{QDRANT_COLLECTION} (size {vector_size})")),
         );
     }
+    None
+}
 
+/// Optional Meilisearch index bootstrap; returns `Some(exit_code)` on failure.
+async fn bootstrap_meilisearch() -> Option<ExitCode> {
     if let Ok(meili_url) = env::var("TDW_MEILI_URL") {
         let api_key = env::var("TDW_MEILI_API_KEY").ok();
         let engine = match MeilisearchHttpEngine::new(&meili_url, api_key) {
             Ok(engine) => engine,
             Err(error) => {
                 log_step("meili-connect", "failed", Some(&error.to_string()));
-                return ExitCode::from(9);
+                return Some(ExitCode::from(9));
             }
         };
         if let Err(error) = engine.ensure_index(MEILI_INDEX, "id").await {
             log_step("meili-index", "failed", Some(&error.to_string()));
-            return ExitCode::from(9);
+            return Some(ExitCode::from(9));
         }
         log_step("meili-index", "ok", Some(MEILI_INDEX));
     }
-
-    log_step("done", "ok", Some("data backend live"));
-    ExitCode::SUCCESS
+    None
 }
 
 fn require_env(name: &str) -> Result<String, String> {
