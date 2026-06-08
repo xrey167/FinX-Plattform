@@ -236,35 +236,32 @@ async fn run_serve_dispatch<Q: tdw_worker::ServeQueue + Clone + 'static>(
     config: tdw_worker::ServeConfig,
     once: bool,
 ) -> tdw_worker::Result<tdw_worker::ServeReport> {
-    match daemon {
-        Some((daemon_config, _)) => {
-            let inner = tdw_worker::DaemonJobHandler::new(daemon_config);
-            #[cfg(feature = "functions")]
-            if let Some(registry) = build_function_registry() {
-                return run_serve(
-                    queue,
-                    FnRoutingHandler::new(std::sync::Arc::new(registry), inner),
-                    config,
-                    once,
-                )
-                .await;
-            }
-            run_serve(queue, inner, config, once).await
+    if let Some((daemon_config, _)) = daemon {
+        let inner = tdw_worker::DaemonJobHandler::new(daemon_config);
+        #[cfg(feature = "functions")]
+        if let Some(registry) = build_function_registry() {
+            return run_serve(
+                queue,
+                FnRoutingHandler::new(std::sync::Arc::new(registry), inner),
+                config,
+                once,
+            )
+            .await;
         }
-        None => {
-            let inner = tdw_worker::LoggingAckHandler;
-            #[cfg(feature = "functions")]
-            if let Some(registry) = build_function_registry() {
-                return run_serve(
-                    queue,
-                    FnRoutingHandler::new(std::sync::Arc::new(registry), inner),
-                    config,
-                    once,
-                )
-                .await;
-            }
-            run_serve(queue, inner, config, once).await
+        run_serve(queue, inner, config, once).await
+    } else {
+        let inner = tdw_worker::LoggingAckHandler;
+        #[cfg(feature = "functions")]
+        if let Some(registry) = build_function_registry() {
+            return run_serve(
+                queue,
+                FnRoutingHandler::new(std::sync::Arc::new(registry), inner),
+                config,
+                once,
+            )
+            .await;
         }
+        run_serve(queue, inner, config, once).await
     }
 }
 
