@@ -15,7 +15,7 @@ use tdw_agent::{
     Adaptivity, EntityMeta, Origin, Registry, RegistryEntity, Source, Tier, Tool, ToolEffect,
     ToolImplementation,
 };
-use tdw_tool_exec::{ExecError, ToolExecutor};
+use tdw_tool_exec::{ExecError, SchemaValidation, ToolExecutor};
 
 /// A builtin handler: echoes its input back under `echoed`.
 /// The `fn(Value) -> tdw_tools::Result<Value>` shape is fixed by `ToolHandler`.
@@ -85,4 +85,36 @@ fn main() {
     let missing = ToolExecutor::new().execute(&Registry::new(), "demo.nope", &json!({}));
     assert!(matches!(missing, Err(ExecError::ToolNotFound(_))));
     println!("missing tool -> {missing:?}");
+
+    // Opt-in argument validation rejects a missing required field before dispatch.
+    let mut validated = tool_with_impl(
+        "demo.validated",
+        ToolImplementation::Builtin {
+            handler: "demo.validated.handler".to_string(),
+        },
+    );
+    validated.input_schema = json!({ "type": "object", "required": ["symbol"] });
+    let validated_registry = registry_with(&validated);
+    let validating_executor = ToolExecutor::new()
+        .with_builtin("demo.validated.handler", echo_handler)
+        .expect("register builtin handler")
+        .with_arg_validation(SchemaValidation::On);
+
+    // Missing "symbol" => InvalidArguments (never reaches the backend).
+    let rejected = validating_executor
+        .execute(&validated_registry, "demo.validated", &json!({}))
+        .expect_err("missing required field must be rejected");
+    assert!(matches!(rejected, ExecError::InvalidArguments { .. }));
+    println!("invalid args -> {rejected}");
+
+    // With the required field present, the same call succeeds.
+    let accepted = validating_executor
+        .execute(
+            &validated_registry,
+            "demo.validated",
+            &json!({ "symbol": "AAPL" }),
+        )
+        .expect("present required field passes");
+    assert_eq!(accepted.structured["echoed"], json!({ "symbol": "AAPL" }));
+    println!("valid args dispatched: {}", accepted.structured);
 }

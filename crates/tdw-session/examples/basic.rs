@@ -1,6 +1,6 @@
 //! Offline `SqliteSessionStore` round-trip: persist a session + a cost-ledger
-//! entry to an in-memory SQLite database and read them back. No network, no
-//! docker — the SQLite store is the always-available default and auto-migrates
+//! entry to an in-memory `SQLite` database and read them back. No network, no
+//! docker — the `SQLite` store is the always-available default and auto-migrates
 //! on connect.
 //!
 //! Run with: `cargo run -p tdw-session --example tdw-session-basic`

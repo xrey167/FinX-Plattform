@@ -130,6 +130,26 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "function_steps",
             sql: include_str!("../../../migrations/postgres/20260607_0002_function_steps.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0003",
+            name: "identity_users",
+            sql: include_str!("../../../migrations/postgres/20260607_0003_identity_users.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260608_0001",
+            name: "identity_sessions",
+            sql: include_str!("../../../migrations/postgres/20260608_0001_identity_sessions.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260608_0002",
+            name: "identity_reset_tokens",
+            sql: include_str!(
+                "../../../migrations/postgres/20260608_0002_identity_reset_tokens.sql"
+            ),
+        },
     ]
 }
 
@@ -429,6 +449,9 @@ mod tests {
             "system.tag_rule",
             "system.feature_snapshot",
             "system.worker_jobs",
+            "system.identity_users",
+            "system.identity_sessions",
+            "system.identity_reset_tokens",
         ] {
             assert!(
                 postgres_sql.contains(table),
@@ -448,6 +471,59 @@ mod tests {
                 target: MigrationTarget::Postgres,
                 version: "20260521_0001",
             })
+        );
+    }
+
+    #[test]
+    fn catalog_validation_covers_each_boundary_error() {
+        let base = Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260101_0001",
+            name: "ok",
+            sql: "create table x ();",
+        };
+
+        assert_eq!(
+            validate_migration_catalog(&[Migration {
+                version: "  ",
+                ..base
+            }]),
+            Err(MigrationCatalogError::EmptyVersion {
+                target: MigrationTarget::Postgres
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration { name: " ", ..base }]),
+            Err(MigrationCatalogError::EmptyName {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration { sql: "   ", ..base }]),
+            Err(MigrationCatalogError::EmptySql {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+        assert_eq!(
+            validate_migration_catalog(&[Migration {
+                sql: "insert into x values (1);",
+                ..base
+            }]),
+            Err(MigrationCatalogError::NonCreateSql {
+                target: MigrationTarget::Postgres,
+                version: "20260101_0001"
+            })
+        );
+
+        // A leading `--` comment block is stripped before the `create` check.
+        assert!(
+            validate_migration_catalog(&[Migration {
+                sql: "-- header comment\n-- more\ncreate table x ();",
+                ..base
+            }])
+            .is_ok()
         );
     }
 }

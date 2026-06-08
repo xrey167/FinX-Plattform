@@ -12,7 +12,9 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
 use tdw_provider_finnhub::{
-    FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher, FinnhubProfileQuery,
+    FinnhubCompanyNewsQuery, FinnhubHttpCompanyNewsFetcher, FinnhubHttpProfileFetcher,
+    FinnhubHttpQuoteSnapshotFetcher, FinnhubHttpSymbolSearchFetcher, FinnhubProfileQuery,
+    FinnhubSearchQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -42,6 +44,53 @@ fn quote_cassette() -> Bytes {
         "pc": 188.10_f64,
         "t": 1_717_200_000_i64
     })
+}
+
+fn search_cassette() -> Bytes {
+    cassette_bytes!({
+        "count": 2,
+        "result": [
+            {
+                "symbol": "AAPL",
+                "displaySymbol": "AAPL",
+                "description": "APPLE INC",
+                "type": "Common Stock"
+            },
+            {
+                "symbol": "AAPL.SW",
+                "displaySymbol": "AAPL.SW",
+                "description": "APPLE INC",
+                "type": "Common Stock"
+            }
+        ]
+    })
+}
+
+fn company_news_cassette() -> Bytes {
+    cassette_bytes!([
+        {
+            "category": "company news",
+            "datetime": 1_717_200_000_i64,
+            "headline": "Apple unveils new product",
+            "id": 123_456_i64,
+            "image": "https://example.com/a.png",
+            "related": "AAPL",
+            "source": "Reuters",
+            "summary": "Apple announced a new product today.",
+            "url": "https://example.com/news/1"
+        },
+        {
+            "category": "company news",
+            "datetime": 1_717_286_400_i64,
+            "headline": "Apple beats earnings",
+            "id": 123_457_i64,
+            "image": "https://example.com/b.png",
+            "related": "AAPL",
+            "source": "Bloomberg",
+            "summary": "Apple reported strong quarterly results.",
+            "url": "https://example.com/news/2"
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +219,164 @@ fn quote_snapshot_malformed_json_produces_provider_error() {
 }
 
 // ---------------------------------------------------------------------------
+// Symbol-search cassette tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_finnhub_symbol_search_response() {
+    let fetcher = FinnhubHttpSymbolSearchFetcher::default();
+    let query = FinnhubHttpSymbolSearchFetcher::transform_query(json!({"query": "apple"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = fetcher
+        .transform_data(&query, search_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].display_symbol, "AAPL");
+    assert_eq!(rows[0].description, "APPLE INC");
+    assert_eq!(rows[0].kind, "Common Stock");
+    assert_eq!(rows[1].symbol, "AAPL.SW");
+}
+
+#[test]
+fn symbol_search_transform_query_accepts_free_text_and_rejects_blank() {
+    let query = FinnhubHttpSymbolSearchFetcher::transform_query(json!({"query": "apple inc"}))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query.query, "apple inc");
+
+    // `q` alias also works.
+    let aliased = FinnhubHttpSymbolSearchFetcher::transform_query(json!({"q": "msft"}))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(aliased.query, "msft");
+
+    assert!(FinnhubHttpSymbolSearchFetcher::transform_query(json!({"query": ""})).is_err());
+    assert!(FinnhubHttpSymbolSearchFetcher::transform_query(json!({"query": "   "})).is_err());
+}
+
+#[test]
+fn symbol_search_empty_result_produces_empty_vec() {
+    let fetcher = FinnhubHttpSymbolSearchFetcher::default();
+    let query = FinnhubSearchQuery::new("zzzz").unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!({"count": 0, "result": []});
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert!(rows.is_empty());
+}
+
+#[test]
+fn symbol_search_malformed_json_produces_provider_error() {
+    let fetcher = FinnhubHttpSymbolSearchFetcher::default();
+    let query = FinnhubSearchQuery::new("apple").unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = Bytes::from(b"not valid json".to_vec());
+
+    let err = fetcher
+        .transform_data(&query, raw)
+        .expect_err("malformed JSON must produce an error");
+    assert!(err.to_string().contains("finnhub search parse_json"));
+}
+
+// ---------------------------------------------------------------------------
+// Company-news cassette tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_finnhub_company_news_response() {
+    let fetcher = FinnhubHttpCompanyNewsFetcher::default();
+    let query = FinnhubHttpCompanyNewsFetcher::transform_query(json!({
+        "symbol": "AAPL",
+        "from": "2024-06-01",
+        "to": "2024-06-02"
+    }))
+    .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = fetcher
+        .transform_data(&query, company_news_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].id, 123_456);
+    // Finnhub datetime is seconds; fetcher multiplies by 1000 for datetime_ms.
+    assert_eq!(rows[0].datetime_ms, 1_717_200_000_000);
+    assert_eq!(rows[0].headline, "Apple unveils new product");
+    assert_eq!(rows[0].summary, "Apple announced a new product today.");
+    assert_eq!(rows[0].source, "Reuters");
+    assert_eq!(rows[0].url, "https://example.com/news/1");
+    assert_eq!(rows[0].category, "company news");
+    assert_eq!(rows[0].related, "AAPL");
+    assert_eq!(rows[1].id, 123_457);
+    assert_eq!(rows[1].source, "Bloomberg");
+}
+
+#[test]
+fn company_news_transform_query_normalises_and_validates() {
+    let query = FinnhubHttpCompanyNewsFetcher::transform_query(json!({
+        "ticker": "msft",
+        "from": "2024-01-01",
+        "to": "2024-01-31"
+    }))
+    .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query.symbol, "MSFT");
+    assert_eq!(query.from, "2024-01-01");
+    assert_eq!(query.to, "2024-01-31");
+
+    // Bad date shape is rejected.
+    assert!(
+        FinnhubHttpCompanyNewsFetcher::transform_query(json!({
+            "symbol": "AAPL",
+            "from": "2024/01/01",
+            "to": "2024-01-31"
+        }))
+        .is_err()
+    );
+    // Invalid symbol is rejected.
+    assert!(
+        FinnhubHttpCompanyNewsFetcher::transform_query(json!({
+            "symbol": "AAPL/../x",
+            "from": "2024-01-01",
+            "to": "2024-01-31"
+        }))
+        .is_err()
+    );
+    // Missing date param is rejected.
+    assert!(
+        FinnhubHttpCompanyNewsFetcher::transform_query(
+            json!({"symbol": "AAPL", "from": "2024-01-01"})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn company_news_empty_array_produces_empty_vec() {
+    let fetcher = FinnhubHttpCompanyNewsFetcher::default();
+    let query = FinnhubCompanyNewsQuery::new("AAPL", "2024-01-01", "2024-01-31")
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert!(rows.is_empty());
+}
+
+#[test]
+fn company_news_malformed_json_produces_provider_error() {
+    let fetcher = FinnhubHttpCompanyNewsFetcher::default();
+    let query = FinnhubCompanyNewsQuery::new("AAPL", "2024-01-01", "2024-01-31")
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = Bytes::from(b"not valid json".to_vec());
+
+    let err = fetcher
+        .transform_data(&query, raw)
+        .expect_err("malformed JSON must produce an error");
+    assert!(err.to_string().contains("finnhub company-news parse_json"));
+}
+
+// ---------------------------------------------------------------------------
 // Live tests (gated by TDW_FINNHUB_LIVE=1 and TDW_FINNHUB_API_KEY)
 // ---------------------------------------------------------------------------
 
@@ -230,4 +437,50 @@ async fn live_finnhub_quote_uses_ticker_param_alias() {
     let fetcher = FinnhubHttpQuoteSnapshotFetcher::default();
     let rows = live_fetch_nonempty!(fetcher, query);
     assert_eq!(rows[0].symbol, "MSFT");
+}
+
+#[tokio::test]
+async fn live_finnhub_symbol_search_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FINNHUB_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FINNHUB_LIVE != 1; skipping live Finnhub symbol-search integration test");
+        return;
+    }
+
+    let fetcher = FinnhubHttpSymbolSearchFetcher::default();
+    let query = FinnhubHttpSymbolSearchFetcher::transform_query(json!({"query": "apple"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = live_fetch_nonempty!(fetcher, query);
+
+    assert!(
+        !rows.is_empty(),
+        "live symbol-search response must include data"
+    );
+}
+
+#[tokio::test]
+async fn live_finnhub_company_news_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FINNHUB_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FINNHUB_LIVE != 1; skipping live Finnhub company-news integration test");
+        return;
+    }
+
+    let fetcher = FinnhubHttpCompanyNewsFetcher::default();
+    let query = FinnhubHttpCompanyNewsFetcher::transform_query(json!({
+        "symbol": "AAPL",
+        "from": "2024-06-01",
+        "to": "2024-06-07"
+    }))
+    .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+
+    // News volume varies; only assert the call succeeded and parsed cleanly.
+    let _ = rows;
 }

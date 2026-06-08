@@ -42,6 +42,9 @@ use tdw_storage_s3::InMemoryS3BlobEngine;
 
 use crate::{IngressAuthContext, PolicyEnforcementConfig, default_registry, run_ws_ingest};
 
+#[cfg(feature = "alerts")]
+use tdw_alerts::{AlertStore, InMemoryAlertStore};
+
 const DEFAULT_BUS_CAPACITY: usize = 1024;
 const LOCAL_POLICY_ISSUER: &str = "tdw://local-dev";
 const LOCAL_POLICY_AUDIENCE: &str = "tdw-daemon";
@@ -71,7 +74,7 @@ impl SessionBackend {
             Self::Sqlite(store) => store
                 .upsert_session(record)
                 .await
-                .map_err(session_storage_err),
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.upsert_session(record).await,
         }
@@ -82,7 +85,10 @@ impl SessionBackend {
     /// Returns an error variant if the underlying operation fails.
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<()> {
         match self {
-            Self::Sqlite(store) => store.append_cost(entry).await.map_err(session_storage_err),
+            Self::Sqlite(store) => store
+                .append_cost(entry)
+                .await
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.append_cost(entry).await,
         }
@@ -96,7 +102,7 @@ impl SessionBackend {
             Self::Sqlite(store) => store
                 .cost_entries(session_id)
                 .await
-                .map_err(session_storage_err),
+                .map_err(|error| session_storage_err(&error)),
             #[cfg(feature = "daemon-postgres")]
             Self::Pg(store) => store.cost_entries(session_id).await,
         }
@@ -145,7 +151,7 @@ impl RolloutBackend {
 }
 
 /// Map a `tdw-session` error onto the unified [`tdw_core::Error`].
-fn session_storage_err(error: SessionError) -> Error {
+fn session_storage_err(error: &SessionError) -> Error {
     Error::Storage(error.to_string())
 }
 
@@ -189,6 +195,13 @@ pub struct AppState {
     /// across `AppState` clones (the daemon clones `AppState` per connection),
     /// so a stream started on one clone is visible to `stop_stream` on another.
     pub streams: Arc<Mutex<HashMap<String, StreamControl>>>,
+    /// Price-alert persistence store. Always `InMemoryAlertStore` unless the
+    /// `alerts-postgres` feature is enabled **and** a Postgres URL is configured
+    /// at runtime (`TDW_ALERT_PG_URL` or `DATABASE_URL`). Present only when the
+    /// `alerts` feature is enabled; absent in default offline builds so the
+    /// dependency is not pulled in unconditionally.
+    #[cfg(feature = "alerts")]
+    pub alert_store: Arc<dyn AlertStore>,
 }
 
 impl AppState {
@@ -230,6 +243,8 @@ impl AppState {
             session,
             rollout,
             streams: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "alerts")]
+            alert_store: Arc::new(InMemoryAlertStore::new()),
         })
     }
 
@@ -719,7 +734,7 @@ fn select_vector_engine(live: bool) -> Result<Arc<dyn VectorEngine>> {
 /// `TDW_MEILI_API_KEY`), fail-closed on a missing URL or absent
 /// `real-meilisearch` feature. Otherwise the offline `InMemoryLexicalEngine` is
 /// used. This is the first runtime wiring of the real Meilisearch engine
-/// (mirroring how Qdrant / ClickHouse are wired above).
+/// (mirroring how Qdrant / `ClickHouse` are wired above).
 ///
 /// # Errors
 ///

@@ -51,6 +51,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures 0.2.17",
+ "password-hash",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -555,6 +567,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "blake2"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46502ad458c9a52b69d4d4d32775c788b7a1b85e8bc9d482d92250fc0e3f8efe"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -2606,6 +2627,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4222,9 +4254,7 @@ name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
  "serde_json",
- "tdw-config",
  "tdw-protocol",
- "tdw-service-api",
  "tdw-test-utils",
  "tokio",
 ]
@@ -4302,6 +4332,7 @@ name = "tdw-email"
 version = "0.1.0"
 dependencies = [
  "lettre",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -4442,6 +4473,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-identity"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-kg"
 version = "0.1.0"
 dependencies = [
@@ -4536,6 +4580,14 @@ name = "tdw-ml-registry"
 version = "0.1.0"
 
 [[package]]
+name = "tdw-news-compose"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-outbox"
 version = "0.1.0"
 dependencies = [
@@ -4593,7 +4645,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -4660,7 +4711,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -4698,7 +4748,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4715,7 +4764,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4782,7 +4830,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -4798,7 +4845,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4815,7 +4861,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4863,7 +4908,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -4912,7 +4956,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4929,7 +4972,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4973,7 +5015,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -4990,7 +5031,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -5042,7 +5082,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -5119,7 +5158,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -5136,7 +5174,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tdw-core",
- "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -5269,6 +5306,7 @@ dependencies = [
  "tdw-actor",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-alerts",
  "tdw-app-client",
  "tdw-app-server",
  "tdw-auth",
@@ -5354,6 +5392,7 @@ dependencies = [
  "tdw-udf",
  "tdw-workflow-engine",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5613,6 +5652,14 @@ version = "0.1.0"
 dependencies = [
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "tdw-watchlist-compose"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

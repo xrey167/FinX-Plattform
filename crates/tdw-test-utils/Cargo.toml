@@ -28,5 +28,9 @@ tdw-service-api = { workspace = true }
 tdw-storage-fs = { workspace = true }
 tokio = { workspace = true }
 
+[[example]]
+name = "tdw_test_utils_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

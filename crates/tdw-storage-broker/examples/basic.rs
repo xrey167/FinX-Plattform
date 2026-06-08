@@ -1,5 +1,5 @@
 //! Offline `InMemoryBrokerSink` round-trip: write a batch and read back the
-//! recorded JSONEachRow messages. No network, no docker — the default in-memory
+//! recorded `JSONEachRow` messages. No network, no docker — the default in-memory
 //! sink is always available.
 //!
 //! `WriteSink::write_batch` is async but the in-memory sink resolves

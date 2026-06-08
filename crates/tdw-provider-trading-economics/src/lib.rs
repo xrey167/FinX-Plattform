@@ -95,7 +95,7 @@ impl TradingEconomicsIndicatorQuery {
 // ---------------------------------------------------------------------------
 
 /// A single economic calendar event.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TradingEconomicsCalendarEvent {
     pub date: String,
     pub country: String,
@@ -109,7 +109,7 @@ pub struct TradingEconomicsCalendarEvent {
 }
 
 /// A single country indicator observation.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TradingEconomicsIndicatorRow {
     pub country: String,
     pub category: String,

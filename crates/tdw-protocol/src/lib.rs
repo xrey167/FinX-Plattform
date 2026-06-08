@@ -234,6 +234,35 @@ pub enum Op {
     StreamStop {
         stream_id: String,
     },
+    /// Create a new price alert for the authenticated principal. The server
+    /// derives `owner_id` from the verified JWT subject — it is **never** read
+    /// from the request payload. `target_price` is a decimal string (e.g.
+    /// `"123.45"`) — carrying it as `String` preserves `Op: Eq` (f64 is not
+    /// `Eq`) and avoids NaN-in-protocol. The dispatcher validates it is a
+    /// finite, positive number. `condition` is the `AlertDirection` text:
+    /// `"Above"` or `"Below"`. Serializes as `create_alert`.
+    CreateAlert {
+        symbol: String,
+        target_price: String,
+        condition: String,
+    },
+    /// List all price alerts owned by the authenticated principal, newest
+    /// first. No filter parameters — owner scoping is enforced server-side
+    /// from the verified JWT subject. Serializes as `list_alerts`.
+    ListAlerts {},
+    /// Delete the price alert with `id`. The server verifies that the alert
+    /// belongs to the authenticated principal before deleting; a mismatched or
+    /// non-existent id returns an error that does **not** leak existence.
+    /// Serializes as `delete_alert`.
+    DeleteAlert {
+        id: String,
+    },
+    /// Enable or disable the price alert with `id`. Same server-side ownership
+    /// check as `DeleteAlert`. Serializes as `set_alert_active`.
+    SetAlertActive {
+        id: String,
+        active: bool,
+    },
     Shutdown,
 }
 

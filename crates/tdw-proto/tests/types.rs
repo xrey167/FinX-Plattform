@@ -331,7 +331,7 @@ fn envelope_with_order_book_payload_round_trip() {
         symbol: "BTC-USD".to_string(),
         ingestion_id: "01HZ000000000000000000003".to_string(),
         received_at_ns: 1_700_000_005_000_200_000_i64,
-        payload: Some(Payload::OrderBook(snap.clone())),
+        payload: Some(Payload::OrderBook(snap)),
     };
 
     let decoded: MarketDataEnvelope = decode(&encode(&env));

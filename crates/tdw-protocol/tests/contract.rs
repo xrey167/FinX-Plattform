@@ -206,6 +206,92 @@ fn op_get_quote_snapshot_round_trips_and_serialises_as_snake_case() {
     round_trip(&op);
 }
 
+#[test]
+fn op_create_alert_round_trips_and_serialises_as_snake_case() {
+    // target_price is a decimal String in the Op variant (not f64) so that Op
+    // remains Eq-derivable and NaN cannot enter the protocol layer. The
+    // dispatcher parses it to f64 and rejects non-finite values.
+    let op = Op::CreateAlert {
+        symbol: "AAPL".to_string(),
+        target_price: "200.00".to_string(),
+        condition: "Above".to_string(),
+    };
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert_eq!(encoded["type"], "create_alert");
+    assert_eq!(encoded["symbol"], "AAPL");
+    assert_eq!(encoded["target_price"], "200.00");
+    assert_eq!(encoded["condition"], "Above");
+    round_trip(&op);
+}
+
+#[test]
+fn op_create_alert_below_condition_round_trips() {
+    let op = Op::CreateAlert {
+        symbol: "BTC".to_string(),
+        target_price: "50000.00".to_string(),
+        condition: "Below".to_string(),
+    };
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert_eq!(encoded["condition"], "Below");
+    // target_price travels as a JSON string on the wire
+    assert!(encoded["target_price"].is_string());
+    round_trip(&op);
+}
+
+#[test]
+fn op_list_alerts_round_trips_and_serialises_as_snake_case() {
+    let op = Op::ListAlerts {};
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert_eq!(encoded["type"], "list_alerts");
+    round_trip(&op);
+}
+
+#[test]
+fn op_delete_alert_round_trips_and_serialises_as_snake_case() {
+    let op = Op::DeleteAlert {
+        id: "01J0AAAAAAAAAAAAAAAAAAAAA1".to_string(),
+    };
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert_eq!(encoded["type"], "delete_alert");
+    assert_eq!(encoded["id"], "01J0AAAAAAAAAAAAAAAAAAAAA1");
+    round_trip(&op);
+}
+
+#[test]
+fn op_set_alert_active_round_trips_and_serialises_as_snake_case() {
+    for active in [true, false] {
+        let op = Op::SetAlertActive {
+            id: "01J0AAAAAAAAAAAAAAAAAAAAA2".to_string(),
+            active,
+        };
+        let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+        assert_eq!(encoded["type"], "set_alert_active");
+        assert_eq!(encoded["id"], "01J0AAAAAAAAAAAAAAAAAAAAA2");
+        assert_eq!(encoded["active"], active);
+        round_trip(&op);
+    }
+}
+
+#[test]
+fn op_create_alert_target_price_is_string_on_wire() {
+    // Decimal string encoding: target_price is String so Op remains Eq-derivable
+    // and NaN cannot enter the protocol. The dispatcher parses to f64 and
+    // rejects non-finite / negative values.
+    let op = Op::CreateAlert {
+        symbol: "ETH".to_string(),
+        target_price: "1234.56".to_string(),
+        condition: "Above".to_string(),
+    };
+    let encoded = serde_json::to_value(&op).unwrap_or_else(|e| panic!("serialize: {e}"));
+    assert!(
+        encoded["target_price"].is_string(),
+        "target_price must be a JSON string on the wire, got: {}",
+        encoded["target_price"]
+    );
+    assert_eq!(encoded["target_price"], "1234.56");
+    round_trip(&op);
+}
+
 // ----- EventMsg variants -----
 
 #[test]

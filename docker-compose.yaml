@@ -82,15 +82,15 @@ services:
       - |
         set -eu
         attempt=1
-        while [ "$attempt" -le 30 ]; do
+        while [ "$$attempt" -le 30 ]; do
           if mc alias set local http://minio:9000 minio minio123; then
             break
           fi
-          if [ "$attempt" -eq 30 ]; then
+          if [ "$$attempt" -eq 30 ]; then
             echo "minio-init: minio did not become reachable" >&2
             exit 1
           fi
-          attempt=$((attempt + 1))
+          attempt=$$((attempt + 1))
           sleep 2
         done
         mc mb --ignore-existing local/tdw-default

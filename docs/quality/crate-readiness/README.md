@@ -1,11 +1,11 @@
 # Crate Readiness Framework
 
-Generated for ultragoal story G001-crate-readiness-rubric-inventory-and-matrix on 2026-05-22 from cargo metadata plus a conservative Rust source scan.
+Generated for ultragoal story G001-crate-readiness-rubric-inventory-and-matrix on 2026-05-22 from cargo metadata plus a conservative Rust source scan. Refreshed on 2026-06-07 during G001-crate-by-crate-release-blocker-inven after the workspace grew beyond the original bootstrap roster.
 
 ## Scope
 
-- Workspace packages enumerated: 83.
-- crates/* package directories enumerated: 82.
+- Workspace packages enumerated: 116.
+- crates/* package directories enumerated: 115.
 - Extra workspace package outside crates/*: xtask.
 - Every workspace package is assigned to exactly one downstream ultragoal tranche.
 - Per-crate worksheets live next to this file and are intentionally initialized as pending baseline artifacts. G002-G008 must replace pending entries with evidence while hardening each crate.
@@ -32,7 +32,8 @@ Each per-crate worksheet must end with an explicit production-readiness verdict 
 2. Replace baseline fields with direct evidence from manifests, source, tests, docs, and verification output.
 3. Add or fix implementation/tests/docs only where the evidence shows a real production-readiness gap.
 4. Update matrix.md and dependency-topology.md if a manifest, dependency, feature, or verdict changes.
-5. Keep clean-room constraints intact: no finx-* crates or dependencies, no copied FinX-XR code, and no tdw-provider-openbb.
+5. Run `cargo run -p xtask -- crate-readiness-check` before release or whenever crates are added or removed.
+6. Keep clean-room constraints intact: no finx-* crates or dependencies, no copied FinX-XR code, and no tdw-provider-openbb.
 
 ## Files
 

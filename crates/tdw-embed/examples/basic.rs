@@ -14,7 +14,7 @@ struct ConstantProvider;
 
 #[async_trait::async_trait]
 impl EmbeddingProvider for ConstantProvider {
-    fn model_id(&self) -> &str {
+    fn model_id(&self) -> &'static str {
         "example-constant"
     }
 

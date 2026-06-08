@@ -18,6 +18,11 @@ pub enum ServiceEndpoint {
     IngestBatch,
     ToolCall,
     UdfRun,
+    /// Used for all four price-alert CRUD ops (`CreateAlert`, `ListAlerts`,
+    /// `DeleteAlert`, `SetAlertActive`). Requires the `analyst` role — the
+    /// same gate as query/ingest — so any authenticated analyst can manage
+    /// their own alerts without a separate privilege.
+    AlertManage,
 }
 
 impl ServiceEndpoint {
@@ -28,12 +33,15 @@ impl ServiceEndpoint {
             Self::IngestBatch => "tdw.ingest.run",
             Self::ToolCall => "tdw.udf.run",
             Self::UdfRun => "udf.run",
+            Self::AlertManage => "tdw.alert.manage",
         }
     }
 
     const fn required_role(self) -> &'static str {
         match self {
-            Self::EquityHistorical | Self::RunQuery | Self::IngestBatch => "analyst",
+            Self::EquityHistorical | Self::RunQuery | Self::IngestBatch | Self::AlertManage => {
+                "analyst"
+            }
             Self::ToolCall | Self::UdfRun => "udf_runner",
         }
     }
@@ -45,6 +53,7 @@ impl ServiceEndpoint {
             Self::IngestBatch => "market.ingest_batch",
             Self::ToolCall => "runtime.tool_call",
             Self::UdfRun => "runtime.udf_run",
+            Self::AlertManage => "market.price_alerts",
         }
     }
 }

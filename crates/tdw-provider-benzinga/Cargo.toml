@@ -23,7 +23,6 @@ http = [
     "dep:reqwest",
     "dep:serde_json",
     "dep:tdw-core",
-    "dep:tdw-domain",
     "dep:tokio", "tdw-core/http"]
 
 [dependencies]
@@ -34,7 +33,6 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true, optional = true }
 tdw-core = { workspace = true, optional = true }
-tdw-domain = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
