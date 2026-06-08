@@ -630,8 +630,8 @@ mod tests {
     // -- BroadcastConfig::from_env --------------------------------------------
 
     /// Test config env-reading without mutating the process environment by
-    /// mirroring the from_env logic with explicit values (same pattern as
-    /// the existing email_tests.rs EmailConfig tests).
+    /// mirroring the `from_env` logic with explicit values (same pattern as
+    /// the existing `email_tests.rs` `EmailConfig` tests).
     #[test]
     fn broadcast_config_from_env_cases() {
         // Missing both → None.

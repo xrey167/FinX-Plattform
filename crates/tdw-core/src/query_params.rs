@@ -534,7 +534,7 @@ mod tests {
         assert!(StandardParams::from_value(&json!({ "interval": 60 })).is_err());
         assert!(StandardParams::from_value(&json!({ "limit": -5 })).is_err());
         assert!(StandardParams::from_value(&json!({ "limit": "many" })).is_err());
-        let over = StandardParams::from_value(&json!({ "limit": MAX_LIMIT as i64 + 1 }))
+        let over = StandardParams::from_value(&json!({ "limit": i64::from(MAX_LIMIT) + 1 }))
             .expect_err("over-limit must fail");
         assert!(over.to_string().contains("maximum"), "got: {over}");
     }
