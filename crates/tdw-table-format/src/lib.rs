@@ -79,6 +79,7 @@ impl TableManifest {
     }
 }
 
+#[must_use]
 pub fn simple_checksum(value: &str) -> u64 {
     value.bytes().map(u64::from).sum()
 }
