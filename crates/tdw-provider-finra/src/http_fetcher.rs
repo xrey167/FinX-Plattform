@@ -219,6 +219,8 @@ impl Fetcher<FinraOtcSummaryQuery, FinraOtcSummaryRecord> for FinraOtcSummaryHtt
 
 fn build_client() -> Result<Client> {
     Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| Error::Provider(format!("finra http client build: {e}")))
 }

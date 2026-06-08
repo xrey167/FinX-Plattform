@@ -34,6 +34,8 @@ fn read_api_key() -> Result<String> {
 
 fn build_client() -> Result<Client> {
     Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| Error::Provider(format!("eia build client: {e}")))

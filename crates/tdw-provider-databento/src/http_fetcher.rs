@@ -131,6 +131,8 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
         });
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("databento client build: {e}")))?;
@@ -276,6 +278,8 @@ impl Fetcher<DatabentoMetadataQuery, DatabentoDataset> for DatabentoMetadataFetc
         );
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("databento metadata client build: {e}")))?;

@@ -58,6 +58,8 @@ impl CCDataHttpFetcher {
 
     fn build_client() -> Result<Client> {
         Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("ccdata client build: {e}")))
@@ -257,6 +259,8 @@ impl CCDataAssetHttpFetcher {
 
     fn build_client() -> Result<Client> {
         Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("ccdata client build: {e}")))
