@@ -107,18 +107,50 @@ jobs:
         run: |
           set -euo pipefail
           PSQL="docker compose --profile live exec -T postgres psql -U tdw -d tdw -tA -c"
-          # The worker dispatches leased jobs to the daemon, which persists session
-          # + rollout state to Postgres. After traffic, the rollout table exists and
-          # accumulates rows — proving the worker -> daemon -> PG round-trip.
+          job_id="ci-live-dispatch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          envelope='{
+            "op_id": "019f0000-0000-7000-8000-000000000001",
+            "session_id": "session-live-stack",
+            "sequence": 1,
+            "submitted_by": {
+              "actor_id": "ci-live-stack",
+              "kind": "Worker",
+              "tenant_id": "default"
+            },
+            "op": {
+              "type": "run_query",
+              "sql": "select 1",
+              "plan_id": null,
+              "cost_hint": null
+            }
+          }'
+          docker compose --profile live exec -T postgres psql -U tdw -d tdw <<SQL
+          insert into system.worker_jobs (
+            job_id, queue, envelope_json, max_attempts, not_before_ms, priority,
+            status, attempts, created_at_ms, updated_at_ms
+          )
+          values (
+            '${job_id}', 'default', \$json\$${envelope}\$json\$::jsonb, 3, 0, 10,
+            'Pending', 0,
+            (extract(epoch from clock_timestamp()) * 1000)::bigint,
+            (extract(epoch from clock_timestamp()) * 1000)::bigint
+          )
+          on conflict(job_id) do nothing;
+          SQL
+          # The live worker now has a deliberate queued job to lease and dispatch
+          # to the daemon. The daemon persists session + rollout state to
+          # Postgres, proving the worker -> daemon -> PG round-trip.
           for i in $(seq 1 40); do
+            status="$($PSQL "SELECT status FROM system.worker_jobs WHERE job_id = '${job_id}'" 2>/dev/null || echo "")"
             rows="$($PSQL "SELECT count(*) FROM tdw_rollout;" 2>/dev/null || echo "")"
-            if [ -n "$rows" ] && [ "$rows" -gt 0 ] 2>/dev/null; then
-              echo "tdw_rollout has $rows rows after dispatch round-trip"
+            if [ "$status" = "Completed" ] && [ -n "$rows" ] && [ "$rows" -gt 0 ] 2>/dev/null; then
+              echo "worker job ${job_id} completed; tdw_rollout has $rows rows after dispatch round-trip"
               exit 0
             fi
             sleep 5
           done
-          echo "tdw_rollout never accumulated rows after dispatch"
+          echo "worker job ${job_id} did not complete with rollout rows"
+          $PSQL "SELECT job_id, status, attempts, last_error FROM system.worker_jobs WHERE job_id = '${job_id}'"
           docker compose --profile live logs tdw-service-daemon
           docker compose --profile live logs tdw-worker-serve
           exit 1

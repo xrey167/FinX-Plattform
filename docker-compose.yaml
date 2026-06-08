@@ -147,6 +147,9 @@ services:
       TDW_PROFILE: docker
       TDW_WORKER_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
       TDW_WORKER_ID: tdw-worker-live
+      TDW_WORKER_DISPATCH: daemon
+      TDW_WORKER_DAEMON_ADDR: tdw-service-daemon:7878
+      TDW_WORKER_DAEMON_TIMEOUT_MS: "5000"
       # Drive up to 4 leased jobs in parallel within the serve task.
       TDW_WORKER_CONCURRENCY: "4"
       # Operability surface (/health, /ready, /metrics). Off unless bound; the
