@@ -378,4 +378,161 @@ mod tests {
         let decoded: McpTool = serde_json::from_value(encoded).expect("tool should deserialize");
         assert_eq!(decoded, tool);
     }
+
+    fn sample_tool(effect: crate::base::ToolEffect, idempotent: bool) -> crate::Tool {
+        crate::Tool {
+            meta: crate::base::EntityMeta::new(
+                "t",
+                "t",
+                "0.1.0",
+                crate::base::Origin {
+                    tier: crate::base::Tier::Domain,
+                    source: crate::base::Source::Internal,
+                },
+                crate::base::Adaptivity::None,
+                false,
+            ),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
+            effect,
+            idempotent,
+            open_world: false,
+            implementation: crate::base::ToolImplementation::Unbound,
+        }
+    }
+
+    #[test]
+    fn from_tool_maps_read_only_and_destructive_effects() {
+        // Only the WriteSafe arm was covered; pin the security-relevant arms.
+        let read_only = McpTool::from(&sample_tool(crate::base::ToolEffect::ReadOnly, false));
+        let annotations = read_only.annotations.as_ref().expect("annotations present");
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.destructive_hint, None);
+
+        let destructive = McpTool::from(&sample_tool(crate::base::ToolEffect::Destructive, false));
+        let annotations = destructive
+            .annotations
+            .as_ref()
+            .expect("annotations present");
+        assert_eq!(annotations.read_only_hint, Some(false));
+        assert_eq!(annotations.destructive_hint, Some(true));
+    }
+
+    #[test]
+    fn is_idempotent_follows_idempotent_hint() {
+        let with_hint = |hint: bool| McpTool {
+            base: base("t", None),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
+            annotations: Some(ToolAnnotations {
+                idempotent_hint: Some(hint),
+                ..ToolAnnotations::default()
+            }),
+            meta: BTreeMap::new(),
+        };
+        assert!(with_hint(true).is_idempotent());
+        assert!(!with_hint(false).is_idempotent());
+
+        // No annotations, and annotations present but no idempotent hint, are
+        // both non-idempotent (no retry/backoff).
+        let no_annotations = McpTool {
+            base: base("t", None),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
+            annotations: None,
+            meta: BTreeMap::new(),
+        };
+        assert!(!no_annotations.is_idempotent());
+        let annotations_no_hint = McpTool {
+            annotations: Some(ToolAnnotations::default()),
+            ..no_annotations
+        };
+        assert!(!annotations_no_hint.is_idempotent());
+    }
+
+    #[test]
+    fn from_prompt_projects_arguments_and_drops_domain_only_fields() {
+        let prompt = crate::Prompt {
+            meta: crate::base::EntityMeta::new(
+                "greet",
+                "greet",
+                "0.1.0",
+                crate::base::Origin {
+                    tier: crate::base::Tier::Domain,
+                    source: crate::base::Source::Internal,
+                },
+                crate::base::Adaptivity::None,
+                false,
+            ),
+            template: "Hello {{ name }}".to_string(),
+            arguments: vec![crate::PromptArgument {
+                name: "name".to_string(),
+                description: Some("the name".to_string()),
+                required: true,
+                default: None,
+            }],
+        };
+        let mcp = McpPrompt::from(&prompt);
+        assert_eq!(mcp.arguments.len(), 1);
+        let argument = &mcp.arguments[0];
+        assert_eq!(argument.name, "name");
+        assert_eq!(argument.description.as_deref(), Some("the name"));
+        assert_eq!(argument.required, Some(true));
+        // title is wire-only and not derived from the domain argument.
+        assert_eq!(argument.title, None);
+    }
+
+    #[test]
+    fn project_to_mcp_exposes_tool_and_prompt_only() {
+        use crate::RegistryEntity;
+
+        // tool kind → Some(Tool).
+        let tool_resource = sample_tool(crate::base::ToolEffect::ReadOnly, true)
+            .to_resource()
+            .expect("tool projects to a resource");
+        assert!(matches!(
+            project_to_mcp(&tool_resource),
+            Ok(Some(McpEntity::Tool(_)))
+        ));
+
+        // prompt kind → Some(Prompt).
+        let prompt = crate::Prompt {
+            meta: crate::base::EntityMeta::new(
+                "p",
+                "p",
+                "0.1.0",
+                crate::base::Origin {
+                    tier: crate::base::Tier::Domain,
+                    source: crate::base::Source::Internal,
+                },
+                crate::base::Adaptivity::None,
+                false,
+            ),
+            template: "x".to_string(),
+            arguments: Vec::new(),
+        };
+        let prompt_resource = prompt.to_resource().expect("prompt projects to a resource");
+        assert!(matches!(
+            project_to_mcp(&prompt_resource),
+            Ok(Some(McpEntity::Prompt(_)))
+        ));
+
+        // A non-exposable kind (agent) → None (the `_` arm).
+        let agent_resource = Resource::new(
+            EntityKind::Agent,
+            crate::base::EntityMeta::new(
+                "a",
+                "a",
+                "0.1.0",
+                crate::base::Origin {
+                    tier: crate::base::Tier::Domain,
+                    source: crate::base::Source::Internal,
+                },
+                crate::base::Adaptivity::None,
+                false,
+            ),
+            serde_json::json!({}),
+        );
+        assert!(matches!(project_to_mcp(&agent_resource), Ok(None)));
+    }
 }
