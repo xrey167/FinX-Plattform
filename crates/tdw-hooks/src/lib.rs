@@ -141,22 +141,19 @@ pub struct HookExecutionOutcome {
     pub output: Value,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Default permission posture is `Ask`, derived via [`PermissionRules::default`]
+/// (and `false` for `allow_handler_vetoes`).
+///
+/// HK2/CFG2: this is unified with `PermissionRules::default()` and `TdwConfig`'s
+/// permission default on `Ask` so all three "default permission" sites agree —
+/// an unmatched action is surfaced for approval rather than hard-denied. It
+/// still blocks the handler from running without an explicit Allow/approval
+/// (see `execute_handlers`, where `Ask` returns `PermissionRequiresApproval`);
+/// only the posture changes from fail-closed-deny to require-approval.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookExecutionPolicy {
     pub permissions: PermissionRules,
     pub allow_handler_vetoes: bool,
-}
-
-impl Default for HookExecutionPolicy {
-    fn default() -> Self {
-        Self {
-            permissions: PermissionRules {
-                default_permission: PermissionEffect::Deny,
-                rules: Vec::new(),
-            },
-            allow_handler_vetoes: false,
-        }
-    }
 }
 
 pub trait HookHandlerBackend {
@@ -900,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn handler_execution_denies_before_backend_call() {
+    fn handler_execution_requires_approval_before_backend_call() {
         let mut registry = HookRegistry::default();
         registry.register(
             HookSpec::new("denied", 1, TransactionMode::InTransaction).with_handler(
@@ -912,15 +909,35 @@ mod tests {
         );
         let mut backend = SystemHookHandlerBackend::new();
 
+        // The default policy now defaults to `Ask` (HK2/CFG2 unification), so an
+        // unmatched action stops before the backend call with a requires-approval
+        // error rather than a hard deny — the handler still never runs.
         assert_eq!(
             registry.execute_handlers(
                 &sample_event("service"),
                 &HookExecutionPolicy::default(),
                 &mut backend,
             ),
-            Err(HookError::PermissionDenied(
+            Err(HookError::PermissionRequiresApproval(
                 "hook.command.rustc".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn permission_defaults_are_consistent() {
+        // HK2/CFG2: the embedded policy default must agree with the standalone
+        // PermissionRules default so a caller can't get a different baseline
+        // depending on which constructor they used. Both are `Ask`.
+        assert_eq!(
+            HookExecutionPolicy::default()
+                .permissions
+                .default_permission,
+            PermissionRules::default().default_permission
+        );
+        assert_eq!(
+            PermissionRules::default().default_permission,
+            PermissionEffect::Ask
         );
     }
 
