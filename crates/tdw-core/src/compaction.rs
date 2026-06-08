@@ -79,7 +79,7 @@ impl Default for CompactBudget {
 }
 
 /// Per-transform outcome record.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompactReport {
     /// Name of the transform that produced this report.
     pub transform: &'static str,

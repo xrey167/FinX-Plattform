@@ -44,7 +44,7 @@ struct TiingoNewsItem {
 // ---------------------------------------------------------------------------
 
 /// A single Tiingo news article returned by the news fetcher.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TiingoNewsArticle {
     pub id: u64,
     pub title: String,
