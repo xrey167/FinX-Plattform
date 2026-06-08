@@ -112,18 +112,20 @@ pub enum TradeSide {
     Sell = 2,
 }
 impl TradeSide {
-    /// String value of the enum field names used in the ProtoBuf definition.
+    /// String value of the enum field names used in the `ProtoBuf` definition.
     ///
     /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
+    /// (if the `ProtoBuf` definition does not change) and safe for programmatic use.
+    #[must_use] 
+    pub const fn as_str_name(&self) -> &'static str {
         match self {
             Self::Unknown => "TRADE_SIDE_UNKNOWN",
             Self::Buy => "TRADE_SIDE_BUY",
             Self::Sell => "TRADE_SIDE_SELL",
         }
     }
-    /// Creates an enum from field names used in the ProtoBuf definition.
+    /// Creates an enum from field names used in the `ProtoBuf` definition.
+    #[must_use] 
     pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
         match value {
             "TRADE_SIDE_UNKNOWN" => Some(Self::Unknown),

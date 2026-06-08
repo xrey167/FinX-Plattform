@@ -76,8 +76,7 @@ impl ProviderSpec for EcbDataSpec {
     fn transform_data(query: &EcbDataQuery, raw: Bytes) -> Result<Vec<EcbObservation>> {
         let v: Value = serde_json::from_slice(&raw)
             .map_err(|error| Error::Provider(format!("ecb parse_json: {error}")))?;
-        parse_ecb_value(&v, &query.flow, &query.key)
-            .map_err(|error| Error::Provider(error.to_string()))
+        Ok(parse_ecb_value(&v, &query.flow, &query.key))
     }
 }
 

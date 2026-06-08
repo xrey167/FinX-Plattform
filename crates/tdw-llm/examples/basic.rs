@@ -17,7 +17,7 @@ use tdw_llm::{
 struct EchoModel;
 
 impl LanguageModel for EchoModel {
-    fn model_id(&self) -> &str {
+    fn model_id(&self) -> &'static str {
         "example-echo"
     }
 

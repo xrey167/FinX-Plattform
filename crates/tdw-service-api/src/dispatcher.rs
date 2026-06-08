@@ -113,8 +113,8 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             provider,
             symbol,
             table,
-        } => dispatch_stream_start(state, policy, provider, symbol, table.clone()).await,
-        Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id).await,
+        } => dispatch_stream_start(state, policy, provider, symbol, table.clone()),
+        Op::StreamStop { stream_id } => dispatch_stream_stop(state, policy, stream_id),
         #[cfg(feature = "alerts")]
         Op::CreateAlert {
             symbol,
@@ -231,7 +231,7 @@ async fn fetch_quote_snapshot(provider: &str, symbol: &str) -> Result<QuoteSnaps
 }
 
 /// Comma-separated list of quote-snapshot providers available in this build.
-fn available_quote_snapshot_providers() -> &'static str {
+const fn available_quote_snapshot_providers() -> &'static str {
     #[cfg(all(feature = "provider-finnhub", feature = "provider-fmp"))]
     {
         "finnhub, fmp"
@@ -261,7 +261,7 @@ fn available_quote_snapshot_providers() -> &'static str {
 /// Returns [`Error::Provider`] if policy enforcement fails, if `provider` is
 /// not `binance`, or if the stream cannot be started (e.g. invalid symbol or a
 /// stream with the same id is already running).
-async fn dispatch_stream_start(
+fn dispatch_stream_start(
     state: &AppState,
     policy: &PolicyEnforcementConfig,
     provider: &str,
@@ -300,7 +300,7 @@ async fn dispatch_stream_start(
 ///
 /// Returns [`Error::Provider`] if policy enforcement fails or if the internal
 /// streams registry lock is poisoned.
-async fn dispatch_stream_stop(
+fn dispatch_stream_stop(
     state: &AppState,
     policy: &PolicyEnforcementConfig,
     stream_id: &str,
@@ -895,7 +895,7 @@ fn udf_run_tool() -> RegisteredTool {
 /// [`dispatch_tool`] executes `udf.run` via the sandbox (which needs the WASM
 /// runtime and structured error mapping). The registry only needs a handler to
 /// construct a [`RegisteredTool`]; the echo behaviour here is inert.
-fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
+const fn udf_run_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(input)
 }
 
@@ -941,7 +941,7 @@ mod tests {
     }
 
     /// Policy whose principal also holds the `udf_runner` role required by the
-    /// `tdw.udf.run` (ToolCall) endpoint — analyst alone is denied there.
+    /// `tdw.udf.run` (`ToolCall`) endpoint — analyst alone is denied there.
     fn udf_runner_policy() -> PolicyEnforcementConfig {
         let mut policy = analyst_policy();
         policy.auth.claims.roles = vec!["analyst".to_string(), "udf_runner".to_string()];

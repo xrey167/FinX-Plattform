@@ -9,9 +9,9 @@
 //! # Integrity, not cryptography
 //!
 //! The chain uses the standard-library [`std::collections::hash_map::DefaultHasher`]
-//! (SipHash 1-3) over a deterministic byte encoding. This makes the log
+//! (`SipHash` 1-3) over a deterministic byte encoding. This makes the log
 //! **tamper-EVIDENT** against accidental corruption or a casual edit — it is **NOT**
-//! cryptographic. SipHash is not second-preimage/collision resistant against a
+//! cryptographic. `SipHash` is not second-preimage/collision resistant against a
 //! motivated attacker who controls the receipts and can grind a `u64` collision.
 //! Treat this as an in-process audit trail, not a security boundary. A future
 //! upgrade to a real digest behind an opt-in feature is a clean follow-up.
@@ -46,7 +46,7 @@ pub const GENESIS_PREV_HASH: u64 = 0;
 /// One link in the hash chain.
 ///
 /// `this_hash == chain_hash(prev_hash, seq, tool, args_hash, result_hash)`. The
-/// hashes are std `DefaultHasher` (SipHash) values — tamper-evident, not
+/// hashes are std `DefaultHasher` (`SipHash`) values — tamper-evident, not
 /// cryptographic (see the [module docs](self)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolReceipt {

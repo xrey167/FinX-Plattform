@@ -33,7 +33,7 @@ where
 {
     /// Construct a new [`FallbackModel`] from a primary and a secondary model.
     #[must_use]
-    pub fn new(primary: P, secondary: S) -> Self {
+    pub const fn new(primary: P, secondary: S) -> Self {
         Self { primary, secondary }
     }
 }

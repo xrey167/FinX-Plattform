@@ -54,7 +54,7 @@ pub struct StaticQuoteSource {
 impl StaticQuoteSource {
     /// Create a new source from a pre-built map.
     #[must_use]
-    pub fn new(quotes: BTreeMap<String, QuoteSnapshot>) -> Self {
+    pub const fn new(quotes: BTreeMap<String, QuoteSnapshot>) -> Self {
         Self { quotes }
     }
 }

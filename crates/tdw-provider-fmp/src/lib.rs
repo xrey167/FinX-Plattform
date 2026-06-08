@@ -233,7 +233,7 @@ pub struct FmpOhlcvRow {
 }
 
 /// A single income-statement row returned by the fundamentals endpoint.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FmpIncomeRow {
     pub symbol: String,
     pub date: String,
