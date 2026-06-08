@@ -61,7 +61,7 @@ struct SecRecentFilings {
 }
 
 /// Flattened row returned by `transform_data` for filings queries.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SecFiling {
     pub cik: String,
     pub entity_name: String,
