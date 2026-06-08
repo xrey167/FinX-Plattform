@@ -474,4 +474,48 @@ fn build_context() {}
         assert_eq!(summary.symbols[1].kind, "function");
         assert_eq!(summary.symbols[1].name, "build_context");
     }
+
+    #[test]
+    fn validate_document_rejects_body_entity_and_tags() {
+        let ok_entity = || Entity {
+            entity_id: "instrument:AAPL".to_string(),
+            kind: EntityKind::Instrument,
+            label: "Apple".to_string(),
+            aliases: vec!["AAPL".to_string()],
+        };
+
+        assert!(matches!(
+            validate_document(&KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "  ".to_string(),
+                entity: ok_entity(),
+                tags: vec![],
+            }),
+            Err(KnowledgeError::InvalidDocumentField("body"))
+        ));
+        // An invalid entity (empty label fails validate_entity) maps to the
+        // "entity" document field.
+        assert!(matches!(
+            validate_document(&KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "ok".to_string(),
+                entity: Entity {
+                    label: String::new(),
+                    ..ok_entity()
+                },
+                tags: vec![],
+            }),
+            Err(KnowledgeError::InvalidDocumentField("entity"))
+        ));
+        // A tag without a ':' is not a valid tag id.
+        assert!(matches!(
+            validate_document(&KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "ok".to_string(),
+                entity: ok_entity(),
+                tags: vec!["notacolon".to_string()],
+            }),
+            Err(KnowledgeError::InvalidDocumentField("tags"))
+        ));
+    }
 }
