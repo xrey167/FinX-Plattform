@@ -1051,8 +1051,11 @@ fn available_tool_names(registry: &ToolRegistry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use tdw_auth_oidc::{JwksKey, JwtClaims};
+    use tdw_core::ProviderRegistry;
     use tdw_protocol::{ActorKind, ActorRef, SessionId};
+    use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 
     use crate::IngressAuthContext;
 
@@ -1098,6 +1101,22 @@ mod tests {
             },
             op,
         )
+    }
+
+    async fn offline_fixture_ingest_state() -> AppState {
+        let mut registry = ProviderRegistry::default();
+        registry
+            .register(FilesetEquityHistoricalFetcher::registry_entry())
+            .expect("fileset fixture registers");
+        registry
+            .register(YahooEquityHistoricalFetcher::registry_entry())
+            .expect("yahoo fixture registers");
+
+        let mut state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        state.registry = Arc::new(registry);
+        state
     }
 
     #[tokio::test]
@@ -1225,9 +1244,7 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_batch_persists_and_reports_dedup_token() {
-        let state = AppState::in_memory_for_tests()
-            .await
-            .with_policy(analyst_policy());
+        let state = offline_fixture_ingest_state().await;
         let env = make_envelope(Op::IngestBatch {
             provider: "yahoo".to_string(),
             endpoint: "equity_historical".to_string(),
@@ -1416,9 +1433,7 @@ mod tests {
     async fn ingest_logical_endpoint_explicit_provider_wins() {
         // L1.5: an explicit `provider` selects that candidate even when it is not
         // first in the candidate order (`yahoo` follows `fileset`).
-        let state = AppState::in_memory_for_tests()
-            .await
-            .with_policy(analyst_policy());
+        let state = offline_fixture_ingest_state().await;
         let env = make_envelope(Op::IngestBatch {
             provider: "yahoo".to_string(),
             endpoint: "equity/price/historical".to_string(),
@@ -1524,9 +1539,7 @@ mod tests {
     async fn ingest_concrete_endpoint_bypasses_logical_resolution() {
         // L1.5 backwards-compat: a concrete endpoint (no slash) is dispatched
         // directly, exactly as before the resolution layer existed.
-        let state = AppState::in_memory_for_tests()
-            .await
-            .with_policy(analyst_policy());
+        let state = offline_fixture_ingest_state().await;
         let env = make_envelope(Op::IngestBatch {
             provider: "yahoo".to_string(),
             endpoint: "equity_historical".to_string(),
