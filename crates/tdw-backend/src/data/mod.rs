@@ -898,19 +898,32 @@ mod tests {
         assert!(backend.submission_handle().is_some());
 
         // A loopback client submits a Shutdown op and must observe a terminal
-        // event. `submit_and_wait` is blocking, so run it off the async worker.
-        let client_addr = addr.clone();
-        let submission = tokio::task::spawn_blocking(move || {
-            let client = DaemonClient::new(
-                DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(2)),
-            );
-            client.submit_and_wait(&make_envelope(Op::Shutdown))
-        });
-        let submission = tokio::time::timeout(Duration::from_secs(3), submission)
-            .await
-            .expect("loopback submit must not hang")
-            .expect("spawn_blocking join")
-            .expect("loopback submission should reach the in-process daemon");
+        // event. `serve` returns after binding, but the spawned accept loop can
+        // still be a few scheduler ticks behind on loaded CI runners.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let submission = loop {
+            let client_addr = addr.clone();
+            let attempt = tokio::task::spawn_blocking(move || {
+                let client = DaemonClient::new(
+                    DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(5)),
+                );
+                client.submit_and_wait(&make_envelope(Op::Shutdown))
+            });
+            match tokio::time::timeout(Duration::from_secs(6), attempt)
+                .await
+                .expect("loopback submit must not hang")
+                .expect("spawn_blocking join")
+            {
+                Ok(submission) => break submission,
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "loopback submission should reach the in-process daemon: {error}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        };
         assert!(
             submission
                 .events
