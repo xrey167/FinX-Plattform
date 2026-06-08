@@ -179,8 +179,26 @@ jobs:
 
       - name: tdw-cli one-shot smoke against the tools profile
         timeout-minutes: 15
-        run: docker compose --profile tools run --rm --build tdw-cli --smoke AAPL
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 3); do
+            if docker compose --profile tools run --rm --build tdw-cli --smoke AAPL; then
+              exit 0
+            fi
+            echo "tdw-cli tools smoke failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile tools run --rm --build tdw-cli --smoke AAPL
 
       - name: tdw-mcp Streamable HTTP smoke
         timeout-minutes: 15
-        run: docker compose --profile tools run --rm --build tdw-mcp --streamable-http-smoke
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 3); do
+            if docker compose --profile tools run --rm --build tdw-mcp --streamable-http-smoke; then
+              exit 0
+            fi
+            echo "tdw-mcp tools smoke failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile tools run --rm --build tdw-mcp --streamable-http-smoke
