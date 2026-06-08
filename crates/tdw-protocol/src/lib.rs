@@ -227,6 +227,65 @@ pub enum Op {
     Shutdown,
 }
 
+impl Op {
+    /// Validate the op's required string fields at the wire boundary, before it
+    /// enters the service loop.
+    ///
+    /// `Op` decodes structurally with no field checks: `IngestBatch.symbols` is
+    /// `#[serde(default)]` (so a missing list becomes an empty `Vec` despite the
+    /// documented "Must be non-empty"), and the plain `String` fields
+    /// (`sql`, `provider`, `tool_name`, …) can all decode empty. This enforces
+    /// those contracts so a malformed op is rejected at ingress rather than
+    /// silently no-op'd or deferred to a downstream failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyField`] naming the first empty field. For
+    /// `IngestBatch`, an empty `symbols` list (or any empty entry) is rejected.
+    pub fn validate(&self) -> Result<()> {
+        fn require(value: &str, field: &'static str) -> Result<()> {
+            if value.trim().is_empty() {
+                Err(ProtocolError::EmptyField { field })
+            } else {
+                Ok(())
+            }
+        }
+        match self {
+            Self::AppendUserMessage { message } => require(message, "message"),
+            Self::RunQuery { sql, .. } => require(sql, "sql"),
+            Self::IngestBatch {
+                provider,
+                endpoint,
+                symbols,
+                ..
+            } => {
+                require(provider, "provider")?;
+                require(endpoint, "endpoint")?;
+                if symbols.is_empty() {
+                    return Err(ProtocolError::EmptyField { field: "symbols" });
+                }
+                for symbol in symbols {
+                    require(symbol, "symbol")?;
+                }
+                Ok(())
+            }
+            Self::ToolCall { tool_name, .. } => require(tool_name, "tool_name"),
+            Self::StreamStart {
+                provider, symbol, ..
+            } => {
+                require(provider, "provider")?;
+                require(symbol, "symbol")
+            }
+            Self::StreamStop { stream_id } => require(stream_id, "stream_id"),
+            // These carry only newtype-validated IDs or no required text.
+            Self::ApprovalResponse { .. }
+            | Self::CompactContext { .. }
+            | Self::Cancel { .. }
+            | Self::Shutdown => Ok(()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventMsg {
@@ -362,6 +421,65 @@ mod tests {
             })
         );
         assert!(PermissionId::new("approval-1").is_ok());
+    }
+
+    #[test]
+    fn op_validate_enforces_non_empty_fields() {
+        // The headline PR2 bug: IngestBatch.symbols is `#[serde(default)]`, so an
+        // op with no symbols decodes to an empty Vec and is a silent no-op.
+        let empty_symbols = Op::IngestBatch {
+            provider: "polygon".to_string(),
+            endpoint: "aggregates".to_string(),
+            symbols: Vec::new(),
+            range: None,
+        };
+        assert_eq!(
+            empty_symbols.validate(),
+            Err(ProtocolError::EmptyField { field: "symbols" })
+        );
+
+        // An empty entry within symbols is also rejected.
+        let blank_symbol = Op::IngestBatch {
+            provider: "polygon".to_string(),
+            endpoint: "aggregates".to_string(),
+            symbols: vec!["AAPL".to_string(), "  ".to_string()],
+            range: None,
+        };
+        assert_eq!(
+            blank_symbol.validate(),
+            Err(ProtocolError::EmptyField { field: "symbol" })
+        );
+
+        // Per-variant required fields.
+        assert_eq!(
+            Op::RunQuery {
+                sql: "   ".to_string(),
+                plan_id: None,
+                cost_hint: None,
+            }
+            .validate(),
+            Err(ProtocolError::EmptyField { field: "sql" })
+        );
+        assert_eq!(
+            Op::StreamStop {
+                stream_id: String::new()
+            }
+            .validate(),
+            Err(ProtocolError::EmptyField { field: "stream_id" })
+        );
+
+        // Well-formed ops pass.
+        assert!(
+            Op::IngestBatch {
+                provider: "polygon".to_string(),
+                endpoint: "aggregates".to_string(),
+                symbols: vec!["AAPL".to_string()],
+                range: None,
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(Op::Shutdown.validate().is_ok());
     }
 
     #[test]
