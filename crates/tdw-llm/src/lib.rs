@@ -5,6 +5,12 @@ pub mod router;
 pub use fallback::FallbackModel;
 pub use router::{CredentialProbe, ModelFactory, ModelRef, ModelRouter, parse_model_ref};
 
+pub mod reasoning;
+pub use reasoning::{
+    ReasoningConfig, ReasoningLevel, ReasoningParams, clamp_temperature, parse_directive, resolve,
+    to_params,
+};
+
 use serde::{Deserialize, Serialize};
 use tdw_config::TdwConfig;
 use thiserror::Error;
