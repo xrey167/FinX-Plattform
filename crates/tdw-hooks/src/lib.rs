@@ -571,7 +571,13 @@ impl DeferredApprovals {
         action: impl Into<String>,
         pattern: impl Into<String>,
     ) -> PermissionId {
-        let next = self.pending.len() + 1;
+        // Probe for an id not already pending. `len() + 1` alone collides after a
+        // resolve removes an entry (resolve #1 of {1,2}, then request → len 1 →
+        // "permission-2", overwriting the still-pending #2 and losing it).
+        let mut next = self.pending.len() + 1;
+        while self.pending.contains_key(&format!("permission-{next}")) {
+            next += 1;
+        }
         let permission_id = PermissionId::new(format!("permission-{next}"))
             .unwrap_or_else(|error| panic!("generated permission id should be valid: {error}"));
         let approval = DeferredApproval {
@@ -997,5 +1003,37 @@ mod tests {
     #[test]
     fn prompt_text_is_sibling_asset() {
         assert!(tool_prompt_text().contains("TDW hook tool"));
+    }
+
+    #[test]
+    fn request_does_not_reuse_a_still_pending_permission_id() {
+        let mut approvals = DeferredApprovals::default();
+        let first = approvals.request("a.one", "a.*");
+        let second = approvals.request("a.two", "a.*");
+
+        // Resolve the first, leaving `second` pending. A naive len()+1 scheme would
+        // now mint "permission-2" again and clobber `second`.
+        approvals
+            .resolve(&first, ApprovalDecision::AllowOnce)
+            .expect("first approval resolves");
+
+        let third = approvals.request("a.three", "a.*");
+
+        assert_ne!(
+            third.as_str(),
+            second.as_str(),
+            "a freshly requested id must not reuse a still-pending id"
+        );
+        assert_eq!(
+            approvals.pending_count(),
+            2,
+            "second must remain pending alongside third"
+        );
+        assert!(
+            approvals
+                .resolve(&second, ApprovalDecision::AllowOnce)
+                .is_some(),
+            "second approval must still be resolvable (not overwritten)"
+        );
     }
 }
