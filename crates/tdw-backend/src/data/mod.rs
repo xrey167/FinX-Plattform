@@ -858,10 +858,10 @@ mod tests {
         assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
 
         let bus = backend.event_bus();
-        let _bus_guard = bus
+        let bus_guard = bus
             .lock()
             .unwrap_or_else(|error| panic!("bus lock: {error}"));
-        drop(_bus_guard);
+        drop(bus_guard);
 
         let outbox = backend.outbox();
         let _outbox_guard = outbox

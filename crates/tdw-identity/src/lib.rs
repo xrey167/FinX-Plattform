@@ -437,7 +437,7 @@ impl UserStore for InMemoryUserStore {
     }
 
     async fn authenticate(&self, email: &str, password: &str) -> Result<User> {
-        let email = if let Ok(e) = normalize_email(email) { e } else {
+        let Ok(email) = normalize_email(email) else {
             // Still run a dummy verify to equalize timing before returning.
             let _ = verify_password(DUMMY_HASH, password);
             return Err(IdentityError::InvalidCredentials);

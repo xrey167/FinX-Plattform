@@ -193,23 +193,20 @@ fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Result<Vec<E
 
     let mut rows = Vec::new();
 
-    let datasets = match v.get("dataSets").and_then(|ds| ds.as_array()) {
-        Some(ds) => ds,
-        None => return Ok(rows),
+    let Some(datasets) = v.get("dataSets").and_then(|ds| ds.as_array()) else {
+        return Ok(rows);
     };
 
     for dataset in datasets {
-        let series_map = match dataset.get("series").and_then(|s| s.as_object()) {
-            Some(m) => m,
-            None => continue,
+        let Some(series_map) = dataset.get("series").and_then(|s| s.as_object()) else {
+            continue;
         };
         for (_series_key, series_val) in series_map {
-            let observations = match series_val
+            let Some(observations) = series_val
                 .get("observations")
                 .and_then(|obs| obs.as_object())
-            {
-                Some(obs) => obs,
-                None => continue,
+            else {
+                continue;
             };
             for (idx_str, obs_array) in observations {
                 let idx: usize = idx_str.parse().unwrap_or(usize::MAX);
