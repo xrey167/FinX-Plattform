@@ -134,13 +134,13 @@ impl<T> ResultEnvelope<T> {
 
     /// Number of standardized records carried by the envelope.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.results.len()
     }
 
     /// Whether the envelope carries no records.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.results.is_empty()
     }
 }
