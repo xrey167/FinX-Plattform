@@ -14,6 +14,64 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-10
+
+The "live data, for real" release: the MCP financial-data server now serves
+live market data end to end, verified by driving it as a real MCP client. See
+[`docs/release/v1.2.0-notes.md`](docs/release/v1.2.0-notes.md).
+
+### Added
+
+- **`live` feature on `tdw-mcp`** (#269). Swaps the offline Yahoo fixture for
+  the real HTTP fetcher and registers every live HTTP provider (34 providers /
+  51 fetcher endpoints vs 3 offline). GHCR images (#271) and tagged release
+  binaries (#272) build with it, so distribution artifacts serve real data.
+- **Generic provider dispatch: `tdw.provider.fetch`** (#274). Any compiled-in
+  fetcher is callable by `(provider, endpoint)`; a drift-guard test pins
+  dispatch completeness against the registry. Previously only yahoo + fileset
+  were reachable from `tools/call`.
+- **Yahoo cookie+crumb handshake** (#268). v10 `quoteSummary` / v7
+  quote/options endpoints reject anonymous requests with 401 "Invalid Crumb";
+  the fetcher now performs the browser handshake lazily on 401/403 only, so
+  offline tests never touch the network.
+- **Live-test coverage** (#267, #268): CoinGecko's documented live test now
+  exists; Binance gained a live websocket subscribe test (first real BTCUSDT
+  trade tick asserted).
+- **MCP quickstart** (#271, #272): `docs/products/mcp-quickstart.md` — GHCR
+  one-liner, from-source build, Claude Code/Desktop wiring, per-provider
+  API-key table. Plus the tool-surface audit that drove this release
+  (`docs/products/mcp-tool-surface-audit.md`).
+- **Nightly live-smoke job** (#275): provider live tests + MCP E2E live bars.
+- **Per-crate `pedantic`+`nursery` deny** in the 58 lint-clean crates (#257)
+  and a **performance benchmark + regression ratchet** in `xtask` (#263).
+
+### Fixed
+
+- **SEC EDGAR live conformance** (#267): CIKs normalized from the zero-padded
+  wire form; XBRL revenue extraction falls back through the post-ASC-606
+  us-gaap concepts (`RevenueFromContractWithCustomerExcludingAssessedTax`,
+  `Revenues`, `SalesRevenueNet`).
+- **`block_on` reactor panic** (#269): the noop-waker busy-poll panicked with
+  "there is no reactor running" the moment a live reqwest fetcher ran, and a
+  naive runtime rebuild panicked inside `#[tokio::main]` callers; the helper
+  is now runtime-context-aware.
+- **Container Image CI timeouts** (#270): buildx GHA layer cache (scoped per
+  binary, shared by the scan and push builds) + a 120-minute cold-cache
+  backstop; main-push image builds previously died at the 60-minute job
+  timeout building the workspace under QEMU.
+
+### Changed
+
+- **MCP catalog honesty** (#273, #274): `.sample` evidence tools are hidden
+  from the default `tools/list`, and the server discloses fixture-vs-live
+  data mode in `initialize` instructions and tool descriptions.
+- **G005–G007 hardening reconciled to main** (#264, #265): bounded HTTP
+  clients via the shared `build_client` (10s connect / 30s request timeouts),
+  validator coverage for the new protocol ops, and the hooks deny→ask
+  reconciliation.
+- **Dependency hygiene** (#266): unused deps pruned (eval-runner `serde_json`;
+  service `tokio-util`, `toml`) and a `needless_return` cleanup in `tdw-core`.
+
 ## [1.1.0] - 2026-06-08
 
 Security, observability, feature-platform, and production-readiness release on
