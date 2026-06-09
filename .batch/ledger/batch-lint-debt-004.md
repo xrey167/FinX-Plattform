@@ -45,7 +45,10 @@ compiled clean under the workspace clippy `-D warnings` gate above.
 PASS — `clean-room audit passed`; AUDIT_EXIT=0
 
 ## PR
-(to be appended after creation)
+https://github.com/xrey167/FinX-Plattform/pull/258
+(branch `work/batch-lint-debt-004-doc-markdown`: the original `work/batch-lint-debt-004`
+remote name was already taken by a stale historical `missing_const_for_fn` branch, so
+pushed under a distinct name to avoid clobbering it / force-push.)
 
 ## Notes
 - `FinX` is brand prose but clippy treats it as a CamelCase identifier; applied its
