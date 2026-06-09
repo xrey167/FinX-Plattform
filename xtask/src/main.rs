@@ -327,9 +327,7 @@ fn bench_compare(baseline: Option<String>) -> Result<(), String> {
         };
         let regressed = current_ns > baseline_ns * REGRESSION_TOLERANCE;
         let status = if regressed { "REGRESSED" } else { "OK" };
-        println!(
-            "{name:<28} {baseline_ns:>14.1} {current_ns:>14.1} {delta_pct:>+9.1} {status}"
-        );
+        println!("{name:<28} {baseline_ns:>14.1} {current_ns:>14.1} {delta_pct:>+9.1} {status}");
         if regressed {
             regressions.push(name.to_string());
         }
