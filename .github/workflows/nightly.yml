@@ -109,3 +109,63 @@ jobs:
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts/**
+
+  # P1.5: prove the live data path nightly — env-gated provider live tests plus
+  # a real MCP stdio session fetching live bars. These hit external public APIs,
+  # so they run here (not in PR CI) and fail loudly on live regressions.
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Live provider tests (keyless)
+        env:
+          TDW_YAHOO_LIVE: "1"
+          TDW_BINANCE_LIVE: "1"
+          TDW_COINGECKO_LIVE: "1"
+          TDW_SEC_LIVE: "1"
+          TDW_ECB_LIVE: "1"
+        run: >
+          cargo test
+          -p tdw-provider-yahoo -p tdw-provider-binance -p tdw-provider-coingecko
+          -p tdw-provider-sec -p tdw-provider-ecb
+          --features tdw-provider-yahoo/http,tdw-provider-binance/http,tdw-provider-coingecko/http,tdw-provider-sec/http,tdw-provider-ecb/http
+      - name: Live FRED tests (only when the secret is provisioned)
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          if [ -z "$FRED_API_KEY" ]; then
+            echo "FRED_API_KEY secret not set; skipping FRED live tests"
+            exit 0
+          fi
+          TDW_FRED_LIVE=1 cargo test -p tdw-provider-fred --features tdw-provider-fred/http
+      - name: MCP E2E — live AAPL bars through a real stdio session
+        env:
+          TDW_YAHOO_LIVE: "1"
+        run: |
+          cargo build -p tdw-mcp --features live
+          python3 - <<'PY'
+          import subprocess, json, os
+          p = subprocess.Popen(["target/debug/tdw-mcp","--stdio-json-rpc"],
+              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+          msgs = [
+              {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"nightly-smoke","version":"0"}}},
+              {"jsonrpc":"2.0","method":"notifications/initialized"},
+              {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tdw.equity.historical","arguments":{"symbol":"AAPL","provider":"yahoo"}}},
+          ]
+          out, _ = p.communicate("".join(json.dumps(m)+"\n" for m in msgs), timeout=120)
+          rows = None
+          for line in out.strip().split("\n"):
+              try: d = json.loads(line)
+              except json.JSONDecodeError: continue
+              if d.get("id") == 2:
+                  r = d["result"]
+                  assert not r.get("isError"), f"tools/call errored: {r}"
+                  payload = json.loads(r["content"][0]["text"])
+                  rows = payload.get("rows", [])
+          assert rows, "MCP session must return live AAPL bars"
+          assert all(row["close"] > 0 for row in rows), "bars must have positive closes"
+          print(f"MCP E2E OK: {len(rows)} live AAPL bars via tools/call")
+          PY

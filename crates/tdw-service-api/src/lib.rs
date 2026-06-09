@@ -391,6 +391,355 @@ pub fn fetch_equity_historical(
     }
 }
 
+/// Dispatch a raw `(provider, endpoint)` fetch against every compiled-in
+/// [`Fetcher`](tdw_core::Fetcher) and return the serialized [`OBBject`].
+///
+/// This is the generic sibling of [`fetch_equity_historical`]: instead of the
+/// two hardcoded equity-historical arms it covers EVERY fetcher that
+/// [`default_registry`] (+ `register_extended_providers`) registers, behind the
+/// same `#[cfg(feature = "provider-…")]` gates. Streamer-kind entries
+/// (`mock-ws`, `binance/trades`) are intentionally excluded — only `Fetcher`
+/// kinds are dispatchable here.
+///
+/// `params` is the provider-specific query object (the same shape
+/// `transform_query` expects). The successful result is `serde_json::to_value`
+/// of the provider's `OBBject<D>` (which is `Serialize`).
+///
+/// # Errors
+///
+/// Returns [`Error::Registry`] for an unknown `(provider, endpoint)` pair, or
+/// the fetcher's own error (network, parse, …) on a failed run. A serialization
+/// failure surfaces as [`Error::Provider`].
+pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Result<Value> {
+    let runner = CommandRunner::new(default_registry()?);
+
+    // Each arm runs one registered fetcher and serializes its OBBject. The
+    // string literals mirror the `const PROVIDER`/`const ENDPOINT` on each
+    // fetcher's `impl Fetcher<…>`; the trailing comment names the concrete type
+    // (and matches the `registry.register(<Type>::registry_entry())` line in
+    // `default_registry`/`register_extended_providers`).
+    macro_rules! dispatch {
+        ($fetcher:expr) => {{
+            let obbject = block_on(runner.run(&$fetcher, params))?;
+            serde_json::to_value(&obbject).map_err(|error| Error::Provider(error.to_string()))
+        }};
+    }
+
+    match (provider, endpoint) {
+        // FilesetEquityHistoricalFetcher (always registered)
+        ("fileset", "equity_historical") => dispatch!(FilesetEquityHistoricalFetcher),
+        // SelectedYahooEquityHistoricalFetcher (always registered)
+        ("yahoo", "equity_historical") => {
+            dispatch!(SelectedYahooEquityHistoricalFetcher::default())
+        }
+        // AdanosSentimentHttpFetcher
+        #[cfg(feature = "provider-adanos")]
+        ("adanos", "sentiment") => dispatch!(AdanosSentimentHttpFetcher::default()),
+        // AdanosTrendingHttpFetcher
+        #[cfg(feature = "provider-adanos")]
+        ("adanos", "trending") => dispatch!(AdanosTrendingHttpFetcher::default()),
+        // AdanosPolymarketHttpFetcher
+        #[cfg(feature = "provider-adanos")]
+        ("adanos", "polymarket") => dispatch!(AdanosPolymarketHttpFetcher::default()),
+        // AkShareHttpFetcher
+        #[cfg(feature = "provider-akshare")]
+        ("akshare", "hist") => dispatch!(AkShareHttpFetcher::default()),
+        // AlpacaHttpStockBarsFetcher
+        #[cfg(feature = "provider-alpaca")]
+        ("alpaca", "stock_bars") => dispatch!(AlpacaHttpStockBarsFetcher::default()),
+        // AlphaVantageHttpFetcher
+        #[cfg(feature = "provider-alpha-vantage")]
+        ("alpha_vantage", "market_data") => dispatch!(AlphaVantageHttpFetcher::default()),
+        // BenzingaNewsHttpFetcher
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "news") => dispatch!(BenzingaNewsHttpFetcher::default()),
+        // BenzingaEarningsHttpFetcher
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "earnings") => dispatch!(BenzingaEarningsHttpFetcher::default()),
+        // BlsHttpTimeSeriesFetcher
+        #[cfg(feature = "provider-bls")]
+        ("bls", "timeseries_data") => dispatch!(BlsHttpTimeSeriesFetcher::default()),
+        // CboeHttpIndexFetcher
+        #[cfg(feature = "provider-cboe")]
+        ("cboe", "index_quotes") => dispatch!(CboeHttpIndexFetcher::default()),
+        // CboeHttpOptionsFetcher
+        #[cfg(feature = "provider-cboe")]
+        ("cboe", "options") => dispatch!(CboeHttpOptionsFetcher::default()),
+        // CCDataHttpFetcher
+        #[cfg(feature = "provider-ccdata")]
+        ("ccdata", "crypto_ohlcv") => dispatch!(CCDataHttpFetcher::default()),
+        // CoinGeckoHttpOhlcFetcher
+        #[cfg(feature = "provider-coingecko")]
+        ("coingecko", "ohlc") => dispatch!(CoinGeckoHttpOhlcFetcher::default()),
+        // DatabentoHttpTimeseriesFetcher
+        #[cfg(feature = "provider-databento")]
+        ("databento", "timeseries") => dispatch!(DatabentoHttpTimeseriesFetcher::default()),
+        // DatabentoMetadataFetcher
+        #[cfg(feature = "provider-databento")]
+        ("databento", "metadata") => dispatch!(DatabentoMetadataFetcher::default()),
+        // DeribitHttpInstrumentsFetcher
+        #[cfg(feature = "provider-deribit")]
+        ("deribit", "instruments") => dispatch!(DeribitHttpInstrumentsFetcher::default()),
+        // DeribitHttpOrderBookFetcher
+        #[cfg(feature = "provider-deribit")]
+        ("deribit", "order_book") => dispatch!(DeribitHttpOrderBookFetcher::default()),
+        // DeribitHttpFundingFetcher
+        #[cfg(feature = "provider-deribit")]
+        ("deribit", "funding_rate") => dispatch!(DeribitHttpFundingFetcher::default()),
+        // EcbHttpDataFetcher
+        #[cfg(feature = "provider-ecb")]
+        ("ecb", "data") => dispatch!(EcbHttpDataFetcher::default()),
+        // EiaHttpSpotPriceFetcher
+        #[cfg(feature = "provider-eia")]
+        ("eia", "spot_price") => dispatch!(EiaHttpSpotPriceFetcher::default()),
+        // EiaHttpNaturalGasFetcher
+        #[cfg(feature = "provider-eia")]
+        ("eia", "natural_gas") => dispatch!(EiaHttpNaturalGasFetcher::default()),
+        // FinraOtcSummaryHttpFetcher
+        #[cfg(feature = "provider-finra")]
+        ("finra", "otc_summary") => dispatch!(FinraOtcSummaryHttpFetcher::default()),
+        // FinraShortInterestHttpFetcher
+        #[cfg(feature = "provider-finra")]
+        ("finra", "short_interest") => dispatch!(FinraShortInterestHttpFetcher::default()),
+        // FinnhubHttpProfileFetcher
+        #[cfg(feature = "provider-finnhub")]
+        ("finnhub", "company_profile") => dispatch!(FinnhubHttpProfileFetcher::default()),
+        // FinnhubHttpQuoteSnapshotFetcher
+        #[cfg(feature = "provider-finnhub")]
+        ("finnhub", "quote_snapshot") => dispatch!(FinnhubHttpQuoteSnapshotFetcher::default()),
+        // FmpHttpHistoricalFetcher
+        #[cfg(feature = "provider-fmp")]
+        ("fmp", "equity_historical") => dispatch!(FmpHttpHistoricalFetcher::default()),
+        // FmpHttpIncomeFetcher
+        #[cfg(feature = "provider-fmp")]
+        ("fmp", "income_statement") => dispatch!(FmpHttpIncomeFetcher::default()),
+        // FmpHttpQuoteSnapshotFetcher
+        #[cfg(feature = "provider-fmp")]
+        ("fmp", "quote_snapshot") => dispatch!(FmpHttpQuoteSnapshotFetcher::default()),
+        // FredHttpSeriesObservationsFetcher
+        #[cfg(feature = "provider-fred")]
+        ("fred", "series_observations") => {
+            dispatch!(FredHttpSeriesObservationsFetcher::default())
+        }
+        // GeckoTerminalHttpFetcher
+        #[cfg(feature = "provider-geckoterminal")]
+        ("geckoterminal", "pool") => dispatch!(GeckoTerminalHttpFetcher::default()),
+        // GlassnodeHttpFetcher
+        #[cfg(feature = "provider-glassnode")]
+        ("glassnode", "metric") => dispatch!(GlassnodeHttpFetcher::default()),
+        // HuggingFaceHttpTextGenerationFetcher
+        #[cfg(feature = "provider-huggingface")]
+        ("huggingface", "text_generation") => {
+            dispatch!(HuggingFaceHttpTextGenerationFetcher::default())
+        }
+        // NasdaqHttpDatasetFetcher
+        #[cfg(feature = "provider-nasdaq")]
+        ("nasdaq", "datasets") => dispatch!(NasdaqHttpDatasetFetcher::default()),
+        // OecdHttpDataFetcher
+        #[cfg(feature = "provider-oecd")]
+        ("oecd", "sdmx_data") => dispatch!(OecdHttpDataFetcher::default()),
+        // PolygonHttpAggregatesFetcher
+        #[cfg(feature = "provider-polygon")]
+        ("polygon", "aggregates") => dispatch!(PolygonHttpAggregatesFetcher::default()),
+        // SecFilingsHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "filings") => dispatch!(SecFilingsHttpFetcher::default()),
+        // SecXbrlHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "xbrl_revenue") => dispatch!(SecXbrlHttpFetcher::default()),
+        // SeekingAlphaArticlesHttpFetcher (PROVIDER_ID = "seeking-alpha")
+        #[cfg(feature = "provider-seeking-alpha")]
+        ("seeking-alpha", "articles") => dispatch!(SeekingAlphaArticlesHttpFetcher::default()),
+        // SeekingAlphaRatingsHttpFetcher (PROVIDER_ID = "seeking-alpha")
+        #[cfg(feature = "provider-seeking-alpha")]
+        ("seeking-alpha", "ratings") => dispatch!(SeekingAlphaRatingsHttpFetcher::default()),
+        // TiingoHttpHistoricalFetcher
+        #[cfg(feature = "provider-tiingo")]
+        ("tiingo", "historical") => dispatch!(TiingoHttpHistoricalFetcher::default()),
+        // TiingoHttpNewsFetcher
+        #[cfg(feature = "provider-tiingo")]
+        ("tiingo", "news") => dispatch!(TiingoHttpNewsFetcher::default()),
+        // TmxHttpQuoteFetcher
+        #[cfg(feature = "provider-tmx")]
+        ("tmx", "equity_quote") => dispatch!(TmxHttpQuoteFetcher::default()),
+        // TmxHttpBatchQuoteFetcher
+        #[cfg(feature = "provider-tmx")]
+        ("tmx", "equity_batch_quote") => dispatch!(TmxHttpBatchQuoteFetcher::default()),
+        // TradierHttpQuoteFetcher
+        #[cfg(feature = "provider-tradier")]
+        ("tradier", "quote") => dispatch!(TradierHttpQuoteFetcher::default()),
+        // TradierHttpOptionsFetcher
+        #[cfg(feature = "provider-tradier")]
+        ("tradier", "options_chain") => dispatch!(TradierHttpOptionsFetcher::default()),
+        // TradingEconomicsHttpCalendarFetcher
+        #[cfg(feature = "provider-trading-economics")]
+        ("trading_economics", "calendar") => {
+            dispatch!(TradingEconomicsHttpCalendarFetcher::default())
+        }
+        // TradingEconomicsHttpIndicatorFetcher
+        #[cfg(feature = "provider-trading-economics")]
+        ("trading_economics", "indicator") => {
+            dispatch!(TradingEconomicsHttpIndicatorFetcher::default())
+        }
+        // VelodataHttpFundingFetcher
+        #[cfg(feature = "provider-velodata")]
+        ("velodata", "funding_rates") => dispatch!(VelodataHttpFundingFetcher::default()),
+        // VelodataHttpLiquidationsFetcher
+        #[cfg(feature = "provider-velodata")]
+        ("velodata", "liquidations_aggregated") => {
+            dispatch!(VelodataHttpLiquidationsFetcher::default())
+        }
+        // VelodataHttpOiFetcher
+        #[cfg(feature = "provider-velodata")]
+        ("velodata", "oi_aggregated") => dispatch!(VelodataHttpOiFetcher::default()),
+        // BinanceHttpTickerPriceFetcher
+        #[cfg(feature = "provider-binance-http")]
+        ("binance", "ticker_price") => dispatch!(BinanceHttpTickerPriceFetcher::default()),
+        _ => Err(Error::Registry(format!(
+            "no fetcher for {provider}/{endpoint}"
+        ))),
+    }
+}
+
+/// The `(provider, endpoint)` pairs [`fetch_provider_json`] can dispatch IN THIS
+/// BUILD.
+///
+/// Gated by the exact same `#[cfg(feature = "provider-…")]` set as the match
+/// arms above, so the MCP layer can advertise an honest tool description
+/// reflecting only what is actually compiled in.
+#[must_use]
+pub fn provider_fetch_targets() -> Vec<(String, String)> {
+    // `targets` is only mutated, and `target!` is only invoked, when at least
+    // one provider feature is enabled; both are unused under the default
+    // (offline) feature set.
+    #[allow(unused_mut)]
+    let mut targets: Vec<(String, String)> = vec![
+        ("fileset".to_string(), "equity_historical".to_string()),
+        ("yahoo".to_string(), "equity_historical".to_string()),
+    ];
+    #[allow(unused_macros)]
+    macro_rules! target {
+        ($provider:expr, $endpoint:expr) => {
+            targets.push(($provider.to_string(), $endpoint.to_string()));
+        };
+    }
+    #[cfg(feature = "provider-adanos")]
+    {
+        target!("adanos", "sentiment");
+        target!("adanos", "trending");
+        target!("adanos", "polymarket");
+    }
+    #[cfg(feature = "provider-akshare")]
+    target!("akshare", "hist");
+    #[cfg(feature = "provider-alpaca")]
+    target!("alpaca", "stock_bars");
+    #[cfg(feature = "provider-alpha-vantage")]
+    target!("alpha_vantage", "market_data");
+    #[cfg(feature = "provider-benzinga")]
+    {
+        target!("benzinga", "news");
+        target!("benzinga", "earnings");
+    }
+    #[cfg(feature = "provider-bls")]
+    target!("bls", "timeseries_data");
+    #[cfg(feature = "provider-cboe")]
+    {
+        target!("cboe", "index_quotes");
+        target!("cboe", "options");
+    }
+    #[cfg(feature = "provider-ccdata")]
+    target!("ccdata", "crypto_ohlcv");
+    #[cfg(feature = "provider-coingecko")]
+    target!("coingecko", "ohlc");
+    #[cfg(feature = "provider-databento")]
+    {
+        target!("databento", "timeseries");
+        target!("databento", "metadata");
+    }
+    #[cfg(feature = "provider-deribit")]
+    {
+        target!("deribit", "instruments");
+        target!("deribit", "order_book");
+        target!("deribit", "funding_rate");
+    }
+    #[cfg(feature = "provider-ecb")]
+    target!("ecb", "data");
+    #[cfg(feature = "provider-eia")]
+    {
+        target!("eia", "spot_price");
+        target!("eia", "natural_gas");
+    }
+    #[cfg(feature = "provider-finra")]
+    {
+        target!("finra", "otc_summary");
+        target!("finra", "short_interest");
+    }
+    #[cfg(feature = "provider-finnhub")]
+    {
+        target!("finnhub", "company_profile");
+        target!("finnhub", "quote_snapshot");
+    }
+    #[cfg(feature = "provider-fmp")]
+    {
+        target!("fmp", "equity_historical");
+        target!("fmp", "income_statement");
+        target!("fmp", "quote_snapshot");
+    }
+    #[cfg(feature = "provider-fred")]
+    target!("fred", "series_observations");
+    #[cfg(feature = "provider-geckoterminal")]
+    target!("geckoterminal", "pool");
+    #[cfg(feature = "provider-glassnode")]
+    target!("glassnode", "metric");
+    #[cfg(feature = "provider-huggingface")]
+    target!("huggingface", "text_generation");
+    #[cfg(feature = "provider-nasdaq")]
+    target!("nasdaq", "datasets");
+    #[cfg(feature = "provider-oecd")]
+    target!("oecd", "sdmx_data");
+    #[cfg(feature = "provider-polygon")]
+    target!("polygon", "aggregates");
+    #[cfg(feature = "provider-sec")]
+    {
+        target!("sec", "filings");
+        target!("sec", "xbrl_revenue");
+    }
+    #[cfg(feature = "provider-seeking-alpha")]
+    {
+        target!("seeking-alpha", "articles");
+        target!("seeking-alpha", "ratings");
+    }
+    #[cfg(feature = "provider-tiingo")]
+    {
+        target!("tiingo", "historical");
+        target!("tiingo", "news");
+    }
+    #[cfg(feature = "provider-tmx")]
+    {
+        target!("tmx", "equity_quote");
+        target!("tmx", "equity_batch_quote");
+    }
+    #[cfg(feature = "provider-tradier")]
+    {
+        target!("tradier", "quote");
+        target!("tradier", "options_chain");
+    }
+    #[cfg(feature = "provider-trading-economics")]
+    {
+        target!("trading_economics", "calendar");
+        target!("trading_economics", "indicator");
+    }
+    #[cfg(feature = "provider-velodata")]
+    {
+        target!("velodata", "funding_rates");
+        target!("velodata", "liquidations_aggregated");
+        target!("velodata", "oi_aggregated");
+    }
+    #[cfg(feature = "provider-binance-http")]
+    target!("binance", "ticker_price");
+    targets
+}
+
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
@@ -1459,6 +1808,60 @@ mod tests {
 
         assert_eq!(object.provider, "fileset");
         assert_eq!(object.rows[0].symbol, "AAPL");
+    }
+
+    #[test]
+    fn fetch_provider_json_dispatches_fileset_and_errors_on_unknown() {
+        let value =
+            fetch_provider_json("fileset", "equity_historical", json!({ "symbol": "AAPL" }))
+                .unwrap_or_else(|error| panic!("fileset dispatch should succeed: {error}"));
+
+        assert_eq!(value["provider"], "fileset");
+        assert_eq!(value["endpoint"], "equity_historical");
+        assert!(
+            value["rows"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty()),
+            "expected non-empty rows, got {value}"
+        );
+        assert_eq!(value["rows"][0]["symbol"], "AAPL");
+
+        let unknown =
+            fetch_provider_json("nope", "missing", json!({})).expect_err("unknown pair must error");
+        assert!(
+            unknown.to_string().contains("no fetcher for nope/missing"),
+            "unexpected error: {unknown}"
+        );
+    }
+
+    #[test]
+    fn provider_fetch_targets_includes_fileset_equity_historical() {
+        let targets = provider_fetch_targets();
+        assert!(
+            targets.contains(&("fileset".to_string(), "equity_historical".to_string())),
+            "fileset/equity_historical must be a dispatch target, got {targets:?}"
+        );
+    }
+
+    #[test]
+    fn provider_fetch_targets_never_drift_from_dispatch_arms() {
+        // Drift guard: every advertised target must reach a dispatch arm in
+        // fetch_provider_json. A `null` params value fails every fetcher's
+        // transform_query BEFORE any I/O, so the probe is network-free in all
+        // feature configurations — the one error that must never appear is
+        // the unknown-pair Registry error.
+        for (provider, endpoint) in provider_fetch_targets() {
+            match fetch_provider_json(&provider, &endpoint, Value::Null) {
+                Ok(_) => {}
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        !message.contains("no fetcher for"),
+                        "{provider}/{endpoint} is advertised by provider_fetch_targets                          but has no dispatch arm: {message}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
