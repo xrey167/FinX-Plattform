@@ -1395,7 +1395,11 @@ mod tests {
         let traversal_registry = registry_with(&traversal);
         let traversal_exec = ToolExecutor::new().with_command_policy(allow(&["../evil"]));
         assert!(matches!(
-            traversal_exec.execute(&traversal_registry, "tool.exec.trav", &serde_json::json!({})),
+            traversal_exec.execute(
+                &traversal_registry,
+                "tool.exec.trav",
+                &serde_json::json!({})
+            ),
             Err(ExecError::BadArguments(_))
         ));
     }
