@@ -35,7 +35,7 @@ pub enum StatementKind {
 /// Standardizes: `equity/fundamental/balance`, `equity/fundamental/income`,
 /// `equity/fundamental/cash` (and, via [`StatementKind`], their growth-rate siblings
 /// `*_growth`). The common period header is typed; the many provider-variable
-/// statement lines live in `line_items` keyed by a normalized snake_case name
+/// statement lines live in `line_items` keyed by a normalized `snake_case` name
 /// (e.g. `total_assets`, `net_income`, `operating_cash_flow`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct FinancialStatement {
