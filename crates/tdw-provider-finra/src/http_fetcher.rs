@@ -8,11 +8,7 @@
 //!
 //! The FINRA API returns pipe-delimited plain text, not JSON.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     BASE_URL, FinraOtcSummaryQuery, FinraOtcSummaryRecord, FinraShortInterestQuery,
@@ -21,35 +17,14 @@ use crate::{
 
 // ── Short-interest fetcher ────────────────────────────────────────────────────
 
-/// Production FINRA consolidated short-interest HTTP fetcher.
-///
-/// Calls `GET /OTCMarket/block/CONSOLIDATEDSHORTINTERESTdata` with
-/// pipe-delimited CSV response.
-#[derive(Clone, Debug)]
-pub struct FinraShortInterestHttpFetcher {
-    base_url: String,
-}
-
-impl Default for FinraShortInterestHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl FinraShortInterestHttpFetcher {
-    /// Override the base URL (useful in tests pointing at a local stub).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `finra` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production FINRA consolidated short-interest HTTP fetcher.
+    ///
+    /// Calls `GET /OTCMarket/block/CONSOLIDATEDSHORTINTERESTdata` with
+    /// pipe-delimited CSV response.
+    pub FinraShortInterestHttpFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<FinraShortInterestQuery, FinraShortInterestRecord> for FinraShortInterestHttpFetcher {
@@ -81,7 +56,7 @@ impl Fetcher<FinraShortInterestQuery, FinraShortInterestRecord> for FinraShortIn
              &fields=issuerName,symbol,marketClassCode,currentShortInterest,\
              previousShortInterest,percentChangeinShortInterest,\
              avgDailyShareVolume,daysToCoverShortInterest,settlementDate",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.limit,
             query.offset,
         );
@@ -123,35 +98,14 @@ impl Fetcher<FinraShortInterestQuery, FinraShortInterestRecord> for FinraShortIn
 
 // ── OTC summary fetcher ───────────────────────────────────────────────────────
 
-/// Production FINRA weekly OTC summary HTTP fetcher.
-///
-/// Calls `GET /OTCMarket/block/WEEKLYSUMMARYdata` with pipe-delimited CSV
-/// response.
-#[derive(Clone, Debug)]
-pub struct FinraOtcSummaryHttpFetcher {
-    base_url: String,
-}
-
-impl Default for FinraOtcSummaryHttpFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl FinraOtcSummaryHttpFetcher {
-    /// Override the base URL (useful in tests pointing at a local stub).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `finra` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production FINRA weekly OTC summary HTTP fetcher.
+    ///
+    /// Calls `GET /OTCMarket/block/WEEKLYSUMMARYdata` with pipe-delimited CSV
+    /// response.
+    pub FinraOtcSummaryHttpFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<FinraOtcSummaryQuery, FinraOtcSummaryRecord> for FinraOtcSummaryHttpFetcher {
@@ -176,7 +130,7 @@ impl Fetcher<FinraOtcSummaryQuery, FinraOtcSummaryRecord> for FinraOtcSummaryHtt
             "{}/OTCMarket/block/WEEKLYSUMMARYdata\
              ?limit={}&fields=tradeReportDate,marketParticipantIdentifier,\
              totalShareQuantity,totalTradeCount",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.limit,
         );
 

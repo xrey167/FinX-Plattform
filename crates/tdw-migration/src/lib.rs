@@ -49,6 +49,13 @@ pub enum MigrationCatalogError {
 
 #[must_use]
 pub fn postgres_migrations() -> Vec<Migration> {
+    let mut migrations = postgres_migrations_core();
+    migrations.extend(postgres_migrations_reference());
+    migrations
+}
+
+/// First half of the Postgres migration catalog (schema init through worker queue).
+fn postgres_migrations_core() -> Vec<Migration> {
     vec![
         Migration {
             target: MigrationTarget::Postgres,
@@ -100,6 +107,12 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "worker_queue",
             sql: include_str!("../../../migrations/postgres/20260521_0008_worker_queue.sql"),
         },
+    ]
+}
+
+/// Second half of the Postgres migration catalog (reference master through identity tokens).
+fn postgres_migrations_reference() -> Vec<Migration> {
+    vec![
         Migration {
             target: MigrationTarget::Postgres,
             version: "20260528_0001",
@@ -118,11 +131,50 @@ pub fn postgres_migrations() -> Vec<Migration> {
             name: "trading_calendar",
             sql: include_str!("../../../migrations/postgres/20260528_0003_trading_calendar.sql"),
         },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0001",
+            name: "price_alerts",
+            sql: include_str!("../../../migrations/postgres/20260607_0001_price_alerts.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0002",
+            name: "function_steps",
+            sql: include_str!("../../../migrations/postgres/20260607_0002_function_steps.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260607_0003",
+            name: "identity_users",
+            sql: include_str!("../../../migrations/postgres/20260607_0003_identity_users.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260608_0001",
+            name: "identity_sessions",
+            sql: include_str!("../../../migrations/postgres/20260608_0001_identity_sessions.sql"),
+        },
+        Migration {
+            target: MigrationTarget::Postgres,
+            version: "20260608_0002",
+            name: "identity_reset_tokens",
+            sql: include_str!(
+                "../../../migrations/postgres/20260608_0002_identity_reset_tokens.sql"
+            ),
+        },
     ]
 }
 
 #[must_use]
 pub fn clickhouse_migrations() -> Vec<Migration> {
+    let mut migrations = clickhouse_migrations_core();
+    migrations.extend(clickhouse_migrations_analytics());
+    migrations
+}
+
+/// First half of the `ClickHouse` migration catalog (database init through raw book).
+fn clickhouse_migrations_core() -> Vec<Migration> {
     vec![
         Migration {
             target: MigrationTarget::ClickHouse,
@@ -208,6 +260,12 @@ pub fn clickhouse_migrations() -> Vec<Migration> {
             name: "raw_book",
             sql: include_str!("../../../migrations/clickhouse/20260528_0010_raw_book.sql"),
         },
+    ]
+}
+
+/// Second half of the `ClickHouse` migration catalog (trading calendar through analytics UDFs).
+fn clickhouse_migrations_analytics() -> Vec<Migration> {
+    vec![
         Migration {
             target: MigrationTarget::ClickHouse,
             version: "20260528_0011",
@@ -417,6 +475,9 @@ mod tests {
             "system.tag_rule",
             "system.feature_snapshot",
             "system.worker_jobs",
+            "system.identity_users",
+            "system.identity_sessions",
+            "system.identity_reset_tokens",
         ] {
             assert!(
                 postgres_sql.contains(table),
@@ -449,7 +510,10 @@ mod tests {
         };
 
         assert_eq!(
-            validate_migration_catalog(&[Migration { version: "  ", ..base }]),
+            validate_migration_catalog(&[Migration {
+                version: "  ",
+                ..base
+            }]),
             Err(MigrationCatalogError::EmptyVersion {
                 target: MigrationTarget::Postgres
             })

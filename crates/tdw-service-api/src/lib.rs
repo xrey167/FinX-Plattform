@@ -22,8 +22,14 @@
 mod app_state;
 mod dispatcher;
 mod event_sink;
+pub mod fetch_policy;
+#[cfg(feature = "functions")]
+pub mod function_enqueue;
 mod policy;
+mod provider_resolve;
 mod stream_ingest;
+#[cfg(feature = "identity")]
+pub mod user_events;
 
 pub use app_state::{AppState, OidcPolicyError};
 pub use dispatcher::dispatch_op;
@@ -123,10 +129,14 @@ use tdw_provider_ecb::EcbHttpDataFetcher;
 #[cfg(feature = "provider-eia")]
 use tdw_provider_eia::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+#[cfg(feature = "provider-finnhub")]
+use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher};
 #[cfg(feature = "provider-finra")]
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
-use tdw_provider_fmp::{FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher};
+use tdw_provider_fmp::{
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
+};
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::FredHttpSeriesObservationsFetcher;
 #[cfg(feature = "provider-geckoterminal")]
@@ -160,7 +170,10 @@ use tdw_provider_velodata::{
     VelodataHttpFundingFetcher, VelodataHttpLiquidationsFetcher, VelodataHttpOiFetcher,
 };
 use tdw_provider_ws_mock::MockEquityStreamer;
+#[cfg(not(feature = "provider-yahoo-http"))]
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -178,6 +191,11 @@ use tdw_tools::{ToolOrchestrator, ToolRegistry, echo_tool};
 use tdw_tui::event_lines;
 use tdw_udf::{UdfDefinition, UdfRuntime, evaluate};
 use tdw_workflow_engine::WorkflowEngine;
+
+#[cfg(feature = "provider-yahoo-http")]
+type SelectedYahooEquityHistoricalFetcher = YahooHttpEquityHistoricalFetcher;
+#[cfg(not(feature = "provider-yahoo-http"))]
+type SelectedYahooEquityHistoricalFetcher = YahooEquityHistoricalFetcher;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderSummary {
@@ -201,7 +219,7 @@ pub struct ResearchIndexEvidence {
 pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
-    registry.register(YahooEquityHistoricalFetcher::registry_entry())?;
+    registry.register(SelectedYahooEquityHistoricalFetcher::registry_entry())?;
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
     registry.register(AdanosSentimentHttpFetcher::registry_entry())?;
@@ -249,12 +267,51 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FinraOtcSummaryHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
     registry.register(FinraShortInterestHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finnhub")]
+    registry.register(FinnhubHttpProfileFetcher::registry_entry())?;
+    #[cfg(feature = "provider-finnhub")]
+    registry.register(FinnhubHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpHistoricalFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpIncomeFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
+    register_extended_providers(&mut registry)?;
+    Ok(registry)
+}
+
+/// Register the second half of the built-in provider catalog (geckoterminal onward).
+///
+/// `registry` is only mutated when at least one of the corresponding provider
+/// features is enabled, so it is unused under the default (offline) feature set.
+#[cfg_attr(
+    not(any(
+        feature = "provider-geckoterminal",
+        feature = "provider-glassnode",
+        feature = "provider-huggingface",
+        feature = "provider-nasdaq",
+        feature = "provider-oecd",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-seeking-alpha",
+        feature = "provider-tiingo",
+        feature = "provider-tmx",
+        feature = "provider-tradier",
+        feature = "provider-trading-economics",
+        feature = "provider-velodata",
+        feature = "provider-binance-http",
+    )),
+    allow(
+        unused_variables,
+        clippy::unnecessary_wraps,
+        clippy::missing_const_for_fn,
+        clippy::needless_pass_by_ref_mut
+    )
+)]
+fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     #[cfg(feature = "provider-geckoterminal")]
     registry.register(GeckoTerminalHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-glassnode")]
@@ -299,7 +356,7 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(VelodataHttpOiFetcher::registry_entry())?;
     #[cfg(feature = "provider-binance-http")]
     registry.register(BinanceHttpTickerPriceFetcher::registry_entry())?;
-    Ok(registry)
+    Ok(())
 }
 
 /// # Errors
@@ -329,7 +386,7 @@ pub fn fetch_equity_historical(
 
     match provider {
         "fileset" => block_on(runner.run(&FilesetEquityHistoricalFetcher, params)),
-        "yahoo" => block_on(runner.run(&YahooEquityHistoricalFetcher, params)),
+        "yahoo" => block_on(runner.run(&SelectedYahooEquityHistoricalFetcher::default(), params)),
         other => Err(Error::Registry(format!("unknown provider: {other}"))),
     }
 }
@@ -787,6 +844,20 @@ pub fn parity_layer_sample() -> Result<Value> {
         json!({ "snapshot_version": snapshot.version }),
     ));
 
+    parity_layer_evidence(snapshot.version, time_travel_rows, stream_offset)
+}
+
+/// Assemble the parity-layer evidence payload from the snapshot version,
+/// time-travel row count, and stream offset.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
+fn parity_layer_evidence(
+    snapshot_version: u64,
+    time_travel_rows: usize,
+    stream_offset: u64,
+) -> Result<Value> {
     let mut graph = DirectedGraph::default();
     graph.add_edge("account", "position");
     graph.add_edge("position", "instrument");
@@ -817,7 +888,7 @@ pub fn parity_layer_sample() -> Result<Value> {
     let manifest = TableManifest {
         format: TableFormat::Iceberg,
         table: "raw.market_data_bar".to_string(),
-        version: snapshot.version,
+        version: snapshot_version,
         files: vec![TableFile {
             path: "s3://bucket/market/ohlcv.parquet".to_string(),
             checksum: simple_checksum("s3://bucket/market/ohlcv.parquet"),
@@ -834,6 +905,43 @@ pub fn parity_layer_sample() -> Result<Value> {
         "aapl",
     )
     .map_err(|error| Error::Provider(error.to_string()))?;
+    let (claims, auth_policy, define, masked_account) = parity_auth_mask_evidence()?;
+
+    Ok(json!({
+        "snapshot_version": snapshot_version,
+        "time_travel_rows": time_travel_rows,
+        "stream_offset": stream_offset,
+        "live_query_event_type": "stream.market_data_bar",
+        "graph_path": graph.traverse("account"),
+        "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
+        "copy_checksum": copy_plan.checksum,
+        "pipe_offset": pipe.last_offset,
+        "table_manifest_ok": manifest.verify_checksums(),
+        "udf_output": udf_output,
+        "jwt_valid": validate_claims(
+            &claims,
+            &[JwksKey { kid: "k1".to_string(), alg: "RS256".to_string() }],
+            "https://issuer",
+            "tdw"
+        ),
+        "authorized": authorize(
+            &Principal { subject: "alice".to_string(), roles: claims.roles },
+            &auth_policy
+        ),
+        "define_hook": define.compile_hook().name,
+        "define_key": define.idempotency_key(),
+        "mask_hook": masking_hook().name,
+        "masked_account": masked_account,
+    }))
+}
+
+/// Build the JWT claims, auth policy, define event, and masked account fields
+/// used by the parity-layer evidence payload.
+///
+/// # Errors
+///
+/// Returns an error variant if the underlying operation fails.
+fn parity_auth_mask_evidence() -> Result<(JwtClaims, AuthPolicy, DefineEvent, String)> {
     let claims = JwtClaims {
         sub: "alice".to_string(),
         iss: "https://issuer".to_string(),
@@ -866,32 +974,7 @@ pub fn parity_layer_sample() -> Result<Value> {
         .cloned()
         .ok_or_else(|| Error::Provider("masked account_id missing".to_string()))?;
 
-    Ok(json!({
-        "snapshot_version": snapshot.version,
-        "time_travel_rows": time_travel_rows,
-        "stream_offset": stream_offset,
-        "live_query_event_type": "stream.market_data_bar",
-        "graph_path": graph.traverse("account"),
-        "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
-        "copy_checksum": copy_plan.checksum,
-        "pipe_offset": pipe.last_offset,
-        "table_manifest_ok": manifest.verify_checksums(),
-        "udf_output": udf_output,
-        "jwt_valid": validate_claims(
-            &claims,
-            &[JwksKey { kid: "k1".to_string(), alg: "RS256".to_string() }],
-            "https://issuer",
-            "tdw"
-        ),
-        "authorized": authorize(
-            &Principal { subject: "alice".to_string(), roles: claims.roles },
-            &auth_policy
-        ),
-        "define_hook": define.compile_hook().name,
-        "define_key": define.idempotency_key(),
-        "mask_hook": masking_hook().name,
-        "masked_account": masked_account,
-    }))
+    Ok((claims, auth_policy, define, masked_account))
 }
 
 #[must_use]
@@ -1291,10 +1374,22 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "provider-yahoo-http")]
+    #[test]
+    fn yahoo_http_feature_selects_http_fetcher_for_execution_paths() {
+        let selected = std::any::type_name::<SelectedYahooEquityHistoricalFetcher>();
+
+        assert!(
+            selected.ends_with("YahooHttpEquityHistoricalFetcher"),
+            "selected yahoo fetcher was {selected}"
+        );
+    }
+
     /// The default (no-feature) build must register exactly the three offline
-    /// providers (fileset, yahoo, mock-ws). Enabling any `provider-*` feature
-    /// only adds live HTTP fetchers on top, so this exact count is asserted only
-    /// when no provider feature is active.
+    /// providers (fileset, yahoo, mock-ws). Enabling provider features adds live
+    /// HTTP fetchers on top, except `provider-yahoo-http`, which swaps Yahoo's
+    /// offline fixture for the live implementation under the same key. This
+    /// exact offline count is asserted only when no provider feature is active.
     #[cfg(not(any(
         feature = "provider-adanos",
         feature = "provider-akshare",
@@ -1310,6 +1405,7 @@ mod tests {
         feature = "provider-ecb",
         feature = "provider-eia",
         feature = "provider-finra",
+        feature = "provider-finnhub",
         feature = "provider-fmp",
         feature = "provider-fred",
         feature = "provider-geckoterminal",
@@ -1326,6 +1422,7 @@ mod tests {
         feature = "provider-trading-economics",
         feature = "provider-velodata",
         feature = "provider-binance-http",
+        feature = "provider-yahoo-http",
     )))]
     #[test]
     fn default_registry_is_offline_only() {

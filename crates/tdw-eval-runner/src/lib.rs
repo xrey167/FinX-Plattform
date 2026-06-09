@@ -255,12 +255,12 @@ pub fn validate_request(request: &EvalRunRequest) -> Result<(), EvalRunError> {
     Ok(())
 }
 
-/// The deterministic, offline default [`LanguageModel`]: it models a faithful,
-/// fully-grounded agent by echoing back every message's content (the system grounding
-/// context plus the user prompt) as the assistant reply, with no network access. This is
-/// the model the daemon injects by default so eval runs stay offline and reproducible in
-/// CI; callers swap in a real client (Anthropic / OpenAI-compatible) when a live model is
-/// configured.
+/// The deterministic, offline default [`LanguageModel`] used by the daemon in CI.
+///
+/// Models a faithful, fully-grounded agent by echoing back every message's content (the
+/// system grounding context plus the user prompt) as the assistant reply, with no network
+/// access. Callers swap in a real client (Anthropic / OpenAI-compatible) when a live model
+/// is configured.
 ///
 /// Because the runner places the agent's grounding reference URIs in the system message, a
 /// case whose `expected_refs` are present in that grounding context passes the
@@ -271,7 +271,7 @@ pub fn validate_request(request: &EvalRunRequest) -> Result<(), EvalRunError> {
 pub struct StubLanguageModel;
 
 impl LanguageModel for StubLanguageModel {
-    fn model_id(&self) -> &str {
+    fn model_id(&self) -> &'static str {
         "stub-echo"
     }
 

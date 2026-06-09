@@ -104,7 +104,7 @@ pub enum EiaProviderError {
     Provider(String),
 }
 
-fn validate_length(length: u32) -> Result<()> {
+const fn validate_length(length: u32) -> Result<()> {
     if length == 0 || length > 10_000 {
         return Err(EiaProviderError::InvalidLength(length));
     }
@@ -146,6 +146,7 @@ pub fn mock_natural_gas(query: &EiaNaturalGasQuery) -> Result<Vec<EiaNaturalGasR
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // exact-value parse assertions; deterministic parser, exact comparison intended
 mod tests {
     use super::*;
 

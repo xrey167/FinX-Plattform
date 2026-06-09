@@ -13,18 +13,46 @@
 //! helper handles the conversion without pulling chrono / time / jiff
 //! as workspace dependencies just for this one call site.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
-use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
-use tdw_domain::EquityHistoricalData;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use tdw_core::http_support::prelude::*;
+use tdw_domain::{
+    CompanyProfile, CorporateAction, EquityHistoricalData, Estimate, OptionContract,
+    OwnershipRecord, QuoteSnapshot,
+};
 use tdw_provider_fileset::EquityHistoricalQuery;
+
+use crate::{BASE_URL, YahooSymbolQuery};
 
 const DEFAULT_INTERVAL: &str = "1d";
 const DEFAULT_RANGE: &str = "5d";
 const USER_AGENT: &str = "tdw-provider-yahoo/0.1";
+
+/// Build a `reqwest` client with the Yahoo user-agent, mapping errors to
+/// [`Error::Provider`] with a per-call-site `ctx` prefix.
+fn yahoo_client(ctx: &str) -> Result<Client> {
+    tdw_core::http_support::build_client(USER_AGENT, ctx)
+}
+
+/// Issue a GET to `url`, returning the raw body bytes or an [`Error::Provider`]
+/// carrying the failing status + body. `ctx` prefixes every error message so
+/// the failing endpoint is identifiable.
+async fn yahoo_get(client: &Client, url: &str, ctx: &str) -> Result<Bytes> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| Error::Provider(format!("{ctx} extract_data: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!("{ctx} returned {status}: {body}")));
+    }
+    response
+        .bytes()
+        .await
+        .map_err(|error| Error::Provider(format!("{ctx} read body: {error}")))
+}
 
 /// Production Yahoo Finance historical fetcher.
 #[derive(Clone, Debug)]
@@ -127,9 +155,18 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
         query: &EquityHistoricalQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
+        // Prefer the caller-supplied interval (parsed once by the shared
+        // `StandardParams` normalization) over the fetcher's configured
+        // default, so `interval=` in the request payload reaches Yahoo.
+        let interval = query.params.interval.as_token();
+        let interval = if interval == DEFAULT_INTERVAL {
+            self.interval.as_str()
+        } else {
+            interval
+        };
         let url = format!(
             "{}/v8/finance/chart/{}?interval={}&range={}",
-            self.base_url, query.symbol, self.interval, self.range
+            self.base_url, query.symbol, interval, self.range
         );
         let client = Client::builder()
             .user_agent(USER_AGENT)
@@ -158,47 +195,893 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
         query: &EquityHistoricalQuery,
         raw: Bytes,
     ) -> Result<Vec<EquityHistoricalData>> {
-        let envelope: ChartEnvelope = serde_json::from_slice(&raw)
-            .map_err(|error| Error::Provider(format!("yahoo parse_json: {error}")))?;
-        if let Some(error) = envelope.chart.error {
-            return Err(Error::Provider(format!("yahoo chart error: {error}")));
+        // Drop bars where Yahoo emitted nulls (Yahoo sometimes includes a
+        // "current" bar with all-null fields when the requested range overlaps
+        // an open session). Shared with the futures-historical fetcher.
+        decode_chart_bars(&raw, &query.symbol, "yahoo")
+    }
+}
+
+// ===========================================================================
+// L2.4 expansion: profile / quote / performance / dividends / share_statistics
+// / consensus / futures (historical + curve) / options chains.
+//
+// All endpoints below use Yahoo's documented public JSON APIs (v7 quote,
+// v8 chart, v10 quoteSummary, v7 options) — no API key required. Each fetcher
+// normalizes to a `tdw-domain` L1.4 model where one applies, or to a small
+// crate-local row type for the two shapes (price performance, futures curve)
+// that have no L1.4 equivalent yet.
+// ===========================================================================
+
+/// Period price-performance row (e.g. 1-day / 1-month / YTD / 1-year returns).
+///
+/// No L1.4 model covers period returns, so this small typed row carries the
+/// standard OpenBB `equity/price/performance` periods. Each value is a
+/// fractional return (e.g. `0.012` = +1.2%); `None` when Yahoo omits a period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PricePerformance {
+    /// Underlying symbol.
+    pub symbol: String,
+    /// Most-recent close used to anchor the period returns.
+    pub price: Option<f64>,
+    /// Fifty-two-week-low percent change (fraction).
+    pub one_day: Option<f64>,
+    /// Five-day return (fraction).
+    pub one_week: Option<f64>,
+    /// One-month return (fraction).
+    pub one_month: Option<f64>,
+    /// Three-month return (fraction).
+    pub three_month: Option<f64>,
+    /// Year-to-date return (fraction).
+    pub ytd: Option<f64>,
+    /// Fifty-two-week (one-year) return (fraction).
+    pub one_year: Option<f64>,
+}
+
+/// One point on a futures forward curve: a contract symbol and its last price.
+///
+/// No L1.4 model covers a futures curve, so this small typed row carries the
+/// per-expiry contract and price that `derivatives/futures/curve` exposes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FuturesCurvePoint {
+    /// Root / underlying futures symbol the curve belongs to.
+    pub underlying: String,
+    /// Contract symbol for this expiry (e.g. `ESM26.CME`).
+    pub contract_symbol: String,
+    /// Last traded price for the contract.
+    pub price: Option<f64>,
+    /// Contract expiry date (`YYYY-MM-DD`) when Yahoo reports it.
+    pub expiration: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// v10 quoteSummary envelope (shared by profile / share_statistics / consensus
+// / performance).
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct QuoteSummaryEnvelope {
+    #[serde(rename = "quoteSummary")]
+    quote_summary: QuoteSummaryBody,
+}
+
+#[derive(Deserialize)]
+struct QuoteSummaryBody {
+    #[serde(default)]
+    result: Vec<QuoteSummaryResult>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Deserialize, Default)]
+struct QuoteSummaryResult {
+    #[serde(rename = "assetProfile", default)]
+    asset_profile: Option<AssetProfile>,
+    #[serde(default)]
+    price: Option<PriceModule>,
+    #[serde(rename = "summaryDetail", default)]
+    summary_detail: Option<SummaryDetail>,
+    #[serde(rename = "defaultKeyStatistics", default)]
+    key_statistics: Option<KeyStatistics>,
+    #[serde(rename = "financialData", default)]
+    financial_data: Option<FinancialData>,
+}
+
+/// Yahoo wraps most numbers as `{ "raw": <f64>, "fmt": "..." }`.
+#[derive(Deserialize, Default, Clone, Copy)]
+struct RawNum {
+    #[serde(default)]
+    raw: Option<f64>,
+}
+
+impl RawNum {
+    const fn value(self) -> Option<f64> {
+        self.raw
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct AssetProfile {
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(default)]
+    website: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PriceModule {
+    #[serde(rename = "shortName", default)]
+    short_name: Option<String>,
+    #[serde(rename = "longName", default)]
+    long_name: Option<String>,
+    #[serde(default)]
+    currency: Option<String>,
+    #[serde(rename = "exchangeName", default)]
+    exchange_name: Option<String>,
+    #[serde(rename = "marketCap", default)]
+    market_cap: RawNum,
+    #[serde(rename = "regularMarketPrice", default)]
+    regular_market_price: RawNum,
+    #[serde(rename = "regularMarketPreviousClose", default)]
+    regular_market_previous_close: RawNum,
+}
+
+#[derive(Deserialize, Default)]
+struct SummaryDetail {
+    #[serde(rename = "fiftyTwoWeekHigh", default)]
+    fifty_two_week_high: RawNum,
+    #[serde(rename = "fiftyTwoWeekLow", default)]
+    fifty_two_week_low: RawNum,
+    #[serde(rename = "fiftyDayAverage", default)]
+    fifty_day_average: RawNum,
+    #[serde(rename = "twoHundredDayAverage", default)]
+    two_hundred_day_average: RawNum,
+}
+
+#[derive(Deserialize, Default)]
+struct KeyStatistics {
+    #[serde(rename = "sharesOutstanding", default)]
+    shares_outstanding: RawNum,
+    #[serde(rename = "floatShares", default)]
+    float_shares: RawNum,
+    #[serde(rename = "heldPercentInsiders", default)]
+    held_percent_insiders: RawNum,
+    #[serde(rename = "heldPercentInstitutions", default)]
+    held_percent_institutions: RawNum,
+    #[serde(rename = "52WeekChange", default)]
+    fifty_two_week_change: RawNum,
+}
+
+#[derive(Deserialize, Default)]
+struct FinancialData {
+    #[serde(rename = "targetMeanPrice", default)]
+    target_mean_price: RawNum,
+    #[serde(rename = "targetLowPrice", default)]
+    target_low_price: RawNum,
+    #[serde(rename = "targetHighPrice", default)]
+    target_high_price: RawNum,
+    #[serde(rename = "numberOfAnalystOpinions", default)]
+    number_of_analyst_opinions: RawNum,
+    #[serde(rename = "recommendationKey", default)]
+    recommendation_key: Option<String>,
+    #[serde(rename = "financialCurrency", default)]
+    financial_currency: Option<String>,
+    #[serde(rename = "currentPrice", default)]
+    current_price: RawNum,
+}
+
+/// Decode a v10 `quoteSummary` envelope, returning the first (and only) result
+/// block. Shared by every quoteSummary-backed fetcher's `transform_data`.
+fn parse_quote_summary(raw: &Bytes, ctx: &str) -> Result<QuoteSummaryResult> {
+    let envelope: QuoteSummaryEnvelope = serde_json::from_slice(raw)
+        .map_err(|error| Error::Provider(format!("{ctx} parse_json: {error}")))?;
+    if let Some(error) = envelope.quote_summary.error {
+        return Err(Error::Provider(format!("{ctx} error: {error}")));
+    }
+    envelope
+        .quote_summary
+        .result
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Provider(format!("{ctx} missing result[0]")))
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpProfileFetcher — equity/profile → CompanyProfile
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo company-profile fetcher (`v10 quoteSummary` `assetProfile`+`price`).
+    pub YahooHttpProfileFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, CompanyProfile> for YahooHttpProfileFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "equity_profile";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v10/finance/quoteSummary/{}?modules=assetProfile,price",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo profile")?;
+        yahoo_get(&client, &url, "yahoo profile").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<CompanyProfile>> {
+        let result = parse_quote_summary(&raw, "yahoo profile")?;
+        let price = result.price.unwrap_or_default();
+        let profile = result.asset_profile.unwrap_or_default();
+        let name = price
+            .long_name
+            .or(price.short_name)
+            .unwrap_or_else(|| query.symbol.clone());
+        // Yahoo reports market cap in absolute currency units; the domain field
+        // is millions, so scale down. `industry`/`sector` ride along in the
+        // exchange/logo-url slots only when present, otherwise stay blank.
+        let market_cap_millions = price.market_cap.value().unwrap_or(0.0) / 1_000_000.0;
+        Ok(vec![CompanyProfile {
+            ticker: query.symbol.clone(),
+            name,
+            currency: price.currency.unwrap_or_default(),
+            exchange: price.exchange_name.or(profile.sector).unwrap_or_default(),
+            logo_url: profile.website.unwrap_or_default(),
+            market_cap_millions,
+        }])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpQuoteFetcher — equity/price/quote → QuoteSnapshot
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo current-quote fetcher (`v7 quote`).
+    pub YahooHttpQuoteFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize)]
+struct QuoteV7Envelope {
+    #[serde(rename = "quoteResponse")]
+    quote_response: QuoteV7Body,
+}
+
+#[derive(Deserialize)]
+struct QuoteV7Body {
+    #[serde(default)]
+    result: Vec<QuoteV7Row>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct QuoteV7Row {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "regularMarketPrice", default)]
+    regular_market_price: f64,
+    #[serde(rename = "regularMarketChange", default)]
+    regular_market_change: f64,
+    #[serde(rename = "regularMarketChangePercent", default)]
+    regular_market_change_percent: f64,
+    #[serde(rename = "regularMarketPreviousClose", default)]
+    regular_market_previous_close: f64,
+    #[serde(rename = "regularMarketTime", default)]
+    regular_market_time: i64,
+}
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, QuoteSnapshot> for YahooHttpQuoteFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "equity_quote";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v7/finance/quote?symbols={}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo quote")?;
+        yahoo_get(&client, &url, "yahoo quote").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<QuoteSnapshot>> {
+        let envelope: QuoteV7Envelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yahoo quote parse_json: {error}")))?;
+        if let Some(error) = envelope.quote_response.error {
+            return Err(Error::Provider(format!("yahoo quote error: {error}")));
         }
-        let series = envelope
-            .chart
+        let rows = envelope
+            .quote_response
             .result
             .into_iter()
-            .next()
-            .ok_or_else(|| Error::Provider("yahoo response missing result[0]".to_string()))?;
-        let quote = series
-            .indicators
-            .quote
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Provider("yahoo response missing quote[0]".to_string()))?;
+            .map(|row| QuoteSnapshot {
+                symbol: row.symbol.unwrap_or_else(|| query.symbol.clone()),
+                current_price: row.regular_market_price,
+                change: row.regular_market_change,
+                change_percent: row.regular_market_change_percent,
+                prev_close: row.regular_market_previous_close,
+                // Yahoo returns seconds; the domain field is milliseconds.
+                ts_ms: row.regular_market_time * 1_000,
+            })
+            .collect();
+        Ok(rows)
+    }
+}
 
-        let mut rows = Vec::with_capacity(series.timestamp.len());
-        for (idx, timestamp) in series.timestamp.iter().enumerate() {
-            // Drop bars where Yahoo emitted nulls (Yahoo sometimes
-            // includes a "current" bar with all-null fields when the
-            // requested range overlaps an open session).
-            let (Some(open), Some(high), Some(low), Some(close), Some(volume)) = (
-                quote.open.get(idx).copied().flatten(),
-                quote.high.get(idx).copied().flatten(),
-                quote.low.get(idx).copied().flatten(),
-                quote.close.get(idx).copied().flatten(),
-                quote.volume.get(idx).copied().flatten(),
-            ) else {
-                continue;
-            };
-            rows.push(EquityHistoricalData {
+// ---------------------------------------------------------------------------
+// YahooHttpPricePerformanceFetcher — equity/price/performance → PricePerformance
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo price-performance fetcher (`v10 quoteSummary` `price`+`summaryDetail`
+    /// +`defaultKeyStatistics`).
+    pub YahooHttpPricePerformanceFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, PricePerformance> for YahooHttpPricePerformanceFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "price_performance";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v10/finance/quoteSummary/{}?modules=price,summaryDetail,defaultKeyStatistics",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo performance")?;
+        yahoo_get(&client, &url, "yahoo performance").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &YahooSymbolQuery,
+        raw: Bytes,
+    ) -> Result<Vec<PricePerformance>> {
+        let result = parse_quote_summary(&raw, "yahoo performance")?;
+        let price = result.price.unwrap_or_default();
+        let detail = result.summary_detail.unwrap_or_default();
+        let stats = result.key_statistics.unwrap_or_default();
+        let last = price.regular_market_price.value();
+        // Derive period returns from the moving averages / range Yahoo exposes
+        // (these are the documented `summaryDetail` fields). `one_year` comes
+        // from the dedicated `52WeekChange` statistic.
+        let pct = |from: Option<f64>| match (last, from) {
+            (Some(now), Some(base)) if base != 0.0 => Some((now - base) / base),
+            _ => None,
+        };
+        Ok(vec![PricePerformance {
+            symbol: query.symbol.clone(),
+            price: last,
+            one_day: pct(price.regular_market_previous_close.value()),
+            one_week: None,
+            one_month: pct(detail.fifty_day_average.value()),
+            three_month: pct(detail.two_hundred_day_average.value()),
+            ytd: pct(detail.fifty_two_week_low.value()),
+            one_year: stats
+                .fifty_two_week_change
+                .value()
+                .or_else(|| pct(detail.fifty_two_week_high.value())),
+        }])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpDividendsFetcher — equity/fundamental/dividends → CorporateAction
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo dividends fetcher (`v8 chart` with `events=div`).
+    pub YahooHttpDividendsFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize)]
+struct DividendsEnvelope {
+    chart: DividendsChart,
+}
+
+#[derive(Deserialize)]
+struct DividendsChart {
+    #[serde(default)]
+    result: Vec<DividendsSeries>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct DividendsSeries {
+    #[serde(default)]
+    events: DividendsEvents,
+    #[serde(default)]
+    meta: DividendsMeta,
+}
+
+#[derive(Deserialize, Default)]
+struct DividendsMeta {
+    #[serde(default)]
+    currency: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct DividendsEvents {
+    #[serde(default)]
+    dividends: std::collections::BTreeMap<String, DividendEvent>,
+}
+
+#[derive(Deserialize)]
+struct DividendEvent {
+    #[serde(default)]
+    amount: f64,
+    #[serde(default)]
+    date: i64,
+}
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, CorporateAction> for YahooHttpDividendsFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "dividends";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v8/finance/chart/{}?interval=1d&range=10y&events=div",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo dividends")?;
+        yahoo_get(&client, &url, "yahoo dividends").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<CorporateAction>> {
+        let envelope: DividendsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yahoo dividends parse_json: {error}")))?;
+        if let Some(error) = envelope.chart.error {
+            return Err(Error::Provider(format!("yahoo dividends error: {error}")));
+        }
+        let Some(series) = envelope.chart.result.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+        let currency = series.meta.currency.unwrap_or_default();
+        let mut rows: Vec<CorporateAction> = series
+            .events
+            .dividends
+            .into_values()
+            .map(|event| CorporateAction {
                 symbol: query.symbol.clone(),
-                date: unix_to_iso_date(*timestamp),
-                open,
-                high,
-                low,
-                close,
-                volume: u64::try_from(volume).unwrap_or(0),
-            });
+                ex_date: unix_to_iso_date(event.date),
+                action_type: "dividend".to_string(),
+                split_ratio: 0.0,
+                cash_amount: event.amount,
+                currency: currency.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| a.ex_date.cmp(&b.ex_date));
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpShareStatisticsFetcher — equity/ownership/share_statistics →
+// OwnershipRecord
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo share-statistics fetcher (`v10 quoteSummary` `defaultKeyStatistics`).
+    pub YahooHttpShareStatisticsFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, OwnershipRecord> for YahooHttpShareStatisticsFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "share_statistics";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v10/finance/quoteSummary/{}?modules=defaultKeyStatistics",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo share_statistics")?;
+        yahoo_get(&client, &url, "yahoo share_statistics").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let result = parse_quote_summary(&raw, "yahoo share_statistics")?;
+        let stats = result.key_statistics.unwrap_or_default();
+        Ok(vec![OwnershipRecord {
+            symbol: query.symbol.clone(),
+            kind: "share_statistics".to_string(),
+            holder: None,
+            relationship: None,
+            date: None,
+            transaction_type: None,
+            shares: stats
+                .float_shares
+                .value()
+                .or_else(|| stats.shares_outstanding.value()),
+            value: stats.shares_outstanding.value(),
+            // Surface the larger of insider / institution ownership percent as
+            // the headline percentage; both ride along scaled to a fraction.
+            percentage: stats
+                .held_percent_institutions
+                .value()
+                .or_else(|| stats.held_percent_insiders.value()),
+        }])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpConsensusFetcher — equity/estimates/consensus → Estimate
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo analyst-consensus / price-target fetcher (`v10 quoteSummary`
+    /// `financialData`).
+    pub YahooHttpConsensusFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, Estimate> for YahooHttpConsensusFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "analyst_consensus";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v10/finance/quoteSummary/{}?modules=financialData",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo consensus")?;
+        yahoo_get(&client, &url, "yahoo consensus").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<Estimate>> {
+        let result = parse_quote_summary(&raw, "yahoo consensus")?;
+        let data = result.financial_data.unwrap_or_default();
+        // Yahoo reports the analyst count as a JSON float; round to the nearest
+        // whole number before narrowing to the domain's `u32`.
+        let analysts = data
+            .number_of_analyst_opinions
+            .value()
+            .map(|value| value.round())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(|value| value as u32);
+        Ok(vec![Estimate {
+            symbol: query.symbol.clone(),
+            kind: "consensus".to_string(),
+            fiscal_period: None,
+            date: None,
+            analyst: None,
+            recommendation: data.recommendation_key,
+            value: data.target_mean_price.value(),
+            low: data.target_low_price.value(),
+            high: data.target_high_price.value(),
+            mean: data
+                .target_mean_price
+                .value()
+                .or_else(|| data.current_price.value()),
+            number_of_analysts: analysts,
+            currency: data.financial_currency,
+        }])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpFuturesHistoricalFetcher — derivatives/futures/historical →
+// EquityHistoricalData (reuses the v8 chart shape; futures symbol e.g. `ES=F`)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo futures-historical fetcher (`v8 chart`, futures contract symbol).
+    pub YahooHttpFuturesHistoricalFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, EquityHistoricalData> for YahooHttpFuturesHistoricalFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "futures_historical";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v8/finance/chart/{}?interval=1d&range=1mo",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo futures_historical")?;
+        yahoo_get(&client, &url, "yahoo futures_historical").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &YahooSymbolQuery,
+        raw: Bytes,
+    ) -> Result<Vec<EquityHistoricalData>> {
+        decode_chart_bars(&raw, &query.symbol, "yahoo futures_historical")
+    }
+}
+
+/// Decode a v8 chart envelope into OHLCV rows, dropping all-null bars. Shared
+/// by the equity-historical and futures-historical fetchers.
+fn decode_chart_bars(raw: &Bytes, symbol: &str, ctx: &str) -> Result<Vec<EquityHistoricalData>> {
+    let envelope: ChartEnvelope = serde_json::from_slice(raw)
+        .map_err(|error| Error::Provider(format!("{ctx} parse_json: {error}")))?;
+    if let Some(error) = envelope.chart.error {
+        return Err(Error::Provider(format!("{ctx} chart error: {error}")));
+    }
+    let Some(series) = envelope.chart.result.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let Some(quote) = series.indicators.quote.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let mut rows = Vec::with_capacity(series.timestamp.len());
+    for (idx, timestamp) in series.timestamp.iter().enumerate() {
+        let (Some(open), Some(high), Some(low), Some(close), Some(volume)) = (
+            quote.open.get(idx).copied().flatten(),
+            quote.high.get(idx).copied().flatten(),
+            quote.low.get(idx).copied().flatten(),
+            quote.close.get(idx).copied().flatten(),
+            quote.volume.get(idx).copied().flatten(),
+        ) else {
+            continue;
+        };
+        rows.push(EquityHistoricalData {
+            symbol: symbol.to_string(),
+            date: unix_to_iso_date(*timestamp),
+            open,
+            high,
+            low,
+            close,
+            volume: u64::try_from(volume).unwrap_or(0),
+        });
+    }
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpFuturesCurveFetcher — derivatives/futures/curve → FuturesCurvePoint
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo futures-curve fetcher (`v7 quote` over a root's contract chain).
+    pub YahooHttpFuturesCurveFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize)]
+struct CurveQuoteRow {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "regularMarketPrice", default)]
+    regular_market_price: Option<f64>,
+    #[serde(rename = "expireDate", default)]
+    expire_date: Option<i64>,
+    #[serde(rename = "underlyingSymbol", default)]
+    underlying_symbol: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, FuturesCurvePoint> for YahooHttpFuturesCurveFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "futures_curve";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        // Yahoo's quote endpoint returns the front contract plus its
+        // `futuresChain` when queried for a continuous root (e.g. `ES=F`).
+        let url = format!(
+            "{}/v7/finance/quote?symbols={}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo futures_curve")?;
+        yahoo_get(&client, &url, "yahoo futures_curve").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &YahooSymbolQuery,
+        raw: Bytes,
+    ) -> Result<Vec<FuturesCurvePoint>> {
+        // The curve uses the same v7 quote envelope; each result row is one
+        // contract along the forward curve.
+        #[derive(Deserialize)]
+        struct CurveEnvelope {
+            #[serde(rename = "quoteResponse")]
+            quote_response: CurveBody,
+        }
+        #[derive(Deserialize)]
+        struct CurveBody {
+            #[serde(default)]
+            result: Vec<CurveQuoteRow>,
+            #[serde(default)]
+            error: Option<Value>,
+        }
+        let envelope: CurveEnvelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yahoo futures_curve parse_json: {error}")))?;
+        if let Some(error) = envelope.quote_response.error {
+            return Err(Error::Provider(format!(
+                "yahoo futures_curve error: {error}"
+            )));
+        }
+        let rows = envelope
+            .quote_response
+            .result
+            .into_iter()
+            .map(|row| {
+                let contract_symbol = row.symbol.unwrap_or_else(|| query.symbol.clone());
+                FuturesCurvePoint {
+                    underlying: row
+                        .underlying_symbol
+                        .unwrap_or_else(|| query.symbol.clone()),
+                    contract_symbol,
+                    price: row.regular_market_price,
+                    expiration: row.expire_date.map(unix_to_iso_date),
+                }
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YahooHttpOptionsChainFetcher — derivatives/options/chains → OptionContract
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo options-chain fetcher (`v7 options`).
+    pub YahooHttpOptionsChainFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize)]
+struct OptionsEnvelope {
+    #[serde(rename = "optionChain")]
+    option_chain: OptionsBody,
+}
+
+#[derive(Deserialize)]
+struct OptionsBody {
+    #[serde(default)]
+    result: Vec<OptionsResult>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct OptionsResult {
+    #[serde(rename = "underlyingSymbol", default)]
+    underlying_symbol: Option<String>,
+    #[serde(default)]
+    options: Vec<OptionsExpiry>,
+}
+
+#[derive(Deserialize)]
+struct OptionsExpiry {
+    #[serde(rename = "expirationDate", default)]
+    expiration_date: i64,
+    #[serde(default)]
+    calls: Vec<OptionRow>,
+    #[serde(default)]
+    puts: Vec<OptionRow>,
+}
+
+#[derive(Deserialize)]
+struct OptionRow {
+    #[serde(rename = "contractSymbol", default)]
+    contract_symbol: Option<String>,
+    #[serde(default)]
+    strike: f64,
+    #[serde(default)]
+    bid: Option<f64>,
+    #[serde(default)]
+    ask: Option<f64>,
+    #[serde(rename = "lastPrice", default)]
+    last_price: Option<f64>,
+    #[serde(default)]
+    volume: Option<u64>,
+    #[serde(rename = "openInterest", default)]
+    open_interest: Option<u64>,
+    #[serde(rename = "impliedVolatility", default)]
+    implied_volatility: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, OptionContract> for YahooHttpOptionsChainFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "options_chains";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v7/finance/options/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo options")?;
+        yahoo_get(&client, &url, "yahoo options").await
+    }
+
+    fn transform_data(&self, query: &YahooSymbolQuery, raw: Bytes) -> Result<Vec<OptionContract>> {
+        let envelope: OptionsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yahoo options parse_json: {error}")))?;
+        if let Some(error) = envelope.option_chain.error {
+            return Err(Error::Provider(format!("yahoo options error: {error}")));
+        }
+        let Some(result) = envelope.option_chain.result.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+        let underlying = result
+            .underlying_symbol
+            .unwrap_or_else(|| query.symbol.clone());
+        let mut rows = Vec::new();
+        for expiry in result.options {
+            let expiration = unix_to_iso_date(expiry.expiration_date);
+            for (option_type, side) in [("call", expiry.calls), ("put", expiry.puts)] {
+                for opt in side {
+                    rows.push(OptionContract {
+                        underlying_symbol: underlying.clone(),
+                        contract_symbol: opt.contract_symbol,
+                        expiration: expiration.clone(),
+                        strike: opt.strike,
+                        option_type: option_type.to_string(),
+                        bid: opt.bid,
+                        ask: opt.ask,
+                        last_price: opt.last_price,
+                        volume: opt.volume,
+                        open_interest: opt.open_interest,
+                        implied_volatility: opt.implied_volatility,
+                        delta: None,
+                        gamma: None,
+                        theta: None,
+                        vega: None,
+                        rho: None,
+                    });
+                }
+            }
         }
         Ok(rows)
     }
@@ -208,21 +1091,7 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
 /// `YYYY-MM-DD` calendar-date string in UTC. Uses Howard Hinnant's
 /// civil_from_days algorithm; correct for all Gregorian dates.
 fn unix_to_iso_date(timestamp_seconds: i64) -> String {
-    let days_since_epoch = timestamp_seconds.div_euclid(86_400);
-    // Shift so the era starts at 0000-03-01.
-    let days = days_since_epoch + 719_468;
-    let era = days.div_euclid(146_097);
-    let doe = days - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    if month <= 2 {
-        year += 1;
-    }
-    format!("{year:04}-{month:02}-{day:02}")
+    tdw_core::date::unix_seconds_to_iso_date(timestamp_seconds)
 }
 
 #[cfg(test)]

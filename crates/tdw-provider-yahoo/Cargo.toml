@@ -5,13 +5,20 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = []
 # Enables the real Yahoo Finance HTTP fetcher (reqwest). Off by
 # default so the workspace test set stays offline; the live test is
 # additionally gated by the env var TDW_YAHOO_LIVE=1 so unattended
 # CI runs do not hit Yahoo's chart API.
-http = ["dep:reqwest", "dep:tokio"]
+http = ["dep:reqwest", "dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -25,5 +32,18 @@ tdw-domain = { workspace = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tokio = { workspace = true, optional = true }
 
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
+[[test]]
+name = "http_fetcher"
+path = "tests/http_fetcher.rs"
+required-features = ["http"]
+
+[[example]]
+name = "yahoo_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true
+

@@ -5,14 +5,14 @@
 
 #![cfg(feature = "http")]
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_core::{Error, Result};
+use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery, TiingoProviderError};
 
@@ -25,11 +25,8 @@ const USER_AGENT: &str = "tdw-provider-tiingo/0.1";
 #[derive(Deserialize)]
 struct TiingoDailyPrice {
     date: String,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
+    #[serde(flatten)]
+    ohlcv: Ohlcv,
 }
 
 #[derive(Deserialize)]
@@ -47,7 +44,7 @@ struct TiingoNewsItem {
 // ---------------------------------------------------------------------------
 
 /// A single Tiingo news article returned by the news fetcher.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TiingoNewsArticle {
     pub id: u64,
     pub title: String,
@@ -60,37 +57,22 @@ pub struct TiingoNewsArticle {
 // Historical price fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tiingo daily historical price fetcher.
-#[derive(Clone, Debug)]
-pub struct TiingoHttpHistoricalFetcher {
-    base_url: String,
-}
+/// Provider specification for the Tiingo daily historical price fetcher.
+pub struct TiingoHistoricalSpec;
 
-impl Default for TiingoHttpHistoricalFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TiingoHttpHistoricalFetcher {
-    /// Override the Tiingo base URL (useful for tests against a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tiingo` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
-
-#[async_trait]
-impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetcher {
+impl ProviderSpec for TiingoHistoricalSpec {
     const PROVIDER: &'static str = "tiingo";
     const ENDPOINT: &'static str = "historical";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "tiingo http client";
+    const SEND_ERR: &'static str = "tiingo historical extract_data";
+    const RETURNED_ERR: &'static str = "tiingo historical returned";
+    const READ_BODY_ERR: &'static str = "tiingo historical read body";
+
+    type Query = TiingoHistoricalQuery;
+    type Data = MarketDataBar;
 
     fn transform_query(params: Value) -> Result<TiingoHistoricalQuery> {
         let symbol = params
@@ -103,43 +85,22 @@ impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetch
         TiingoHistoricalQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &TiingoHistoricalQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let api_key = read_api_key()?;
         let endpoint = format!(
             "{}/daily/{}/prices",
-            self.base_url.trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.symbol,
         );
         let query_params = [("startDate", "2024-01-01".to_string()), ("token", api_key)];
-        let client = build_client()?;
-        let response = client
-            .get(&endpoint)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("tiingo historical extract_data: {e}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "tiingo historical returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("tiingo historical read body: {e}")))
+        Ok(client.get(&endpoint).query(&query_params))
     }
 
-    fn transform_data(
-        &self,
-        query: &TiingoHistoricalQuery,
-        raw: Bytes,
-    ) -> Result<Vec<MarketDataBar>> {
+    fn transform_data(query: &TiingoHistoricalQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
         let prices: Vec<TiingoDailyPrice> = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("tiingo historical parse_json: {e}")))?;
         let mut rows = Vec::with_capacity(prices.len());
@@ -149,53 +110,37 @@ impl Fetcher<TiingoHistoricalQuery, MarketDataBar> for TiingoHttpHistoricalFetch
                 venue: "tiingo".to_string(),
                 granularity: TimeGranularity::Day,
                 ts: price.date,
-                open: price.open,
-                high: price.high,
-                low: price.low,
-                close: price.close,
-                volume: price.volume,
                 source: "tiingo".to_string(),
+                ..price.ohlcv.into_bar_template()
             });
         }
         Ok(rows)
     }
 }
 
+/// Production Tiingo daily historical price fetcher.
+pub type TiingoHttpHistoricalFetcher = HttpFetcher<TiingoHistoricalSpec>;
+
 // ---------------------------------------------------------------------------
 // News fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Tiingo news feed fetcher.
-#[derive(Clone, Debug)]
-pub struct TiingoHttpNewsFetcher {
-    base_url: String,
-}
+/// Provider specification for the Tiingo news feed fetcher.
+pub struct TiingoNewsSpec;
 
-impl Default for TiingoHttpNewsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TiingoHttpNewsFetcher {
-    /// Override the Tiingo base URL (useful for tests against a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `tiingo` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
-
-#[async_trait]
-impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
+impl ProviderSpec for TiingoNewsSpec {
     const PROVIDER: &'static str = "tiingo";
     const ENDPOINT: &'static str = "news";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "tiingo http client";
+    const SEND_ERR: &'static str = "tiingo news extract_data";
+    const RETURNED_ERR: &'static str = "tiingo news returned";
+    const READ_BODY_ERR: &'static str = "tiingo news read body";
+
+    type Query = TiingoNewsQuery;
+    type Data = TiingoNewsArticle;
 
     fn transform_query(params: Value) -> Result<TiingoNewsQuery> {
         let tickers_value = params.get("tickers").ok_or_else(|| {
@@ -221,36 +166,19 @@ impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
         TiingoNewsQuery::new(&refs).map_err(|e| Error::InvalidQuery(e.to_string()))
     }
 
-    async fn extract_data(&self, query: &TiingoNewsQuery, _creds: &Credentials) -> Result<Bytes> {
+    fn build_request(
+        base_url: &str,
+        query: &TiingoNewsQuery,
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         let api_key = read_api_key()?;
         let tickers_param = query.tickers.join(",").to_ascii_lowercase();
-        let endpoint = format!("{}/news", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/news", base_url.trim_end_matches('/'));
         let query_params = [("tickers", tickers_param), ("token", api_key)];
-        let client = build_client()?;
-        let response = client
-            .get(&endpoint)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|e| Error::Provider(format!("tiingo news extract_data: {e}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "tiingo news returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|e| Error::Provider(format!("tiingo news read body: {e}")))
+        Ok(client.get(&endpoint).query(&query_params))
     }
 
-    fn transform_data(
-        &self,
-        _query: &TiingoNewsQuery,
-        raw: Bytes,
-    ) -> Result<Vec<TiingoNewsArticle>> {
+    fn transform_data(_query: &TiingoNewsQuery, raw: Bytes) -> Result<Vec<TiingoNewsArticle>> {
         let items: Vec<TiingoNewsItem> = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("tiingo news parse_json: {e}")))?;
         Ok(items
@@ -266,6 +194,9 @@ impl Fetcher<TiingoNewsQuery, TiingoNewsArticle> for TiingoHttpNewsFetcher {
     }
 }
 
+/// Production Tiingo news feed fetcher.
+pub type TiingoHttpNewsFetcher = HttpFetcher<TiingoNewsSpec>;
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -280,11 +211,4 @@ fn read_api_key() -> Result<String> {
                 TiingoProviderError::Provider(format!("{API_KEY_ENV} not set")).to_string(),
             )
         })
-}
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("tiingo http client: {e}")))
 }

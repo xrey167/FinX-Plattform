@@ -18,6 +18,18 @@ pub enum ServiceEndpoint {
     IngestBatch,
     ToolCall,
     UdfRun,
+    /// Used for all four price-alert CRUD ops (`CreateAlert`, `ListAlerts`,
+    /// `DeleteAlert`, `SetAlertActive`). Requires the `analyst` role — the
+    /// same gate as query/ingest — so any authenticated analyst can manage
+    /// their own alerts without a separate privilege.
+    AlertManage,
+    /// User registration (`RegisterUser`). Registration is an onboarding op:
+    /// in production it would be a **public**, unauthenticated endpoint
+    /// (anyone can sign up). This integration slice does not introduce a new
+    /// auth mechanism, so for now it reuses the same `analyst` gate as the
+    /// alert ops; a production deployment would move this to a public path
+    /// (no required role) once anonymous ingress is wired.
+    UserRegister,
 }
 
 impl ServiceEndpoint {
@@ -28,12 +40,21 @@ impl ServiceEndpoint {
             Self::IngestBatch => "tdw.ingest.run",
             Self::ToolCall => "tdw.udf.run",
             Self::UdfRun => "udf.run",
+            Self::AlertManage => "tdw.alert.manage",
+            Self::UserRegister => "tdw.user.register",
         }
     }
 
     const fn required_role(self) -> &'static str {
         match self {
-            Self::EquityHistorical | Self::RunQuery | Self::IngestBatch => "analyst",
+            // `UserRegister` is an onboarding op that would be public in
+            // production; for now it reuses the same `analyst` gate as the
+            // alert ops (no new auth mechanism is introduced here).
+            Self::EquityHistorical
+            | Self::RunQuery
+            | Self::IngestBatch
+            | Self::AlertManage
+            | Self::UserRegister => "analyst",
             Self::ToolCall | Self::UdfRun => "udf_runner",
         }
     }
@@ -45,6 +66,8 @@ impl ServiceEndpoint {
             Self::IngestBatch => "market.ingest_batch",
             Self::ToolCall => "runtime.tool_call",
             Self::UdfRun => "runtime.udf_run",
+            Self::AlertManage => "market.price_alerts",
+            Self::UserRegister => "system.identity_users",
         }
     }
 }
@@ -332,5 +355,45 @@ fn masked_leaf(value: &Value, mode: MaskMode) -> Value {
                 Value::String(format!("***{suffix}"))
             },
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn last4(field: &str) -> MaskRule {
+        MaskRule {
+            field: field.to_string(),
+            mode: MaskMode::Last4,
+        }
+    }
+
+    #[test]
+    fn last4_masks_long_string_to_trailing_four_digits() {
+        // The Last4 string path: keep only the final four characters behind the
+        // `***` marker. Reached via the public mask_json_response -> the private
+        // masked_leaf Last4 arm.
+        let masked = mask_json_response(json!({ "account": "1234567890" }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***7890");
+    }
+
+    #[test]
+    fn last4_masks_non_string_value_to_bare_marker() {
+        // as_str() is None for a numeric leaf, so the map_or_else fallback yields
+        // the bare `***` marker (no suffix).
+        let masked = mask_json_response(json!({ "account": 12345 }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***");
+    }
+
+    #[test]
+    fn last4_masks_short_string_keeping_all_available_chars() {
+        // A string shorter than four chars exercises the chars().rev().take(4)
+        // boundary: every character is retained behind the marker.
+        let masked = mask_json_response(json!({ "account": "ab" }), &[last4("account")]);
+
+        assert_eq!(masked["account"], "***ab");
     }
 }

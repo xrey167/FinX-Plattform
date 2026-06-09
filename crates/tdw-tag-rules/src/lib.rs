@@ -325,8 +325,6 @@ mod tests {
         // Identifiers that merely embed a keyword as a substring are NOT false-flagged.
         engine
             .hot_reload(vec![rule("select dropped_count, updated_at from t")])
-            .unwrap_or_else(|error| {
-                panic!("benign keyword-substring sql should pass: {error:?}")
-            });
+            .unwrap_or_else(|error| panic!("benign keyword-substring sql should pass: {error:?}"));
     }
 }

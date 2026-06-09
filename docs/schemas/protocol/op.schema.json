@@ -119,6 +119,14 @@
             }
           ]
         },
+        "symbols": {
+          "default": [],
+          "description": "Symbols to ingest in this batch. Each is fetched and persisted\nindependently (with its own deduplication token), so a single op can\nfan out across a watchlist. Must be non-empty.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "type": {
           "const": "ingest_batch",
           "type": "string"
@@ -216,6 +224,181 @@
       "required": [
         "type",
         "op_id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Fetch a fresh last-price quote snapshot for `symbol` from the named\n`provider`. This is a **no-cache read**: the daemon calls the provider's\nHTTP endpoint on every dispatch and returns the result directly without\nwriting to any storage layer. Intended for real-time consumers such as a\nprice-alert engine that evaluate `current_price` against thresholds on\nevery trigger cycle. Serializes as `get_quote_snapshot`.",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "type": {
+          "const": "get_quote_snapshot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "symbol"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Start a live streaming-ingest task for `provider`/`symbol`, draining the\nprovider's websocket subscription into the (optional) `table` (defaulting\nto the provider's bronze landing table). Serializes as `stream_start`.",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "table": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "stream_start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "provider",
+        "symbol"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Stop a previously started streaming-ingest task identified by\n`stream_id`. Serializes as `stream_stop`.",
+      "properties": {
+        "stream_id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "stream_stop",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "stream_id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Create a new price alert for the authenticated principal. The server\nderives `owner_id` from the verified JWT subject — it is **never** read\nfrom the request payload. `target_price` is a decimal string (e.g.\n`\"123.45\"`) — carrying it as `String` preserves `Op: Eq` (f64 is not\n`Eq`) and avoids NaN-in-protocol. The dispatcher validates it is a\nfinite, positive number. `condition` is the `AlertDirection` text:\n`\"Above\"` or `\"Below\"`. Serializes as `create_alert`.",
+      "properties": {
+        "condition": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "target_price": {
+          "type": "string"
+        },
+        "type": {
+          "const": "create_alert",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "symbol",
+        "target_price",
+        "condition"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "List all price alerts owned by the authenticated principal, newest\nfirst. No filter parameters — owner scoping is enforced server-side\nfrom the verified JWT subject. Serializes as `list_alerts`.",
+      "properties": {
+        "type": {
+          "const": "list_alerts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Delete the price alert with `id`. The server verifies that the alert\nbelongs to the authenticated principal before deleting; a mismatched or\nnon-existent id returns an error that does **not** leak existence.\nSerializes as `delete_alert`.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "delete_alert",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Enable or disable the price alert with `id`. Same server-side ownership\ncheck as `DeleteAlert`. Serializes as `set_alert_active`.",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "const": "set_alert_active",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "active"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Register a new first-party user (email/password onboarding). The\ndispatcher validates and hashes the password via the `tdw-identity`\nstore and emits a `user.created` event on success. `password` is the\nplaintext credential — it is hashed by the store and is **never**\nreturned or logged; the created `User` record never carries the hash.\n`id` and `now_ms` are caller-supplied (the identity crate has no\nUUID/clock dependency). Serializes as `register_user`. Like the alert\nops, this variant is always present in the protocol; the dispatcher arm\nthat services it is gated by the `identity` feature on `tdw-service-api`.",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "now_ms": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "password": {
+          "type": "string"
+        },
+        "type": {
+          "const": "register_user",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "email",
+        "password",
+        "display_name",
+        "now_ms"
       ],
       "type": "object"
     },

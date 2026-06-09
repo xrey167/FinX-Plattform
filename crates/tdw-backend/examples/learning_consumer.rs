@@ -243,5 +243,7 @@ fn learning_agent_card() -> AgentCard {
             tags: Vec::new(),
         }],
         endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+        tool_scope: Vec::new(),
+        runtime: None,
     }
 }

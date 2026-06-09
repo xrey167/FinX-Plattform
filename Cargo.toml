@@ -43,14 +43,36 @@ futures-util = { version = "0.3.31", default-features = false }
 # Pure-Rust JSON5 parser. Comment-friendly authoring format for the agent registry;
 # the MCP wire stays strict JSON via the mcp adapter.
 json5 = "1"
+# JWT verification (signature + standard claim checks) for the OIDC ingress
+# boundary. `rust_crypto` selects the pure-Rust crypto backend (rsa/p256/p384/
+# hmac/sha2 crates); no C / CMake / aws-lc-sys build dependency.
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 # Cross-platform filesystem notifications (pure Rust) for event-driven registry hot-reload.
 notify = "8"
+# Constant-time byte comparison for bearer-token / secret equality checks
+# (timing-attack resistant). Already a vetted transitive dependency.
+subtle = "2.6"
+# HMAC-SHA256 for /functions request-signature verification.
+# Both crates are pure Rust (no C/CMake deps) and are already transitively
+# present via jsonwebtoken's rust_crypto feature; declaring them here makes
+# the version explicit and avoids re-resolving a new entry in Cargo.lock.
+hmac = "0.13"
+sha2 = "0.11"
+# Argon2id password hashing (RustCrypto, pure Rust, MIT OR Apache-2.0).
+# No C/CMake deps; compiles cleanly on Windows CI without a native toolchain.
+# Stable 0.5.x; 0.6.x is still RC as of 2026-06-07.
+argon2 = { version = "0.5", features = ["password-hash", "std"] }
 toml = "1.1.2"
+tracing = "0.1"
 ulid = { version = "1.2.1", features = ["serde"] }
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 validator = { version = "0.20.0", features = ["derive"] }
 wasmi = "0.31"
+# Transactional SMTP client. Pure-Rust TLS via rustls (no native-tls / OpenSSL
+# build deps) so it compiles on Windows CI without a C toolchain.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "tokio1", "tokio1-rustls-tls", "builder"] }
 
+tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
 tdw-core = { path = "crates/tdw-core" }
@@ -71,6 +93,7 @@ tdw-runtime = { path = "crates/tdw-runtime" }
 tdw-app-client = { path = "crates/tdw-app-client" }
 tdw-app-server = { path = "crates/tdw-app-server" }
 tdw-provider-fileset = { path = "crates/tdw-provider-fileset" }
+tdw-provider-http = { path = "crates/tdw-provider-http" }
 tdw-provider-ws = { path = "crates/tdw-provider-ws" }
 tdw-storage-broker = { path = "crates/tdw-storage-broker" }
 tdw-storage-fs = { path = "crates/tdw-storage-fs" }

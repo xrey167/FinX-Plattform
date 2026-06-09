@@ -121,7 +121,7 @@ impl Backend {
 
     /// The underlying daemon composition root.
     #[must_use]
-    pub fn app_state(&self) -> &AppState {
+    pub const fn app_state(&self) -> &AppState {
         &self.state
     }
 
@@ -338,6 +338,7 @@ impl Backend {
         store
             .upsert_at(memory, &now)
             .map_err(|error| BackendError::Memory(error.to_string()))?;
+        drop(store);
         Ok(())
     }
 
@@ -469,6 +470,7 @@ impl Backend {
     pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
         let mut index = self.index.lock().await;
         index.index_document(doc).await?;
+        drop(index);
         Ok(())
     }
 
@@ -520,7 +522,7 @@ fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
     match provider.as_deref() {
-        None | Some("hash") | Some("local") => Ok(Arc::new(HashEmbeddingProvider::default())),
+        None | Some("hash" | "local") => Ok(Arc::new(HashEmbeddingProvider::default())),
         #[cfg(feature = "openai")]
         Some("openai") => build_openai_embedder(),
         #[cfg(feature = "google")]
@@ -858,10 +860,10 @@ mod tests {
         assert!(Arc::ptr_eq(&backend.outbox(), &backend.app_state().outbox));
 
         let bus = backend.event_bus();
-        let _bus_guard = bus
+        let bus_guard = bus
             .lock()
             .unwrap_or_else(|error| panic!("bus lock: {error}"));
-        drop(_bus_guard);
+        drop(bus_guard);
 
         let outbox = backend.outbox();
         let _outbox_guard = outbox
@@ -896,19 +898,32 @@ mod tests {
         assert!(backend.submission_handle().is_some());
 
         // A loopback client submits a Shutdown op and must observe a terminal
-        // event. `submit_and_wait` is blocking, so run it off the async worker.
-        let client_addr = addr.clone();
-        let submission = tokio::task::spawn_blocking(move || {
-            let client = DaemonClient::new(
-                DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(2)),
-            );
-            client.submit_and_wait(&make_envelope(Op::Shutdown))
-        });
-        let submission = tokio::time::timeout(Duration::from_secs(3), submission)
-            .await
-            .expect("loopback submit must not hang")
-            .expect("spawn_blocking join")
-            .expect("loopback submission should reach the in-process daemon");
+        // event. `serve` returns after binding, but the spawned accept loop can
+        // still be a few scheduler ticks behind on loaded CI runners.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let submission = loop {
+            let client_addr = addr.clone();
+            let attempt = tokio::task::spawn_blocking(move || {
+                let client = DaemonClient::new(
+                    DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(5)),
+                );
+                client.submit_and_wait(&make_envelope(Op::Shutdown))
+            });
+            match tokio::time::timeout(Duration::from_secs(6), attempt)
+                .await
+                .expect("loopback submit must not hang")
+                .expect("spawn_blocking join")
+            {
+                Ok(submission) => break submission,
+                Err(error) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "loopback submission should reach the in-process daemon: {error}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        };
         assert!(
             submission
                 .events

@@ -1,0 +1,53 @@
+{
+  "scope": "work/release-1-0-gap-closure",
+  "decision": "passed_with_ci_validation_required",
+  "aiSlopCleaner": {
+    "status": "passed",
+    "report": "docs/quality/release-1-0-gap-ai-slop-cleanup-report.md",
+    "evidence": "Changed-scope scan for fallback/workaround/temporary/bypass/skip/swallow/silent default/TODO/FIXME/HACK found no new masking fallback slop; docs/quality/release-1-0-gap-ai-slop-cleanup-report.md records classifications and residual risks.",
+    "summary": "Changed-scope fallback/slop scan found no new masking fallback paths. CI retry hardening is explicit and evidence-preserving."
+  },
+  "verification": {
+    "status": "passed",
+    "evidence": "fmt, cargo check, clippy -D warnings, workspace tests, clean-room audit, prerelease-check, plain tdw-service smoke, and git diff whitespace check all passed locally.",
+    "commands": [
+      "cargo fmt --all -- --check",
+      "cargo check --workspace",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "cargo test --workspace",
+      "cargo run -p xtask -- clean-room-audit",
+      "cargo run -p xtask -- prerelease-check",
+      "cargo run -p tdw-service -- --smoke AAPL",
+      "git diff --check"
+    ]
+  },
+  "codeReview": {
+    "status": "passed_with_residual_risk",
+    "recommendation": "APPROVE",
+    "architectStatus": "CLEAR",
+    "evidence": "Independent code-reviewer re-check returned APPROVE after the changelog compare-link blocker was fixed. Independent architect re-check returned CLEAR after stale audit references were updated and .omx session state was excluded from the PR diff. Manual changed-file review found no behavioral regressions: CI retry hardening only retries dependency pulls, docker-compose escaping preserves shell-local attempt arithmetic, release docs correctly use a new v1.1.0 tag instead of moving v1.0.0, batch-lint-debt-004 is already upstream after rebase, and clean-room boundaries remain enforced.",
+    "independentReview": {
+      "codeReviewer": {
+        "status": "completed",
+        "recommendation": "APPROVE",
+        "evidence": "No findings. Changelog footer blocker resolved with correct [Unreleased], [1.1.0], and [1.0.0] compare ranges; git diff --check and clean-room audit passed."
+      },
+      "architect": {
+        "status": "completed",
+        "architectStatus": "CLEAR",
+        "evidence": "Focused re-check returned CLEAR after the audit moved to origin/main d2978f3, queued current CI was distinguished from the historical bb689fe Docker Hub timeout, and .omx files were removed from the PR diff."
+      }
+    },
+    "findings": [],
+    "residualRisk": [
+      "Docker is unavailable in the local Windows environment, so the compose pull retry must be validated by GitHub Actions on the PR.",
+      "The active Codex goal object for this thread was already complete from the prior run; repo-local OMX session state is excluded from this release PR and the durable evidence is recorded under docs/quality."
+    ]
+  },
+  "releaseEvidence": {
+    "audit": "docs/quality/release-1-0-gap-audit.md",
+    "readiness": "docs/quality/release-1-0-readiness.md",
+    "nextTag": "v1.1.0",
+    "reason": "Current origin/main has user-visible auth and worker changes after v1.0.0; SemVer requires a new minor 1.x release instead of moving v1.0.0."
+  }
+}

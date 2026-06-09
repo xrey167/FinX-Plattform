@@ -211,6 +211,16 @@ pub enum Op {
     Cancel {
         op_id: OpId,
     },
+    /// Fetch a fresh last-price quote snapshot for `symbol` from the named
+    /// `provider`. This is a **no-cache read**: the daemon calls the provider's
+    /// HTTP endpoint on every dispatch and returns the result directly without
+    /// writing to any storage layer. Intended for real-time consumers such as a
+    /// price-alert engine that evaluate `current_price` against thresholds on
+    /// every trigger cycle. Serializes as `get_quote_snapshot`.
+    GetQuoteSnapshot {
+        provider: String,
+        symbol: String,
+    },
     /// Start a live streaming-ingest task for `provider`/`symbol`, draining the
     /// provider's websocket subscription into the (optional) `table` (defaulting
     /// to the provider's bronze landing table). Serializes as `stream_start`.
@@ -223,6 +233,51 @@ pub enum Op {
     /// `stream_id`. Serializes as `stream_stop`.
     StreamStop {
         stream_id: String,
+    },
+    /// Create a new price alert for the authenticated principal. The server
+    /// derives `owner_id` from the verified JWT subject — it is **never** read
+    /// from the request payload. `target_price` is a decimal string (e.g.
+    /// `"123.45"`) — carrying it as `String` preserves `Op: Eq` (f64 is not
+    /// `Eq`) and avoids NaN-in-protocol. The dispatcher validates it is a
+    /// finite, positive number. `condition` is the `AlertDirection` text:
+    /// `"Above"` or `"Below"`. Serializes as `create_alert`.
+    CreateAlert {
+        symbol: String,
+        target_price: String,
+        condition: String,
+    },
+    /// List all price alerts owned by the authenticated principal, newest
+    /// first. No filter parameters — owner scoping is enforced server-side
+    /// from the verified JWT subject. Serializes as `list_alerts`.
+    ListAlerts {},
+    /// Delete the price alert with `id`. The server verifies that the alert
+    /// belongs to the authenticated principal before deleting; a mismatched or
+    /// non-existent id returns an error that does **not** leak existence.
+    /// Serializes as `delete_alert`.
+    DeleteAlert {
+        id: String,
+    },
+    /// Enable or disable the price alert with `id`. Same server-side ownership
+    /// check as `DeleteAlert`. Serializes as `set_alert_active`.
+    SetAlertActive {
+        id: String,
+        active: bool,
+    },
+    /// Register a new first-party user (email/password onboarding). The
+    /// dispatcher validates and hashes the password via the `tdw-identity`
+    /// store and emits a `user.created` event on success. `password` is the
+    /// plaintext credential — it is hashed by the store and is **never**
+    /// returned or logged; the created `User` record never carries the hash.
+    /// `id` and `now_ms` are caller-supplied (the identity crate has no
+    /// UUID/clock dependency). Serializes as `register_user`. Like the alert
+    /// ops, this variant is always present in the protocol; the dispatcher arm
+    /// that services it is gated by the `identity` feature on `tdw-service-api`.
+    RegisterUser {
+        id: String,
+        email: String,
+        password: String,
+        display_name: String,
+        now_ms: i64,
     },
     Shutdown,
 }
@@ -380,6 +435,20 @@ mod tests {
         let encoded = serde_json::to_string(&frame).expect("frame serializes");
         let decoded: ReplayFrame = serde_json::from_str(&encoded).expect("frame deserializes");
         assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn get_quote_snapshot_op_round_trips_with_tagged_variant() {
+        let op = Op::GetQuoteSnapshot {
+            provider: "fmp".to_string(),
+            symbol: "AAPL".to_string(),
+        };
+        let encoded = serde_json::to_value(&op).expect("op serializes");
+        assert_eq!(encoded["type"], "get_quote_snapshot");
+        assert_eq!(encoded["provider"], "fmp");
+        assert_eq!(encoded["symbol"], "AAPL");
+        let decoded: Op = serde_json::from_value(encoded).expect("op deserializes");
+        assert_eq!(decoded, op);
     }
 
     #[test]

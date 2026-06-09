@@ -7,6 +7,29 @@ targets = [
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 (Marvin Attack, `rsa` crate, no fixed version exists):
+    # timing sidechannel on RSA PRIVATE-key operations (decryption/signing).
+    # `rsa` enters the tree only via jsonwebtoken's `rust_crypto` backend in
+    # tdw-auth-oidc, which performs exclusively PUBLIC-key signature
+    # VERIFICATION of IdP-issued JWTs — the vulnerable private-key code path
+    # is never exercised. Accepted in preference to: (a) staying on
+    # jsonwebtoken 9.x (real authorization-bypass vuln in the verification
+    # path, dependabot alert #4), or (b) the aws-lc-rs backend (C/CMake/NASM
+    # build deps breaking the Windows CI matrix). Revisit when RustCrypto/RSA
+    # ships the fix (https://github.com/RustCrypto/RSA/issues/626).
+    "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0173 (`proc-macro-error2` UNMAINTAINED — advisory, not a
+    # vulnerability): the author confirmed the crate is no longer maintained.
+    # It enters the tree only as a COMPILE-TIME proc-macro via
+    # validator_derive 0.20 -> validator 0.20 (struct validation in tdw-agent).
+    # As a build dependency it is absent from the shipped runtime binary, so
+    # there is no runtime attack surface. validator 0.20 is the current release
+    # and still depends on it; dropping it requires upstream `validator` to
+    # migrate off proc-macro-error2. Revisit when validator ships a release that
+    # removes the dependency (https://rustsec.org/advisories/RUSTSEC-2026-0173).
+    "RUSTSEC-2026-0173",
+]
 
 [licenses]
 version = 2

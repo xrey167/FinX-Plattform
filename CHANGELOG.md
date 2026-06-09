@@ -4,13 +4,183 @@ All notable changes to FinX-Plattform are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 SemVer tags `vMAJOR.MINOR.PATCH` as defined in [`docs/release.md`](docs/release.md).
 
-While the major version is `0`, `MINOR` is incremented for user-visible
-runtime, protocol, storage, provider, or release-packaging changes, and `PATCH`
-for compatible fixes, docs, CI-only changes, and packaging repairs.
+From `v1.0.0` onward the project follows standard SemVer: `MAJOR` for
+backward-incompatible protocol/persistence/API/operator-contract changes,
+`MINOR` for backward-compatible user-visible additions, and `PATCH` for
+compatible fixes, docs, CI-only changes, and packaging repairs. The pre-1.0
+history below used `MINOR` for any user-visible change while the major version
+was `0`. The workspace `Cargo.toml` `version` field is intentionally not bumped
+per release — releases are tag-driven (see [`docs/release.md`](docs/release.md)).
 
 ## [Unreleased]
 
-_Nothing yet._
+## [1.1.0] - 2026-06-08
+
+Security, observability, feature-platform, and production-readiness release on
+top of `v1.0.0`. Hardens authentication (cryptographic OIDC, constant-time token
+comparison, loopback-default daemon bind), wires real storage/compute engines
+into the `live` profile by default, completes registry-driven dispatch, lands
+the worker dead-letter operator surface and full ops/health surface, and adds
+the first OpenBB-gap-closure layer (standardized result envelope, cluster data
+models, shared query params, logical-endpoint resolution, symbology). It also
+builds out the application feature platform — alert engine, transactional and
+broadcast email, news aggregation, a multi-step function/cron spine, first-party
+identity/session/password stores, the Finnhub provider, an LLM fallback/router
+with error classification, and tool-execution autonomy gating with a hash-chained
+receipt log — on top of a workspace-wide documentation, self-improve, and
+dependency-hygiene sweep.
+
+### Added
+
+- **Real engines by default in the `live` profile** (#157). `tdw-service-api`'s
+  `AppState` now wires the real ClickHouse / Postgres / Qdrant / Meilisearch /
+  S3 engines (behind feature gates) instead of in-memory stand-ins when the
+  `live` Compose profile is selected, so the deployed stack exercises the
+  production storage/compute paths. The default offline build is unchanged.
+- **Registry-driven dispatch end to end** (#158). Ingest is now driven through
+  the provider registry, a `ToolRegistry` routes tool/MCP calls, and the wasm
+  UDF runtime is reachable from the daemon dispatch path — closing the gap
+  between the registered provider/tool set and what the daemon can actually
+  execute.
+- **Worker dead-letter operator surface** (#153). `tdw-worker` gains
+  `dead-letter list` / `dead-letter replay` CLI subcommands for inspecting and
+  re-enqueueing dead-lettered jobs, plus a bounded-concurrency clamp so
+  `TDW_WORKER_CONCURRENCY` cannot exceed a safe ceiling. Documented in
+  `docs/release/worker-deployment.md`.
+- **Cryptographic OIDC verification** in `tdw-auth-oidc` (#150). New
+  `verify_jwt` / `verify_jwt_strict` verify a compact JWT's signature against
+  supplied verifying keys (RS256/ES256, resolved by `kid`) and enforce
+  `exp`/`nbf`/`iat` (60s clock-skew leeway), issuer, and audience — failing
+  closed on any error. The `none` pseudo-algorithm and HMAC tokens are rejected
+  (alg-confusion / `alg:none` defence). Built on `jsonwebtoken` (default `ring`
+  backend, already a vetted transitive dependency). The existing structural
+  claim/JWKS checks remain as a pre-filter. Remote JWKS fetch stays out of
+  scope: verifying keys are supplied from the configured JWKS.
+- **Ops/health surface + graceful drain** (#161, G002). `/health`, `/ready`,
+  and `/metrics` endpoints plus coordinated graceful drain for the daemon,
+  worker, and MCP server, so the deployed stack is probe- and shutdown-aware.
+- **Price-alert engine** (#180, #187, #199). A `PriceAlert` domain model with a
+  Postgres migration and alert stores (#180), a `tdw-alert-evaluator` price-alert
+  evaluation function on a 5-minute cron (#187), and owner-scoped alert CRUD
+  daemon ops in `tdw-service-api` (#199).
+- **Function/cron spine** (#177, #185, #186). A `tdw-cron` recurring-trigger
+  spine over the worker queue (#177), a multi-step `tdw-functions` registry with
+  per-step memoization (#185), and cron/event triggers wired to worker-job
+  execution (#186).
+- **Transactional + broadcast email** (#183, #201). `tdw-email` transactional
+  SMTP send with HTML template fill (#183), plus a marketing/broadcast client
+  behind a `broadcast` feature (#201).
+- **News aggregation policy layer** (#204). A new `tdw-news-compose` crate that
+  aggregates and composes news under an explicit policy layer.
+- **First-party identity stores** (#193, #205). A first-party user + password
+  store using argon2 (#193) and a session store (#205) in `tdw-identity`.
+- **Finnhub provider** (`tdw-provider-finnhub`, #192). Company profile and quote
+  fetchers following the canonical provider pattern.
+- **LLM fallback, router, and error classification** (#169, #194, #195).
+  `tdw-llm` gains a `FallbackModel` primary→secondary provider wrapper (#169), a
+  credential-aware provider router (#195), and retryable-vs-permanent error
+  classification (#194).
+- **Tool-execution autonomy gating + receipt log** (#196, #197, #198).
+  `tdw-tool-exec` gates execution on `ToolEffect` risk via an opt-in
+  `AutonomyLevel` (#196), keeps an opt-in hash-chained tool-receipt log (#197),
+  and validates call arguments against an opt-in arg schema before dispatch
+  (#198).
+- **FunctionRegistry over HTTP** (#188). `tdw-app-server` exposes the
+  `FunctionRegistry` over HTTP with HMAC request signing.
+- **Live `QuoteSnapshot` read path** (#179). A `QuoteSnapshot` domain type plus
+  an uncached live read path for quote data.
+- **OpenBB-gap-closure layer 1** (#176, #173, #190, #191). The first layer of
+  the OpenBB clean-room gap-closure plan (analysis + layered plan in #176): a
+  standardized result envelope and cluster data models, shared query-param
+  normalization with a yahoo/fred pilot (L1.3, #191), logical-endpoint provider
+  resolution (L1.5, #190), and a pure ticker-symbology normalization crate
+  `tdw-symbology` (#173).
+
+### Changed
+
+- **Constant-time bearer-token comparison** on the MCP Streamable HTTP layer
+  (#150). `TDW_MCP_HTTP_TOKEN` validation now compares tokens via `subtle`'s
+  `ConstantTimeEq` over fixed-width digests instead of `==`, removing the
+  timing side channel (and not leaking token length).
+- **Safe daemon TCP defaults** (#150). The daemon TCP transport already
+  defaults to loopback (`127.0.0.1:7878`) when `TDW_DAEMON_TCP_BIND` is unset;
+  it now logs a prominent `SECURITY WARNING` at startup when bound to a
+  non-loopback address with no auth-backed policy attached. **Operator note:**
+  deployments that previously relied on an implicit non-loopback bind must set
+  `TDW_DAEMON_TCP_BIND` explicitly and attach an auth-backed policy.
+- **Partial OIDC config is now a hard startup error** (#150). A
+  partially-configured `prod`/`production` boot (some but not all `TDW_OIDC_*`
+  set, or invalid JWKS/claims) makes the daemon **refuse to start**, with a
+  diagnostic listing every missing variable. A fully-unset OIDC config keeps the
+  existing fail-closed (starts, dispatches return `Failed`) behavior.
+  `OidcPolicyError` gained `MissingEnvVars(Vec<&'static str>)` (replacing the
+  single-var `MissingEnvVar`).
+- **CI: live-stack + tools smoke jobs, aarch64 release leg, multiarch images**
+  (#155). A new `live-stack` workflow brings up the Compose stack and runs the
+  smoke path; the CI tools job covers the `tdw-cli`/`tdw-mcp` surface; the
+  release workflow gains an `aarch64-unknown-linux-gnu` build leg; and container
+  images are now built multiarch.
+- **CI: concurrency groups** (#200) cancel superseded PR runs so only the latest
+  push per branch consumes runners.
+- **`jsonwebtoken` 9.3.1 → 10.4.0** on the `rust_crypto` backend (#163), keeping
+  the OIDC verifier on a current, maintained JWT implementation.
+
+### Security
+
+- The OIDC, constant-time token comparison, and loopback-default daemon-bind
+  changes (#150) collectively harden the production authentication and transport
+  posture. See *Upgrade notes* in
+  [`docs/release/v1.1.0-notes.md`](docs/release/v1.1.0-notes.md) for the
+  breaking-for-exposed-deployments details.
+- `cargo-deny` now ignores `RUSTSEC-2026-0173` (proc-macro-error2 unmaintained),
+  a build-time-only transitive advisory with no runtime exposure (#202).
+
+### Performance
+
+- **Verification wall time halved** (#178). Test-target gating, a doctest-harness
+  purge, and fixture shrinking cut workspace verification wall time by ~54% over
+  three self-improve iterations, without reducing coverage.
+
+### Docs
+
+- **Consolidated `TDW_*` environment reference + operator setup** (#149). New
+  [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the single source of truth
+  for every `TDW_*` variable, with a rewritten `.env.example`, a
+  `secrets-and-tls.md` runbook, and `compose-setup` helper scripts.
+- **Comprehensive per-crate README/ARCHITECTURE/examples across all crates**
+  (#164–#168, #170–#172). A workspace-wide documentation sweep adding a README,
+  an ARCHITECTURE note, and runnable examples to every crate — provider crates
+  (batches A/B/C, including the ws and proto crates), domain/data, storage and
+  persistence, AI (llm/embed/agent/udf), service/binary, and core infra.
+- **OpenBB clean-room gap analysis + layered closure plan** (#176). A roadmap
+  document that scopes the OpenBB feature gap and the layered plan to close it.
+- **Lint-debt sweep.** `missing_const_for_fn` resolved across 16 crates
+  (#156, #160) and `too_long_first_doc_paragraph` across 4 crates (#162).
+- **Release roster + 1.0 gap-audit closure.** Crate-readiness roster sync (#182)
+  and the 1.0 gap-audit closure (#159).
+
+### Internal
+
+- **Self-improve campaigns.** Provider HTTP fetchers deduplicated via a shared
+  core (−60% duplication, #175); workspace verification time reduced (−54%, #178,
+  see *Performance*); line coverage raised across `tdw-backend`/`tdw-service-api`/
+  `tdw-core` (#181) and daemon-serving paths covered (#203); and 17
+  code-reference-free workspace dependency edges removed (351 → 334, #184).
+
+## [1.0.0] - 2026-06-07
+
+### Added
+
+- Release 1.0 readiness hardening: Yahoo's real HTTP fetcher is now selectable
+  through `tdw-service-api`'s provider feature set and included in
+  `all-http-providers`.
+- Deterministic coverage for the `tdw-bootstrap`, `tdw-cli`, and `tdw-proto`
+  crates so the batch backlog no longer treats them as untested leaf binaries.
+
+### Changed
+
+- Updated release-facing README status text to reflect the existing tag history
+  and the active `v1.0.0` readiness branch.
 
 ## [0.10.0] - 2026-06-06
 
@@ -411,7 +581,9 @@ Initial tagged release. G014 release-packaging surface for `tdw-service`,
 checksums and build-provenance attestations, plus scanned GHCR container
 images. See `docs/release.md` for the full artifact and image policy.
 
-[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/xrey167/FinX-Plattform/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/xrey167/FinX-Plattform/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.10.0...v1.0.0
 [0.10.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/xrey167/FinX-Plattform/compare/v0.7.0...v0.8.0

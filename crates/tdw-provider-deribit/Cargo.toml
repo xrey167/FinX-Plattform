@@ -5,9 +5,16 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = []
-http = ["dep:async-trait","dep:bytes","dep:reqwest","dep:tdw-core","dep:tdw-domain","dep:tokio"]
+http = ["dep:async-trait","dep:bytes","dep:reqwest","dep:tdw-core","dep:tokio", "tdw-core/http"]
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
@@ -17,9 +24,20 @@ schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true, optional = true }
-tdw-domain = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
+
+[[example]]
+name = "basic"
+required-features = ["http"]
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
+[[test]]
+name = "http_fetcher"
+path = "tests/http_fetcher.rs"
+required-features = ["http"]
 
 [lints]
 workspace = true

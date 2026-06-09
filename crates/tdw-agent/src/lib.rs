@@ -40,9 +40,10 @@ pub use resource::{
 };
 pub use watch::{RegistryWatcher, WatchError};
 
-/// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names. Q8 reclassified
-/// storage to a `resourcedefinition` persistence facet; prefer [`resource_definitions`].
-/// Retained because downstream crates still consume it.
+/// DEPRECATED (pre-taxonomy): the legacy fixed set of agent schema names.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet; prefer
+/// [`resource_definitions`]. Retained because downstream crates still consume it.
 pub const AGENT_SCHEMA_NAMES: [&str; 9] = [
     "agent_card",
     "agent_skill",
@@ -205,6 +206,27 @@ pub struct Prompt {
     pub arguments: Vec<PromptArgument>,
 }
 
+/// Optional per-agent runtime overrides for scoped delegation.
+///
+/// Every field is additive and `None` by default, so existing `*.json5` cards and golden
+/// snapshots deserialize byte-identically. Holds only `Option<String>`/`Option<u32>`, so it
+/// derives `Eq` like the sibling [`SlashArg`]; it carries no validation invariants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentRuntime {
+    /// Preferred provider (e.g. an LLM vendor key); `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Preferred model identifier; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Per-invocation timeout in seconds; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u32>,
+    /// Maximum agent iterations; `None` inherits from the caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_iterations: Option<u32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct AgentCard {
     #[validate(nested)]
@@ -217,6 +239,36 @@ pub struct AgentCard {
     pub content_refs: Vec<ContentRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    /// Allowlist of tools this agent may use. Empty (the default) inherits nothing — an agent
+    /// with no declared scope grants no tools and hands no tools to its delegates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_scope: Vec<String>,
+    /// Optional runtime overrides (provider/model/timeout/iterations) for this agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<AgentRuntime>,
+}
+
+impl AgentCard {
+    /// Returns `true` when `name` is present in this agent's [`tool_scope`](AgentCard::tool_scope)
+    /// allowlist. An empty scope grants nothing.
+    #[must_use]
+    pub fn grants_tool(&self, name: &str) -> bool {
+        self.tool_scope.iter().any(|tool| tool == name)
+    }
+
+    /// Computes the tool scope to hand to a delegate: the intersection of `requested` with this
+    /// agent's own scope.
+    ///
+    /// The result is order-stable and deduplicated relative to `self.tool_scope`, and is always a
+    /// subset of the parent scope — a delegate can never receive a tool the parent does not hold.
+    #[must_use]
+    pub fn child_scope(&self, requested: &[String]) -> Vec<String> {
+        self.tool_scope
+            .iter()
+            .filter(|tool| requested.iter().any(|req| req == *tool))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
@@ -273,9 +325,11 @@ pub struct EvalMetric {
     pub metric_value: f64,
 }
 
-/// A canonical evaluation definition (the `evaluation` kind): what to evaluate plus the
-/// ML-rigor facets (track A). The runtime DTOs (`EvalRunRequest`/`EvalCase`/`EvalMetric`)
-/// are separate execution-plane types and are not registry entities.
+/// A canonical evaluation definition (the `evaluation` kind).
+///
+/// Captures what to evaluate plus the ML-rigor facets (track A). The runtime DTOs
+/// (`EvalRunRequest`/`EvalCase`/`EvalMetric`) are separate execution-plane types and are
+/// not registry entities.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct Evaluation {
     #[validate(nested)]
@@ -329,9 +383,10 @@ pub struct Gotcha {
     pub source_ref: Option<ContentRef>,
 }
 
-/// DEPRECATED (pre-taxonomy): an entity→table mapping. Q8 reclassified storage to a
-/// `resourcedefinition` persistence facet + relation, so this is no longer a first-class
-/// kind. Retained because downstream crates still consume it.
+/// DEPRECATED (pre-taxonomy): an entity→table mapping.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet + relation, so this
+/// is no longer a first-class kind. Retained because downstream crates still consume it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StorageMapping {
     pub entity: String,
@@ -1239,8 +1294,9 @@ pub fn validate_workflow_contract(
     workflow.validate_dag().map_err(AgentContractError::from)
 }
 
-/// DEPRECATED (pre-taxonomy): the legacy seed of entity→table storage mappings. Q8
-/// reclassified storage to a `resourcedefinition` persistence facet + relation. Retained
+/// DEPRECATED (pre-taxonomy): the legacy seed of entity→table storage mappings.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet + relation. Retained
 /// because downstream crates still consume it.
 #[must_use]
 pub fn agent_storage_mappings() -> Vec<StorageMapping> {
@@ -1278,8 +1334,9 @@ pub fn agent_storage_mappings() -> Vec<StorageMapping> {
     ]
 }
 
-/// The self-describing registry: one [`ResourceDefinition`] per classified kind, in
-/// manifest-group order. Kinds with a concrete Rust spec type carry their JSON Schema;
+/// The self-describing registry: one [`ResourceDefinition`] per classified kind.
+///
+/// Ordered by manifest-group. Kinds with a concrete Rust spec type carry their JSON Schema;
 /// `candidate` kinds carry `None` until their spec lands.
 #[must_use]
 pub fn resource_definitions() -> Vec<ResourceDefinition> {
@@ -1289,7 +1346,7 @@ pub fn resource_definitions() -> Vec<ResourceDefinition> {
             group: TDW_API_GROUP.to_string(),
             kind,
             manifest_group: kind.group(),
-            spec_schema: spec_schema_for(kind),
+            spec_schema: Some(spec_schema_for(kind)),
             has_data_facets: kind.is_data_kind(),
             autonomy_capable: kind.is_autonomy_capable(),
         })
@@ -1298,58 +1355,59 @@ pub fn resource_definitions() -> Vec<ResourceDefinition> {
 
 /// JSON Schema for a kind's spec, when a concrete Rust type backs it. The
 /// `resourcedefinition` kind returns its own schema, making the registry self-describing.
-fn spec_schema_for(kind: EntityKind) -> Option<Value> {
+fn spec_schema_for(kind: EntityKind) -> Value {
     match kind {
-        EntityKind::Agent => Some(schema_json::<AgentCard>()),
-        EntityKind::Skill => Some(schema_json::<AgentSkill>()),
-        EntityKind::Tool => Some(schema_json::<Tool>()),
-        EntityKind::Prompt => Some(schema_json::<Prompt>()),
-        EntityKind::Command => Some(schema_json::<SlashCommand>()),
-        EntityKind::Gotcha => Some(schema_json::<Gotcha>()),
-        EntityKind::Workflow => Some(schema_json::<WorkflowDefinition>()),
-        EntityKind::Evaluation => Some(schema_json::<Evaluation>()),
-        EntityKind::ResourceDefinition => Some(schema_json::<ResourceDefinition>()),
-        EntityKind::Personality => Some(schema_json::<Personality>()),
-        EntityKind::PromptTemplate => Some(schema_json::<PromptTemplate>()),
-        EntityKind::Template => Some(schema_json::<Template>()),
-        EntityKind::Instruction => Some(schema_json::<Instruction>()),
-        EntityKind::Context => Some(schema_json::<Context>()),
-        EntityKind::Config => Some(schema_json::<Config>()),
-        EntityKind::Primitive => Some(schema_json::<Primitive>()),
-        EntityKind::EnvironmentVariable => Some(schema_json::<EnvironmentVariable>()),
-        EntityKind::Function => Some(schema_json::<Function>()),
-        EntityKind::McpServer => Some(schema_json::<McpServer>()),
-        EntityKind::McpTool => Some(schema_json::<McpToolRef>()),
-        EntityKind::Connector => Some(schema_json::<Connector>()),
-        EntityKind::Webhook => Some(schema_json::<Webhook>()),
-        EntityKind::Task => Some(schema_json::<Task>()),
-        EntityKind::Hook => Some(schema_json::<Hook>()),
-        EntityKind::AgentRouter => Some(schema_json::<AgentRouter>()),
-        EntityKind::ToolRouter => Some(schema_json::<ToolRouter>()),
-        EntityKind::Knowledge => Some(schema_json::<Knowledge>()),
-        EntityKind::Document => Some(schema_json::<Document>()),
-        EntityKind::RagPipeline => Some(schema_json::<RagPipeline>()),
-        EntityKind::KnowledgeGraph => Some(schema_json::<KnowledgeGraph>()),
-        EntityKind::Memory => Some(schema_json::<Memory>()),
-        EntityKind::FeatureStore => Some(schema_json::<FeatureStore>()),
-        EntityKind::Feature => Some(schema_json::<Feature>()),
-        EntityKind::FeatureList => Some(schema_json::<FeatureList>()),
-        EntityKind::Guardrail => Some(schema_json::<Guardrail>()),
-        EntityKind::Rule => Some(schema_json::<Rule>()),
-        EntityKind::Plugin => Some(schema_json::<Plugin>()),
-        EntityKind::ErrorPolicy => Some(schema_json::<ErrorPolicy>()),
-        EntityKind::Network => Some(schema_json::<Network>()),
-        EntityKind::Compute => Some(schema_json::<Compute>()),
-        EntityKind::DataStore => Some(schema_json::<DataStore>()),
-        EntityKind::SecretStore => Some(schema_json::<SecretStore>()),
-        EntityKind::Observability => Some(schema_json::<Observability>()),
+        EntityKind::Agent => schema_json::<AgentCard>(),
+        EntityKind::Skill => schema_json::<AgentSkill>(),
+        EntityKind::Tool => schema_json::<Tool>(),
+        EntityKind::Prompt => schema_json::<Prompt>(),
+        EntityKind::Command => schema_json::<SlashCommand>(),
+        EntityKind::Gotcha => schema_json::<Gotcha>(),
+        EntityKind::Workflow => schema_json::<WorkflowDefinition>(),
+        EntityKind::Evaluation => schema_json::<Evaluation>(),
+        EntityKind::ResourceDefinition => schema_json::<ResourceDefinition>(),
+        EntityKind::Personality => schema_json::<Personality>(),
+        EntityKind::PromptTemplate => schema_json::<PromptTemplate>(),
+        EntityKind::Template => schema_json::<Template>(),
+        EntityKind::Instruction => schema_json::<Instruction>(),
+        EntityKind::Context => schema_json::<Context>(),
+        EntityKind::Config => schema_json::<Config>(),
+        EntityKind::Primitive => schema_json::<Primitive>(),
+        EntityKind::EnvironmentVariable => schema_json::<EnvironmentVariable>(),
+        EntityKind::Function => schema_json::<Function>(),
+        EntityKind::McpServer => schema_json::<McpServer>(),
+        EntityKind::McpTool => schema_json::<McpToolRef>(),
+        EntityKind::Connector => schema_json::<Connector>(),
+        EntityKind::Webhook => schema_json::<Webhook>(),
+        EntityKind::Task => schema_json::<Task>(),
+        EntityKind::Hook => schema_json::<Hook>(),
+        EntityKind::AgentRouter => schema_json::<AgentRouter>(),
+        EntityKind::ToolRouter => schema_json::<ToolRouter>(),
+        EntityKind::Knowledge => schema_json::<Knowledge>(),
+        EntityKind::Document => schema_json::<Document>(),
+        EntityKind::RagPipeline => schema_json::<RagPipeline>(),
+        EntityKind::KnowledgeGraph => schema_json::<KnowledgeGraph>(),
+        EntityKind::Memory => schema_json::<Memory>(),
+        EntityKind::FeatureStore => schema_json::<FeatureStore>(),
+        EntityKind::Feature => schema_json::<Feature>(),
+        EntityKind::FeatureList => schema_json::<FeatureList>(),
+        EntityKind::Guardrail => schema_json::<Guardrail>(),
+        EntityKind::Rule => schema_json::<Rule>(),
+        EntityKind::Plugin => schema_json::<Plugin>(),
+        EntityKind::ErrorPolicy => schema_json::<ErrorPolicy>(),
+        EntityKind::Network => schema_json::<Network>(),
+        EntityKind::Compute => schema_json::<Compute>(),
+        EntityKind::DataStore => schema_json::<DataStore>(),
+        EntityKind::SecretStore => schema_json::<SecretStore>(),
+        EntityKind::Observability => schema_json::<Observability>(),
     }
 }
 
-/// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle. Q8 reclassified storage to a
-/// `resourcedefinition` persistence facet; prefer [`resource_definitions`] /
-/// [`spec_schema_for`] for the self-describing registry. Retained because downstream crates
-/// still consume it.
+/// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle.
+///
+/// Q8 reclassified storage to a `resourcedefinition` persistence facet; prefer
+/// [`resource_definitions`] / [`spec_schema_for`] for the self-describing registry.
+/// Retained because downstream crates still consume it.
 #[must_use]
 pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     BTreeMap::from([
@@ -1410,6 +1468,8 @@ pub fn sample_agent_card() -> AgentCard {
             tags: vec!["prompt".to_string()],
         }],
         endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+        tool_scope: Vec::new(),
+        runtime: None,
     }
 }
 
@@ -1784,6 +1844,85 @@ mod tests {
             assert!(bundle.contains_key(name), "missing schema: {name}");
         }
         assert_eq!(bundle.len(), AGENT_SCHEMA_NAMES.len());
+    }
+
+    fn agent_card_with_scope(tool_scope: Vec<String>, runtime: Option<AgentRuntime>) -> AgentCard {
+        let json = include_str!("../tests/golden/agent_card.json");
+        let mut card = serde_json::from_str::<AgentCard>(json)
+            .unwrap_or_else(|error| panic!("agent card fixture should parse: {error}"));
+        card.tool_scope = tool_scope;
+        card.runtime = runtime;
+        card
+    }
+
+    #[test]
+    fn grants_tool_respects_allowlist() {
+        let card = agent_card_with_scope(vec!["read".into(), "search".into()], None);
+        assert!(card.grants_tool("read"));
+        assert!(card.grants_tool("search"));
+        assert!(!card.grants_tool("write"));
+
+        // An empty scope grants nothing.
+        let empty = agent_card_with_scope(Vec::new(), None);
+        assert!(!empty.grants_tool("read"));
+    }
+
+    #[test]
+    fn child_scope_returns_intersection_never_superset() {
+        let card =
+            agent_card_with_scope(vec!["read".into(), "search".into(), "fetch".into()], None);
+
+        // A requested tool NOT in the parent scope is dropped (never a superset).
+        let requested = vec!["search".into(), "write".into(), "read".into()];
+        let child = card.child_scope(&requested);
+        assert_eq!(child, vec!["read".to_string(), "search".to_string()]);
+        assert!(!child.iter().any(|tool| tool == "write"));
+
+        // The child scope is always a subset of the parent scope.
+        for tool in &child {
+            assert!(card.grants_tool(tool));
+        }
+
+        // No requested tools => empty child scope.
+        assert!(card.child_scope(&[]).is_empty());
+    }
+
+    #[test]
+    fn agent_card_round_trips_with_scope_and_runtime() {
+        let runtime = AgentRuntime {
+            provider: Some("anthropic".into()),
+            model: Some("claude-opus".into()),
+            timeout_secs: Some(30),
+            max_iterations: Some(8),
+        };
+        let card = agent_card_with_scope(vec!["read".into(), "search".into()], Some(runtime));
+
+        let encoded = serde_json::to_string(&card)
+            .unwrap_or_else(|error| panic!("agent card should serialize: {error}"));
+        assert!(encoded.contains("tool_scope"));
+        assert!(encoded.contains("runtime"));
+
+        let decoded = serde_json::from_str::<AgentCard>(&encoded)
+            .unwrap_or_else(|error| panic!("agent card should deserialize: {error}"));
+        assert_eq!(decoded, card);
+        assert_eq!(
+            decoded.tool_scope,
+            vec!["read".to_string(), "search".to_string()]
+        );
+        let decoded_runtime = decoded.runtime.expect("runtime present after round-trip");
+        assert_eq!(decoded_runtime.provider.as_deref(), Some("anthropic"));
+        assert_eq!(decoded_runtime.timeout_secs, Some(30));
+        assert_eq!(decoded_runtime.max_iterations, Some(8));
+    }
+
+    #[test]
+    fn agent_card_defaults_omit_new_fields() {
+        // Empty/None defaults are skipped, keeping existing golden snapshots byte-identical.
+        let card = agent_card_with_scope(Vec::new(), None);
+        let encoded = serde_json::to_string(&card)
+            .unwrap_or_else(|error| panic!("agent card should serialize: {error}"));
+        assert!(!encoded.contains("tool_scope"));
+        assert!(!encoded.contains("runtime"));
     }
 
     #[test]

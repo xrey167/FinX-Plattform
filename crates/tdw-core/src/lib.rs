@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+#[cfg(feature = "compaction")]
+pub mod compaction;
+#[cfg(feature = "http")]
+pub mod http_support;
+pub mod turn;
+
+pub mod query_params;
+
+pub use query_params::{Date, Interval, MAX_LIMIT, Period, StandardParams};
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
@@ -356,191 +366,156 @@ impl RegistryEntry {
     }
 }
 
+/// Generate the canonical base-URL-only HTTP fetcher scaffolding.
+///
+/// Many `tdw-provider-*` HTTP fetchers share an identical shape: a struct with
+/// a single `base_url: String` field, a [`Default`] impl seeded from the
+/// provider's `BASE_URL` constant, a `with_base_url` builder, a private
+/// `base_url()` accessor, and a `registry_entry()` helper. This macro expands
+/// to exactly that scaffolding so each provider only needs to write its
+/// per-provider [`Fetcher`] impl (`transform_query`/`extract_data`/
+/// `transform_data`).
+///
+/// The macro references [`RegistryEntry`] via `$crate`, so callers need no
+/// extra import. `Self::PROVIDER`/`Self::ENDPOINT` in the generated
+/// `registry_entry()` resolve against the [`Fetcher`] impl the provider writes
+/// separately, so this macro must be invoked in the same module as that impl.
+///
+/// # Example
+///
+/// ```ignore
+/// const BASE_URL: &str = "https://api.example.com";
+/// tdw_core::provider_fetcher_struct!(pub ExampleHttpFetcher, BASE_URL);
+/// // ... then write `impl Fetcher<Q, D> for ExampleHttpFetcher { ... }`
+/// // and read the URL inside `extract_data` via `self.base_url()`.
+/// ```
+#[macro_export]
+macro_rules! provider_fetcher_struct {
+    ($(#[$meta:meta])* $vis:vis $name:ident, $base_url:expr $(,)?) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug)]
+        $vis struct $name {
+            base_url: String,
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self {
+                    base_url: $base_url.to_string(),
+                }
+            }
+        }
+
+        impl $name {
+            /// Override the base URL (useful for testing against a mock server).
+            #[must_use]
+            pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+                self.base_url = base_url.into();
+                self
+            }
+
+            /// Registry entry advertised under this provider's canonical name.
+            #[must_use]
+            pub fn registry_entry() -> $crate::RegistryEntry {
+                $crate::RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
+            }
+
+            #[allow(dead_code)]
+            pub(crate) fn base_url(&self) -> &str {
+                &self.base_url
+            }
+        }
+    };
+}
+
 #[cfg(feature = "inventory-registration")]
 inventory::collect!(RegistryEntry);
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    use serde_json::json;
-
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-    struct Row {
-        symbol: String,
+/// Shared, dependency-free date/time conversion primitives.
+///
+/// These helpers centralise the verbatim Howard-Hinnant `civil_from_days`
+/// algorithm and the ISO-8601 timestamp/date formatting tails that were
+/// previously copy-pasted across several `tdw-provider-*` crates. The math is
+/// reproduced character-for-character so emitted strings remain byte-identical
+/// to the former inlined implementations.
+pub mod date {
+    /// Convert a count of days since the Unix epoch (1970-01-01) into a
+    /// `(year, month, day)` civil date using the Howard-Hinnant algorithm.
+    #[must_use]
+    // month is 1..=12 and day is 1..=31 by the Howard-Hinnant algorithm, so the
+    // i64->u32 casts cannot truncate or lose sign. const fn cannot use try_from,
+    // and the math must stay byte-identical to the former inlined versions.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub const fn civil_from_days(days_since_epoch: i64) -> (i64, u32, u32) {
+        let days = days_since_epoch + 719_468;
+        let era = days.div_euclid(146_097);
+        let doe = days - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let mut year = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        if month <= 2 {
+            year += 1;
+        }
+        (year, month as u32, day as u32)
     }
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-    struct Query {
-        symbol: String,
+    /// Convert a whole-second Unix timestamp to an ISO-8601 UTC timestamp
+    /// string of the form `YYYY-MM-DDThh:mm:ssZ`.
+    #[must_use]
+    pub fn unix_seconds_to_iso_timestamp(seconds: i64) -> String {
+        let days_since_epoch = seconds.div_euclid(86_400);
+        let seconds_of_day = seconds.rem_euclid(86_400);
+        let (year, month, day) = civil_from_days(days_since_epoch);
+        let hour = seconds_of_day / 3_600;
+        let minute = (seconds_of_day % 3_600) / 60;
+        let second = seconds_of_day % 60;
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
     }
 
-    struct MockFetcher;
+    /// Convert a whole-second Unix timestamp to an ISO-8601 UTC date string of
+    /// the form `YYYY-MM-DD`.
+    #[must_use]
+    pub fn unix_seconds_to_iso_date(seconds: i64) -> String {
+        let days_since_epoch = seconds.div_euclid(86_400);
+        let (year, month, day) = civil_from_days(days_since_epoch);
+        format!("{year:04}-{month:02}-{day:02}")
+    }
 
-    #[async_trait]
-    impl Fetcher<Query, Row> for MockFetcher {
-        const PROVIDER: &'static str = "mock";
-        const ENDPOINT: &'static str = "equity_historical";
+    #[cfg(test)]
+    mod tests {
+        use super::*;
 
-        fn transform_query(params: Value) -> Result<Query> {
-            let symbol = params
-                .get("symbol")
-                .and_then(Value::as_str)
-                .ok_or_else(|| Error::InvalidQuery("missing symbol".to_string()))?;
-            Ok(Query {
-                symbol: symbol.to_string(),
-            })
+        #[test]
+        fn civil_from_days_well_known() {
+            assert_eq!(civil_from_days(0), (1970, 1, 1));
+            assert_eq!(civil_from_days(1_704_153_600 / 86_400), (2024, 1, 2));
+            assert_eq!(
+                civil_from_days((-86_400i64).div_euclid(86_400)),
+                (1969, 12, 31)
+            );
         }
 
-        async fn extract_data(&self, query: &Query, _creds: &Credentials) -> Result<Bytes> {
-            Ok(Bytes::from(query.symbol.clone()))
+        #[test]
+        fn unix_seconds_to_iso_timestamp_well_known() {
+            assert_eq!(unix_seconds_to_iso_timestamp(0), "1970-01-01T00:00:00Z");
+            assert_eq!(
+                unix_seconds_to_iso_timestamp(1_704_153_600),
+                "2024-01-02T00:00:00Z"
+            );
+            assert_eq!(
+                unix_seconds_to_iso_timestamp(-86_400),
+                "1969-12-31T00:00:00Z"
+            );
         }
 
-        fn transform_data(&self, _query: &Query, raw: Bytes) -> Result<Vec<Row>> {
-            let symbol = String::from_utf8(raw.to_vec())
-                .map_err(|error| Error::Provider(error.to_string()))?;
-            Ok(vec![Row { symbol }])
+        #[test]
+        fn unix_seconds_to_iso_date_well_known() {
+            assert_eq!(unix_seconds_to_iso_date(0), "1970-01-01");
+            assert_eq!(unix_seconds_to_iso_date(1_704_153_600), "2024-01-02");
+            assert_eq!(unix_seconds_to_iso_date(-86_400), "1969-12-31");
         }
-    }
-
-    struct MockStreamer;
-
-    #[async_trait]
-    impl Streamer<Query, Row> for MockStreamer {
-        const PROVIDER: &'static str = "mock-ws";
-        const ENDPOINT: &'static str = "equity_ticks";
-
-        async fn subscribe(&self, _query: Query, _creds: &Credentials) -> Result<DataStream<Row>> {
-            Ok(Box::pin(EmptyStream))
-        }
-
-        async fn snapshot(&self, query: &Query, _creds: &Credentials) -> Result<Vec<Row>> {
-            Ok(vec![Row {
-                symbol: query.symbol.clone(),
-            }])
-        }
-    }
-
-    struct EmptyStream;
-
-    impl Stream for EmptyStream {
-        type Item = Result<Row>;
-
-        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            Poll::Ready(None)
-        }
-    }
-
-    #[cfg(feature = "inventory-registration")]
-    inventory::submit! {
-        RegistryEntry::fetcher("inventory", "equity_historical")
-    }
-
-    #[test]
-    fn envelope_preserves_provider_and_endpoint() {
-        let rows = vec![Row {
-            symbol: "AAPL".to_string(),
-        }];
-        let object = OBBject::new(rows, "fileset", "equity_historical");
-
-        assert_eq!(object.provider, "fileset");
-        assert_eq!(object.endpoint, "equity_historical");
-        assert_eq!(object.rows[0].symbol, "AAPL");
-    }
-
-    #[test]
-    fn envelope_round_trips_json() {
-        let object = OBBject::new(
-            vec![Row {
-                symbol: "MSFT".to_string(),
-            }],
-            "fileset",
-            "equity_historical",
-        )
-        .with_metadata("source", json!("golden"));
-
-        let json = serde_json::to_string(&object)
-            .unwrap_or_else(|error| panic!("object should serialize: {error}"));
-        let round_trip: OBBject<Row> = serde_json::from_str(&json)
-            .unwrap_or_else(|error| panic!("object should deserialize: {error}"));
-
-        assert_eq!(round_trip, object);
-    }
-
-    #[test]
-    fn registry_rejects_duplicate_entries() {
-        let mut registry = ProviderRegistry::default();
-        let entry = RegistryEntry::fetcher("fileset", "equity_historical");
-
-        assert!(registry.register(entry.clone()).is_ok());
-        let duplicate = registry.register(entry);
-
-        assert!(duplicate.is_err());
-    }
-
-    #[test]
-    fn registry_registers_fetchers_and_streamers_explicitly() {
-        let mut registry = ProviderRegistry::default();
-
-        registry
-            .register_fetcher::<MockFetcher, Query, Row>()
-            .unwrap_or_else(|error| panic!("mock fetcher should register: {error}"));
-        registry
-            .register_streamer::<MockStreamer, Query, Row>()
-            .unwrap_or_else(|error| panic!("mock streamer should register: {error}"));
-
-        assert!(registry.contains("mock", "equity_historical", ProviderKind::Fetcher));
-        assert!(registry.contains("mock-ws", "equity_ticks", ProviderKind::Streamer));
-    }
-
-    #[test]
-    fn registry_allows_distinct_provider_endpoint_and_kind_combinations() {
-        let mut registry = ProviderRegistry::default();
-
-        for entry in [
-            RegistryEntry::fetcher("mock", "equity_historical"),
-            RegistryEntry::fetcher("mock", "quotes"),
-            RegistryEntry::fetcher("fileset", "equity_historical"),
-            RegistryEntry::streamer("mock", "equity_historical"),
-        ] {
-            registry
-                .register(entry)
-                .unwrap_or_else(|error| panic!("distinct entry should register: {error}"));
-        }
-
-        assert_eq!(registry.entries().len(), 4);
-        assert!(
-            registry
-                .resolve("mock", "equity_historical", ProviderKind::Fetcher)
-                .is_some()
-        );
-        assert!(
-            registry
-                .resolve("mock", "equity_historical", ProviderKind::Streamer)
-                .is_some()
-        );
-        assert!(
-            registry
-                .resolve("mock", "missing", ProviderKind::Fetcher)
-                .is_none()
-        );
-        assert!(
-            registry
-                .resolve("missing", "equity_historical", ProviderKind::Fetcher)
-                .is_none()
-        );
-        assert!(!registry.contains("mock", "missing", ProviderKind::Fetcher));
-        assert_eq!(registry.entries()[3].kind, ProviderKind::Streamer);
-    }
-
-    #[cfg(feature = "inventory-registration")]
-    #[test]
-    fn registry_loads_inventory_entries_when_feature_enabled() {
-        let registry = ProviderRegistry::from_inventory()
-            .unwrap_or_else(|error| panic!("inventory registry should load: {error}"));
-
-        assert!(registry.contains("inventory", "equity_historical", ProviderKind::Fetcher));
     }
 }

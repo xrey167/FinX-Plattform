@@ -7,12 +7,8 @@
 //! set in the environment. Live integration tests are additionally gated by
 //! `TDW_SEEKING_ALPHA_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     BASE_URL, RAPIDAPI_HOST, RAPIDAPI_KEY_ENV, SeekingAlphaArticle, SeekingAlphaArticlesQuery,
@@ -86,13 +82,6 @@ fn read_api_key() -> Result<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .ok_or_else(|| Error::Provider(SeekingAlphaProviderError::MissingApiKey.to_string()))
-}
-
-fn build_client() -> Result<Client> {
-    Client::builder()
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|e| Error::Provider(format!("seeking-alpha client build: {e}")))
 }
 
 fn map_article(wire: WireArticle) -> SeekingAlphaArticle {
@@ -176,7 +165,8 @@ impl Fetcher<SeekingAlphaArticlesQuery, SeekingAlphaArticle> for SeekingAlphaArt
         _creds: &Credentials,
     ) -> Result<Bytes> {
         let api_key = read_api_key()?;
-        let client = build_client()?;
+        let client =
+            tdw_core::http_support::build_client(USER_AGENT, "seeking-alpha client build")?;
         let endpoint = format!("{}/analysis/v2/list", self.base_url.trim_end_matches('/'));
 
         let response = client
@@ -273,7 +263,8 @@ impl Fetcher<SeekingAlphaRatingsQuery, SeekingAlphaRatings> for SeekingAlphaRati
         _creds: &Credentials,
     ) -> Result<Bytes> {
         let api_key = read_api_key()?;
-        let client = build_client()?;
+        let client =
+            tdw_core::http_support::build_client(USER_AGENT, "seeking-alpha client build")?;
         let endpoint = format!("{}/symbols/v1/summary", self.base_url.trim_end_matches('/'));
 
         let response = client

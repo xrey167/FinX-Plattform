@@ -9,11 +9,12 @@
 //! No API key is required for the FINRA public API.
 
 use bytes::Bytes;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_finra::{
     FinraOtcSummaryHttpFetcher, FinraOtcSummaryQuery, FinraShortInterestHttpFetcher,
     FinraShortInterestQuery,
 };
+use tdw_provider_testkit::live_fetch_rows_expect;
 
 // ── Cassette helpers ──────────────────────────────────────────────────────────
 
@@ -114,14 +115,7 @@ async fn live_finra_short_interest_returns_data_when_env_var_set() {
     let fetcher = FinraShortInterestHttpFetcher::default();
     let query = FinraShortInterestQuery::new(5, 0).expect("valid query");
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .expect("live extract_data must succeed");
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .expect("live transform_data must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -143,14 +137,7 @@ async fn live_finra_otc_summary_returns_data_when_env_var_set() {
     let fetcher = FinraOtcSummaryHttpFetcher::default();
     let query = FinraOtcSummaryQuery::new(5).expect("valid query");
 
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .expect("live extract_data must succeed");
-
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .expect("live transform_data must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

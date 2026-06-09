@@ -40,7 +40,7 @@ impl RegistryWatcher {
     ///
     /// Returns [`WatchError::NoSource`] if the registry has no source directory, or
     /// [`WatchError::Notify`] if the watcher cannot be created or started.
-    pub fn watch(registry: Arc<Mutex<Registry>>) -> Result<Self, WatchError> {
+    pub fn watch(registry: &Arc<Mutex<Registry>>) -> Result<Self, WatchError> {
         let dir = registry
             .lock()
             .map_err(|_| WatchError::Notify("registry mutex poisoned".to_string()))?
@@ -48,7 +48,7 @@ impl RegistryWatcher {
             .map(Path::to_path_buf)
             .ok_or(WatchError::NoSource)?;
 
-        let registry_for_callback = Arc::clone(&registry);
+        let registry_for_callback = Arc::clone(registry);
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
             if event.is_err() {
                 return;
@@ -83,7 +83,7 @@ mod tests {
     fn watching_without_source_errors() {
         let registry = Arc::new(Mutex::new(Registry::new()));
         assert!(matches!(
-            RegistryWatcher::watch(registry),
+            RegistryWatcher::watch(&registry),
             Err(WatchError::NoSource)
         ));
     }
@@ -92,8 +92,8 @@ mod tests {
     fn watcher_starts_on_a_sourced_registry() {
         // Event delivery is async and platform-specific, so it is not asserted here; this
         // confirms the watcher constructs and attaches to a real source directory.
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/registry");
-        let registry = Arc::new(Mutex::new(Registry::load_dir(&dir).expect("load")));
-        let _watcher = RegistryWatcher::watch(registry).expect("watcher should start");
+        let dir = Path::new("tests/registry");
+        let registry = Arc::new(Mutex::new(Registry::load_dir(dir).expect("load")));
+        let _watcher = RegistryWatcher::watch(&registry).expect("watcher should start");
     }
 }

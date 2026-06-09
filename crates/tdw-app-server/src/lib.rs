@@ -26,8 +26,20 @@ pub use transport_uds::serve_uds;
 
 #[cfg(all(feature = "transport-http", not(loom)))]
 mod transport_http;
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub use transport_http::serve_functions_http;
 #[cfg(all(feature = "transport-http", not(loom)))]
 pub use transport_http::serve_http;
+
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub mod functions_route;
+#[cfg(all(feature = "functions-route", not(loom)))]
+pub use functions_route::{FunctionEntry, FunctionsHandler, HandlerError, SigningConfig};
+
+// Shared service-operability surface (/health, /ready, /metrics). The pure
+// renderer and route classifier are always available; the async listener is
+// gated out under `--cfg loom` (it uses `tokio::net`).
+pub mod ops;
 
 pub use tdw_config::DaemonTransport;
 
@@ -95,10 +107,24 @@ pub fn validate_endpoint(endpoint: &DaemonEndpoint) -> EndpointResult<()> {
 }
 
 fn validate_tcp_address(address: &str) -> EndpointResult<()> {
-    address
-        .parse::<SocketAddr>()
-        .map(|_| ())
-        .map_err(|_| EndpointError::InvalidTcpAddress)
+    if address.parse::<SocketAddr>().is_ok() {
+        return Ok(());
+    }
+
+    let Some((host, port)) = address.rsplit_once(':') else {
+        return Err(EndpointError::InvalidTcpAddress);
+    };
+    if host.is_empty()
+        || host.contains(':')
+        || host.contains('/')
+        || host.contains('\\')
+        || host.chars().any(char::is_whitespace)
+        || port.parse::<u16>().is_err()
+    {
+        return Err(EndpointError::InvalidTcpAddress);
+    }
+
+    Ok(())
 }
 
 fn validate_uds_address(address: &str) -> EndpointResult<()> {
@@ -264,6 +290,11 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
     dispatcher: D,
     sink: S,
     next_sequence: std::sync::atomic::AtomicU64,
+    /// Optional dispatch metrics (outcome counters + in-flight gauge). `None`
+    /// keeps the loop's behavior byte-for-byte unchanged; the daemon attaches a
+    /// handle via [`ServiceLoop::with_metrics`] so its `/metrics` surface sees
+    /// live dispatch counts.
+    metrics: Option<ops::DaemonMetrics>,
 }
 
 impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
@@ -279,7 +310,17 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
             dispatcher,
             sink,
             next_sequence: std::sync::atomic::AtomicU64::new(1),
+            metrics: None,
         }
+    }
+
+    /// Attach a [`ops::DaemonMetrics`] handle so each dispatch updates the
+    /// daemon's outcome counters and in-flight gauge. Consumes and returns
+    /// `self` for builder use.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: ops::DaemonMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Receive one envelope, dispatch it, persist each event, send events on
@@ -287,7 +328,13 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
     /// the submission channel is closed.
     pub async fn run_once(&mut self) -> Option<Vec<EventMsg>> {
         let env = self.submissions.recv().await?;
+        if let Some(metrics) = &self.metrics {
+            metrics.dispatch_started();
+        }
         let emitted = self.dispatcher.dispatch(env.clone()).await;
+        if let Some(metrics) = &self.metrics {
+            metrics.dispatch_finished(&emitted);
+        }
         for event in &emitted {
             let seq = self
                 .next_sequence
@@ -402,6 +449,43 @@ pub fn spawn_inmemory_relay(
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
+/// Resolve when the process receives a graceful-stop signal: `ctrl_c` on every
+/// platform, plus `SIGTERM` on unix (what `docker stop`/systemd/Kubernetes send
+/// at the end of the termination grace period). Long-running serve loops
+/// (`tdw-mcp`, the worker, the daemon) await this to begin a bounded drain.
+///
+/// Excluded from the loom build (it uses `tokio::signal`).
+#[cfg(not(loom))]
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(sigterm) => sigterm,
+            // If SIGTERM cannot be installed, fall back to ctrl-c only.
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = tokio::signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+/// Drive the service loop until shutdown, then drain the relay task.
+///
+/// # Errors
+///
+/// Returns [`SinkError`] if the underlying service loop or event sink fails
+/// while dispatching or draining events.
 pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     mut service_loop: ServiceLoop<D, S>,
     relay: tokio::task::JoinHandle<()>,
@@ -414,10 +498,10 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     let shutdown_for_signal = shutdown.clone();
     #[cfg(not(loom))]
     let signal_task: tokio::task::JoinHandle<()> = tokio::spawn(async move {
-        // Ignore signal install errors on platforms that don't support ctrl_c.
-        if tokio::signal::ctrl_c().await.is_ok() {
-            shutdown_for_signal.cancel();
-        }
+        // Cancel on ctrl-c (all platforms) or SIGTERM (unix). SIGTERM is what
+        // container/systemd stop sends, so a graceful drain hinges on it.
+        shutdown_signal().await;
+        shutdown_for_signal.cancel();
     });
 
     loop {
@@ -881,8 +965,8 @@ mod tests {
         /// first argument to `read_sse_events` so those bytes are not silently
         /// discarded.
         ///
-        /// The subscription point is `tx.subscribe()` inside serve_http's accept
-        /// loop (transport_http.rs:63), which runs before the SSE handler task
+        /// The subscription point is `tx.subscribe()` inside `serve_http`'s accept
+        /// loop (`transport_http.rs:63`), which runs before the SSE handler task
         /// is spawned. Waiting for the HTTP header reply means the server has
         /// already subscribed this receiver to the broadcast — guaranteeing zero
         /// event loss for any send that happens after `open_sse` returns.
@@ -998,7 +1082,7 @@ mod tests {
             collected.unwrap_or_else(|_| panic!("timed out waiting for {expected} SSE events"))
         }
 
-        /// Build an envelope with a fresh, unique `op_id` (UUIDv7 via
+        /// Build an envelope with a fresh, unique `op_id` (`UUIDv7` via
         /// `OpEnvelope::new`) so emitted events can be told apart across the
         /// broadcast. `OpId` has no public string constructor, so callers that
         /// need to assert on identity capture `env.op_id.as_str()`.
@@ -1162,6 +1246,12 @@ mod tests {
         #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
         async fn http_slow_subscriber_does_not_starve_others() {
             let result = tokio::time::timeout(Duration::from_secs(20), async {
+                // 2000 ops × 2 events = 4000 events, well above the 1024-slot
+                // broadcast buffer, so any platform that does lag-drop will hit it.
+                const OPS: u64 = 2000;
+                #[allow(clippy::cast_possible_truncation)] // OPS is the const 2000
+                const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
+
                 let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
                 let addr = listener.local_addr().expect("local addr");
 
@@ -1188,11 +1278,6 @@ mod tests {
                 // The meaningful, portable guarantee is that the FAST subscriber
                 // receives every event while the unresponsive peer is connected.
                 let (_slow_stream, _slow_seed) = open_sse(addr).await;
-
-                // 2000 ops × 2 events = 4000 events, well above the 1024-slot
-                // broadcast buffer, so any platform that does lag-drop will hit it.
-                const OPS: u64 = 2000;
-                const EXPECTED_EVENTS: usize = (OPS as usize) * 2;
 
                 // Drain the fast reader concurrently so the server-side write to
                 // the fast connection never blocks while we are POSTing/emitting.
@@ -1246,6 +1331,13 @@ mod tests {
             validate_endpoint(&DaemonEndpoint {
                 transport: DaemonTransport::Tcp,
                 address: "127.0.0.1:8787".to_string(),
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_endpoint(&DaemonEndpoint {
+                transport: DaemonTransport::Tcp,
+                address: "tdw-service-daemon:7878".to_string(),
             })
             .is_ok()
         );

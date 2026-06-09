@@ -37,6 +37,7 @@ fn main() {
             _ => help(),
         },
         "clean-room-audit" => clean_room_audit(),
+        "crate-readiness-check" => crate_readiness_check(),
         "prerelease-check" => prerelease_check(),
         "improve-scan" => improve_scan::improve_scan(),
         _ => help(),
@@ -51,7 +52,7 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check | improve-scan"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
     );
     Ok(())
 }
@@ -707,6 +708,106 @@ fn clean_room_audit() -> Result<(), String> {
     }
 }
 
+fn crate_readiness_check() -> Result<(), String> {
+    let workspace_crates = workspace_package_names()?;
+    let matrix_crates = matrix_crate_names("docs/quality/crate-readiness/matrix.md")?;
+
+    let mut missing_matrix_rows = Vec::new();
+    let mut missing_worksheets = Vec::new();
+    for name in &workspace_crates {
+        if !matrix_crates.contains(name) {
+            missing_matrix_rows.push(name.clone());
+        }
+        let worksheet = PathBuf::from("docs/quality/crate-readiness").join(format!("{name}.md"));
+        if !worksheet.is_file() {
+            missing_worksheets.push(name.clone());
+        }
+    }
+
+    let stale_matrix_rows: Vec<_> = matrix_crates
+        .iter()
+        .filter(|name| !workspace_crates.contains(*name))
+        .cloned()
+        .collect();
+
+    if missing_matrix_rows.is_empty()
+        && missing_worksheets.is_empty()
+        && stale_matrix_rows.is_empty()
+    {
+        println!(
+            "crate-readiness-check passed: {} workspace crates covered",
+            workspace_crates.len()
+        );
+        return Ok(());
+    }
+
+    let mut sections = Vec::new();
+    if !missing_matrix_rows.is_empty() {
+        sections.push(format!(
+            "missing matrix rows: {}",
+            missing_matrix_rows.join(", ")
+        ));
+    }
+    if !missing_worksheets.is_empty() {
+        sections.push(format!(
+            "missing worksheets: {}",
+            missing_worksheets.join(", ")
+        ));
+    }
+    if !stale_matrix_rows.is_empty() {
+        sections.push(format!(
+            "stale matrix rows: {}",
+            stale_matrix_rows.join(", ")
+        ));
+    }
+
+    Err(format!(
+        "crate-readiness-check failed; refresh docs/quality/crate-readiness:\n{}",
+        sections.join("\n")
+    ))
+}
+
+fn workspace_package_names() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .map_err(|error| format!("failed to spawn cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("cargo metadata exited with {}", output.status));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+    let mut names: Vec<String> = parsed
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata output missing packages array".to_string())?
+        .iter()
+        .filter(|package| package.get("source").is_none_or(serde_json::Value::is_null))
+        .filter_map(|package| package.get("name").and_then(serde_json::Value::as_str))
+        .map(ToString::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn matrix_crate_names(path: &str) -> Result<Vec<String>, String> {
+    let content = fs::read_to_string(path).map_err(|error| {
+        format!("crate-readiness matrix missing or unreadable at {path}: {error}")
+    })?;
+    let mut names: Vec<String> = content
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("| [")
+                .and_then(|rest| rest.split_once(']'))
+                .map(|(name, _)| name.to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
 /// TEST-POLICY-005: run the stable pre-release fuzz-smoke + loom evidence in one
 /// command. This is a manual release-candidate step, not a phase-exit gate.
 ///
@@ -721,9 +822,18 @@ fn clean_room_audit() -> Result<(), String> {
 /// stable smoke evidence is green before a release cut. Returns `Err` if either
 /// suite fails so release readiness cannot claim fuzz/loom evidence without it.
 fn prerelease_check() -> Result<(), String> {
-    println!("prerelease-check: running stable fuzz-smoke + loom evidence");
+    println!("prerelease-check: running crate-readiness sync + stable fuzz-smoke + loom evidence");
 
-    println!("prerelease-check: [1/2] stable fuzz corpus-replay harnesses");
+    println!("prerelease-check: [1/3] crate-readiness coverage sync");
+    let crate_readiness_ok = match crate_readiness_check() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("{error}");
+            false
+        }
+    };
+
+    println!("prerelease-check: [2/3] stable fuzz corpus-replay harnesses");
     let fuzz_ok = run_check(std::process::Command::new("cargo").args([
         "test",
         "-p",
@@ -740,7 +850,7 @@ fn prerelease_check() -> Result<(), String> {
         "fuzz_replay",
     ]));
 
-    println!("prerelease-check: [2/2] stable loom relay model (RUSTFLAGS=--cfg loom)");
+    println!("prerelease-check: [3/3] stable loom relay model (RUSTFLAGS=--cfg loom)");
     let loom_ok = run_check(
         std::process::Command::new("cargo")
             .args(["test", "-p", "tdw-app-server", "--test", "loom_relay"])
@@ -748,13 +858,17 @@ fn prerelease_check() -> Result<(), String> {
     );
 
     println!("prerelease-check: summary");
+    println!(
+        "  crate-readiness coverage: {}",
+        pass_label(crate_readiness_ok)
+    );
     println!("  fuzz-smoke (corpus replay): {}", pass_label(fuzz_ok));
     println!("  loom relay model:           {}", pass_label(loom_ok));
     println!(
         "  deep fuzzing: nightly `fuzz-smoke` job / `cargo +nightly fuzz run <target>` (not run here)"
     );
 
-    if fuzz_ok && loom_ok {
+    if crate_readiness_ok && fuzz_ok && loom_ok {
         println!("prerelease-check: PASS");
         Ok(())
     } else {

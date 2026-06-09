@@ -150,7 +150,7 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
     Ok(symbol.to_ascii_uppercase())
 }
 
-fn validate_limit(limit: u32) -> Result<u32> {
+const fn validate_limit(limit: u32) -> Result<u32> {
     if limit == 0 {
         return Err(VelodataProviderError::InvalidLimit);
     }
@@ -292,8 +292,7 @@ pub fn funding_query_from_value(
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map(|v| v as u32)
-        .unwrap_or(100);
+        .map_or(100, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataFundingQuery::new(exchange, symbol, limit).map_err(|e| e.to_string())
 }
 
@@ -312,8 +311,7 @@ pub fn liquidations_query_from_value(
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map(|v| v as u32)
-        .unwrap_or(24);
+        .map_or(24, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataLiquidationsQuery::new(symbol, limit).map_err(|e| e.to_string())
 }
 
@@ -330,8 +328,7 @@ pub fn oi_query_from_value(params: &Value) -> std::result::Result<VelodataOiQuer
     let limit = params
         .get("limit")
         .and_then(Value::as_u64)
-        .map(|v| v as u32)
-        .unwrap_or(24);
+        .map_or(24, |v| u32::try_from(v).unwrap_or(u32::MAX));
     VelodataOiQuery::new(symbol, limit).map_err(|e| e.to_string())
 }
 
@@ -340,6 +337,7 @@ pub fn oi_query_from_value(params: &Value) -> std::result::Result<VelodataOiQuer
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // exact-value parse assertions; deterministic parser, exact comparison intended
 mod tests {
     use super::*;
 

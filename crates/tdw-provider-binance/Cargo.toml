@@ -5,12 +5,19 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = []
 # Enables the real Binance ticker-price HTTP fetcher (reqwest). Off by
 # default so workspace tests stay offline; live calls are additionally
 # gated by TDW_BINANCE_LIVE=1.
-http = ["dep:bytes", "dep:reqwest", "dep:tokio"]
+http = ["dep:bytes", "dep:reqwest", "dep:tokio", "tdw-core/http", "dep:tdw-provider-http", "tdw-provider-http/http"]
 # Enables the live Binance trade websocket subscribe path (tokio-tungstenite).
 # Off by default so the workspace test set stays offline; `decode_trade_frame`,
 # `snapshot` and `registry_entry` are always available without opening a socket.
@@ -27,10 +34,23 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
+tdw-provider-http = { workspace = true, optional = true }
 thiserror = { workspace = true }
 time = { version = "0.3", default-features = false, features = ["std", "formatting", "parsing"] }
 tokio = { workspace = true, optional = true }
 tokio-tungstenite = { workspace = true, optional = true }
+
+[[example]]
+name = "basic"
+required-features = ["http"]
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
+[[test]]
+name = "http_fetcher"
+path = "tests/http_fetcher.rs"
+required-features = ["http"]
 
 [lints]
 workspace = true

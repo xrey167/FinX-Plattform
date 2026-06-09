@@ -84,6 +84,18 @@ transport-uds = ["tdw-app-server/transport-uds"]
 name = "tdw-backend"
 path = "src/bin/tdw-backend.rs"
 
+[[example]]
+name = "tdw_backend_basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "trading_consumer"
+path = "examples/trading_consumer.rs"
+
+[[example]]
+name = "learning_consumer"
+path = "examples/learning_consumer.rs"
+
 [dev-dependencies]
 tokio = { workspace = true }
 # Reused as the offline, deterministic test fetcher for fetch/stream coverage.

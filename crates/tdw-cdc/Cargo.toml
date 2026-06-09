@@ -5,6 +5,13 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -15,3 +22,7 @@ tdw-event = { path = "../tdw-event" }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "tdw-cdc-basic"
+path = "examples/basic.rs"
