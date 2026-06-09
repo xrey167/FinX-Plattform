@@ -34,8 +34,6 @@ tdw-config = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
 tdw-test-utils = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "net", "io-util", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["rt"] }
-toml = { workspace = true }
 tdw-protocol = { workspace = true }
 
 [dev-dependencies]
