@@ -1815,7 +1815,15 @@ fn tool_descriptors_evidence() -> Vec<ToolDescriptor> {
         tool(
             "tdw.provider.fetch",
             "Fetch Any Registered Provider",
-            "Dispatch any registered TDW fetcher by (provider, endpoint) and return its OBBject as JSON. Call tdw.providers.list to see what is registered in this build.",
+            &format!(
+                "Dispatch any registered TDW fetcher by (provider, endpoint) and return its \
+                 OBBject as JSON. {} (provider, endpoint) pairs are dispatchable in this \
+                 build — call tdw.providers.list for the catalog (kind=Fetcher only; Streamer \
+                 endpoints are not dispatchable here). Keyed providers read their API keys \
+                 from environment variables at fetch time; a missing key surfaces as a tool \
+                 error on first use.",
+                tdw_service_api::provider_fetch_targets().len()
+            ),
             json!({
                 "type": "object",
                 "properties": {

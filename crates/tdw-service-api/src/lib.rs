@@ -1844,6 +1844,27 @@ mod tests {
     }
 
     #[test]
+    fn provider_fetch_targets_never_drift_from_dispatch_arms() {
+        // Drift guard: every advertised target must reach a dispatch arm in
+        // fetch_provider_json. A `null` params value fails every fetcher's
+        // transform_query BEFORE any I/O, so the probe is network-free in all
+        // feature configurations — the one error that must never appear is
+        // the unknown-pair Registry error.
+        for (provider, endpoint) in provider_fetch_targets() {
+            match fetch_provider_json(&provider, &endpoint, Value::Null) {
+                Ok(_) => {}
+                Err(error) => {
+                    let message = error.to_string();
+                    assert!(
+                        !message.contains("no fetcher for"),
+                        "{provider}/{endpoint} is advertised by provider_fetch_targets                          but has no dispatch arm: {message}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn secure_endpoint_validates_auth_hooks_and_masks_response() {
         let config = policy_config_with_hook_policy(
             vec!["analyst"],
