@@ -179,9 +179,7 @@ fn validate_op(op: &Op) -> Result<()> {
             validate_token("symbol", symbol)?;
             validate_token("condition", condition)
         }
-        Op::ListAlerts {} => Ok(()),
-        Op::DeleteAlert { id } => validate_token("id", id),
-        Op::SetAlertActive { id, .. } => validate_token("id", id),
+        Op::DeleteAlert { id } | Op::SetAlertActive { id, .. } => validate_token("id", id),
         Op::RegisterUser {
             id,
             email,
@@ -197,7 +195,7 @@ fn validate_op(op: &Op) -> Result<()> {
             validate_display_text("email", email)?;
             validate_display_text("display_name", display_name)
         }
-        Op::Cancel { .. } | Op::Shutdown => Ok(()),
+        Op::ListAlerts {} | Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }
 
