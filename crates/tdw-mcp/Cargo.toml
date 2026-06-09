@@ -12,6 +12,14 @@ license = "MIT OR Apache-2.0"
 # until you delete this line. Crates with real doc-tests keep doctests enabled.
 doctest = false
 
+[features]
+default = []
+## Serve live market data: swaps the offline Yahoo fixture for the real HTTP
+## fetcher and registers every live HTTP provider in `default_registry()`.
+## Off by default so builds and tests stay offline; live calls still honor
+## each provider's own gates (API-key env vars where required).
+live = ["tdw-service-api/all-http-providers"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
