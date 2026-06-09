@@ -182,4 +182,55 @@ mod tests {
             Err(ClaimValidationError::InvalidRole)
         );
     }
+
+    #[test]
+    fn rejects_issuer_audience_empty_kid_and_unknown_kid() {
+        let jwks = [JwksKey {
+            kid: "k1".to_string(),
+            alg: "RS256".to_string(),
+        }];
+        let base = JwtClaims {
+            sub: "alice".to_string(),
+            iss: "https://issuer".to_string(),
+            aud: "tdw".to_string(),
+            kid: "k1".to_string(),
+            roles: vec!["analyst".to_string()],
+        };
+        let algs = ["RS256"];
+
+        assert_eq!(
+            validate_claims_strict(&base, &jwks, "https://evil", "tdw", &algs),
+            Err(ClaimValidationError::IssuerMismatch)
+        );
+        assert_eq!(
+            validate_claims_strict(&base, &jwks, "https://issuer", "other-aud", &algs),
+            Err(ClaimValidationError::AudienceMismatch)
+        );
+        assert_eq!(
+            validate_claims_strict(
+                &JwtClaims {
+                    kid: "  ".to_string(),
+                    ..base.clone()
+                },
+                &jwks,
+                "https://issuer",
+                "tdw",
+                &algs
+            ),
+            Err(ClaimValidationError::EmptyKeyId)
+        );
+        assert_eq!(
+            validate_claims_strict(
+                &JwtClaims {
+                    kid: "k2".to_string(),
+                    ..base
+                },
+                &jwks,
+                "https://issuer",
+                "tdw",
+                &algs
+            ),
+            Err(ClaimValidationError::UnknownKeyId)
+        );
+    }
 }

@@ -471,6 +471,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_sandbox_denies_filesystem_capability() {
+        // Mirrors the network-denial test for the other sandboxed capability:
+        // a UDF requesting filesystem access is refused before any execution.
+        let sandbox = LocalUdfSandbox;
+        let denied = sandbox.run(UdfRequest {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            input: "aapl".to_string(),
+            allow_network: false,
+            allow_filesystem: true,
+            wasm_limits: None,
+        });
+
+        assert_eq!(denied, Err(SandboxError::CapabilityDenied("filesystem")));
+    }
+
     /// When compiled with `udf-wasm`, the Wasm runtime routes through
     /// `WasmUdfRuntime` and still produces the correct deterministic output.
     #[cfg(feature = "udf-wasm")]
