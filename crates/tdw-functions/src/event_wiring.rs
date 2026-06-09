@@ -37,7 +37,7 @@ use crate::{FunctionRegistry, Trigger};
 /// functions.
 #[derive(Clone, Debug, Default)]
 pub struct EventRouter {
-    /// `event_name → [function_id, …]` in deterministic (BTreeMap) order.
+    /// `event_name → [function_id, …]` in deterministic (`BTreeMap`) order.
     routes: BTreeMap<String, Vec<String>>,
 }
 

@@ -3,9 +3,9 @@
 //! Every `tdw_core::Fetcher` result is wrapped in a [`ResultEnvelope<T>`], giving
 //! callers (CLI, REST/SSE service, MCP, LLM/dataframe consumers) one consistent
 //! shape regardless of which provider served the request. The field shape mirrors
-//! the documented OBBject surface (`id` / `results` / `provider` / `warnings` /
+//! the documented `OBBject` surface (`id` / `results` / `provider` / `warnings` /
 //! `extra{route, timestamp, arguments}`) as enumerated in
-//! `docs/roadmap/openbb-surface-domains.md` — names are FinX's own, derived from the
+//! `docs/roadmap/openbb-surface-domains.md` — names are `FinX`'s own, derived from the
 //! public surface docs, not from any upstream source code.
 
 use std::collections::BTreeMap;
