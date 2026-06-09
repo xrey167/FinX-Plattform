@@ -196,20 +196,22 @@ mod tests {
 
         fn complete(&self, _request: ChatRequest) -> Result<ChatResponse> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            match &self.fail {
-                None => Ok(ChatResponse {
-                    model_id: self.id.to_string(),
-                    message: ChatMessage {
-                        role: MessageRole::Assistant,
-                        content: format!("{} response", self.id),
-                    },
-                    usage: Usage {
-                        input_tokens: 1,
-                        output_tokens: 1,
-                    },
-                }),
-                Some(err) => Err(clone_error(err)),
-            }
+            self.fail.as_ref().map_or_else(
+                || {
+                    Ok(ChatResponse {
+                        model_id: self.id.to_string(),
+                        message: ChatMessage {
+                            role: MessageRole::Assistant,
+                            content: format!("{} response", self.id),
+                        },
+                        usage: Usage {
+                            input_tokens: 1,
+                            output_tokens: 1,
+                        },
+                    })
+                },
+                |err| Err(clone_error(err)),
+            )
         }
     }
 
