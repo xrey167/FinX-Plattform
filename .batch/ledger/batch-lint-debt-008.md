@@ -66,4 +66,5 @@ cargo run -p xtask -- clean-room-audit
 - No AGPL code copied.
 
 ## PR
-<!-- PR URL appended after creation -->
+
+https://github.com/xrey167/FinX-Plattform/pull/262
