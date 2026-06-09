@@ -71,6 +71,10 @@ attaches an auth-backed ingress policy from the six `TDW_OIDC_*` variables
 
 ## Quickstart
 
+> **Just want live market data in Claude?** Skip the contributor setup below —
+> [`docs/products/mcp-quickstart.md`](docs/products/mcp-quickstart.md) gets you
+> from zero to live AAPL bars in an MCP client in under 10 minutes.
+
 Prerequisites: Rust toolchain pinned by [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.95.0). Docker Desktop is only needed for live container smoke tests; the offline gates run without it.
 
 ```powershell
