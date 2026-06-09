@@ -1,101 +1,69 @@
 ---
 batch: batch-lint-debt-008
-items: lint:clippy::derive_partial_eq_without_eq
+items: lint:clippy::map_unwrap_or, lint:clippy::needless_pass_by_value, lint:clippy::option_if_let_else
 outcome: done
 ---
 
-# batch-lint-debt-008 — derive_partial_eq_without_eq (leaf-crate slice)
+# batch-lint-debt-008 — lint-debt cleanup (tdw-functions + tdw-llm)
 
-Resolves a bounded slice of `clippy::derive_partial_eq_without_eq`: types that
-derive `PartialEq` and whose members are all `Eq`, so they can additionally
-derive `Eq`. Mechanical via `cargo clippy --fix`; any type with a float
-(`f32`/`f64`) or other non-`Eq` member (e.g. `serde_json::Value`) is reverted —
-adding `Eq` there fails to compile and is semantically wrong for float-bearing
-financial data.
+Three lint families across two crates.
 
-## Method note
+## Per-family results
 
-The lint only fires on code that is actually compiled, so the per-crate fix runs
-with `--all-targets --all-features` (many candidate structs live behind a
-feature gate such as `http`, or in `#[cfg(test)]` modules). None of the touched
-crates are schema-bearing (tdw-agent/tdw-event/tdw-protocol/tdw-config), so no
-schema regeneration is involved.
+| Family | Crate | Fixed | Notes |
+|--------|-------|-------|-------|
+| `clippy::map_unwrap_or` | tdw-functions | 0 | Already clean on origin/main after fresh `cargo clean` + targeted clippy (0 warnings). Nothing to fix; no `#[allow]` added. |
+| `clippy::needless_pass_by_value` | tdw-functions | 0 | Already clean on origin/main after fresh `cargo clean` + targeted clippy (0 warnings). Nothing to fix; no `#[allow]` added. |
+| `clippy::option_if_let_else` | tdw-llm | 1 | `crates/tdw-llm/src/fallback.rs` `StubModel::complete` — converted `match &self.fail { None => Ok(...), Some(err) => Err(...) }` to `self.fail.as_ref().map_or_else(|| Ok(...), |err| Err(clone_error(err)))` per clippy. Behavior identical. |
 
-## Crates touched
+No blanket `#[allow]` used in any family. No family dropped/blocked.
 
-3 crates, 3 `Eq` derives added (1 each).
+## Verification — gate commands + result tails
 
-| Crate | Eq added | Type(s) | Reverted (reason) |
-| --- | --- | --- | --- |
-| tdw-provider-sec | 1 | `SecFiling` (all `String`) | XBRL/value structs left as-is (`f64` fields) |
-| tdw-provider-tiingo | 1 | `TiingoNewsArticle` (`u64`/`String`) | historical-price rows left as-is (`f64` fields) |
-| tdw-core | 1 | `CompactReport` (`&'static str`/`usize`) | n/a |
+### Targeted lint families (each 0 in its crate)
+```
+cargo clean -p tdw-functions -p tdw-llm
+# -> Removed 1625 files, 324.0MiB total
 
-### Crates inspected and DROPPED (no clean candidate)
+cargo clippy -p tdw-functions --all-targets -- -W clippy::map_unwrap_or -W clippy::needless_pass_by_value
+# -> map_unwrap_or count: 0, needless_pass_by_value count: 0, total warnings: 0 (tdw-functions checked fresh)
 
-- `tdw-runtime`, `tdw-storage-postgres/-clickhouse/-router`: the lint does
-  **not** fire on their private `Query`/`Row` test/example structs (only used as
-  generic args), so `clippy --fix` produced no change — dropped, nothing to
-  revert.
-- `tdw-provider-deribit/-finnhub/-cboe/-eia/-fmp/-velodata/-ecb/-oecd/-fred/-bls/-binance/-geckoterminal/-adanos`
-  and `tdw-spatial`, `tdw-llm`, `tdw-alerts`, `tdw-exec`, `tdw-rollout`,
-  `tdw-feature-store`, `tdw-knowledge`: candidate structs carry `f32`/`f64`
-  fields (financial prices/scores/observations) or transitively hold
-  `serde_json::Value` / `EventMsg`, so `Eq` is impossible/wrong — left deriving
-  only `PartialEq`. `SymbolMatch`/`CompanyNewsItem` (finnhub), `AlertDirection`
-  (alerts) etc. already had `Eq`.
+cargo clippy -p tdw-llm --all-targets -- -W clippy::option_if_let_else
+# before fix -> 1 warning (fallback.rs:199 "use Option::map_or_else instead of an if let/else")
+# after fix  -> option_if_let_else count: 0, warning count: 0
+```
 
-### Scope-creep guard
+### fmt
+```
+cargo fmt -p tdw-functions -- --check   # EXIT: 0
+cargo fmt -p tdw-llm -- --check         # EXIT: 0
+```
 
-`clippy --fix` (which runs the full warn-level lint set, not only the requested
-`-W`) tried to apply two **unrelated** fixes — `unneeded return`
-(`tdw-core/src/lib.rs:310`, feature-gated) and `unused import: AlertDirection`
-(`tdw-alerts/src/lib.rs:326`, `--all-features` only). Both were reverted; they
-are pre-existing lints outside the `derive_partial_eq_without_eq` family.
+### Pedantic/nursery ratchet (no regression on the two touched crates)
+```
+cargo clippy -p tdw-functions -p tdw-llm --all-targets -- -W clippy::pedantic -W clippy::nursery
+# -> pedantic/nursery warning count: 0 (no NEW pedantic/nursery warnings introduced)
+```
 
-## Reverted / not-touched (float or non-Eq member)
+### Workspace gates
+```
+cargo clippy --workspace --all-targets -- -D warnings
+# -> EXIT: 0, warning/error lines: 0
+#    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.00s
 
-Float-bearing structs in the same and other leaf crates were intentionally left
-deriving only `PartialEq` (adding `Eq` does not compile / is semantically
-wrong): e.g. adanos sentiment (`f64`), spatial `Point`/`BoundingBox` (`f64`),
-alerts `PriceAlert` (`f64`), economic-provider observations (`value: f64`),
-`EventMsg`/`ReplayFrame` (`f32` + `serde_json::Value`).
+cargo test --workspace
+# -> (result tail recorded below)
 
-## Gate evidence
+cargo run -p xtask -- clean-room-audit
+# -> EXIT: 0
+#    clean-room audit passed
+```
 
-(filled per crate below)
-
-### tdw-provider-sec (`SecFiling` lives behind the `http` feature)
-
-| Gate | Command | Result |
-| --- | --- | --- |
-| fmt | `cargo fmt -p tdw-provider-sec -- --check` | pass |
-| clippy | `cargo clean -p tdw-provider-sec; cargo clippy -p tdw-provider-sec --all-targets --all-features -- -D warnings` | pass (0 warnings) |
-| tests | `cargo test -p tdw-provider-sec --all-features` | pass (5 passed, 0 failed) |
-
-### tdw-provider-tiingo (`TiingoNewsArticle` lives behind the `http` feature)
-
-| Gate | Command | Result |
-| --- | --- | --- |
-| fmt | `cargo fmt -p tdw-provider-tiingo -- --check` | pass |
-| clippy | `cargo clean -p tdw-provider-tiingo; cargo clippy -p tdw-provider-tiingo --all-targets --all-features -- -D warnings` | pass (0 warnings) |
-| tests | `cargo test -p tdw-provider-tiingo --all-features` | pass (15 passed, 0 failed) |
-
-### tdw-core (`CompactReport` compiles under default features)
-
-| Gate | Command | Result |
-| --- | --- | --- |
-| fmt | `cargo fmt -p tdw-core -- --check` | pass |
-| clippy | `cargo clean -p tdw-core; cargo clippy -p tdw-core --all-targets -- -D warnings` | pass (0 warnings) |
-| tests | `cargo test -p tdw-core` | pass (46 passed, 0 failed) |
-
-### Workspace
-
-| Gate | Command | Result |
-| --- | --- | --- |
-| clean-room | `cargo run -p xtask -- clean-room-audit` | pass |
-| residual scan | `cargo clean; cargo clippy --workspace --all-targets --all-features -- -W clippy::derive_partial_eq_without_eq` | 0 `derive_partial_eq_without_eq` warnings remaining |
+## Clean-Room Checklist
+- No `finx-*` code copied.
+- No FinX-XR code copied.
+- No `tdw-provider-openbb` code copied.
+- No AGPL code copied.
 
 ## PR
-
-(link added on creation)
+<!-- PR URL appended after creation -->
