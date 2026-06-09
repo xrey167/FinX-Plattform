@@ -4821,6 +4821,7 @@ dependencies = [
  "tdw-core",
  "tdw-domain",
  "tdw-provider-http",
+ "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
 ]

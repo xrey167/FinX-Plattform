@@ -120,7 +120,20 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
         let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("sec filings parse_json: {e}")))?;
 
-        let cik = envelope.cik.unwrap_or_else(|| query.cik.clone());
+        // Live EDGAR returns the CIK zero-padded to 10 digits; cassettes and
+        // queries use the canonical unpadded form. Normalize so rows always
+        // carry the unpadded CIK regardless of source.
+        let cik = envelope
+            .cik
+            .map(|c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            })
+            .unwrap_or_else(|| query.cik.clone());
         let entity_name = envelope.name.unwrap_or_default();
 
         let recent = envelope
@@ -277,7 +290,19 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         let us_gaap = envelope.facts.and_then(|f| f.us_gaap).unwrap_or_default();
 
-        let revenue_value = us_gaap.get("Revenue").cloned();
+        // Filers tag top-line revenue under different us-gaap concepts: modern
+        // ASC-606 filers (e.g. Apple) use RevenueFromContractWithCustomer...,
+        // older filings use Revenues/SalesRevenueNet, and some cassettes use
+        // the bare "Revenue". Take the first concept present, in that order.
+        const REVENUE_CONCEPTS: [&str; 4] = [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "Revenues",
+            "SalesRevenueNet",
+            "Revenue",
+        ];
+        let revenue_value = REVENUE_CONCEPTS
+            .iter()
+            .find_map(|concept| us_gaap.get(*concept).cloned());
         let revenue: SecXbrlConcept = match revenue_value {
             Some(v) => serde_json::from_value(v)
                 .map_err(|e| Error::Provider(format!("sec xbrl Revenue parse: {e}")))?,
