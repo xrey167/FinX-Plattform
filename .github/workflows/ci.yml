@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Manual trigger: runs the FULL pipeline including the Container Image jobs
+  # (the changes job treats a dispatch as image-affecting), so a container run
+  # can be produced on demand — e.g. after a workflow-only change that the
+  # paths filter would otherwise skip.
+  workflow_dispatch:
 
 # Cancel superseded runs on a PR branch when it is pushed again (rebases,
 # auto-update-branch). Runs on `main` are never cancelled so post-merge
@@ -149,6 +154,9 @@ jobs:
           fi
 
           image_affecting=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            image_affecting=true
+          fi
           while IFS= read -r path; do
             case "$path" in
               Cargo.lock|Cargo.toml|rust-toolchain.toml|crates/*|docker/*|docker-compose.yaml)

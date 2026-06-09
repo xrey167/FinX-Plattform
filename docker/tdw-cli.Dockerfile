@@ -17,6 +17,10 @@ COPY . .
 RUN cargo build --release --bin tdw-cli
 
 FROM debian:bookworm-slim AS runtime
+
+# OCI metadata: links the GHCR package to the repo (source), and carries
+# the description/license into the registry UI.
+LABEL org.opencontainers.image.source="https://github.com/xrey167/FinX-Plattform"       org.opencontainers.image.description="TDW trading-data-warehouse CLI"       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
