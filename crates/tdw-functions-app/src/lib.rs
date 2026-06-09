@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Application [`FunctionDef`]s for the FinX function runtime.
+//! Application [`FunctionDef`]s for the `FinX` function runtime.
 //!
 //! This crate hosts concrete, application-level functions that are registered
 //! into a [`tdw_functions::FunctionRegistry`] and activated by the function

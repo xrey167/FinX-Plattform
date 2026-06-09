@@ -100,7 +100,14 @@ impl KnowledgeGraph {
     }
 
     pub fn manual_merge(&mut self, source: &str, target: &str, approved_by: &str) -> bool {
-        if !self.entities.contains_key(source) || !self.entities.contains_key(target) {
+        // A self-merge (an entity into itself) is meaningless; reject it instead of
+        // recording a bogus `X->X` audit entry. Matches the sibling
+        // `tdw-entity-resolver::try_manual_merge_decision`, which already rejects
+        // `source == target`.
+        if source == target
+            || !self.entities.contains_key(source)
+            || !self.entities.contains_key(target)
+        {
             return false;
         }
         if approved_by.trim().is_empty() || approved_by.chars().any(char::is_control) {
@@ -266,5 +273,26 @@ mod tests {
             }),
             Err(KnowledgeGraphError::EmptyProvenance)
         );
+    }
+
+    #[test]
+    fn manual_merge_rejects_self_merge_even_with_valid_approver() {
+        let mut kg = KnowledgeGraph::default();
+        for id in ["instrument:AAPL", "instrument:APPLE"] {
+            kg.upsert_entity(Entity {
+                entity_id: id.to_string(),
+                kind: EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: Vec::new(),
+            });
+        }
+
+        // A self-merge is rejected and records no audit entry, even with a valid approver.
+        assert!(!kg.manual_merge("instrument:AAPL", "instrument:AAPL", "architect"));
+        assert!(kg.merge_audit().is_empty());
+
+        // A genuine merge of two distinct entities still succeeds and audits.
+        assert!(kg.manual_merge("instrument:AAPL", "instrument:APPLE", "architect"));
+        assert_eq!(kg.merge_audit().len(), 1);
     }
 }

@@ -145,4 +145,55 @@ mod tests {
             Err(UdfError::InputTooLarge)
         );
     }
+
+    #[test]
+    fn denies_filesystem_rejects_oversized_source_and_unknown_udf() {
+        let base = UdfDefinition {
+            name: "upper".to_string(),
+            runtime: UdfRuntime::Wasm,
+            source: "upper(input)".to_string(),
+            allow_network: false,
+            allow_filesystem: false,
+        };
+
+        // Filesystem capability is denied, in parity with network.
+        assert_eq!(
+            validate_definition(&UdfDefinition {
+                allow_filesystem: true,
+                ..base.clone()
+            }),
+            Err(UdfError::CapabilityDenied("filesystem"))
+        );
+        // Oversized SOURCE is SourceTooLarge (distinct from the InputTooLarge path).
+        assert_eq!(
+            validate_definition(&UdfDefinition {
+                source: "x".repeat(MAX_UDF_SOURCE_BYTES + 1),
+                ..base.clone()
+            }),
+            Err(UdfError::SourceTooLarge)
+        );
+        // The `identity` builtin echoes input...
+        assert_eq!(
+            evaluate(
+                &UdfDefinition {
+                    name: "identity".to_string(),
+                    ..base.clone()
+                },
+                "AAPL"
+            )
+            .unwrap_or_else(|error| panic!("identity should evaluate: {error}")),
+            "AAPL"
+        );
+        // ...and an unregistered name is Unknown.
+        assert_eq!(
+            evaluate(
+                &UdfDefinition {
+                    name: "nope".to_string(),
+                    ..base
+                },
+                "x"
+            ),
+            Err(UdfError::Unknown("nope".to_string()))
+        );
+    }
 }

@@ -420,4 +420,60 @@ mod tests {
             Err(EvalRunError::InvalidRequest)
         );
     }
+
+    #[test]
+    fn validate_request_rejects_each_malformed_field() {
+        let base = || EvalRunRequest {
+            run_id: "eval-1".to_string(),
+            agent_id: "market-researcher".to_string(),
+            dataset_id: "golden".to_string(),
+            cases: vec![EvalCase {
+                case_id: "case-1".to_string(),
+                prompt: "Summarize AAPL".to_string(),
+                expected_refs: Vec::new(),
+            }],
+        };
+        let case = |case_id: &str, prompt: &str| EvalCase {
+            case_id: case_id.to_string(),
+            prompt: prompt.to_string(),
+            expected_refs: Vec::new(),
+        };
+
+        assert_eq!(
+            validate_request(&EvalRunRequest {
+                run_id: " ".to_string(),
+                ..base()
+            }),
+            Err(EvalRunError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_request(&EvalRunRequest {
+                agent_id: String::new(),
+                ..base()
+            }),
+            Err(EvalRunError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_request(&EvalRunRequest {
+                dataset_id: " ".to_string(),
+                ..base()
+            }),
+            Err(EvalRunError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_request(&EvalRunRequest {
+                cases: vec![case(" ", "p")],
+                ..base()
+            }),
+            Err(EvalRunError::InvalidRequest)
+        );
+        assert_eq!(
+            validate_request(&EvalRunRequest {
+                cases: vec![case("c", "  ")],
+                ..base()
+            }),
+            Err(EvalRunError::InvalidRequest)
+        );
+        assert!(validate_request(&base()).is_ok());
+    }
 }

@@ -248,4 +248,76 @@ mod tests {
             Err(StoreError::InvalidEvalRun)
         );
     }
+
+    #[test]
+    fn eval_run_validation_rejects_each_empty_field() {
+        let mut store = AgentStore::new();
+        let base_request = || EvalRunRequest {
+            run_id: "eval-1".to_string(),
+            agent_id: "market-researcher".to_string(),
+            dataset_id: "golden".to_string(),
+            cases: Vec::new(),
+        };
+        let run = |request: EvalRunRequest, metrics: Vec<EvalMetric>, status: &str| StoredEvalRun {
+            request,
+            metrics,
+            status: status.to_string(),
+            updated_skills: Vec::new(),
+        };
+
+        assert_eq!(
+            store.try_record_eval_run(run(
+                EvalRunRequest {
+                    run_id: " ".to_string(),
+                    ..base_request()
+                },
+                Vec::new(),
+                "success"
+            )),
+            Err(StoreError::InvalidEvalRun)
+        );
+        assert_eq!(
+            store.try_record_eval_run(run(
+                EvalRunRequest {
+                    agent_id: String::new(),
+                    ..base_request()
+                },
+                Vec::new(),
+                "success"
+            )),
+            Err(StoreError::InvalidEvalRun)
+        );
+        assert_eq!(
+            store.try_record_eval_run(run(
+                EvalRunRequest {
+                    dataset_id: " ".to_string(),
+                    ..base_request()
+                },
+                Vec::new(),
+                "success"
+            )),
+            Err(StoreError::InvalidEvalRun)
+        );
+        assert_eq!(
+            store.try_record_eval_run(run(
+                base_request(),
+                vec![EvalMetric {
+                    metric_name: " ".to_string(),
+                    metric_value: 1.0,
+                }],
+                "success"
+            )),
+            Err(StoreError::InvalidEvalRun)
+        );
+        assert_eq!(
+            store.try_record_eval_run(run(base_request(), Vec::new(), " ")),
+            Err(StoreError::InvalidEvalRun)
+        );
+        // A fully valid run is accepted.
+        assert!(
+            store
+                .try_record_eval_run(run(base_request(), Vec::new(), "success"))
+                .is_ok()
+        );
+    }
 }

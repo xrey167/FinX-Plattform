@@ -166,4 +166,71 @@ mod tests {
             Err(PipelineValidationError::EmptyArgs { name: "job" })
         );
     }
+
+    #[test]
+    fn validate_jobs_reports_each_structural_error() {
+        assert_eq!(
+            validate_jobs(&[]),
+            Err(PipelineValidationError::EmptyPipeline)
+        );
+
+        assert_eq!(
+            validate_jobs(&[PipelineJob {
+                name: " ",
+                runner: "dbt",
+                args: "run",
+                depends_on: &[],
+            }]),
+            Err(PipelineValidationError::EmptyJobName)
+        );
+        assert_eq!(
+            validate_jobs(&[PipelineJob {
+                name: "job",
+                runner: " ",
+                args: "run",
+                depends_on: &[],
+            }]),
+            Err(PipelineValidationError::EmptyRunner { name: "job" })
+        );
+        // A job depending on itself is caught as SelfDependency, not treated as a
+        // satisfied known dependency (the self-dep check precedes the unknown check).
+        assert_eq!(
+            validate_jobs(&[PipelineJob {
+                name: "job",
+                runner: "dbt",
+                args: "run",
+                depends_on: &["job"],
+            }]),
+            Err(PipelineValidationError::SelfDependency { name: "job" })
+        );
+        assert_eq!(
+            validate_jobs(&[
+                PipelineJob {
+                    name: "a",
+                    runner: "dbt",
+                    args: "run",
+                    depends_on: &[],
+                },
+                PipelineJob {
+                    name: "a",
+                    runner: "dbt",
+                    args: "run",
+                    depends_on: &[],
+                },
+            ]),
+            Err(PipelineValidationError::DuplicateJob { name: "a" })
+        );
+        assert_eq!(
+            validate_jobs(&[PipelineJob {
+                name: "silver",
+                runner: "dbt",
+                args: "run",
+                depends_on: &["bronze"],
+            }]),
+            Err(PipelineValidationError::UnknownDependency {
+                name: "silver",
+                dependency: "bronze",
+            })
+        );
+    }
 }
