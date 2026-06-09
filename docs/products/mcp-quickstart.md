@@ -38,14 +38,22 @@ cargo build --release -p tdw-mcp --features live --bin tdw-mcp
 | Flag | Transport |
 |---|---|
 | `--stdio-json-rpc` | JSON-RPC over stdin/stdout (what MCP clients spawn) |
-| `--streamable-http [bind]` | MCP Streamable HTTP; default bind from `default_streamable_http_bind()` |
+| `--streamable-http [bind]` | MCP Streamable HTTP; bind defaults to `127.0.0.1:8788` — pass e.g. `0.0.0.0:8788` to override |
 
 Set `TDW_MCP_OPS_BIND` to additionally expose `/health` and `/ready` probes
 for compose/K8s healthchecks.
 
 ## 2. Wire it into Claude
 
-`claude mcp add` (Claude Code) or `claude_desktop_config.json` (Desktop):
+**Claude Code** — one command:
+
+```sh
+claude mcp add tdw -- docker run -i --rm ghcr.io/xrey167/finx-plattform-tdw-mcp:latest --stdio-json-rpc
+```
+
+**Claude Desktop** — edit `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`),
+then restart Claude Desktop:
 
 ```json
 {
@@ -55,21 +63,30 @@ for compose/K8s healthchecks.
       "args": ["run", "-i", "--rm",
                "-e", "FRED_API_KEY",
                "ghcr.io/xrey167/finx-plattform-tdw-mcp:latest",
-               "--stdio-json-rpc"]
+               "--stdio-json-rpc"],
+      "env": { "FRED_API_KEY": "<your key>" }
     }
   }
 }
 ```
 
-For a from-source install, set `command` to the built binary path and `args`
-to `["--stdio-json-rpc"]`. Add one `-e VAR` per API key you want forwarded
-into the container (see table below).
+GUI apps don't inherit your shell environment — put key values in the `env`
+block (it sets them for the spawned `docker` process) and pass-through
+`-e VAR` flags forward them into the container, one per key from the table
+below. For a from-source install, set `command` to the built binary path and
+`args` to `["--stdio-json-rpc"]`; keys then come straight from `env`.
 
 ## 3. Provider API keys
 
 Keys are read from environment variables at fetch time. No key is validated
 at startup — a missing/wrong key surfaces as an `isError: true` tool result
 on first use.
+
+> **Routable today:** `tdw.equity.historical` currently dispatches `yahoo`
+> (keyless) and `fileset`; the other providers below are registered and
+> listed by `tdw.providers.list`, and become callable when generic dispatch
+> lands (P1.3b). Configure their keys now or later — nothing breaks either
+> way.
 
 **No key needed:** yahoo, sec, ecb, binance, coingecko (free tier).
 
@@ -78,7 +95,7 @@ on first use.
 | fred | `FRED_API_KEY` | Free: https://fred.stlouisfed.org/docs/api/api_key.html |
 | coingecko | `COINGECKO_API_KEY` | Optional; raises free-tier rate limits |
 | polygon | `POLYGON_API_KEY` | |
-| alpaca | `APCA_API_KEY_ID` | |
+| alpaca | `APCA_API_KEY_ID` + `APCA_API_SECRET_KEY` | Both required |
 | alpha-vantage | `TDW_ALPHA_VANTAGE_API_KEY` | |
 | fmp | `TDW_FMP_API_KEY` | |
 | tiingo | `TDW_TIINGO_API_KEY` | |
@@ -87,6 +104,7 @@ on first use.
 | databento | `TDW_DATABENTO_API_KEY` | |
 | benzinga / bls / ccdata / eia / glassnode / tradier / trading-economics / velodata / adanos | `TDW_<PROVIDER>_API_KEY` | Same pattern, uppercased provider name |
 | seeking-alpha | `TDW_SEEKING_ALPHA_API_KEY` | RapidAPI key |
+| huggingface | `HF_TOKEN` (or `HUGGINGFACE_API_TOKEN` / `HF_API_TOKEN`) | |
 
 ## 4. First query
 
