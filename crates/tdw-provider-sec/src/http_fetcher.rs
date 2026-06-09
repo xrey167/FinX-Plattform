@@ -120,7 +120,15 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
         let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("sec filings parse_json: {e}")))?;
 
-        let cik = envelope.cik.unwrap_or_else(|| query.cik.clone());
+        // EDGAR returns the CIK zero-padded to 10 digits; the crate's
+        // canonical form is unpadded (matching `SecFilingsQuery::cik`).
+        let cik = envelope
+            .cik
+            .map(|c| match c.trim_start_matches('0') {
+                "" => "0".to_string(),
+                trimmed => trimmed.to_string(),
+            })
+            .unwrap_or_else(|| query.cik.clone());
         let entity_name = envelope.name.unwrap_or_default();
 
         let recent = envelope
@@ -160,7 +168,9 @@ tdw_core::provider_fetcher_struct!(
     ///
     /// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json`.
     /// Returns equity historical data shaped as [`MarketDataBar`] by extracting
-    /// `us-gaap/Revenue` USD facts tagged on 10-K filings.
+    /// us-gaap revenue USD facts tagged on 10-K filings (first present of
+    /// `RevenueFromContractWithCustomerExcludingAssessedTax`, `Revenues`,
+    /// `SalesRevenueNet`).
     pub SecXbrlHttpFetcher,
     BASE_URL
 );
@@ -277,7 +287,17 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         let us_gaap = envelope.facts.and_then(|f| f.us_gaap).unwrap_or_default();
 
-        let revenue_value = us_gaap.get("Revenue").cloned();
+        // The us-gaap taxonomy has no plain `Revenue` concept; filers report
+        // under one of these, newest standard (ASC 606) first.
+        const REVENUE_CONCEPTS: [&str; 3] = [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "Revenues",
+            "SalesRevenueNet",
+        ];
+        let revenue_value = REVENUE_CONCEPTS
+            .iter()
+            .find_map(|concept| us_gaap.get(*concept))
+            .cloned();
         let revenue: SecXbrlConcept = match revenue_value {
             Some(v) => serde_json::from_value(v)
                 .map_err(|e| Error::Provider(format!("sec xbrl Revenue parse: {e}")))?,
@@ -359,7 +379,7 @@ mod tests {
         let query = filings_query();
         let raw = Bytes::from(
             serde_json::json!({
-                "cik": "320193",
+                "cik": "0000320193",
                 "name": "Apple Inc.",
                 "filings": {
                     "recent": {
@@ -392,8 +412,8 @@ mod tests {
                 "entityName": "Apple Inc.",
                 "facts": {
                     "us-gaap": {
-                        "Revenue": {
-                            "label": "Revenue",
+                        "Revenues": {
+                            "label": "Revenues",
                             "units": {
                                 "USD": [
                                     {"end": "2024-09-28", "val": 391035000000.0_f64, "form": "10-K"},

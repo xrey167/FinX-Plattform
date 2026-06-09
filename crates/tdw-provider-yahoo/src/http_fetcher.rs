@@ -34,9 +34,75 @@ fn yahoo_client(ctx: &str) -> Result<Client> {
     tdw_core::http_support::build_client(USER_AGENT, ctx)
 }
 
+/// Cookie-issuing endpoint for the crumb handshake. Returns 404 but sets the
+/// session cookie the crumb endpoint requires.
+const CRUMB_COOKIE_URL: &str = "https://fc.yahoo.com/";
+/// Crumb endpoint; needs the session cookie from [`CRUMB_COOKIE_URL`].
+const CRUMB_URL: &str = "https://query1.finance.yahoo.com/v1/test/getcrumb";
+/// Browser-like user agent for the crumb handshake and crumb-authenticated
+/// retries: Yahoo answers 429 to crumb requests from non-browser UAs, so the
+/// crate's own UA cannot be used on this path.
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+/// Acquire a Yahoo session cookie + crumb pair. The v10 `quoteSummary` and
+/// v7 quote/options endpoints reject anonymous requests with
+/// 401 "Invalid Crumb"; this two-step handshake (cookie, then crumb) is what
+/// browsers do implicitly.
+async fn yahoo_handshake(client: &Client, ctx: &str) -> Result<(String, String)> {
+    let response = client
+        .get(CRUMB_COOKIE_URL)
+        .header(reqwest::header::USER_AGENT, BROWSER_USER_AGENT)
+        .send()
+        .await
+        .map_err(|error| Error::Provider(format!("{ctx} crumb cookie: {error}")))?;
+    // fc.yahoo.com answers 404 — only the Set-Cookie headers matter.
+    let cookie = response
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter_map(|value| value.split(';').next())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if cookie.is_empty() {
+        return Err(Error::Provider(format!(
+            "{ctx} crumb cookie: no session cookie issued"
+        )));
+    }
+    let response = client
+        .get(CRUMB_URL)
+        .header(reqwest::header::USER_AGENT, BROWSER_USER_AGENT)
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .map_err(|error| Error::Provider(format!("{ctx} crumb fetch: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "{ctx} crumb fetch returned {status}: {body}"
+        )));
+    }
+    let crumb = response
+        .text()
+        .await
+        .map_err(|error| Error::Provider(format!("{ctx} crumb read: {error}")))?;
+    if crumb.is_empty() || crumb.contains('{') {
+        return Err(Error::Provider(format!(
+            "{ctx} crumb fetch returned an error body: {crumb}"
+        )));
+    }
+    Ok((cookie, crumb))
+}
+
 /// Issue a GET to `url`, returning the raw body bytes or an [`Error::Provider`]
 /// carrying the failing status + body. `ctx` prefixes every error message so
 /// the failing endpoint is identifiable.
+///
+/// On 401/403 the request is retried once with a freshly acquired
+/// cookie + crumb (see [`yahoo_handshake`]). The handshake is strictly lazy so
+/// offline cassette/mock tests never touch the network.
 async fn yahoo_get(client: &Client, url: &str, ctx: &str) -> Result<Bytes> {
     let response = client
         .get(url)
@@ -45,6 +111,26 @@ async fn yahoo_get(client: &Client, url: &str, ctx: &str) -> Result<Bytes> {
         .map_err(|error| Error::Provider(format!("{ctx} extract_data: {error}")))?;
     if !response.status().is_success() {
         let status = response.status();
+        if matches!(status.as_u16(), 401 | 403) {
+            let (cookie, crumb) = yahoo_handshake(client, ctx).await?;
+            let retry = client
+                .get(url)
+                .query(&[("crumb", crumb.as_str())])
+                .header(reqwest::header::USER_AGENT, BROWSER_USER_AGENT)
+                .header(reqwest::header::COOKIE, &cookie)
+                .send()
+                .await
+                .map_err(|error| Error::Provider(format!("{ctx} extract_data: {error}")))?;
+            if !retry.status().is_success() {
+                let status = retry.status();
+                let body = retry.text().await.unwrap_or_default();
+                return Err(Error::Provider(format!("{ctx} returned {status}: {body}")));
+            }
+            return retry
+                .bytes()
+                .await
+                .map_err(|error| Error::Provider(format!("{ctx} read body: {error}")));
+        }
         let body = response.text().await.unwrap_or_default();
         return Err(Error::Provider(format!("{ctx} returned {status}: {body}")));
     }
