@@ -20,7 +20,7 @@ use tdw_provider_testkit::{cassette_bytes, live_fetch_rows_expect};
 
 fn cassette_submissions() -> Bytes {
     cassette_bytes!({
-        "cik": "320193",
+        "cik": "0000320193",
         "name": "Apple Inc.",
         "filings": {
             "recent": {
@@ -41,8 +41,8 @@ fn cassette_xbrl() -> Bytes {
         "entityName": "Apple Inc.",
         "facts": {
             "us-gaap": {
-                "Revenue": {
-                    "label": "Revenue",
+                "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                    "label": "Revenue from Contract with Customer, Excluding Assessed Tax",
                     "units": {
                         "USD": [
                             {

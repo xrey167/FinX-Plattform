@@ -52,5 +52,10 @@ name = "http_fetcher"
 path = "tests/http_fetcher.rs"
 required-features = ["http"]
 
+[[test]]
+name = "ws_streamer"
+path = "tests/ws_streamer.rs"
+required-features = ["ws"]
+
 [lints]
 workspace = true
