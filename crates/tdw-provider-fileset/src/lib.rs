@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-
 #![deny(clippy::pedantic, clippy::nursery)]
 use async_trait::async_trait;
 use bytes::Bytes;

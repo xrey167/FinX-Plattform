@@ -1,5 +1,4 @@
 #![forbid(unsafe_code)]
-
 #![deny(clippy::pedantic, clippy::nursery)]
 use std::net::SocketAddr;
 use std::time::Duration;

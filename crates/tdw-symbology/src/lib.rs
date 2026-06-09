@@ -19,7 +19,6 @@
 //!   shared by alerting/watchlist storage.
 
 #![forbid(unsafe_code)]
-
 #![deny(clippy::pedantic, clippy::nursery)]
 /// Maps a ticker dot-suffix to a human-readable exchange label.
 ///

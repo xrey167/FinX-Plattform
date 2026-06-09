@@ -31,7 +31,6 @@
 //! 7 clickhouse, 8 qdrant, 9 meilisearch.
 
 #![forbid(unsafe_code)]
-
 #![deny(clippy::pedantic, clippy::nursery)]
 use std::env;
 use std::process::ExitCode;
