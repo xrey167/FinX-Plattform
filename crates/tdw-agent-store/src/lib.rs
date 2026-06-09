@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 mod memory;
 
 pub use memory::{

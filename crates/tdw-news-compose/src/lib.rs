@@ -14,6 +14,7 @@
 //! * [`compose_for_symbols`] — multi-symbol variant using round-robin
 //!   distribution so no single symbol dominates the result.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![doc = "Generated protobuf bindings for TDW market data types."]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 pub mod finance {
     // Vendored prost-build output (see `finance.gen.rs`). Included via a relative
     // path so the crate needs no build-time codegen or system `protoc`.

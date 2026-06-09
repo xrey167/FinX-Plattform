@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

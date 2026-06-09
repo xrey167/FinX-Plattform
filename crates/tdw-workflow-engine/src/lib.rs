@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use serde::{Deserialize, Serialize};
 use tdw_agent::{AgentContractError, WorkflowDefinition, validate_workflow_contract};
 

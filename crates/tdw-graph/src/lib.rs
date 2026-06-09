@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};

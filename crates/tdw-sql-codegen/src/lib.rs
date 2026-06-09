@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 pub mod analytics;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

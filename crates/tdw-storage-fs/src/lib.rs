@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 

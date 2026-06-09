@@ -14,6 +14,7 @@
 //! `serde_json`, and `tdw-core` (for [`tdw_core::Credentials`]). It performs no
 //! network access and pulls in no `reqwest`.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 /// Build a [`bytes::Bytes`] cassette body from a `serde_json` literal.
 ///
 /// Expands to `Bytes::from(json!(<literal>).to_string().into_bytes())`,

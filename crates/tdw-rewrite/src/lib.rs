@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 pub const CRATE_NAME: &str = "tdw-rewrite";
 
 #[derive(Clone, Debug, PartialEq, Eq)]

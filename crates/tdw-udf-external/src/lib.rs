@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 pub const CRATE_NAME: &str = "tdw-udf-external";
 pub const RUNTIME_NAME: &str = "external";
 pub const MAX_TIMEOUT_MS: u64 = 30_000;

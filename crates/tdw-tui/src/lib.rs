@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use ratatui::text::Line;
 use tdw_protocol::EventMsg;
 
