@@ -549,6 +549,57 @@ mod tests {
             Err(WasmUdfError::UnknownExport)
         );
     }
+
+    #[test]
+    fn fixture_dispatch_covers_lower_identity_and_len() {
+        let rt = WasmUdfRuntime::new();
+        let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        assert_eq!(
+            rt.execute(&wasm, "lower", "AAPL")
+                .unwrap_or_else(|e| panic!("lower: {e}")),
+            "aapl"
+        );
+        assert_eq!(
+            rt.execute(&wasm, "identity", "AaPl")
+                .unwrap_or_else(|e| panic!("identity: {e}")),
+            "AaPl"
+        );
+        assert_eq!(
+            rt.execute(&wasm, "len", "abcd")
+                .unwrap_or_else(|e| panic!("len: {e}")),
+            "4"
+        );
+    }
+
+    #[test]
+    fn validate_module_rejects_empty_name_empty_bytes_and_oversize() {
+        assert_eq!(
+            validate_module(&WasmUdfModule {
+                module_name: "  ".to_string(),
+                exported_function: "upper".to_string(),
+                bytes: vec![0x00, 0x61, 0x73, 0x6d],
+            }),
+            Err(WasmUdfError::EmptyModuleName)
+        );
+        assert_eq!(
+            validate_module(&WasmUdfModule {
+                module_name: CRATE_NAME.to_string(),
+                exported_function: "upper".to_string(),
+                bytes: Vec::new(),
+            }),
+            Err(WasmUdfError::EmptyModuleBytes)
+        );
+        let mut oversize = vec![0x00, 0x61, 0x73, 0x6d];
+        oversize.resize(MAX_WASM_MODULE_BYTES + 1, 0x00);
+        assert_eq!(
+            validate_module(&WasmUdfModule {
+                module_name: CRATE_NAME.to_string(),
+                exported_function: "upper".to_string(),
+                bytes: oversize,
+            }),
+            Err(WasmUdfError::ModuleTooLarge)
+        );
+    }
 }
 
 #[cfg(all(test, feature = "wasmi"))]
