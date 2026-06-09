@@ -228,10 +228,7 @@ mod tests {
         assert_eq!(grandchild.correlation_id, Some(root.event_id));
         assert_eq!(grandchild.causation_id, Some(child.event_id));
         assert_eq!(grandchild.depth, 2);
-        assert_eq!(
-            grandchild.trace.parent_span_id,
-            Some(child.trace.span_id.clone())
-        );
+        assert_eq!(grandchild.trace.parent_span_id, Some(child.trace.span_id));
     }
 
     #[test]
