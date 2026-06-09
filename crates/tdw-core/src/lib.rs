@@ -297,7 +297,7 @@ impl ProviderRegistry {
         let registry = Self::default();
         #[cfg(feature = "inventory-registration")]
         {
-            return Self::with_inventory_entries(registry);
+            Self::with_inventory_entries(registry)
         }
         #[cfg(not(feature = "inventory-registration"))]
         {

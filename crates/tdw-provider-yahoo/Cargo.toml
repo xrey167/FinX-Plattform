@@ -17,7 +17,6 @@ http = ["dep:reqwest", "dep:tokio"]
 async-trait = { workspace = true }
 bytes = { workspace = true }
 reqwest = { workspace = true, optional = true }
-schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }

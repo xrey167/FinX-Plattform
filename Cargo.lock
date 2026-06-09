@@ -3846,7 +3846,6 @@ name = "tdw-eval-runner"
 version = "0.1.0"
 dependencies = [
  "serde",
- "serde_json",
  "tdw-agent",
  "tdw-agent-store",
  "tdw-llm",
@@ -4573,7 +4572,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "reqwest",
- "schemars",
  "serde",
  "serde_json",
  "tdw-core",
@@ -4647,8 +4645,6 @@ dependencies = [
  "tdw-service-api",
  "tdw-test-utils",
  "tokio",
- "tokio-util",
- "toml",
 ]
 
 [[package]]
