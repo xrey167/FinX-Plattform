@@ -1228,15 +1228,16 @@ impl Wake for NoopWake {
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-
-    loop {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
-            return output;
-        }
-    }
+    // Live HTTP fetchers (reqwest) need a reactor and timers; the
+    // deterministic in-memory futures don't care either way. A throwaway
+    // current-thread runtime serves both — the previous noop-waker
+    // busy-poll panicked with "there is no reactor running" the moment a
+    // live provider feature was enabled.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tdw-service-api block_on: build current-thread runtime")
+        .block_on(future)
 }
 
 fn poll_stream_next<T: tdw_core::DataModel>(
