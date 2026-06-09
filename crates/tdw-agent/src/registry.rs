@@ -482,4 +482,51 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn merge_rejects_duplicate_kind_name_across_registries() {
+        // `merge` (the cross-plugin combine path) had no direct test; the
+        // (kind, name) collision was only exercised at the `insert` level.
+        let tool = |id: &str| {
+            load_resource(&format!(
+                r#"{{ apiVersion:"tdw.finx/v1", kind:"tool",
+                     metadata:{{ name:"dup", id:"{id}", version:"0.1.0",
+                       origin:{{tier:"Domain",source:"Internal"}}, adaptivity:"None", autonomous:false }},
+                     spec:{{ input_schema:{{ type:"object" }} }} }}"#
+            ))
+            .expect("tool parse")
+        };
+        let mut first = Registry::from_resources([tool("a")]).expect("first registry");
+        let second = Registry::from_resources([tool("b")]).expect("second registry");
+        // Both hold a tool named "dup": merging collides on (Tool, "dup").
+        assert!(matches!(
+            first.merge(second),
+            Err(LoadError::Duplicate { .. })
+        ));
+    }
+
+    #[test]
+    fn load_plugins_reports_missing_member() {
+        // The end-to-end MissingMember failure through load_plugins (not just
+        // via from_resources/validate_plugins) was untested.
+        let root =
+            std::env::temp_dir().join(format!("tdw_agent_plugins_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let plugin_dir = root.join("beta");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir");
+        // The plugin references a member no resource provides.
+        std::fs::write(
+            plugin_dir.join("plugin.json5"),
+            r#"{ apiVersion:"tdw.finx/v1", kind:"plugin",
+                 metadata:{ name:"beta", id:"beta", version:"0.1.0",
+                   origin:{tier:"Custom",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 spec:{ members:["beta.absent"], client_side:false, server_side:true } }"#,
+        )
+        .expect("write plugin");
+
+        let result = Registry::load_plugins(&root);
+        assert!(matches!(result, Err(LoadError::MissingMember { .. })));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -21,7 +21,7 @@
 //! CREATE TABLE tdw_sessions                  (session_id TEXT PK, status TEXT, created_at TEXT, updated_at TEXT);
 //! CREATE TABLE tdw_sessions_permission_state (session_id TEXT PK, rules_json TEXT);
 //! CREATE TABLE tdw_sessions_pending_approvals(permission_id TEXT PK, session_id TEXT, action TEXT, pattern TEXT, decision TEXT NULL);
-//! CREATE TABLE tdw_sessions_cost_ledger      (id BIGSERIAL PK, session_id TEXT, operation_id TEXT, tokens BIGINT, bytes_scanned BIGINT, rows_read BIGINT, rows_written BIGINT, backend TEXT);
+//! CREATE TABLE tdw_sessions_cost_ledger      (id BIGSERIAL PK, session_id TEXT, operation_id TEXT, tokens BIGINT, bytes_scanned BIGINT, rows_read BIGINT, rows_written BIGINT, backend TEXT, UNIQUE(session_id, operation_id));
 //! ```
 
 use serde_json::{Value, json};
@@ -56,10 +56,17 @@ impl PgSessionStore {
 
     /// Override the base table name. Companion tables follow the
     /// `<base>_<suffix>` convention.
-    #[must_use]
-    pub fn with_table(mut self, table: impl Into<String>) -> Self {
-        self.table = table.into();
-        self
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Storage`] if `table` is not a valid SQL identifier.
+    /// The base name is `format!`-interpolated into every statement (SQL has
+    /// no bind parameter for identifiers), so it must be validated here.
+    pub fn with_table(mut self, table: impl Into<String>) -> Result<Self, Error> {
+        let table = table.into();
+        tdw_core::safe_sql_identifier(&table)?;
+        self.table = table;
+        Ok(self)
     }
 
     fn permission_table(&self) -> String {
@@ -121,7 +128,8 @@ impl PgSessionStore {
                 bytes_scanned BIGINT NOT NULL, \
                 rows_read BIGINT NOT NULL, \
                 rows_written BIGINT NOT NULL, \
-                backend TEXT NOT NULL\
+                backend TEXT NOT NULL, \
+                UNIQUE (session_id, operation_id)\
             )",
             self.cost_table()
         );
@@ -269,8 +277,10 @@ impl PgSessionStore {
         permission_id: &PermissionId,
         decision: ApprovalDecision,
     ) -> Result<Option<PendingApprovalRecord>, Error> {
+        // Mirror the sqlite store's first-decision-wins guard: `decision IS NULL`
+        // prevents a late caller from silently overwriting a resolved approval.
         let sql = format!(
-            "UPDATE {} SET decision = $1 WHERE permission_id = $2",
+            "UPDATE {} SET decision = $1 WHERE permission_id = $2 AND decision IS NULL",
             self.approval_table()
         );
         self.engine
@@ -312,7 +322,8 @@ impl PgSessionStore {
     pub async fn append_cost(&self, entry: &CostLedgerEntry) -> Result<(), Error> {
         let sql = format!(
             "INSERT INTO {} (session_id, operation_id, tokens, bytes_scanned, rows_read, rows_written, backend) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (session_id, operation_id) DO NOTHING",
             self.cost_table()
         );
         self.engine

@@ -30,7 +30,9 @@ async fn pg_outbox_appends_marks_and_recovers_pending_records() {
     let engine = PgEngine::connect(&url)
         .await
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
-    let store = PgOutboxStore::new(engine.clone()).with_table(table_name());
+    let store = PgOutboxStore::new(engine.clone())
+        .with_table(table_name())
+        .expect("valid outbox table identifier");
 
     // Hermetic setup: drop any leftovers from a previous interrupted
     // run, then create fresh.

@@ -68,6 +68,10 @@ impl OpenAiEmbeddingHttpClient {
         let base_url = parse_base_url(DEFAULT_BASE_URL)?;
         let client = Client::builder()
             .user_agent("tdw-embed-openai/0.1")
+            // Bound the client so a stalled endpoint can't hang the knowledge-index
+            // op forever (IO1): fail fast on connect, with a per-request backstop.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
             .build()
             .map_err(|error| OpenAiEmbeddingHttpError::ClientBuild(error.to_string()))?;
         Ok(Self {

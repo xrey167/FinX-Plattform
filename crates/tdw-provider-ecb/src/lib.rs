@@ -86,6 +86,10 @@ pub enum EcbProviderError {
     EmptyKey,
     #[error("ecb key must not exceed 100 characters")]
     KeyTooLong,
+    #[error("ecb flow contains characters outside the SDMX grammar")]
+    InvalidFlow,
+    #[error("ecb key contains characters outside the SDMX grammar")]
+    InvalidKey,
 }
 
 /// Build the relative request path for the ECB `/data` endpoint.
@@ -114,6 +118,9 @@ fn validate_flow(flow: &str) -> Result<String> {
     if flow.len() > 100 {
         return Err(EcbProviderError::FlowTooLong);
     }
+    if !flow.chars().all(is_sdmx_char) {
+        return Err(EcbProviderError::InvalidFlow);
+    }
     Ok(flow)
 }
 
@@ -125,7 +132,19 @@ fn validate_key(key: &str) -> Result<String> {
     if key.len() > 100 {
         return Err(EcbProviderError::KeyTooLong);
     }
+    if !key.chars().all(is_sdmx_char) {
+        return Err(EcbProviderError::InvalidKey);
+    }
     Ok(key)
+}
+
+/// SDMX flow/series-key grammar: ASCII alphanumerics plus the structural
+/// characters SDMX itself uses — `.` (dimension separator), `+` (OR within a
+/// dimension), and `-`. Crucially this excludes `/`, `?`, `&`, `#` and
+/// whitespace, so a `flow`/`key` interpolated into the `/data/{flow}/{key}?…`
+/// URL path can no longer inject extra path segments or query parameters.
+fn is_sdmx_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-')
 }
 
 /// Mock fetcher for use in unit tests (no network required).
@@ -293,6 +312,28 @@ mod tests {
             EcbDataQuery::new("EXR", long, "2024-01-01", "2024-01-31"),
             Err(EcbProviderError::KeyTooLong),
         );
+    }
+
+    #[test]
+    fn rejects_flow_with_injection_characters() {
+        // A `/` would open a new URL path segment; `?`/`&` would inject query
+        // params. The SDMX grammar excludes all of them.
+        assert_eq!(
+            EcbDataQuery::new("EX/R", "D.USD.EUR.SP00.A", "2024-01-01", "2024-01-31"),
+            Err(EcbProviderError::InvalidFlow),
+        );
+    }
+
+    #[test]
+    fn rejects_key_with_injection_characters() {
+        // `EXR/../../something?evil=1`-style payloads inject path segments and
+        // query parameters into the ECB request; charset validation blocks them.
+        assert_eq!(
+            EcbDataQuery::new("EXR", "EXR/../../x?evil=1", "2024-01-01", "2024-01-31"),
+            Err(EcbProviderError::InvalidKey),
+        );
+        // A `+` (SDMX OR) and `-` remain valid so legitimate keys still parse.
+        assert!(EcbDataQuery::new("EXR", "D.USD+GBP.EUR-SP.A", "2024-01-01", "2024-01-31").is_ok());
     }
 
     #[test]

@@ -1179,15 +1179,16 @@ mod tests {
         backend.register_hook(hook);
         assert_eq!(backend.hook_names(), vec!["audit-log".to_string()]);
 
-        // The default `HookExecutionPolicy` denies by default, so executing the
-        // handler surfaces a mapped `PermissionDenied` for the command action.
+        // The default `HookExecutionPolicy` defaults to `Ask` (HK2/CFG2), so
+        // executing an unmatched command handler surfaces a mapped
+        // `PermissionRequiresApproval` — the handler still never runs.
         let envelope = sample_event("backend");
         let error = backend
             .run_hooks(&envelope)
-            .expect_err("default deny policy must reject the hook handler");
+            .expect_err("default ask policy must withhold the hook handler");
         assert!(matches!(
             error,
-            crate::error::BackendError::Hook(HookError::PermissionDenied(action))
+            crate::error::BackendError::Hook(HookError::PermissionRequiresApproval(action))
                 if action == "hook.command.true"
         ));
         let _ = std::fs::remove_dir_all(&dir);

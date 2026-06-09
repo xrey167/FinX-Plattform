@@ -11,10 +11,12 @@
 //! structures are rejected with a clear error so production callers know
 //! to extend the binding surface deliberately.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use serde_json::Value;
-use sqlx::Row;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::{Executor, Row};
 use tdw_core::{Error, RelationalEngine, Result};
 
 /// Production Postgres backend. Construct via [`PgEngine::connect`] (URL)
@@ -32,8 +34,22 @@ impl PgEngine {
     ///
     /// Returns an error variant if the underlying operation fails.
     pub async fn connect(database_url: &str) -> Result<Self> {
+        // Bound the DB arm of theme #6 (bounded I/O), mirroring the HTTP client
+        // timeouts (PGE2): with only 8 connections, a caller awaiting a free
+        // one must fail after `acquire_timeout` instead of blocking forever when
+        // the pool is exhausted; idle connections are reclaimed; and each
+        // connection gets a server-side `statement_timeout` so a single runaway
+        // query can't hold a connection and starve every PG-backed op.
         let pool = PgPoolOptions::new()
             .max_connections(8)
+            .acquire_timeout(Duration::from_secs(10))
+            .idle_timeout(Duration::from_secs(600))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    conn.execute("SET statement_timeout = '30s'").await?;
+                    Ok(())
+                })
+            })
             .connect(database_url)
             .await
             .map_err(|error| Error::Storage(format!("postgres connect: {error}")))?;

@@ -16,6 +16,7 @@ doctest = false
 reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tdw-core = { workspace = true }
 tdw-event = { path = "../tdw-event" }
 tdw-protocol = { workspace = true }
 thiserror = { workspace = true }

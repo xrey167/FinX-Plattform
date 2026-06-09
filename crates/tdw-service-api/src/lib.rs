@@ -1560,9 +1560,16 @@ mod tests {
 
         let denied =
             secure_endpoint_response_with_backend(&config, "fileset", "aapl", &mut backend)
-                .expect_err("unallowed hook action must deny before backend execution");
+                .expect_err("unallowed hook action must block before backend execution");
 
-        assert!(denied.to_string().contains("hook permission denied"));
+        // HK2/CFG2: the default posture is Ask, so an unmatched hook action
+        // surfaces as requires-approval rather than a hard deny — but it must
+        // still block the backend from executing without an explicit Allow.
+        assert!(
+            denied
+                .to_string()
+                .contains("hook permission requires approval")
+        );
         assert!(backend.calls.is_empty());
     }
 

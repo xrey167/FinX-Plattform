@@ -97,6 +97,11 @@ impl AnthropicHttpClient {
             .map_err(|error| AnthropicHttpError::InvalidBaseUrl(error.to_string()))?;
         let client = Client::builder()
             .user_agent("tdw-llm-anthropic/0.1")
+            // Bound the client so a stalled endpoint can't hang the eval/agent op
+            // forever (IO1). connect_timeout fails fast on an unreachable host;
+            // the overall timeout is generous since completions can run long.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(120))
             .build()
             .map_err(|error| AnthropicHttpError::ClientBuild(error.to_string()))?;
         Ok(Self {

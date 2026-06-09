@@ -101,6 +101,8 @@ impl Fetcher<DeribitInstrumentsQuery, DeribitInstrument> for DeribitHttpInstrume
         let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("deribit instruments client build: {e}")))?;
@@ -191,6 +193,8 @@ impl Fetcher<DeribitOrderBookQuery, DeribitOrderBook> for DeribitHttpOrderBookFe
         let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("deribit order_book client build: {e}")))?;
@@ -297,6 +301,8 @@ impl Fetcher<DeribitFundingQuery, DeribitFundingRecord> for DeribitHttpFundingFe
         let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| Error::Provider(format!("deribit funding client build: {e}")))?;

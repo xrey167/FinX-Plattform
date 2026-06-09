@@ -29,7 +29,9 @@ async fn pg_snapshot_commits_versions_monotonically_and_recovers_by_lookup() {
     let engine = PgEngine::connect(&url)
         .await
         .unwrap_or_else(|error| panic!("postgres connect: {error}"));
-    let store = PgSnapshotStore::new(engine.clone()).with_table(table_name());
+    let store = PgSnapshotStore::new(engine.clone())
+        .with_table(table_name())
+        .expect("valid snapshot table identifier");
 
     let drop_sql = format!("DROP TABLE IF EXISTS {}", table_name());
     engine

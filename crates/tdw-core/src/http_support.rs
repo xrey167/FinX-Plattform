@@ -33,8 +33,14 @@ pub mod prelude {
 /// builder error to [`Error::Provider`] using `ctx` as the message prefix.
 ///
 /// Reproduces the per-provider error text `"{ctx}: {error}"` byte-identically.
+///
+/// All provider HTTP traffic through this client is bounded: 10s connect
+/// timeout, 30s total request timeout (the G005 bounded-I/O policy), so a
+/// stalled upstream cannot hang a dispatcher worker indefinitely.
 pub fn build_client(user_agent: &str, ctx: &str) -> Result<Client> {
     Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .user_agent(user_agent)
         .build()
         .map_err(|error| Error::Provider(format!("{ctx}: {error}")))

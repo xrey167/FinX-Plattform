@@ -2278,6 +2278,55 @@ mod serve_tests {
         assert_eq!(report.completed, 5);
         assert_eq!(peak, 2, "in-flight count must be capped at max_concurrent");
     }
+
+    #[tokio::test]
+    async fn run_drains_in_flight_jobs_on_shutdown() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+        // Four ready jobs all lease immediately at max_concurrent = 4 and begin a
+        // ~40ms handler. Shutdown fires at 10ms — while all four are in-flight —
+        // so this drives the drain-with-work path that the existing empty-queue
+        // run() test never exercises. run()'s contract is that a stop signal
+        // never cancels already-leased work, so every in-flight job must still
+        // reach a terminal outcome.
+        let jobs = (0..4).map(|i| job_with(&format!("job-{i}"), 3)).collect();
+        let queue = MockQueue {
+            pending: std::sync::Mutex::new(jobs),
+        };
+        let peak = Arc::new(AtomicUsize::new(0));
+        let probe = ConcurrencyProbe {
+            current: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::clone(&peak),
+        };
+        let config = ServeConfig {
+            max_concurrent: 4,
+            ..ServeConfig::default()
+        };
+        let runner = WorkerRunner::new(queue, probe, config);
+
+        let report = runner
+            .run(tokio::time::sleep(std::time::Duration::from_millis(10)))
+            .await
+            .expect("run");
+
+        assert_eq!(
+            peak.load(SeqCst),
+            4,
+            "all four jobs were in-flight when shutdown fired"
+        );
+        assert_eq!(report.processed, 4, "every leased job is accounted for");
+        assert_eq!(
+            report.completed, 4,
+            "in-flight jobs drained to completion despite shutdown"
+        );
+        assert_eq!(report.failed, 0);
+        assert_eq!(
+            report.completed + report.failed,
+            report.processed,
+            "shutdown must not cancel already-leased work"
+        );
+    }
 }
 
 #[cfg(test)]

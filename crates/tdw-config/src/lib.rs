@@ -21,6 +21,8 @@ pub enum ConfigError {
         name: String,
         source: serde_json::Error,
     },
+    #[error("invalid configuration: {0}")]
+    Validation(String),
 }
 
 #[derive(
@@ -207,6 +209,91 @@ impl Default for TdwConfig {
     }
 }
 
+impl TdwConfig {
+    /// Validate the *semantics* of a fully merged config — the checks serde's
+    /// structural decode can't make. Called at the end of [`merge_layers`] so an
+    /// invalid config fails fast at load instead of much later at bind/use.
+    ///
+    /// Enforces: bind addresses parse as socket addresses; the active transport
+    /// has the bind it needs; `protocol.max_event_bytes > 0`; the model id is
+    /// non-empty/control-free; and `model.base_url` (when set) is an http(s)
+    /// URL with no whitespace/control characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError::Validation`] describing the first invalid field.
+    pub fn validate(&self) -> Result<()> {
+        use std::net::SocketAddr;
+        use std::str::FromStr;
+
+        // Bind addresses, when present, must parse as socket addresses.
+        for (field, bind) in [
+            ("daemon.tcp_bind", &self.daemon.tcp_bind),
+            ("daemon.http_bind", &self.daemon.http_bind),
+        ] {
+            if let Some(bind) = bind
+                && SocketAddr::from_str(bind).is_err()
+            {
+                return Err(ConfigError::Validation(format!(
+                    "{field} is not a valid socket address: {bind:?}"
+                )));
+            }
+        }
+
+        // The active transport must have the bind/path it will use, so a
+        // misconfigured transport is caught at load rather than at bind time.
+        match self.daemon.transport {
+            DaemonTransport::Tcp if self.daemon.tcp_bind.is_none() => {
+                return Err(ConfigError::Validation(
+                    "daemon.transport = Tcp requires daemon.tcp_bind".to_string(),
+                ));
+            }
+            DaemonTransport::HttpSse if self.daemon.http_bind.is_none() => {
+                return Err(ConfigError::Validation(
+                    "daemon.transport = HttpSse requires daemon.http_bind".to_string(),
+                ));
+            }
+            DaemonTransport::Uds if self.daemon.uds_path.trim().is_empty() => {
+                return Err(ConfigError::Validation(
+                    "daemon.transport = Uds requires a non-empty daemon.uds_path".to_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // A zero cap would reject every event.
+        if self.protocol.max_event_bytes == 0 {
+            return Err(ConfigError::Validation(
+                "protocol.max_event_bytes must be greater than 0".to_string(),
+            ));
+        }
+
+        // Model id: non-empty, no control characters.
+        if self.model.model.trim().is_empty() || self.model.model.chars().any(char::is_control) {
+            return Err(ConfigError::Validation(format!(
+                "model.model is not a valid model id: {:?}",
+                self.model.model
+            )));
+        }
+
+        // Optional base URL: http(s) scheme, no whitespace/control characters.
+        if let Some(base_url) = &self.model.base_url {
+            let has_unsafe = base_url
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control());
+            if has_unsafe || !(base_url.starts_with("http://") || base_url.starts_with("https://"))
+            {
+                return Err(ConfigError::Validation(format!(
+                    "model.base_url must be an http(s) URL with no whitespace/control chars: \
+                     {base_url:?}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[must_use]
 pub fn default_layer_order() -> Vec<ConfigLayerDescriptor> {
     [
@@ -248,10 +335,14 @@ pub fn merge_layers(layers: &[ConfigLayer]) -> Result<TdwConfig> {
         deep_merge(&mut merged, layer.value);
     }
 
-    serde_json::from_value(merged).map_err(|source| ConfigError::Json {
+    let config: TdwConfig = serde_json::from_value(merged).map_err(|source| ConfigError::Json {
         name: "merged".to_string(),
         source,
-    })
+    })?;
+    // Structural decode succeeded; now enforce the semantic contract at the
+    // ingestion boundary so an invalid config fails fast here, not at bind/use.
+    config.validate()?;
+    Ok(config)
 }
 
 #[must_use]
@@ -307,4 +398,149 @@ fn merge_object(base: &mut Map<String, Value>, overlay: Map<String, Value>) {
 fn schema_json<T: JsonSchema>() -> Value {
     serde_json::to_value(schema_for!(T))
         .unwrap_or_else(|error| panic!("config schema should serialize: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn default_layer_order_matches_contract() {
+        let order = default_layer_order();
+        assert_eq!(order.len(), 6);
+        assert_eq!(order[0].kind, ConfigLayerKind::UserDefaults);
+        assert_eq!(order[5].kind, ConfigLayerKind::CliFlags);
+        assert!(
+            order
+                .windows(2)
+                .all(|pair| pair[0].precedence < pair[1].precedence)
+        );
+    }
+
+    #[test]
+    fn later_layers_override_without_deleting_nested_values() {
+        let layers = vec![
+            ConfigLayer::new(
+                ConfigLayerKind::ProjectConfig,
+                "project",
+                json!({
+                    "model": { "provider": "anthropic", "model": "claude" },
+                    "daemon": { "transport": "Uds", "uds_path": "/tmp/tdw.sock" }
+                }),
+            ),
+            ConfigLayer::new(
+                ConfigLayerKind::CliFlags,
+                "cli",
+                json!({
+                    "model": { "model": "override" },
+                    "protocol": { "max_event_bytes": 512 }
+                }),
+            ),
+        ];
+
+        let config = merge_layers(&layers).expect("layers merge");
+
+        assert_eq!(config.model.provider, "anthropic");
+        assert_eq!(config.model.model, "override");
+        assert_eq!(config.daemon.uds_path, "/tmp/tdw.sock");
+        assert_eq!(config.protocol.max_event_bytes, 512);
+        assert_eq!(config.permissions.default_action, PermissionAction::Ask);
+    }
+
+    #[test]
+    fn default_config_passes_validation() {
+        TdwConfig::default()
+            .validate()
+            .expect("the shipped default config must be valid");
+    }
+
+    #[test]
+    fn validate_rejects_semantic_errors() {
+        // Unparseable bind address.
+        let mut cfg = TdwConfig::default();
+        cfg.daemon.tcp_bind = Some("not-an-address".to_string());
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // Tcp transport without a tcp_bind.
+        let mut cfg = TdwConfig::default();
+        cfg.daemon.tcp_bind = None;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // HttpSse transport without an http_bind.
+        let mut cfg = TdwConfig::default();
+        cfg.daemon.transport = DaemonTransport::HttpSse;
+        cfg.daemon.http_bind = None;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // Zero event-size cap.
+        let mut cfg = TdwConfig::default();
+        cfg.protocol.max_event_bytes = 0;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // Empty model id.
+        let mut cfg = TdwConfig::default();
+        cfg.model.model = "  ".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // Non-http(s) base URL.
+        let mut cfg = TdwConfig::default();
+        cfg.model.base_url = Some("ftp://example.com".to_string());
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // A valid https base URL passes.
+        let mut cfg = TdwConfig::default();
+        cfg.model.base_url = Some("https://api.example.com/v1".to_string());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn merge_layers_rejects_a_semantically_invalid_layer() {
+        // Validation runs at the merge boundary, so a structurally-valid but
+        // semantically-invalid override is rejected by merge_layers itself.
+        let layers = vec![ConfigLayer::new(
+            ConfigLayerKind::CliFlags,
+            "cli",
+            json!({ "protocol": { "max_event_bytes": 0 } }),
+        )];
+        assert!(matches!(
+            merge_layers(&layers),
+            Err(ConfigError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn parses_toml_layer() {
+        let layer = ConfigLayer::from_toml(
+            ConfigLayerKind::ProjectConfig,
+            "project",
+            r#"
+profile = "dev"
+
+[session]
+sqlite_path = ".tdw/session.sqlite"
+
+[worker]
+backend = "Postgres"
+sqlite_path = ".tdw/worker.sqlite"
+postgres_url_env = "TDW_WORKER_POSTGRES_URL"
+"#,
+        )
+        .expect("toml parses");
+
+        let config = merge_layers(&[layer]).expect("layer merges");
+        assert_eq!(config.profile, "dev");
+        assert_eq!(config.session.sqlite_path, ".tdw/session.sqlite");
+        assert!(config.session.jsonl_archive);
+        assert_eq!(config.worker.backend, WorkerBackend::Postgres);
+        assert_eq!(config.worker.sqlite_path, ".tdw/worker.sqlite");
+        assert_eq!(config.worker.postgres_url_env, "TDW_WORKER_POSTGRES_URL");
+    }
+
+    #[test]
+    fn exports_config_schema_bundle() {
+        let bundle = schema_bundle();
+        assert!(bundle.contains_key("tdw_config"));
+        assert!(bundle.contains_key("config_layer_descriptor"));
+    }
 }

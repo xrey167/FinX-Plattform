@@ -290,11 +290,25 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
     dispatcher: D,
     sink: S,
     next_sequence: std::sync::atomic::AtomicU64,
+    persist_failures: std::sync::atomic::AtomicU64,
+    cost_failures: std::sync::atomic::AtomicU64,
     /// Optional dispatch metrics (outcome counters + in-flight gauge). `None`
     /// keeps the loop's behavior byte-for-byte unchanged; the daemon attaches a
     /// handle via [`ServiceLoop::with_metrics`] so its `/metrics` surface sees
     /// live dispatch counts.
     metrics: Option<ops::DaemonMetrics>,
+}
+
+/// Snapshot of durability-sink failure counts surfaced by [`ServiceLoop`] for
+/// health/metrics. Non-zero values mean events or cost records failed to
+/// persist while the op still completed (persistence here is best-effort), so a
+/// health check / metrics scrape can detect a silent durability/audit/cost gap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ServiceLoopFailures {
+    /// Count of `persist_event` failures since the loop started.
+    pub persist_event: u64,
+    /// Count of `record_cost` failures since the loop started.
+    pub record_cost: u64,
 }
 
 impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
@@ -310,7 +324,21 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
             dispatcher,
             sink,
             next_sequence: std::sync::atomic::AtomicU64::new(1),
+            persist_failures: std::sync::atomic::AtomicU64::new(0),
+            cost_failures: std::sync::atomic::AtomicU64::new(0),
             metrics: None,
+        }
+    }
+
+    /// Current durability-sink failure counts (see [`ServiceLoopFailures`]).
+    /// Intended for a health endpoint / metrics scrape so a sink outage is
+    /// observable rather than hidden.
+    #[must_use]
+    pub fn failure_counts(&self) -> ServiceLoopFailures {
+        use std::sync::atomic::Ordering;
+        ServiceLoopFailures {
+            persist_event: self.persist_failures.load(Ordering::Relaxed),
+            record_cost: self.cost_failures.load(Ordering::Relaxed),
         }
     }
 
@@ -340,12 +368,35 @@ impl<D: Dispatcher + 'static, S: EventSink + 'static> ServiceLoop<D, S> {
                 .next_sequence
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if let Err(e) = self.sink.persist_event(&env, event, seq).await {
-                eprintln!("[ServiceLoop] persist_event error (seq={seq}): {e}");
+                // Don't bury a durability failure: bump a metric and surface a
+                // signal on the event stream so a health check / consumer can
+                // observe the audit/replay gap. The op still completes
+                // (persistence is best-effort here).
+                self.persist_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // The raw error stays SERVER-SIDE only: the event stream fans
+                // out to external transport clients, so the client-facing
+                // payload carries just the (non-sensitive) sequence — never the
+                // raw sink error, which can leak DB URLs / paths / query text.
+                eprintln!("[ServiceLoop] persist_event failed (seq={seq}): {e}");
+                let _ = self.events.send(EventMsg::DomainEvent {
+                    op_id: env.op_id.clone(),
+                    event_type: "service.persist_event_failed".to_string(),
+                    payload: serde_json::json!({ "sequence": seq }),
+                });
             }
             let _ = self.events.send(event.clone());
         }
         if let Err(e) = self.sink.record_cost(&env, "in-memory").await {
-            eprintln!("[ServiceLoop] record_cost error: {e}");
+            self.cost_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Raw error server-side only; client event carries no error detail.
+            eprintln!("[ServiceLoop] record_cost failed: {e}");
+            let _ = self.events.send(EventMsg::DomainEvent {
+                op_id: env.op_id.clone(),
+                event_type: "service.record_cost_failed".to_string(),
+                payload: serde_json::Value::Null,
+            });
         }
         Some(emitted)
     }
@@ -394,9 +445,11 @@ pub const fn transport_label(t: DaemonTransport) -> &'static str {
 /// pending records every `tick`, publishes each on the bus, and marks it
 /// dispatched. Cooperative shutdown via the supplied `CancellationToken`.
 ///
-/// # Panics
-///
-/// The spawned relay task panics if the outbox or bus mutex is poisoned.
+/// Mutex poisoning is recovered (the guard is taken via `into_inner`) rather
+/// than panicked on: a panic in some unrelated lock-holder must not silently
+/// kill event delivery. The outbox/bus are simple in-memory collections, so a
+/// recovered guard is safe to keep using. `serve` additionally treats this
+/// task ending before cancellation as an error (see [`serve`]).
 pub fn spawn_inmemory_relay(
     outbox: std::sync::Arc<std::sync::Mutex<tdw_outbox::InMemoryOutbox>>,
     bus: std::sync::Arc<std::sync::Mutex<tdw_bus::EventBus>>,
@@ -408,18 +461,24 @@ pub fn spawn_inmemory_relay(
         loop {
             // Drain all pending records in one tick.
             let pending = {
-                let guard = outbox.lock().expect("outbox lock");
+                let guard = outbox
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.pending_after(last_seq)
             };
             for record in &pending {
                 // Publish a fresh EventEnvelope of the same payload onto the bus.
                 let envelope = record.envelope.clone();
                 {
-                    let mut bus_guard = bus.lock().expect("bus lock");
+                    let mut bus_guard = bus
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     bus_guard.publish(envelope);
                 }
                 {
-                    let mut outbox_guard = outbox.lock().expect("outbox lock");
+                    let mut outbox_guard = outbox
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     outbox_guard.mark_dispatched(record.sequence);
                 }
                 if record.sequence > last_seq {
@@ -488,7 +547,7 @@ pub async fn shutdown_signal() {
 /// while dispatching or draining events.
 pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
     mut service_loop: ServiceLoop<D, S>,
-    relay: tokio::task::JoinHandle<()>,
+    mut relay: tokio::task::JoinHandle<()>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> std::result::Result<(), SinkError> {
     // `tokio::signal` is gated out by tokio under `--cfg loom`; the ctrl_c
@@ -508,6 +567,19 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
         tokio::select! {
             biased;
             () = shutdown.cancelled() => break,
+            // The relay only ends on cancellation. If it resolves while we are
+            // still serving, it died unexpectedly (e.g. a panic) — surface it
+            // and shut down rather than discarding the JoinError and silently
+            // serving with no event delivery.
+            relay_result = &mut relay => {
+                shutdown.cancel();
+                #[cfg(not(loom))]
+                signal_task.abort();
+                return Err(SinkError(match relay_result {
+                    Ok(()) => "outbox→bus relay terminated unexpectedly".to_string(),
+                    Err(join_error) => format!("outbox→bus relay task failed: {join_error}"),
+                }));
+            }
             maybe = service_loop.run_once() => {
                 match maybe {
                     None => break, // submissions channel closed
@@ -523,7 +595,8 @@ pub async fn serve<D: Dispatcher + 'static, S: EventSink + 'static>(
         }
     }
 
-    // Drain: ensure relay task observes cancellation, then await both.
+    // Drain: ensure the relay observes cancellation, then await its (now
+    // expected) termination.
     shutdown.cancel();
     let _ = relay.await;
     #[cfg(not(loom))]
@@ -632,6 +705,59 @@ mod tests {
         )
     }
 
+    struct FailingSink;
+
+    #[async_trait::async_trait]
+    impl EventSink for FailingSink {
+        async fn persist_event(
+            &self,
+            _env: &OpEnvelope,
+            _event: &EventMsg,
+            _sequence: u64,
+        ) -> SinkResult<()> {
+            Err(SinkError("persist boom".to_string()))
+        }
+
+        async fn record_cost(&self, _env: &OpEnvelope, _backend: &str) -> SinkResult<()> {
+            Err(SinkError("cost boom".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_once_surfaces_sink_failures_via_counts_and_events() {
+        let (handle, mut events, mut loop_runner) = service_channel(FakeDispatcher, FailingSink);
+        handle
+            .submit(make_envelope(Op::Shutdown))
+            .expect("submit accepted");
+
+        let emitted = loop_runner
+            .run_once()
+            .await
+            .expect("run_once yields events");
+        assert_eq!(emitted.len(), 1, "FakeDispatcher emits one event");
+
+        // Both durability failures are now counted (not silently swallowed).
+        let counts = loop_runner.failure_counts();
+        assert_eq!(counts.persist_event, 1);
+        assert_eq!(counts.record_cost, 1);
+
+        // ...and surfaced on the event stream so a consumer/health check sees
+        // them. Order: persist-failure signal, the dispatched event, then the
+        // cost-failure signal.
+        let first = events.recv().await.expect("persist failure event");
+        assert!(matches!(
+            &first,
+            EventMsg::DomainEvent { event_type, .. } if event_type == "service.persist_event_failed"
+        ));
+        let second = events.recv().await.expect("dispatched event");
+        assert!(matches!(second, EventMsg::Started { .. }));
+        let third = events.recv().await.expect("cost failure event");
+        assert!(matches!(
+            &third,
+            EventMsg::DomainEvent { event_type, .. } if event_type == "service.record_cost_failed"
+        ));
+    }
+
     #[tokio::test]
     async fn relay_drains_outbox_into_bus_and_marks_dispatched() {
         let outbox = Arc::new(Mutex::new(InMemoryOutbox::default()));
@@ -735,6 +861,78 @@ mod tests {
         assert!(
             cancel.is_cancelled(),
             "token should be cancelled after shutdown"
+        );
+    }
+
+    #[tokio::test]
+    async fn serve_errors_when_relay_dies_unexpectedly() {
+        // Keep the submission channel open (handle alive) so run_once awaits;
+        // the relay ends immediately, simulating a dead relay. serve must
+        // surface that as an error rather than hang or silently return Ok.
+        let (_handle, _events, service_loop) = service_channel(FakeDispatcher, FakeSink);
+        let cancel = CancellationToken::new();
+        let relay = tokio::spawn(async {}); // ends immediately
+
+        let result =
+            tokio::time::timeout(Duration::from_secs(1), serve(service_loop, relay, cancel)).await;
+        let outcome = result.expect("serve must not hang");
+        assert!(
+            matches!(&outcome, Err(SinkError(msg)) if msg.contains("relay terminated unexpectedly")),
+            "expected relay-death error, got: {outcome:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_recovers_from_poisoned_outbox_mutex() {
+        let outbox = Arc::new(Mutex::new(InMemoryOutbox::default()));
+        let bus = Arc::new(Mutex::new(EventBus::new(64)));
+        {
+            let mut o = outbox.lock().expect("lock");
+            o.append(sample_event("poison-test"));
+        }
+
+        // Poison the outbox mutex by panicking while holding it.
+        let poison_target = outbox.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_target.lock().expect("lock");
+            panic!("intentionally poison the outbox mutex");
+        })
+        .join();
+        assert!(outbox.lock().is_err(), "outbox mutex should be poisoned");
+
+        // The relay must keep draining despite the poison (recover the guard,
+        // don't panic) — otherwise a stray panic anywhere silently kills event
+        // delivery.
+        let cancel = CancellationToken::new();
+        let handle = spawn_inmemory_relay(
+            outbox.clone(),
+            bus.clone(),
+            Duration::from_millis(5),
+            cancel.clone(),
+        );
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            let pending = outbox
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending_after(0);
+            if pending.is_empty() || tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        cancel.cancel();
+        let _ = handle.await;
+
+        let pending = outbox
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending_after(0);
+        assert!(
+            pending.is_empty(),
+            "relay should drain even a poisoned-mutex outbox"
         );
     }
 

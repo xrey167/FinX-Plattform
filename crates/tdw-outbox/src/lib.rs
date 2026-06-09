@@ -45,9 +45,18 @@ impl InMemoryOutbox {
         sequence
     }
 
+    /// Transition a pending record to dispatched.
+    ///
+    /// Returns `true` only when this call performed the `Pending -> Dispatched`
+    /// transition. An unknown sequence or an already-dispatched record returns
+    /// `false`, mirroring the Postgres store's `... AND status = 'Pending'`
+    /// guard so a duplicate dispatch can never be mistaken for the first one.
     pub fn mark_dispatched(&mut self, sequence: u64) -> bool {
         for record in &mut self.records {
             if record.sequence == sequence {
+                if record.status == OutboxStatus::Dispatched {
+                    return false;
+                }
                 record.status = OutboxStatus::Dispatched;
                 return true;
             }
@@ -81,5 +90,19 @@ mod tests {
         let pending = outbox.pending_after(0);
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].sequence, second);
+    }
+
+    #[test]
+    fn second_dispatch_of_same_record_returns_false() {
+        let mut outbox = InMemoryOutbox::default();
+        let seq = outbox.append(sample_event("service"));
+
+        // First dispatch performs the Pending -> Dispatched transition.
+        assert!(outbox.mark_dispatched(seq));
+        // A duplicate dispatch must not report success, so callers can rely on
+        // the boolean to detect a redundant/at-least-once redelivery.
+        assert!(!outbox.mark_dispatched(seq));
+        // State stays Dispatched and the record is not resurrected as pending.
+        assert!(outbox.pending_after(0).is_empty());
     }
 }

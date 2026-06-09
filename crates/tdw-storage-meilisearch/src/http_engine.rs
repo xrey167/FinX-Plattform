@@ -26,6 +26,12 @@ use tdw_core::{Error, LexicalDoc, LexicalEngine, Result, ScoredDoc, TextQuery};
 
 const TASK_POLL_INTERVAL_MS: u64 = 200;
 const TASK_POLL_MAX_ATTEMPTS: u32 = 60;
+/// Cap on connection establishment so a stalled/black-holed Meilisearch
+/// endpoint fails fast instead of hanging the calling op (ME2/IO1).
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Per-request timeout — bounds any single index/search/wait_for_task request
+/// so one hung poll cannot exceed the logical task-poll budget (ME2/IO1).
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Production Meilisearch backend.
 #[derive(Clone)]
@@ -59,6 +65,8 @@ impl MeilisearchHttpEngine {
             .map_err(|error| Error::Storage(format!("meilisearch endpoint: {error}")))?;
         let client = Client::builder()
             .user_agent("tdw-storage-meilisearch/0.1")
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
             .build()
             .map_err(|error| Error::Storage(format!("meilisearch client: {error}")))?;
         Ok(Self {
@@ -134,6 +142,7 @@ impl MeilisearchHttpEngine {
     /// Returns an error if the existence check, the create request, or the
     /// resulting Meilisearch task fails.
     pub async fn ensure_index(&self, index: &str, primary_key: &str) -> Result<()> {
+        validate_index(index)?;
         let exists = self
             .request(reqwest::Method::GET, &format!("/indexes/{index}"))?
             .send()
@@ -188,6 +197,27 @@ struct SearchEnvelope {
     hits: Vec<Value>,
 }
 
+/// Validate a Meilisearch index UID before it is interpolated into a request
+/// path such as `/indexes/{index}/documents`.
+///
+/// Meilisearch index UIDs are limited to ASCII alphanumerics, `-` and `_`.
+/// Enforcing that here means an `index` containing `/`, `?`, `#` or `..` can no
+/// longer alter the request path or smuggle query parameters via
+/// [`Url::join`], which treats those characters structurally.
+fn validate_index(index: &str) -> Result<()> {
+    if index.is_empty()
+        || !index
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err(Error::Storage(format!(
+            "meilisearch index uid {index:?} must be non-empty and contain only \
+             alphanumeric characters, '-' or '_'"
+        )));
+    }
+    Ok(())
+}
+
 fn flatten_doc(doc: LexicalDoc) -> Value {
     let mut document = json!({
         "id": doc.id,
@@ -214,6 +244,7 @@ fn hit_id_to_string(id: &Value) -> String {
 #[async_trait]
 impl LexicalEngine for MeilisearchHttpEngine {
     async fn index(&self, index: &str, docs: Vec<LexicalDoc>) -> Result<()> {
+        validate_index(index)?;
         if docs.is_empty() {
             return Err(Error::Storage(
                 "meilisearch index must include at least one document".to_string(),
@@ -242,6 +273,7 @@ impl LexicalEngine for MeilisearchHttpEngine {
     }
 
     async fn search_text(&self, index: &str, query: TextQuery) -> Result<Vec<ScoredDoc>> {
+        validate_index(index)?;
         if query.text.trim().is_empty() {
             return Err(Error::Storage(
                 "meilisearch search text must not be empty".to_string(),
@@ -294,5 +326,43 @@ impl LexicalEngine for MeilisearchHttpEngine {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_index_accepts_uid_grammar_and_rejects_injection() {
+        // Legitimate Meilisearch UIDs.
+        for ok in ["docs", "lexical-1", "tdw_index", "ABC123"] {
+            assert!(validate_index(ok).is_ok(), "{ok:?} should be accepted");
+        }
+        // Empty and path/query-injection payloads.
+        for bad in ["", "a/b", "a?x=1", "..", "idx#frag", "with space"] {
+            assert!(validate_index(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[tokio::test]
+    async fn index_rejects_injection_index_before_any_request() {
+        // `new` only parses the URL; no server is contacted. Because
+        // validate_index runs before the empty-docs check (and before the
+        // network call), a crafted index fails fast with a validation error
+        // rather than a connection error.
+        let engine = MeilisearchHttpEngine::new("http://127.0.0.1:7700", None)
+            .unwrap_or_else(|error| panic!("engine builds: {error}"));
+        let error = engine
+            .index("evil/../../x", Vec::new())
+            .await
+            .expect_err("injection index must be rejected");
+        match error {
+            Error::Storage(message) => assert!(
+                message.contains("index uid"),
+                "expected index-uid validation error, got: {message}"
+            ),
+            other => panic!("expected Error::Storage, got: {other:?}"),
+        }
     }
 }

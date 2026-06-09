@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,10 @@ pub struct EventEnvelope<P> {
     pub depth: u8,
 }
 
+/// Process-global monotonic counter giving each `child_event` span a unique
+/// suffix, so sibling events never collide on `span_id`/`event_id`.
+static CHILD_SPAN_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 impl<P> EventEnvelope<P> {
     pub fn new(
         event_type: impl Into<String>,
@@ -107,11 +112,22 @@ impl<P> EventEnvelope<P> {
     }
 
     pub fn child_event<Q>(&self, event_type: impl Into<String>, payload: Q) -> EventEnvelope<Q> {
+        // Each child gets a process-unique span suffix. A bare `"{parent}-child"`
+        // gave every sibling the same span_id, so two same-type children of one
+        // parent produced identical event_ids (event_id = trace:span:type) —
+        // collapsing them in the trace/causation graph. The monotonic counter
+        // keeps sibling spans (and therefore event_ids) distinct while the
+        // parent linkage is still carried by `TraceContext::child`.
+        let child_span = format!(
+            "{}-child-{}",
+            self.trace.span_id,
+            CHILD_SPAN_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
         let mut envelope = EventEnvelope::new(
             event_type,
             self.actor.clone(),
             self.origin.clone(),
-            self.trace.child(format!("{}-child", self.trace.span_id)),
+            self.trace.child(child_span),
             self.occurred_at.clone(),
             payload,
         );
@@ -203,6 +219,28 @@ mod tests {
         assert_eq!(child.causation_id, Some(event.event_id));
         assert_eq!(child.depth, 1);
         assert_eq!(child.trace.parent_span_id, Some("root".to_string()));
+    }
+
+    #[test]
+    fn same_type_siblings_get_distinct_span_and_event_ids() {
+        let parent = sample_event("service");
+        let a = parent.child_event("hook.audit", json!({"n": 1}));
+        let b = parent.child_event("hook.audit", json!({"n": 2}));
+
+        // The EV1 bug: identical span_id -> identical event_id for same-type
+        // siblings, collapsing them in the trace graph. They must now differ.
+        assert_ne!(
+            a.trace.span_id, b.trace.span_id,
+            "sibling spans must differ"
+        );
+        assert_ne!(a.event_id, b.event_id, "sibling event_ids must differ");
+        // Parent linkage is still carried correctly on both.
+        assert_eq!(a.trace.parent_span_id.as_deref(), Some("root"));
+        assert_eq!(b.trace.parent_span_id.as_deref(), Some("root"));
+        assert_eq!(a.causation_id.as_deref(), Some(parent.event_id.as_str()));
+        assert_eq!(b.causation_id.as_deref(), Some(parent.event_id.as_str()));
+        // event_id still encodes the (now-unique) span_id.
+        assert!(a.event_id.contains(&a.trace.span_id));
     }
 
     #[test]

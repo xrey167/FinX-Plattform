@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
-use tdw_protocol::{ApprovalDecision, EventMsg, Op, PermissionId, SessionId};
+use tdw_protocol::{ApprovalDecision, EventMsg, Op, PermissionId, ProtocolError, SessionId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AcpServerInfo {
@@ -120,6 +120,13 @@ pub fn parse_approval_decision(value: &str) -> Result<ApprovalDecision> {
 }
 
 fn validate_op(op: &Op) -> Result<()> {
+    // Enforce the protocol-level non-empty contract first. This notably rejects
+    // an IngestBatch with an empty `symbols` list — the per-symbol loop below
+    // is a silent no-op in that case, so without this the documented
+    // "must be non-empty" contract would pass the gate.
+    op.validate().map_err(|error| match error {
+        ProtocolError::EmptyField { field } => AcpValidationError::EmptyField { field },
+    })?;
     match op {
         Op::AppendUserMessage { message } => validate_display_text("message", message),
         Op::RunQuery { sql, .. } => validate_read_only_sql(sql),
@@ -318,6 +325,38 @@ mod tests {
                 field: "permission_id"
             })
         );
+    }
+
+    #[test]
+    fn rejects_ingest_batch_with_no_symbols() {
+        // The per-symbol loop in validate_op is a no-op for an empty list, so
+        // the empty-symbols case is caught only by the protocol-level
+        // Op::validate now wired in at the top of the gate.
+        let request = AcpRequest::SubmitOp {
+            session_id: SessionId::new("session-1").expect("session id"),
+            op: Op::IngestBatch {
+                provider: "polygon".to_string(),
+                endpoint: "aggregates".to_string(),
+                symbols: Vec::new(),
+                range: None,
+            },
+        };
+        assert_eq!(
+            validate_request(&request),
+            Err(AcpValidationError::EmptyField { field: "symbols" })
+        );
+
+        // A well-formed batch still passes.
+        let ok = AcpRequest::SubmitOp {
+            session_id: SessionId::new("session-1").expect("session id"),
+            op: Op::IngestBatch {
+                provider: "polygon".to_string(),
+                endpoint: "aggregates".to_string(),
+                symbols: vec!["AAPL".to_string()],
+                range: None,
+            },
+        };
+        assert!(validate_request(&ok).is_ok());
     }
 
     #[test]
