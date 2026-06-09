@@ -25,6 +25,7 @@
 //! raw token plus key material is available. See
 //! `docs/release/production-auth-oidc.md`.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 mod verify;
 
 pub use verify::{

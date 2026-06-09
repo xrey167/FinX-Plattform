@@ -13,6 +13,7 @@
 //! * [`compose`] — full pipeline: validate → normalize → dedup by symbol →
 //!   cap, preserving stable input order.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};

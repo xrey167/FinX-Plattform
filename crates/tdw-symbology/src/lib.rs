@@ -19,7 +19,7 @@
 //!   shared by alerting/watchlist storage.
 
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 /// Maps a ticker dot-suffix to a human-readable exchange label.
 ///
 /// The suffix must include the leading dot and be upper-case (the caller is

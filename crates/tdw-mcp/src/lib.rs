@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;

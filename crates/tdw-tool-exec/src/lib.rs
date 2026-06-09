@@ -13,6 +13,7 @@
 //! (later phases): `Http`/`Mcp` are honestly deferred because a fresh backend has neither
 //! credential wiring nor server resolution, so they cannot run yet.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 pub mod loop_guard;
 
 use std::collections::BTreeMap;

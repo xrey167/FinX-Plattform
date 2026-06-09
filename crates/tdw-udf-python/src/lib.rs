@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 pub const CRATE_NAME: &str = "tdw-udf-python";
 pub const RUNTIME_NAME: &str = "python";
 

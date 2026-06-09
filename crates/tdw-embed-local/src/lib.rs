@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use tdw_embed::{Embedding, EmbeddingError, EmbeddingProvider, Result};
 
 #[derive(Clone, Debug)]

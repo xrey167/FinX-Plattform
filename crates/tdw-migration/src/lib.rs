@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};

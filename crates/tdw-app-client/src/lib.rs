@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::error::Error;
 use std::fmt;
 use std::io::{Read, Write};

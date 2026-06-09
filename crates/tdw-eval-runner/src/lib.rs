@@ -11,6 +11,7 @@
 //! run `status`. The feedback-to-skill-quality mutation is a later phase; this phase only
 //! produces real metrics.
 
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
