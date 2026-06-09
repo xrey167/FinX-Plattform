@@ -1813,6 +1813,25 @@ fn tool_descriptors_evidence() -> Vec<ToolDescriptor> {
             }),
         ),
         tool(
+            "tdw.provider.fetch",
+            "Fetch Any Registered Provider",
+            "Dispatch any registered TDW fetcher by (provider, endpoint) and return its OBBject as JSON. Call tdw.providers.list to see what is registered in this build.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "provider": { "type": "string", "description": "Provider id, for example coingecko or fileset." },
+                    "endpoint": { "type": "string", "description": "Endpoint id for that provider, for example ohlc or equity_historical." },
+                    "params": {
+                        "type": "object",
+                        "description": "Provider-specific query parameters. Defaults to {}.",
+                        "additionalProperties": true
+                    }
+                },
+                "required": ["provider", "endpoint"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
             "tdw.progress.sample",
             "Emit Progress Sample",
             "Run the deterministic streaming fetch sample and emit MCP progress notifications when a progress token is supplied.",
@@ -2064,6 +2083,16 @@ fn execute_tool(
             let symbol = required_argument(arguments_object, "symbol")?;
             let provider = optional_argument(arguments_object, "provider").unwrap_or("fileset");
             let response = tdw_service_api::endpoint_response(provider, symbol)
+                .map_err(|error| ToolFailure::Execution(error.to_string()))?;
+            Ok(structured(response))
+        }
+        "tdw.provider.fetch" => {
+            let provider = required_argument(arguments_object, "provider")?;
+            let endpoint = required_argument(arguments_object, "endpoint")?;
+            let params = optional_object_argument(arguments_object, "params")?
+                .cloned()
+                .map_or_else(|| json!({}), Value::Object);
+            let response = tdw_service_api::fetch_provider_json(provider, endpoint, params)
                 .map_err(|error| ToolFailure::Execution(error.to_string()))?;
             Ok(structured(response))
         }
@@ -2348,6 +2377,21 @@ fn required_argument<'a>(
 
 fn optional_argument<'a>(arguments: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
     arguments.get(name).and_then(Value::as_str)
+}
+
+/// Read an optional object-valued argument. Absent → `Ok(None)`; present and an
+/// object → `Ok(Some(_))`; present but not an object → a `-32602` protocol error.
+fn optional_object_argument<'a>(
+    arguments: &'a Map<String, Value>,
+    name: &str,
+) -> Result<Option<&'a Map<String, Value>>, ToolFailure> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(object)) => Ok(Some(object)),
+        Some(_) => Err(protocol_argument_failure(format!(
+            "{name} must be an object"
+        ))),
+    }
 }
 
 fn optional_u64_argument(
@@ -3241,6 +3285,55 @@ mod tests {
             "AAPL"
         );
         assert_eq!(response["result"]["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn tools_call_provider_fetch_dispatches_fileset_structured_content() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.provider.fetch","arguments":{"provider":"fileset","endpoint":"equity_historical","params":{"symbol":"aapl"}}}}"#,
+            )[0],
+        );
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(
+            response["result"]["structuredContent"]["provider"],
+            "fileset"
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["endpoint"],
+            "equity_historical"
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["rows"][0]["symbol"],
+            "AAPL"
+        );
+        assert_eq!(response["result"]["content"][0]["type"], "text");
+    }
+
+    #[test]
+    fn tools_call_provider_fetch_unknown_provider_is_tool_error_not_protocol_error() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"tdw.provider.fetch","arguments":{"provider":"nope","endpoint":"missing"}}}"#,
+            )[0],
+        );
+        assert!(
+            response["error"].is_null(),
+            "unknown provider must not be a protocol error: {response}"
+        );
+        assert_eq!(response["result"]["isError"], true);
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("no fetcher for nope/missing")),
+            "unexpected error text: {response}"
+        );
     }
 
     #[test]
