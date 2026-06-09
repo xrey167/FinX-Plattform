@@ -38,4 +38,6 @@ resolved by the 2 source edits above. All were const-able and compiled cleanly.
 
 ## PR
 
-(link added on creation)
+https://github.com/xrey167/FinX-Plattform/pull/260
+(branch `work/batch-lint-debt-006-const` — the `work/batch-lint-debt-006`
+remote branch name was already taken by a prior shipped batch.)
