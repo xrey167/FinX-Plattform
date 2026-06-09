@@ -5,9 +5,28 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = []
 postgres = ["sqlx/postgres"]
+# Enables executing application function jobs (welcome, etc.) via an inline
+# `FnRoutingHandler`. OFF by default: without this feature (or with the feature
+# built in but `TDW_WORKER_FUNCTIONS` unset/falsey) the worker is byte-for-byte
+# unchanged. The production SMTP mailer is gated behind `tdw-email/smtp`; email
+# config (`TDW_SMTP_HOST` / `TDW_EMAIL_FROM`) must also be present at runtime.
+#
+# NOTE: `tdw-functions` and `tdw-functions-app` cannot be added here because
+# `tdw-functions` transitively depends on `tdw-cron` which depends on
+# `tdw-worker` — a package-level cycle Cargo rejects even for optional deps.
+# The routing logic and welcome function are therefore inlined in main.rs;
+# `tdw-email` (cycle-free) provides `EmailConfig` and the SMTP transport.
+functions = ["dep:tdw-email", "tdw-email/smtp"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,8 +40,15 @@ tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api" }
+# `functions` feature: EmailConfig::from_env() + TransactionalMailer (smtp sub-feature).
+# tdw-email has no transitive dep on tdw-worker, so adding it is cycle-free.
+tdw-email = { path = "../tdw-email", optional = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["time", "signal"] }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+
+[[example]]
+name = "tdw_worker_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

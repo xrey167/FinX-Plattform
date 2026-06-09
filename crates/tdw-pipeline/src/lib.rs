@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::BTreeSet;
 
 use thiserror::Error;
@@ -168,7 +168,10 @@ mod tests {
 
     #[test]
     fn validate_jobs_reports_each_structural_error() {
-        assert_eq!(validate_jobs(&[]), Err(PipelineValidationError::EmptyPipeline));
+        assert_eq!(
+            validate_jobs(&[]),
+            Err(PipelineValidationError::EmptyPipeline)
+        );
 
         assert_eq!(
             validate_jobs(&[PipelineJob {

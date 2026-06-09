@@ -139,7 +139,7 @@ impl EntityKind {
 
     /// The manifest group this kind belongs to.
     #[must_use]
-    pub fn group(self) -> Group {
+    pub const fn group(self) -> Group {
         match self {
             Self::Agent
             | Self::Personality
@@ -190,7 +190,7 @@ impl EntityKind {
     /// Whether this is a data/content kind that carries the data facets
     /// (`plane` / `materialization` / `as_of` / `validation`).
     #[must_use]
-    pub fn is_data_kind(self) -> bool {
+    pub const fn is_data_kind(self) -> bool {
         matches!(
             self,
             Self::Knowledge
@@ -207,7 +207,7 @@ impl EntityKind {
     /// Whether this kind can be an autonomous actor. Only `agent` is autonomy-capable —
     /// the cleanest validation that autonomy is an agent property, not an Origin axis.
     #[must_use]
-    pub fn is_autonomy_capable(self) -> bool {
+    pub const fn is_autonomy_capable(self) -> bool {
         matches!(self, Self::Agent)
     }
 }

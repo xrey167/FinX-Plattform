@@ -8,13 +8,29 @@
 //! `RS256`/`ES256`), and well-formed role names. See [`validate_claims_strict`]
 //! (rich [`ClaimValidationError`]) and the [`validate_claims`] bool shim.
 //!
-//! # Scope: structural, not cryptographic
+//! # Scope: structural pre-filter + cryptographic verification
 //!
-//! It does **not** verify JWT signatures, parse/decode tokens, fetch or refresh
-//! a remote JWKS, or check token expiry — those are tracked follow-ups for the
-//! auth-service adapter. Consumers (notably `tdw-service-api`'s production
-//! `TDW_OIDC_*` policy builder) rely on this for claim/JWKS consistency only.
-//! See `docs/release/production-auth-oidc.md`.
+//! The structural checks above are a **pre-filter**. Cryptographic JWT
+//! verification — signature validation against supplied verifying keys plus
+//! `exp`/`nbf`/`iat`, issuer, and audience enforcement — lives in the
+//! [`verify`] module ([`verify_jwt`] / [`verify_jwt_strict`]). It accepts only
+//! the asymmetric algorithms in [`DEFAULT_ALLOWED_ALGORITHMS`] and rejects the
+//! `none` pseudo-algorithm and HMAC tokens (alg-confusion / `alg:none`
+//! defence), failing closed on any error.
+//!
+//! Remote JWKS fetch/refresh remains out of scope: verifying keys are supplied
+//! by the caller (from the configured JWKS). Consumers (notably
+//! `tdw-service-api`'s production `TDW_OIDC_*` policy builder) use the
+//! structural checks for claim/JWKS consistency and the [`verify`] module when a
+//! raw token plus key material is available. See
+//! `docs/release/production-auth-oidc.md`.
+
+#![deny(clippy::pedantic, clippy::nursery)]
+mod verify;
+
+pub use verify::{
+    DEFAULT_LEEWAY_SECS, VerifiedClaims, VerifyError, VerifyingKey, verify_jwt, verify_jwt_strict,
+};
 
 use serde::{Deserialize, Serialize};
 

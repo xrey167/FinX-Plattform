@@ -103,7 +103,7 @@ fn normalize_currency(currency: &str) -> Result<String> {
     Ok(currency.to_ascii_lowercase())
 }
 
-fn validate_days(days: u32) -> Result<u32> {
+const fn validate_days(days: u32) -> Result<u32> {
     match days {
         1 | 7 | 14 | 30 | 90 | 180 | 365 => Ok(days),
         _ => Err(CoinGeckoProviderError::InvalidDays),

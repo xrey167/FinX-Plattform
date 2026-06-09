@@ -1,4 +1,20 @@
 {
-  "bootstrap": true,
-  "workloads": []
+  "schema": 1,
+  "workloads": [
+    {
+      "iters": 25000,
+      "name": "proto_encode_ohlcv",
+      "ns_per_iter": 1192.536
+    },
+    {
+      "iters": 30000,
+      "name": "proto_decode_ohlcv",
+      "ns_per_iter": 1013.7266666666667
+    },
+    {
+      "iters": 8000,
+      "name": "proto_roundtrip_envelope",
+      "ns_per_iter": 4178.1875
+    }
+  ]
 }

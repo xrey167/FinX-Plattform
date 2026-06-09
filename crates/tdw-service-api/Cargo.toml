@@ -48,6 +48,36 @@ real-clickhouse = ["tdw-storage-clickhouse/clickhouse"]
 ## `TDW_QDRANT_TEST_URL`.
 real-qdrant = ["tdw-storage-qdrant/qdrant"]
 
+## Swap the lexical engine in `AppState` for the real `MeilisearchHttpEngine`
+## (reqwest over the Meilisearch REST API). Activates
+## `tdw-storage-meilisearch/meilisearch`. When the `live` profile is selected,
+## `from_config` reads `TDW_MEILI_URL` (+ optional `TDW_MEILI_API_KEY`) to point
+## the lexical index at a live Meilisearch so search documents survive restarts.
+real-meilisearch = ["tdw-storage-meilisearch/meilisearch"]
+
+## Swap the blob engine in `AppState` for the real `S3Engine` (aws-sdk-s3).
+## Activates `tdw-storage-s3/s3`. When the `live` profile is selected,
+## `from_config` reads `TDW_S3_ENDPOINT` / `TDW_S3_BUCKET` / `TDW_S3_ACCESS_KEY`
+## / `TDW_S3_SECRET_KEY` (+ optional `TDW_S3_REGION`) to point object storage at
+## a live S3/MinIO bucket. Independent of the `storage-fs` local-disk path.
+real-s3 = ["tdw-storage-s3/s3"]
+
+## Aggregate: select the real production engines (Postgres relational,
+## ClickHouse OLAP, Qdrant vector, Meilisearch lexical, S3 blob) **and** the
+## Postgres-backed daemon session/rollout stores. This is the feature set the
+## `live` compose stack builds with so that `TDW_PROFILE=live` (or
+## `TDW_ENGINES=real`) wires every engine to its real backend, failing closed at
+## startup when a required connection env var is missing. Default builds leave
+## all of these off, keeping the offline in-memory engines.
+real-engines = [
+    "real-postgres",
+    "real-clickhouse",
+    "real-qdrant",
+    "real-meilisearch",
+    "real-s3",
+    "daemon-postgres",
+]
+
 ## Enable the live Binance trade websocket subscribe path in the streaming
 ## ingest control ops. Forwarded to `tdw-provider-binance/ws`. Without this
 ## feature the default offline (deterministic single-tick) streamer is used so
@@ -75,6 +105,7 @@ provider-deribit = ["dep:tdw-provider-deribit", "tdw-provider-deribit/http"]
 provider-ecb = ["dep:tdw-provider-ecb", "tdw-provider-ecb/http"]
 provider-eia = ["dep:tdw-provider-eia", "tdw-provider-eia/http"]
 provider-finra = ["dep:tdw-provider-finra", "tdw-provider-finra/http"]
+provider-finnhub = ["dep:tdw-provider-finnhub", "tdw-provider-finnhub/http"]
 provider-fmp = ["dep:tdw-provider-fmp", "tdw-provider-fmp/http"]
 provider-fred = ["dep:tdw-provider-fred", "tdw-provider-fred/http"]
 provider-geckoterminal = [
@@ -103,14 +134,56 @@ provider-trading-economics = [
 ]
 provider-velodata = ["dep:tdw-provider-velodata", "tdw-provider-velodata/http"]
 
+## Yahoo is already a non-optional offline dependency. This feature swaps the
+## canonical yahoo/equity_historical implementation to the real HTTP fetcher.
+provider-yahoo-http = ["tdw-provider-yahoo/http"]
+
 ## Binance is already a non-optional dependency (its offline ws default and
 ## fixture path stay wired); this feature only turns on its `http` ticker-price
 ## fetcher and registers it.
 provider-binance-http = ["tdw-provider-binance/http"]
 
+## Enable the price-alert CRUD dispatcher arms (`CreateAlert`, `ListAlerts`,
+## `DeleteAlert`, `SetAlertActive`). Requires a Postgres connection: when the
+## `postgres` feature on `tdw-alerts` is absent the store falls back to the
+## in-memory implementation (suitable for tests and offline builds). Enabling
+## this feature also activates `real-postgres` so `PgAlertStore` can be built.
+alerts = ["dep:tdw-alerts"]
+
+## Like `alerts` but wires the real `PgAlertStore` instead of `InMemoryAlertStore`.
+## Used by the `live` compose stack so alerts survive container restarts.
+alerts-postgres = ["alerts", "tdw-alerts/postgres", "real-postgres"]
+
+## Enable the user-registration dispatcher arm (`RegisterUser`) + the
+## `user.created` event emission, behind the first-party `tdw-identity` store.
+## When the `postgres` feature on `tdw-identity` is absent the store falls back
+## to the in-memory implementation (suitable for tests and offline builds).
+## Mirrors the `alerts` feature pattern.
+identity = ["dep:tdw-identity"]
+
+## Like `identity` but wires the real `PgUserStore` instead of
+## `InMemoryUserStore`. Used by the `live` compose stack so users survive
+## container restarts. Mirrors the `alerts-postgres` feature pattern.
+identity-postgres = ["identity", "tdw-identity/postgres", "real-postgres"]
+
+## Enable the dispatcher hook that enqueues subscribed application-function
+## jobs (welcome mailer, etc.) when a `user.created` event is emitted.
+## Requires `identity` (the event is only emitted when that feature is on).
+## The `AppState::function_enqueuer` field defaults to `None`; callers must
+## wire a concrete `FunctionEnqueuer` impl to activate the path.
+##
+## NOTE: No production `FunctionEnqueuer` impl ships in this crate.
+## `tdw-worker/Cargo.toml:42` has an unconditional back-dep on
+## `tdw-service-api`, so pulling `tdw-functions`/`tdw-worker` here would
+## create a Cargo manifest-level cycle.  The production `RouterEnqueuer` is
+## a follow-up in a cycle-free wiring crate.
+functions = ["identity", "dep:tracing"]
+
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
-## providers; this only adds the live HTTP fetchers when explicitly enabled.
+## providers; this adds live HTTP fetchers when explicitly enabled. Yahoo is the
+## exception: `provider-yahoo-http` swaps the existing offline Yahoo fixture for
+## the real HTTP implementation under the same provider/endpoint key.
 all-http-providers = [
     "provider-adanos",
     "provider-akshare",
@@ -126,6 +199,7 @@ all-http-providers = [
     "provider-ecb",
     "provider-eia",
     "provider-finra",
+    "provider-finnhub",
     "provider-fmp",
     "provider-fred",
     "provider-geckoterminal",
@@ -142,6 +216,7 @@ all-http-providers = [
     "provider-trading-economics",
     "provider-velodata",
     "provider-binance-http",
+    "provider-yahoo-http",
 ]
 
 [dependencies]
@@ -151,8 +226,10 @@ futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+uuid = { workspace = true }
 tdw-acp = { workspace = true }
 tdw-actor = { path = "../tdw-actor" }
+tdw-alerts = { path = "../tdw-alerts", optional = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-app-client = { workspace = true }
@@ -174,6 +251,7 @@ tdw-exec = { workspace = true }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-graph = { path = "../tdw-graph" }
 tdw-hooks = { path = "../tdw-hooks" }
+tdw-identity = { path = "../tdw-identity", optional = true }
 tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
@@ -198,6 +276,7 @@ tdw-provider-ecb = { path = "../tdw-provider-ecb", optional = true }
 tdw-provider-eia = { path = "../tdw-provider-eia", optional = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-finra = { path = "../tdw-provider-finra", optional = true }
+tdw-provider-finnhub = { path = "../tdw-provider-finnhub", optional = true }
 tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
@@ -238,9 +317,14 @@ tdw-tools = { workspace = true }
 tdw-tui = { workspace = true }
 tdw-udf = { path = "../tdw-udf" }
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
+[[example]]
+name = "tdw_service_api_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

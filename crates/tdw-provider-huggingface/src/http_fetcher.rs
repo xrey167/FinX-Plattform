@@ -6,12 +6,14 @@
 //! additionally gated by `TDW_HUGGINGFACE_LIVE=1` so unattended CI
 //! stays offline.
 
-use async_trait::async_trait;
+#![cfg(feature = "http")]
+
 use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{
     AUTH_HEADER, BASE_URL, HuggingFaceTextGeneration, HuggingFaceTextGenerationQuery,
@@ -20,34 +22,6 @@ use crate::{
 
 const TOKEN_ENVS: [&str; 3] = ["HF_TOKEN", "HUGGINGFACE_API_TOKEN", "HF_API_TOKEN"];
 const USER_AGENT: &str = "tdw-provider-huggingface/0.1";
-
-/// Production HuggingFace text-generation fetcher.
-#[derive(Clone, Debug)]
-pub struct HuggingFaceHttpTextGenerationFetcher {
-    base_url: String,
-}
-
-impl Default for HuggingFaceHttpTextGenerationFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl HuggingFaceHttpTextGenerationFetcher {
-    /// Override the HuggingFace inference base URL.
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `huggingface`
-    /// provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
 
 #[derive(Deserialize)]
 struct HuggingFaceGeneration {
@@ -59,12 +33,22 @@ struct HuggingFaceErrorEnvelope {
     error: String,
 }
 
-#[async_trait]
-impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
-    for HuggingFaceHttpTextGenerationFetcher
-{
+/// Provider specification for the HuggingFace text-generation fetcher.
+pub struct HuggingFaceTextGenerationSpec;
+
+impl ProviderSpec for HuggingFaceTextGenerationSpec {
     const PROVIDER: &'static str = "huggingface";
     const ENDPOINT: &'static str = "text_generation";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "huggingface client";
+    const SEND_ERR: &'static str = "huggingface extract_data";
+    const RETURNED_ERR: &'static str = "huggingface extract_data returned";
+    const READ_BODY_ERR: &'static str = "huggingface read body";
+
+    type Query = HuggingFaceTextGenerationQuery;
+    type Data = HuggingFaceTextGeneration;
 
     fn transform_query(params: Value) -> Result<HuggingFaceTextGenerationQuery> {
         let model_id = params
@@ -100,11 +84,11 @@ impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
         Ok(query)
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &HuggingFaceTextGenerationQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         text_generation_request(&query.model_id, true)
             .map_err(|error| Error::Provider(error.to_string()))?;
         let token = hf_token().ok_or_else(|| {
@@ -115,7 +99,7 @@ impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
         })?;
         let endpoint = format!(
             "{}/models/{}",
-            self.base_url.trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.model_id
         );
         let mut body = json!({ "inputs": query.inputs });
@@ -123,34 +107,13 @@ impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
             body["parameters"] = json!({ "max_new_tokens": max_new_tokens });
         }
 
-        let client = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("huggingface client: {error}")))?;
-        let response = client
+        Ok(client
             .post(&endpoint)
             .header(AUTH_HEADER, format!("Bearer {token}"))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("huggingface extract_data: {error}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "huggingface extract_data returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("huggingface read body: {error}")))
+            .json(&body))
     }
 
     fn transform_data(
-        &self,
         query: &HuggingFaceTextGenerationQuery,
         raw: Bytes,
     ) -> Result<Vec<HuggingFaceTextGeneration>> {
@@ -177,6 +140,9 @@ impl Fetcher<HuggingFaceTextGenerationQuery, HuggingFaceTextGeneration>
         }])
     }
 }
+
+/// Production HuggingFace text-generation fetcher.
+pub type HuggingFaceHttpTextGenerationFetcher = HttpFetcher<HuggingFaceTextGenerationSpec>;
 
 fn hf_token() -> Option<String> {
     TOKEN_ENVS.iter().find_map(|name| {

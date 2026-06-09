@@ -10,8 +10,9 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
 use tdw_provider_alpha_vantage::{AlphaVantageHttpFetcher, AlphaVantageQuery};
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
@@ -34,56 +35,48 @@ fn global_quote_query() -> AlphaVantageQuery {
 }
 
 fn time_series_daily_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "Meta Data": {
-                "1. Information": "Daily Prices (open, high, low, close) and Volumes",
-                "2. Symbol": "MSFT",
-                "3. Last Refreshed": "2024-01-03",
-                "4. Output Size": "Compact",
-                "5. Time Zone": "US/Eastern"
+    cassette_bytes!({
+        "Meta Data": {
+            "1. Information": "Daily Prices (open, high, low, close) and Volumes",
+            "2. Symbol": "MSFT",
+            "3. Last Refreshed": "2024-01-03",
+            "4. Output Size": "Compact",
+            "5. Time Zone": "US/Eastern"
+        },
+        "Time Series (Daily)": {
+            "2024-01-02": {
+                "1. open": "373.86",
+                "2. high": "375.90",
+                "3. low": "366.77",
+                "4. close": "370.87",
+                "5. volume": "25258600"
             },
-            "Time Series (Daily)": {
-                "2024-01-02": {
-                    "1. open": "373.86",
-                    "2. high": "375.90",
-                    "3. low": "366.77",
-                    "4. close": "370.87",
-                    "5. volume": "25258600"
-                },
-                "2024-01-03": {
-                    "1. open": "369.01",
-                    "2. high": "373.26",
-                    "3. low": "366.09",
-                    "4. close": "367.94",
-                    "5. volume": "23083500"
-                }
+            "2024-01-03": {
+                "1. open": "369.01",
+                "2. high": "373.26",
+                "3. low": "366.09",
+                "4. close": "367.94",
+                "5. volume": "23083500"
             }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+        }
+    })
 }
 
 fn global_quote_cassette() -> Bytes {
-    Bytes::from(
-        json!({
-            "Global Quote": {
-                "01. symbol": "AAPL",
-                "02. open": "185.00",
-                "03. high": "186.10",
-                "04. low": "184.40",
-                "05. price": "185.20",
-                "06. volume": "55000000",
-                "07. latest trading day": "2024-01-03",
-                "08. previous close": "184.90",
-                "09. change": "0.30",
-                "10. change percent": "0.1623%"
-            }
-        })
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!({
+        "Global Quote": {
+            "01. symbol": "AAPL",
+            "02. open": "185.00",
+            "03. high": "186.10",
+            "04. low": "184.40",
+            "05. price": "185.20",
+            "06. volume": "55000000",
+            "07. latest trading day": "2024-01-03",
+            "08. previous close": "184.90",
+            "09. change": "0.30",
+            "10. change percent": "0.1623%"
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -127,14 +120,10 @@ fn cassette_replay_decodes_global_quote_into_market_bar() {
 fn cassette_replay_surfaces_information_message_as_error() {
     let fetcher = AlphaVantageHttpFetcher::default();
     let query = time_series_daily_query();
-    let rate_limit_body = Bytes::from(
-        json!({
-            "Information": "Thank you for using Alpha Vantage! \
-            Our standard API rate limit is 25 requests per day."
-        })
-        .to_string()
-        .into_bytes(),
-    );
+    let rate_limit_body = cassette_bytes!({
+        "Information": "Thank you for using Alpha Vantage! \
+        Our standard API rate limit is 25 requests per day."
+    });
     let err = fetcher
         .transform_data(&query, rate_limit_body)
         .expect_err("information envelope must be propagated as error");
@@ -149,7 +138,7 @@ fn cassette_replay_surfaces_information_message_as_error() {
 fn cassette_replay_surfaces_empty_global_quote_as_error() {
     let fetcher = AlphaVantageHttpFetcher::default();
     let query = global_quote_query();
-    let empty_body = Bytes::from(json!({ "Global Quote": {} }).to_string().into_bytes());
+    let empty_body = cassette_bytes!({ "Global Quote": {} });
     let err = fetcher
         .transform_data(&query, empty_body)
         .expect_err("empty global_quote must be propagated as error");
@@ -211,13 +200,7 @@ async fn live_alpha_vantage_returns_data_when_env_var_set() {
 
     let fetcher = AlphaVantageHttpFetcher::default();
     let query = global_quote_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

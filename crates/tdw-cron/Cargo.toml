@@ -1,0 +1,27 @@
+[package]
+name = "tdw-cron"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Recurring-trigger spine: cron-scheduled enqueue into the TDW worker queue."
+
+[dependencies]
+# 5-field cron expression parser (MIT/Apache-2.0). Provides `Schedule` + next-time
+# iteration over `chrono::DateTime`; we wrap it in `CronSchedule` for our ms-epoch API.
+cron = "0.16"
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-worker = { path = "../tdw-worker" }
+tdw-protocol = { workspace = true }
+# Periodic scheduler task + cooperative shutdown — mirrors spawn_consolidation_scheduler shape.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

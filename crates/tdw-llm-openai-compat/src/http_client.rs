@@ -12,8 +12,8 @@ use reqwest::{Client, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tdw_llm::{
-    ChatMessage, ChatRequest, ChatResponse, MessageRole, Usage, validate_base_url,
-    validate_chat_request, validate_model_id,
+    ChatMessage, ChatRequest, ChatResponse, ClassifyError, MessageRole, Retryability, Usage,
+    classify_http_status, validate_base_url, validate_chat_request, validate_model_id,
 };
 use thiserror::Error;
 
@@ -60,6 +60,24 @@ pub enum OpenAiCompatibleHttpError {
     InvalidResponse(String),
     #[error("client build error: {0}")]
     ClientBuild(String),
+}
+
+impl ClassifyError for OpenAiCompatibleHttpError {
+    /// Translate the transport-facing variants into a recoverability
+    /// classification using the shared `tdw-llm` helpers; all other
+    /// (local validation) variants are permanent.
+    ///
+    /// `Network(_)` (a reqwest transport failure) is treated as transient.
+    /// `Http { status, body }` is delegated to
+    /// [`tdw_llm::classify_http_status`], which owns the transient status
+    /// set and the context-overflow heuristic.
+    fn retryability(&self) -> Retryability {
+        match self {
+            Self::Network(_) => Retryability::Transient,
+            Self::Http { status, body } => classify_http_status(status.as_u16(), body),
+            _ => Retryability::Permanent,
+        }
+    }
 }
 
 impl OpenAiCompatibleHttpClient {
@@ -734,5 +752,29 @@ data: [DONE]
         };
         let mut stream = OpenAiStreamState::new("gpt-4o-mini");
         assert!(stream.apply_event(event, &mut |_| {}).is_err());
+    }
+
+    #[test]
+    fn http_error_classification_covers_transient_permanent_and_overflow() {
+        let transient = OpenAiCompatibleHttpError::Http {
+            status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            body: String::new(),
+        };
+        assert_eq!(transient.retryability(), Retryability::Transient);
+
+        let permanent = OpenAiCompatibleHttpError::Http {
+            status: reqwest::StatusCode::UNAUTHORIZED,
+            body: "invalid api key".to_string(),
+        };
+        assert_eq!(permanent.retryability(), Retryability::Permanent);
+
+        let overflow = OpenAiCompatibleHttpError::Http {
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: r#"{"error":{"message":"maximum context length is 8192 tokens"}}"#.to_string(),
+        };
+        assert_eq!(overflow.retryability(), Retryability::ContextOverflow);
+
+        let local = OpenAiCompatibleHttpError::MissingApiKey;
+        assert_eq!(local.retryability(), Retryability::Permanent);
     }
 }

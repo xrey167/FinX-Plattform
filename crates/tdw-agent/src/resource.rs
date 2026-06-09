@@ -106,9 +106,10 @@ pub trait RegistryEntity: Serialize {
     }
 }
 
-/// Rebuild a typed entity from a [`Resource`] by merging the envelope `metadata` back into
-/// the `spec` — the inverse of [`RegistryEntity::to_resource`]. Lets a generic
-/// `Resource<Value>` loaded from the registry be re-typed (e.g. into a `Tool`/`Prompt`).
+/// Rebuild a typed entity from a [`Resource`] — the inverse of [`RegistryEntity::to_resource`].
+///
+/// Merges the envelope `metadata` back into the `spec`, letting a generic `Resource<Value>`
+/// loaded from the registry be re-typed (e.g. into a `Tool`/`Prompt`).
 ///
 /// # Errors
 ///

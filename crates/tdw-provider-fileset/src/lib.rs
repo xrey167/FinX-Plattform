@@ -1,16 +1,21 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use async_trait::async_trait;
 use bytes::Bytes;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tdw_core::query_params::StandardParams;
 use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
 use tdw_domain::EquityHistoricalData;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EquityHistoricalQuery {
     pub symbol: String,
+    /// Shared date/interval/period/limit normalization parsed from the same
+    /// caller payload as `symbol`. Defaults apply when the caller omits them.
+    #[serde(default, flatten)]
+    pub params: StandardParams,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -35,6 +40,7 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for FilesetEquityHisto
             .ok_or_else(|| Error::InvalidQuery("missing symbol".to_string()))?;
         Ok(EquityHistoricalQuery {
             symbol: normalize_symbol(symbol)?,
+            params: StandardParams::from_value(&params)?,
         })
     }
 
@@ -127,5 +133,36 @@ mod tests {
         }))
         .unwrap_or_else(|error| panic!("query should normalize: {error}"));
         assert_eq!(query.symbol, "AAPL");
+        // Absent standard params fall back to the shared defaults.
+        assert_eq!(query.params, tdw_core::StandardParams::default());
+    }
+
+    #[test]
+    fn transform_query_parses_shared_standard_params() {
+        let query = FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({
+            "symbol": "msft",
+            "start_date": "2026-01-01",
+            "end_date": "2026-02-01",
+            "interval": "1h",
+            "limit": 50
+        }))
+        .unwrap_or_else(|error| panic!("query should normalize: {error}"));
+
+        assert_eq!(query.symbol, "MSFT");
+        assert_eq!(query.params.interval, tdw_core::Interval::OneHour);
+        assert_eq!(
+            query.params.start_date.map(|d| d.to_string()).as_deref(),
+            Some("2026-01-01")
+        );
+        assert_eq!(query.params.limit, Some(50));
+        // Shared cross-field validation rejects an inverted date range.
+        assert!(
+            FilesetEquityHistoricalFetcher::transform_query(serde_json::json!({
+                "symbol": "MSFT",
+                "start_date": "2026-02-01",
+                "end_date": "2026-01-01"
+            }))
+            .is_err()
+        );
     }
 }

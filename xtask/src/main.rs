@@ -37,6 +37,7 @@ fn main() {
             _ => help(),
         },
         "clean-room-audit" => clean_room_audit(),
+        "crate-readiness-check" => crate_readiness_check(),
         "prerelease-check" => prerelease_check(),
         "improve-scan" => improve_scan::improve_scan(),
         _ => help(),
@@ -51,29 +52,331 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | prerelease-check | improve-scan"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
     );
     Ok(())
 }
 
+/// Path the benchmark run writes and the ratchet reads as the current sample.
+const PERF_HISTORY_PATH: &str = "docs/perf-history.json";
+
+/// Default baseline the ratchet compares against when none is supplied.
+const DEFAULT_PERF_BASELINE_PATH: &str = "docs/perf-baseline.json";
+
+/// Regression tolerance: a workload fails enforcement once the current
+/// `ns_per_iter` exceeds the baseline by more than this factor. Deliberately
+/// generous (25%) so ordinary CI scheduling noise does not flap the gate.
+const REGRESSION_TOLERANCE: f64 = 1.25;
+
+/// A single measured workload result, written to `docs/perf-history.json`.
+struct WorkloadResult {
+    name: &'static str,
+    ns_per_iter: f64,
+    iters: u64,
+}
+
+/// Run the deterministic, pure-CPU benchmark suite and write the results to
+/// `docs/perf-history.json`.
+///
+/// Every workload exercises only public `tdw-proto` types via prost
+/// `Message::{encode, decode}` over fixed inputs, so the numbers depend only on
+/// the host CPU — never on wall-clock, randomness, I/O, or allocation patterns
+/// that differ run to run. Each workload warms up, then auto-sizes a per-batch
+/// iteration count so a batch runs ~20-50ms, takes five measured batches, and
+/// reports the median `ns_per_iter` across those batches to damp scheduler
+/// noise.
 fn bench() -> Result<(), String> {
+    let results = [
+        bench_proto_encode_ohlcv(),
+        bench_proto_decode_ohlcv(),
+        bench_proto_roundtrip_envelope(),
+    ];
+
+    println!("{:<28} {:>14} {:>12}", "workload", "ns_per_iter", "iters");
+    for result in &results {
+        println!(
+            "{:<28} {:>14.1} {:>12}",
+            result.name, result.ns_per_iter, result.iters
+        );
+    }
+
+    let workloads: Vec<_> = results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "name": result.name,
+                "ns_per_iter": result.ns_per_iter,
+                "iters": result.iters,
+            })
+        })
+        .collect();
+    let payload = serde_json::json!({
+        "schema": 1,
+        "workloads": workloads,
+    });
+    let content = serde_json::to_string_pretty(&payload)
+        .map(|content| content + "\n")
+        .map_err(|error| error.to_string())?;
+
     fs::create_dir_all("docs").map_err(|error| error.to_string())?;
-    fs::write(
-        "docs/perf-history.json",
-        "{\n  \"bootstrap\": true,\n  \"workloads\": []\n}\n",
-    )
-    .map_err(|error| error.to_string())?;
-    println!("bench scaffold wrote docs/perf-history.json");
+    fs::write(PERF_HISTORY_PATH, content).map_err(|error| error.to_string())?;
+    println!("bench wrote {PERF_HISTORY_PATH}");
     Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms that genuinely return Err
+/// A fixed `OhlcvBar` used as the deterministic input across encode/decode/
+/// envelope workloads.
+fn fixture_bar() -> tdw_proto::OhlcvBar {
+    tdw_proto::OhlcvBar {
+        symbol: "AAPL".to_string(),
+        provider: "polygon".to_string(),
+        timeframe: "1m".to_string(),
+        ts_ns: 1_700_000_000_000_000_000_i64,
+        open: 150.25,
+        high: 151.50,
+        low: 149.80,
+        close: 151.00,
+        volume: 1_234_567.0,
+        vwap: 150.75,
+        trade_count: 42_000,
+    }
+}
+
+/// `proto_encode_ohlcv`: encode a fixed `OhlcvBar` into a reused buffer per iter.
+fn bench_proto_encode_ohlcv() -> WorkloadResult {
+    use prost::Message;
+    let bar = fixture_bar();
+    let mut buf = Vec::with_capacity(64);
+    let ns_per_iter = measure_workload(|iters| {
+        for _ in 0..iters {
+            buf.clear();
+            std::hint::black_box(&bar)
+                .encode(&mut buf)
+                .expect("encode must not fail");
+            std::hint::black_box(&buf);
+        }
+    });
+    WorkloadResult {
+        name: "proto_encode_ohlcv",
+        ns_per_iter: ns_per_iter.0,
+        iters: ns_per_iter.1,
+    }
+}
+
+/// `proto_decode_ohlcv`: decode a pre-encoded `OhlcvBar` per iter.
+fn bench_proto_decode_ohlcv() -> WorkloadResult {
+    use prost::Message;
+    let bar = fixture_bar();
+    let mut bytes = Vec::with_capacity(64);
+    bar.encode(&mut bytes).expect("encode must not fail");
+    let ns_per_iter = measure_workload(|iters| {
+        for _ in 0..iters {
+            let decoded = tdw_proto::OhlcvBar::decode(std::hint::black_box(bytes.as_slice()))
+                .expect("decode must not fail");
+            std::hint::black_box(decoded);
+        }
+    });
+    WorkloadResult {
+        name: "proto_decode_ohlcv",
+        ns_per_iter: ns_per_iter.0,
+        iters: ns_per_iter.1,
+    }
+}
+
+/// `proto_roundtrip_envelope`: encode+decode a fixed `MarketDataEnvelope`
+/// (carrying a bar payload) per iter.
+fn bench_proto_roundtrip_envelope() -> WorkloadResult {
+    use prost::Message;
+    let envelope = tdw_proto::MarketDataEnvelope {
+        provider: "polygon".to_string(),
+        symbol: "AAPL".to_string(),
+        ingestion_id: "01HZ000000000000000000001".to_string(),
+        received_at_ns: 1_700_000_003_000_100_000_i64,
+        payload: Some(tdw_proto::Payload::Bar(fixture_bar())),
+    };
+    let mut buf = Vec::with_capacity(128);
+    let ns_per_iter = measure_workload(|iters| {
+        for _ in 0..iters {
+            buf.clear();
+            std::hint::black_box(&envelope)
+                .encode(&mut buf)
+                .expect("encode must not fail");
+            let decoded =
+                tdw_proto::MarketDataEnvelope::decode(std::hint::black_box(buf.as_slice()))
+                    .expect("decode must not fail");
+            std::hint::black_box(decoded);
+        }
+    });
+    WorkloadResult {
+        name: "proto_roundtrip_envelope",
+        ns_per_iter: ns_per_iter.0,
+        iters: ns_per_iter.1,
+    }
+}
+
+/// Warm up, auto-size the per-batch iteration count to ~20-50ms, run five
+/// measured batches, and return `(median ns_per_iter, per_batch_iters)`.
+///
+/// `run` executes the workload `iters` times; it must `black_box` its inputs
+/// and outputs so the optimizer cannot hoist the work out of the loop.
+fn measure_workload<F: FnMut(u64)>(mut run: F) -> (f64, u64) {
+    use std::time::Instant;
+
+    // Warm up caches / branch predictors and force first-touch allocation.
+    run(1_000);
+
+    // Auto-size: grow the batch until one batch takes at least 20ms, capping
+    // the target near the middle of the 20-50ms window.
+    let target = std::time::Duration::from_millis(30);
+    let mut iters: u64 = 1_000;
+    loop {
+        let start = Instant::now();
+        run(iters);
+        let elapsed = start.elapsed();
+        if elapsed >= std::time::Duration::from_millis(20) || iters >= 1u64 << 32 {
+            break;
+        }
+        // Scale toward the target, at least doubling, to converge quickly.
+        let scale = if elapsed.as_nanos() == 0 {
+            8
+        } else {
+            ((target.as_nanos() / elapsed.as_nanos()) as u64).max(2)
+        };
+        iters = iters.saturating_mul(scale);
+    }
+
+    let mut samples = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let start = Instant::now();
+        run(iters);
+        let elapsed = start.elapsed();
+        #[allow(clippy::cast_precision_loss)]
+        let ns_per_iter = elapsed.as_nanos() as f64 / iters as f64;
+        samples.push(ns_per_iter);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).expect("benchmark timings are finite"));
+    (samples[samples.len() / 2], iters)
+}
+
+/// Compare the current `docs/perf-history.json` against a baseline and enforce
+/// the regression ratchet.
+///
+/// Bootstrap mode (baseline marked `"bootstrap": true` or with no workloads)
+/// just prints the current numbers and returns OK so the gate never fails
+/// before a real, CI-measured baseline has been committed. Enforcing mode fails
+/// if any baseline workload regressed beyond [`REGRESSION_TOLERANCE`]; a missing
+/// current workload warns rather than fails.
 fn bench_compare(baseline: Option<String>) -> Result<(), String> {
+    let baseline_path = baseline.unwrap_or_else(|| DEFAULT_PERF_BASELINE_PATH.to_string());
+
+    let current = read_perf_json(PERF_HISTORY_PATH)?;
+    let baseline = read_perf_json(&baseline_path)?;
+
+    let bootstrap = baseline
+        .get("bootstrap")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let baseline_workloads = baseline
+        .get("workloads")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    if bootstrap || baseline_workloads.is_empty() {
+        println!("bench-compare: bootstrap baseline at {baseline_path}; current run:");
+        print_perf_table(&current);
+        println!(
+            "bench-compare: commit {PERF_HISTORY_PATH} as {baseline_path} to enable enforcement"
+        );
+        return Ok(());
+    }
+
+    let current_workloads = current
+        .get("workloads")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
     println!(
-        "bench comparison scaffold; baseline={}",
-        baseline.unwrap_or_else(|| "none".to_string())
+        "{:<28} {:>14} {:>14} {:>9} status",
+        "workload", "baseline", "current", "delta%"
     );
-    Ok(())
+
+    let mut regressions = Vec::new();
+    for baseline_workload in &baseline_workloads {
+        let Some(name) = baseline_workload
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let baseline_ns = workload_ns_per_iter(baseline_workload);
+        let current_workload = current_workloads.iter().find(|workload| {
+            workload.get("name").and_then(serde_json::Value::as_str) == Some(name)
+        });
+        let Some(current_workload) = current_workload else {
+            let dash = "-";
+            println!("{name:<28} {baseline_ns:>14.1} {dash:>14} {dash:>9} MISSING");
+            continue;
+        };
+        let current_ns = workload_ns_per_iter(current_workload);
+        let delta_pct = if baseline_ns == 0.0 {
+            0.0
+        } else {
+            (current_ns - baseline_ns) / baseline_ns * 100.0
+        };
+        let regressed = current_ns > baseline_ns * REGRESSION_TOLERANCE;
+        let status = if regressed { "REGRESSED" } else { "OK" };
+        println!("{name:<28} {baseline_ns:>14.1} {current_ns:>14.1} {delta_pct:>+9.1} {status}");
+        if regressed {
+            regressions.push(name.to_string());
+        }
+    }
+
+    if regressions.is_empty() {
+        println!("bench-compare: PASS (no workload regressed beyond {REGRESSION_TOLERANCE:.2}x)");
+        Ok(())
+    } else {
+        Err(format!(
+            "bench-compare: FAIL; regressed beyond {:.0}% tolerance: {}",
+            (REGRESSION_TOLERANCE - 1.0) * 100.0,
+            regressions.join(", ")
+        ))
+    }
+}
+
+/// Read and parse a perf JSON document (`perf-history.json` / baseline).
+fn read_perf_json(path: &str) -> Result<serde_json::Value, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|error| format!("perf file missing or unreadable at {path}: {error}"))?;
+    serde_json::from_str(&content).map_err(|error| format!("invalid perf JSON at {path}: {error}"))
+}
+
+/// Extract `ns_per_iter` from a workload object, defaulting to 0 when absent.
+fn workload_ns_per_iter(workload: &serde_json::Value) -> f64 {
+    workload
+        .get("ns_per_iter")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+/// Print the workloads in a perf document as a human-readable table.
+fn print_perf_table(perf: &serde_json::Value) {
+    println!("{:<28} {:>14} {:>12}", "workload", "ns_per_iter", "iters");
+    if let Some(workloads) = perf.get("workloads").and_then(serde_json::Value::as_array) {
+        for workload in workloads {
+            let name = workload
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?");
+            let ns = workload_ns_per_iter(workload);
+            let iters = workload
+                .get("iters")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            println!("{name:<28} {ns:>14.1} {iters:>12}");
+        }
+    }
 }
 
 fn quality_gate(mode: Option<&str>) -> Result<(), String> {
@@ -707,6 +1010,106 @@ fn clean_room_audit() -> Result<(), String> {
     }
 }
 
+fn crate_readiness_check() -> Result<(), String> {
+    let workspace_crates = workspace_package_names()?;
+    let matrix_crates = matrix_crate_names("docs/quality/crate-readiness/matrix.md")?;
+
+    let mut missing_matrix_rows = Vec::new();
+    let mut missing_worksheets = Vec::new();
+    for name in &workspace_crates {
+        if !matrix_crates.contains(name) {
+            missing_matrix_rows.push(name.clone());
+        }
+        let worksheet = PathBuf::from("docs/quality/crate-readiness").join(format!("{name}.md"));
+        if !worksheet.is_file() {
+            missing_worksheets.push(name.clone());
+        }
+    }
+
+    let stale_matrix_rows: Vec<_> = matrix_crates
+        .iter()
+        .filter(|name| !workspace_crates.contains(*name))
+        .cloned()
+        .collect();
+
+    if missing_matrix_rows.is_empty()
+        && missing_worksheets.is_empty()
+        && stale_matrix_rows.is_empty()
+    {
+        println!(
+            "crate-readiness-check passed: {} workspace crates covered",
+            workspace_crates.len()
+        );
+        return Ok(());
+    }
+
+    let mut sections = Vec::new();
+    if !missing_matrix_rows.is_empty() {
+        sections.push(format!(
+            "missing matrix rows: {}",
+            missing_matrix_rows.join(", ")
+        ));
+    }
+    if !missing_worksheets.is_empty() {
+        sections.push(format!(
+            "missing worksheets: {}",
+            missing_worksheets.join(", ")
+        ));
+    }
+    if !stale_matrix_rows.is_empty() {
+        sections.push(format!(
+            "stale matrix rows: {}",
+            stale_matrix_rows.join(", ")
+        ));
+    }
+
+    Err(format!(
+        "crate-readiness-check failed; refresh docs/quality/crate-readiness:\n{}",
+        sections.join("\n")
+    ))
+}
+
+fn workspace_package_names() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .map_err(|error| format!("failed to spawn cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(format!("cargo metadata exited with {}", output.status));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())?;
+    let mut names: Vec<String> = parsed
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "cargo metadata output missing packages array".to_string())?
+        .iter()
+        .filter(|package| package.get("source").is_none_or(serde_json::Value::is_null))
+        .filter_map(|package| package.get("name").and_then(serde_json::Value::as_str))
+        .map(ToString::to_string)
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn matrix_crate_names(path: &str) -> Result<Vec<String>, String> {
+    let content = fs::read_to_string(path).map_err(|error| {
+        format!("crate-readiness matrix missing or unreadable at {path}: {error}")
+    })?;
+    let mut names: Vec<String> = content
+        .lines()
+        .filter_map(|line| {
+            line.strip_prefix("| [")
+                .and_then(|rest| rest.split_once(']'))
+                .map(|(name, _)| name.to_string())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
 /// TEST-POLICY-005: run the stable pre-release fuzz-smoke + loom evidence in one
 /// command. This is a manual release-candidate step, not a phase-exit gate.
 ///
@@ -721,9 +1124,18 @@ fn clean_room_audit() -> Result<(), String> {
 /// stable smoke evidence is green before a release cut. Returns `Err` if either
 /// suite fails so release readiness cannot claim fuzz/loom evidence without it.
 fn prerelease_check() -> Result<(), String> {
-    println!("prerelease-check: running stable fuzz-smoke + loom evidence");
+    println!("prerelease-check: running crate-readiness sync + stable fuzz-smoke + loom evidence");
 
-    println!("prerelease-check: [1/2] stable fuzz corpus-replay harnesses");
+    println!("prerelease-check: [1/3] crate-readiness coverage sync");
+    let crate_readiness_ok = match crate_readiness_check() {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!("{error}");
+            false
+        }
+    };
+
+    println!("prerelease-check: [2/3] stable fuzz corpus-replay harnesses");
     let fuzz_ok = run_check(std::process::Command::new("cargo").args([
         "test",
         "-p",
@@ -740,7 +1152,7 @@ fn prerelease_check() -> Result<(), String> {
         "fuzz_replay",
     ]));
 
-    println!("prerelease-check: [2/2] stable loom relay model (RUSTFLAGS=--cfg loom)");
+    println!("prerelease-check: [3/3] stable loom relay model (RUSTFLAGS=--cfg loom)");
     let loom_ok = run_check(
         std::process::Command::new("cargo")
             .args(["test", "-p", "tdw-app-server", "--test", "loom_relay"])
@@ -748,13 +1160,17 @@ fn prerelease_check() -> Result<(), String> {
     );
 
     println!("prerelease-check: summary");
+    println!(
+        "  crate-readiness coverage: {}",
+        pass_label(crate_readiness_ok)
+    );
     println!("  fuzz-smoke (corpus replay): {}", pass_label(fuzz_ok));
     println!("  loom relay model:           {}", pass_label(loom_ok));
     println!(
         "  deep fuzzing: nightly `fuzz-smoke` job / `cargo +nightly fuzz run <target>` (not run here)"
     );
 
-    if fuzz_ok && loom_ok {
+    if crate_readiness_ok && fuzz_ok && loom_ok {
         println!("prerelease-check: PASS");
         Ok(())
     } else {

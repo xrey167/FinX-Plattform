@@ -24,5 +24,9 @@ tdw-storage-qdrant = { path = "../tdw-storage-qdrant", features = ["qdrant"] }
 tdw-storage-s3 = { path = "../tdw-storage-s3", features = ["s3"] }
 tokio = { workspace = true }
 
+[[example]]
+name = "tdw_bootstrap_basic"
+path = "examples/basic.rs"
+
 [lints]
 workspace = true

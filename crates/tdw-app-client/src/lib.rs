@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::error::Error;
 use std::fmt;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 #[cfg(unix)]
@@ -168,8 +168,7 @@ impl DaemonClient {
     fn submit_tcp(&self, envelope: &OpEnvelope) -> DaemonClientResult {
         let op_id = envelope.op_id.clone();
         let address = self.config.endpoint.address.trim().to_string();
-        let socket_addr = parse_tcp_socket_addr(&address)?;
-        let mut stream = connect_tcp_stream(socket_addr, &address, self.config.timeout, &op_id)?;
+        let mut stream = connect_tcp_authority(&address, self.config.timeout, &op_id, "connect")?;
         stream
             .set_read_timeout(Some(self.config.timeout))
             .map_err(|source| DaemonClientError::Io {
@@ -339,33 +338,6 @@ fn parse_http_sse_endpoint(
         authority: authority.to_string(),
         events_path,
         submit_path,
-    })
-}
-
-fn parse_tcp_socket_addr(address: &str) -> std::result::Result<SocketAddr, DaemonClientError> {
-    address
-        .parse()
-        .map_err(|_| DaemonClientError::InvalidEndpoint(EndpointError::InvalidTcpAddress))
-}
-
-fn connect_tcp_stream(
-    socket_addr: SocketAddr,
-    address: &str,
-    timeout: Duration,
-    op_id: &OpId,
-) -> std::result::Result<TcpStream, DaemonClientError> {
-    TcpStream::connect_timeout(&socket_addr, timeout).map_err(|source| {
-        if is_timeout(&source) {
-            DaemonClientError::TimedOut {
-                op_id: op_id.as_str().to_string(),
-                action: "connect",
-            }
-        } else {
-            DaemonClientError::Connect {
-                address: address.to_string(),
-                source,
-            }
-        }
     })
 }
 

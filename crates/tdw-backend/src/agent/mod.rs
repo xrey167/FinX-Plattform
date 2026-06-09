@@ -30,9 +30,10 @@ use tdw_workflow_engine::{ExecutionPlan, WorkflowEngine};
 use crate::config::BackendConfig;
 use crate::error::BackendResult;
 
-/// Environment variable naming the directory of `tdw-agent` registry definitions
-/// to load. Shared with `tdw-mcp`'s server entrypoints so the embedded and
-/// stand-alone MCP surfaces resolve the same registry.
+/// Environment variable naming the directory of `tdw-agent` registry definitions to load.
+///
+/// Shared with `tdw-mcp`'s server entrypoints so the embedded and stand-alone MCP surfaces
+/// resolve the same registry.
 pub const REGISTRY_DIR_ENV: &str = tdw_mcp::REGISTRY_DIR_ENV;
 
 /// The `pass_rate` threshold below which eval feedback disables a skill. A run whose
@@ -203,7 +204,7 @@ impl AgentBackend {
     }
 
     /// Mutable access to the embedded MCP server (e.g. to drive a JSON-RPC session).
-    pub fn mcp_server(&mut self) -> &mut McpServer {
+    pub const fn mcp_server(&mut self) -> &mut McpServer {
         &mut self.mcp
     }
 
@@ -307,12 +308,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`KnowledgeGraph`].
     #[must_use]
-    pub fn kg(&self) -> &KnowledgeGraph {
+    pub const fn kg(&self) -> &KnowledgeGraph {
         &self.kg
     }
 
     /// Mutable access to the embedded [`KnowledgeGraph`].
-    pub fn kg_mut(&mut self) -> &mut KnowledgeGraph {
+    pub const fn kg_mut(&mut self) -> &mut KnowledgeGraph {
         &mut self.kg
     }
 
@@ -342,12 +343,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`TagStore`].
     #[must_use]
-    pub fn tags(&self) -> &TagStore {
+    pub const fn tags(&self) -> &TagStore {
         &self.tags
     }
 
     /// Mutable access to the embedded [`TagStore`].
-    pub fn tags_mut(&mut self) -> &mut TagStore {
+    pub const fn tags_mut(&mut self) -> &mut TagStore {
         &mut self.tags
     }
 
@@ -383,12 +384,12 @@ impl AgentBackend {
 
     /// Shared access to the embedded [`FeatureStore`].
     #[must_use]
-    pub fn features(&self) -> &FeatureStore {
+    pub const fn features(&self) -> &FeatureStore {
         &self.features
     }
 
     /// Mutable access to the embedded [`FeatureStore`].
-    pub fn features_mut(&mut self) -> &mut FeatureStore {
+    pub const fn features_mut(&mut self) -> &mut FeatureStore {
         &mut self.features
     }
 
@@ -497,7 +498,7 @@ mod tests {
     fn backend_with_search_tool() -> (std::path::PathBuf, AgentBackend) {
         let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir =
-            std::env::temp_dir().join(format!("tdw_backend_agent_{}_{seq}", std::process::id(),));
+            std::env::temp_dir().join(format!("tdw_backend_agent_{}_{seq}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir temp registry dir");
         std::fs::write(dir.join("tool_search.json5"), TOOL_SEARCH_JSON5).expect("write fixture");
@@ -645,6 +646,8 @@ mod tests {
                 tags: Vec::new(),
             }],
             endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
         };
         backend.upsert_agent(card);
 
@@ -830,6 +833,331 @@ mod tests {
             Some("2026-05-21".to_string())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Write the `search` tool fixture into a fresh temp registry dir, returning the dir
+    /// so the caller can mutate it (add members) before/after building a backend.
+    fn fresh_registry_dir() -> std::path::PathBuf {
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "tdw_backend_agent_reg_{}_{seq}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir temp registry dir");
+        std::fs::write(dir.join("tool_search.json5"), TOOL_SEARCH_JSON5).expect("write fixture");
+        dir
+    }
+
+    /// A `tool` fixture for an arbitrary `name` (defaults to `Unbound`), used to add new
+    /// registry members on disk so a reload/merge has an observable effect.
+    fn tool_fixture(name: &str) -> String {
+        format!(
+            r#"{{
+                apiVersion: "tdw.finx/v1",
+                kind: "tool",
+                metadata: {{
+                    name: "{name}", title: "{name}", id: "{name}", version: "0.1.0",
+                    origin: {{ tier: "Domain", source: "Internal" }},
+                    adaptivity: "None", autonomous: false,
+                }},
+                spec: {{ input_schema: {{ type: "object" }}, output_schema: null,
+                        effect: "ReadOnly", idempotent: true, open_world: false }},
+            }}"#
+        )
+    }
+
+    #[test]
+    fn from_config_with_unset_registry_env_builds_empty_registry() {
+        // from_config's None arm (REGISTRY_DIR_ENV unset) uses Registry::new(), which has
+        // no tools — distinct from the from_registry_dir path that lists "search". Guard
+        // the assumption with a read-only env check (no mutation): if the runner has the
+        // env set, the empty-tools property no longer holds, so self-skip that assertion.
+        let backend = AgentBackend::from_config(&BackendConfig::default())
+            .expect("from_config should build with an unset registry env");
+        if std::env::var(REGISTRY_DIR_ENV).is_err() {
+            assert!(
+                backend.list_tools().is_empty(),
+                "Registry::new() (None arm) yields no tools",
+            );
+        }
+    }
+
+    #[test]
+    fn with_language_model_injected_model_drives_eval_run() {
+        // Build a backend, install a language model via the builder, and prove the
+        // injected model is the one the EvalRunner executes through by observing a
+        // successful eval outcome (run_eval_at clones self.language_model into the runner).
+        let (dir, mut backend) = backend_with_search_tool();
+        backend = backend.with_language_model(Arc::new(StubLanguageModel));
+        backend.upsert_agent(sample_agent_card());
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "eval-lm".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden-market-notes".to_string(),
+                cases: vec![EvalCase {
+                    case_id: "case-1".to_string(),
+                    prompt: "Summarize AAPL".to_string(),
+                    expected_refs: Vec::new(),
+                }],
+            },
+            "2026-06-07T00:00:00+00:00",
+        );
+        assert_eq!(outcome.run_id, "eval-lm");
+        assert_eq!(outcome.status, "success");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_if_changed_noop_then_reloads_after_new_member() {
+        let dir = fresh_registry_dir();
+        let mut backend = AgentBackend::from_registry_dir(&dir, deny_all_policy())
+            .expect("backend should build from registry dir");
+        // No change: scan_stamps matches the recorded stamps -> Ok(false).
+        assert!(
+            !backend.reload_if_changed().expect("no-change scan"),
+            "reload_if_changed must report false when nothing changed",
+        );
+        assert!(backend.list_tools().contains(&"search".to_string()));
+        assert!(!backend.list_tools().contains(&"quote".to_string()));
+
+        // Add a NEW *.json5 member: the stamps BTreeMap (keyed on file path) changes
+        // regardless of mtime resolution, so the next poll reloads and re-wires the MCP
+        // registry. Asserting the new tool is now listed proves set_registry took effect.
+        std::fs::write(dir.join("tool_quote.json5"), tool_fixture("quote")).expect("write quote");
+        assert!(
+            backend.reload_if_changed().expect("changed scan"),
+            "reload_if_changed must report true after a new member is added",
+        );
+        assert!(
+            backend.list_tools().contains(&"quote".to_string()),
+            "the reloaded registry must list the newly-added tool",
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_plugins_merges_happy_path_and_rejects_collision() {
+        // Happy path: a plugin root whose immediate subdir is a plugin holding a manifest +
+        // a distinct member tool. load_plugins (registry.rs) iterates SUBDIRECTORIES, so the
+        // layout MUST be root/<plugin>/*.json5 (a flat *.json5 under root is skipped).
+        let (base_dir, mut backend) = backend_with_search_tool();
+
+        let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "tdw_backend_agent_plug_{}_{seq}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let plugin_dir = root.join("extra");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin dir");
+        std::fs::write(
+            plugin_dir.join("plugin.json5"),
+            r#"{ apiVersion:"tdw.finx/v1", kind:"plugin",
+                 metadata:{ name:"extra", id:"extra", version:"0.1.0",
+                   origin:{tier:"Custom",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 spec:{ members:["plugin_tool"], client_side:false, server_side:true } }"#,
+        )
+        .expect("write plugin manifest");
+        std::fs::write(plugin_dir.join("tool.json5"), tool_fixture("plugin_tool"))
+            .expect("write plugin tool");
+
+        backend
+            .load_plugins(&root)
+            .expect("load_plugins happy path should merge");
+        assert!(
+            backend.list_tools().contains(&"plugin_tool".to_string()),
+            "the merged plugin tool must be listed after load_plugins re-wires the registry",
+        );
+        // The base tool is still present (merge is additive).
+        assert!(backend.list_tools().contains(&"search".to_string()));
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Error path: a second plugin root whose tool collides on (kind, name) with the
+        // already-loaded "search" tool -> merge fails with BackendError::Load.
+        let seq2 = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let collide_root = std::env::temp_dir().join(format!(
+            "tdw_backend_agent_plug_col_{}_{seq2}",
+            std::process::id(),
+        ));
+        let _ = std::fs::remove_dir_all(&collide_root);
+        let collide_dir = collide_root.join("dup");
+        std::fs::create_dir_all(&collide_dir).expect("mkdir collide dir");
+        std::fs::write(
+            collide_dir.join("plugin.json5"),
+            r#"{ apiVersion:"tdw.finx/v1", kind:"plugin",
+                 metadata:{ name:"dup", id:"dup", version:"0.1.0",
+                   origin:{tier:"Custom",source:"Internal"}, adaptivity:"None", autonomous:false },
+                 spec:{ members:["search"], client_side:false, server_side:true } }"#,
+        )
+        .expect("write collide manifest");
+        std::fs::write(collide_dir.join("tool.json5"), tool_fixture("search"))
+            .expect("write collide tool");
+
+        let error = backend
+            .load_plugins(&collide_root)
+            .expect_err("a (kind,name) collision with the base tool must error");
+        assert!(matches!(error, crate::error::BackendError::Load(_)));
+        let _ = std::fs::remove_dir_all(&collide_root);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[test]
+    fn kg_bare_accessors_write_through_mut_read_through_shared() {
+        use tdw_kg::EntityKind;
+
+        let (dir, mut backend) = backend_with_search_tool();
+        // Write through the bare kg_mut() accessor (line 315).
+        backend.kg_mut().upsert_entity(Entity {
+            entity_id: "instrument:AAPL".to_string(),
+            kind: EntityKind::Instrument,
+            label: "Apple".to_string(),
+            aliases: vec!["AAPL".to_string()],
+        });
+        // Read back through the bare kg() shared accessor (line 310).
+        assert_eq!(
+            backend
+                .kg()
+                .entity("instrument:AAPL")
+                .map(|e| e.label.clone()),
+            Some("Apple".to_string()),
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tags_bare_accessors_write_through_mut_read_through_shared() {
+        let (dir, mut backend) = backend_with_search_tool();
+        // Define + assign through the bare tags_mut() accessor (line 350).
+        backend
+            .tags_mut()
+            .define(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        backend
+            .tags_mut()
+            .assign(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "asset:equity".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: None,
+                provenance: "manual".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("assignment should persist: {error}"));
+        // Read back through the bare tags() shared accessor (line 345).
+        assert_eq!(
+            backend.tags().active_tags("instrument:AAPL", "2026-05-22"),
+            vec!["asset:equity".to_string()],
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn features_bare_accessors_materialize_then_read_through_shared() {
+        let (dir, mut backend) = backend_with_search_tool();
+        // Tags first (active tags are joined into the snapshot).
+        backend
+            .tags_mut()
+            .define(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        backend
+            .tags_mut()
+            .assign(TagAssignment {
+                entity_id: "instrument:AAPL".to_string(),
+                tag_id: "asset:equity".to_string(),
+                assigned_at: "2026-05-21".to_string(),
+                expires_at: None,
+                provenance: "manual".to_string(),
+            })
+            .unwrap_or_else(|error| panic!("assignment should persist: {error}"));
+
+        // Materialize via the high-level method (the bare features_mut().materialize would
+        // need a simultaneous &self.tags borrow, a borrow-checker split; the bare mut
+        // accessor at 391 is still exercised below via a snapshot count check).
+        let mut features = BTreeMap::new();
+        features.insert("return_1d".to_string(), 0.01);
+        let snapshot = backend.materialize_features("instrument:AAPL", "2026-05-21", features);
+        assert_eq!(snapshot.tags, vec!["asset:equity".to_string()]);
+
+        // Read back through the bare features() shared accessor (line 386).
+        assert_eq!(
+            backend
+                .features()
+                .latest("instrument:AAPL")
+                .map(|latest| latest.as_of.clone()),
+            Some("2026-05-21".to_string()),
+        );
+
+        // Exercise the bare features_mut() accessor (line 391) with a real observable: a
+        // second materialize through tags-free path keeps prior snapshots intact, and the
+        // mut handle is the live store the shared accessor reads.
+        let snap2 = {
+            let empty_tags = TagStore::default();
+            let mut more = BTreeMap::new();
+            more.insert("return_5d".to_string(), 0.05);
+            backend
+                .features_mut()
+                .materialize("instrument:MSFT", "2026-05-22", more, &empty_tags)
+        };
+        assert_eq!(snap2.as_of, "2026-05-22");
+        assert!(snap2.tags.is_empty());
+        assert_eq!(
+            backend
+                .features()
+                .latest("instrument:MSFT")
+                .map(|latest| latest.as_of.clone()),
+            Some("2026-05-22".to_string()),
+        );
+        // The earlier AAPL snapshot is still retrievable, proving the mut handle mutated
+        // the same store the shared accessor reads.
+        assert!(backend.features().latest("instrument:AAPL").is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- config.rs pure builders (cross-file; mandatory floor-clearing leg) -----------
+
+    #[test]
+    fn backend_config_new_defaults_surfaces_and_transport() {
+        use crate::config::{McpTransport, Surfaces};
+        use tdw_config::TdwConfig;
+
+        let config = BackendConfig::new(TdwConfig::default());
+        assert_eq!(config.surfaces, Surfaces::Both);
+        assert_eq!(config.mcp_transport, McpTransport::Stdio);
+    }
+
+    #[test]
+    fn backend_config_with_surfaces_overrides_field() {
+        use crate::config::{McpTransport, Surfaces};
+        use tdw_config::TdwConfig;
+
+        let config = BackendConfig::new(TdwConfig::default()).with_surfaces(Surfaces::McpOnly);
+        assert_eq!(config.surfaces, Surfaces::McpOnly);
+        // The transport is left at its default by the surfaces builder.
+        assert_eq!(config.mcp_transport, McpTransport::Stdio);
+    }
+
+    #[test]
+    fn backend_config_with_mcp_transport_overrides_field() {
+        use crate::config::{McpTransport, Surfaces};
+        use tdw_config::TdwConfig;
+
+        let config = BackendConfig::new(TdwConfig::default())
+            .with_mcp_transport(McpTransport::Http("127.0.0.1:8788".to_string()));
+        assert_eq!(
+            config.mcp_transport,
+            McpTransport::Http("127.0.0.1:8788".to_string()),
+        );
+        // The surfaces field is left at its default by the transport builder.
+        assert_eq!(config.surfaces, Surfaces::Both);
     }
 
     #[test]

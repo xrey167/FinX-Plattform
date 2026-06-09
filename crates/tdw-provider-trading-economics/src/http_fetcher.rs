@@ -11,12 +11,8 @@
 //! test is additionally gated by `TDW_TRADING_ECONOMICS_LIVE=1` so unattended
 //! CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     API_KEY_ENV, BASE_URL, TradingEconomicsCalendarEvent, TradingEconomicsCalendarQuery,
@@ -96,32 +92,11 @@ fn api_key() -> std::result::Result<String, TradingEconomicsError> {
 // TradingEconomicsHttpCalendarFetcher
 // ---------------------------------------------------------------------------
 
-/// Production Trading Economics economic-calendar fetcher.
-#[derive(Clone, Debug)]
-pub struct TradingEconomicsHttpCalendarFetcher {
-    base_url: String,
-}
-
-impl Default for TradingEconomicsHttpCalendarFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TradingEconomicsHttpCalendarFetcher {
-    /// Override the base URL (useful for tests with a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `trading_economics` / `calendar` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Trading Economics economic-calendar fetcher.
+    pub TradingEconomicsHttpCalendarFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TradingEconomicsCalendarQuery, TradingEconomicsCalendarEvent>
@@ -146,7 +121,7 @@ impl Fetcher<TradingEconomicsCalendarQuery, TradingEconomicsCalendarEvent>
         _creds: &Credentials,
     ) -> Result<Bytes> {
         let key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}/calendar", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/calendar", self.base_url().trim_end_matches('/'));
         let client = te_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
             .get(&url)
@@ -200,32 +175,11 @@ impl Fetcher<TradingEconomicsCalendarQuery, TradingEconomicsCalendarEvent>
 // TradingEconomicsHttpIndicatorFetcher
 // ---------------------------------------------------------------------------
 
-/// Production Trading Economics country-indicator fetcher.
-#[derive(Clone, Debug)]
-pub struct TradingEconomicsHttpIndicatorFetcher {
-    base_url: String,
-}
-
-impl Default for TradingEconomicsHttpIndicatorFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl TradingEconomicsHttpIndicatorFetcher {
-    /// Override the base URL (useful for tests with a mock server).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `trading_economics` / `indicator` slot.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Trading Economics country-indicator fetcher.
+    pub TradingEconomicsHttpIndicatorFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<TradingEconomicsIndicatorQuery, TradingEconomicsIndicatorRow>
@@ -255,7 +209,7 @@ impl Fetcher<TradingEconomicsIndicatorQuery, TradingEconomicsIndicatorRow>
         let key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
         let url = format!(
             "{}/indicators/{}/{}",
-            self.base_url.trim_end_matches('/'),
+            self.base_url().trim_end_matches('/'),
             query.country,
             query.indicator,
         );

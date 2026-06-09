@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -41,8 +41,8 @@ pub fn try_apply_masks(
             *value = match rule.mode {
                 MaskMode::Redact => "***".to_string(),
                 MaskMode::Last4 => {
-                    let keep = value.chars().rev().take(4).collect::<Vec<_>>();
-                    let suffix = keep.into_iter().rev().collect::<String>();
+                    let skip = value.chars().count().saturating_sub(4);
+                    let suffix = value.chars().skip(skip).collect::<String>();
                     format!("***{suffix}")
                 }
             };

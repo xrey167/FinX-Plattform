@@ -176,7 +176,33 @@ fn validate_op(op: &Op) -> Result<()> {
             Ok(())
         }
         Op::StreamStop { stream_id } => validate_token("stream_id", stream_id),
-        Op::Cancel { .. } | Op::Shutdown => Ok(()),
+        Op::GetQuoteSnapshot { provider, symbol } => {
+            validate_token("provider", provider)?;
+            validate_token("symbol", symbol)
+        }
+        Op::CreateAlert {
+            symbol, condition, ..
+        } => {
+            validate_token("symbol", symbol)?;
+            validate_token("condition", condition)
+        }
+        Op::DeleteAlert { id } | Op::SetAlertActive { id, .. } => validate_token("id", id),
+        Op::RegisterUser {
+            id,
+            email,
+            display_name,
+            ..
+        } => {
+            // `password` is deliberately not validated here: it is opaque
+            // credential material (may legitimately contain spaces and the
+            // punctuation `validate_token` rejects), and the identity store
+            // enforces its own length policy. `id` is a structural token;
+            // `email`/`display_name` are free-form display text.
+            validate_token("id", id)?;
+            validate_display_text("email", email)?;
+            validate_display_text("display_name", display_name)
+        }
+        Op::ListAlerts {} | Op::Cancel { .. } | Op::Shutdown => Ok(()),
     }
 }
 

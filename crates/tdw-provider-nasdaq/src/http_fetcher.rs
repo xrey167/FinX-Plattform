@@ -7,44 +7,17 @@
 //! integration test is additionally gated by `TDW_NASDAQ_LIVE=1` so
 //! unattended CI stays offline.
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::{Error, Result};
+use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{BASE_URL, NasdaqDataRow, NasdaqDatasetQuery, dataset_request};
 
 const API_KEY_ENV: &str = "TDW_NASDAQ_API_KEY";
 const USER_AGENT: &str = "tdw-provider-nasdaq/0.1";
-
-/// Production NASDAQ Data Link dataset fetcher.
-#[derive(Clone, Debug)]
-pub struct NasdaqHttpDatasetFetcher {
-    base_url: String,
-}
-
-impl Default for NasdaqHttpDatasetFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl NasdaqHttpDatasetFetcher {
-    /// Override the NASDAQ Data Link base URL (useful in tests).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry advertised under the canonical `nasdaq` provider name.
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
 
 /// Top-level API envelope for the dataset data endpoint.
 #[derive(Deserialize)]
@@ -72,10 +45,22 @@ struct NasdaqError {
     message: Option<String>,
 }
 
-#[async_trait]
-impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
+/// Provider specification for the NASDAQ Data Link dataset fetcher.
+pub struct NasdaqDatasetSpec;
+
+impl ProviderSpec for NasdaqDatasetSpec {
     const PROVIDER: &'static str = "nasdaq";
     const ENDPOINT: &'static str = "datasets";
+    const USER_AGENT: &'static str = USER_AGENT;
+    const DEFAULT_BASE_URL: &'static str = BASE_URL;
+
+    const CLIENT_ERR: &'static str = "nasdaq client";
+    const SEND_ERR: &'static str = "nasdaq extract_data";
+    const RETURNED_ERR: &'static str = "nasdaq extract_data returned";
+    const READ_BODY_ERR: &'static str = "nasdaq read body";
+
+    type Query = NasdaqDatasetQuery;
+    type Data = NasdaqDataRow;
 
     fn transform_query(params: Value) -> Result<NasdaqDatasetQuery> {
         let database = params
@@ -104,24 +89,18 @@ impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
         Ok(query)
     }
 
-    async fn extract_data(
-        &self,
+    fn build_request(
+        base_url: &str,
         query: &NasdaqDatasetQuery,
-        _creds: &Credentials,
-    ) -> Result<Bytes> {
+        client: &Client,
+    ) -> Result<reqwest::RequestBuilder> {
         dataset_request(&query.database, &query.dataset, true)
             .map_err(|error| Error::Provider(error.to_string()))?;
-        let api_key = std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                Error::Provider(format!("nasdaq api key env {API_KEY_ENV} must be set"))
-            })?;
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "nasdaq")?;
 
         let endpoint = format!(
             "{}/datasets/{}/{}/data",
-            self.base_url.trim_end_matches('/'),
+            base_url.trim_end_matches('/'),
             query.database,
             query.dataset,
         );
@@ -134,32 +113,10 @@ impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
             query_params.push(("end_date", end.clone()));
         }
 
-        let client = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| Error::Provider(format!("nasdaq client: {error}")))?;
-        let response = client
-            .get(&endpoint)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|error| Error::Provider(format!("nasdaq extract_data: {error}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Provider(format!(
-                "nasdaq extract_data returned {status}: {body}"
-            )));
-        }
-        response
-            .bytes()
-            .await
-            .map_err(|error| Error::Provider(format!("nasdaq read body: {error}")))
+        Ok(client.get(&endpoint).query(&query_params))
     }
 
-    fn transform_data(&self, query: &NasdaqDatasetQuery, raw: Bytes) -> Result<Vec<NasdaqDataRow>> {
+    fn transform_data(query: &NasdaqDatasetQuery, raw: Bytes) -> Result<Vec<NasdaqDataRow>> {
         let envelope: NasdaqEnvelope = serde_json::from_slice(&raw)
             .map_err(|error| Error::Provider(format!("nasdaq parse_json: {error}")))?;
 
@@ -187,3 +144,6 @@ impl Fetcher<NasdaqDatasetQuery, NasdaqDataRow> for NasdaqHttpDatasetFetcher {
         Ok(rows)
     }
 }
+
+/// Production NASDAQ Data Link dataset fetcher.
+pub type NasdaqHttpDatasetFetcher = HttpFetcher<NasdaqDatasetSpec>;

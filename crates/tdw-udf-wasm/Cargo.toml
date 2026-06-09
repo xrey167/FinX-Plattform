@@ -5,6 +5,13 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = []
 ## Enables the real `wasmi`-backed UDF runtime (`execute_wasm_i64`) with fuel
@@ -17,6 +24,19 @@ wasmi = { workspace = true, optional = true }
 
 [dev-dependencies]
 wat = "1"
+
+# Unique example binary names (the workspace builds examples into one shared
+# target dir, where a bare `basic` would collide across crates). The fixture
+# example compiles on default features; the real wasmi round-trip is gated via
+# required-features and skipped unless the feature is enabled.
+[[example]]
+name = "tdw_udf_wasm_basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "tdw_udf_wasm_wasmi_roundtrip"
+path = "examples/wasmi_roundtrip.rs"
+required-features = ["wasmi"]
 
 [lints]
 workspace = true

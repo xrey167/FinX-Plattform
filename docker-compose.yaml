@@ -82,15 +82,15 @@ services:
       - |
         set -eu
         attempt=1
-        while [ "$attempt" -le 30 ]; do
+        while [ "$$attempt" -le 30 ]; do
           if mc alias set local http://minio:9000 minio minio123; then
             break
           fi
-          if [ "$attempt" -eq 30 ]; then
+          if [ "$$attempt" -eq 30 ]; then
             echo "minio-init: minio did not become reachable" >&2
             exit 1
           fi
-          attempt=$((attempt + 1))
+          attempt=$$((attempt + 1))
           sleep 2
         done
         mc mb --ignore-existing local/tdw-default
@@ -147,8 +147,22 @@ services:
       TDW_PROFILE: docker
       TDW_WORKER_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
       TDW_WORKER_ID: tdw-worker-live
+      TDW_WORKER_DISPATCH: daemon
+      TDW_WORKER_DAEMON_ADDR: tdw-service-daemon:7878
+      TDW_WORKER_DAEMON_TIMEOUT_MS: "5000"
       # Drive up to 4 leased jobs in parallel within the serve task.
       TDW_WORKER_CONCURRENCY: "4"
+      # Operability surface (/health, /ready, /metrics). Off unless bound; the
+      # healthcheck below probes /health.
+      TDW_WORKER_HTTP_BIND: 0.0.0.0:9101
+    healthcheck:
+      # Liveness: the process is serving once /health answers 200. Readiness
+      # (/ready) gates on Postgres reachability; liveness is the supervisor probe.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9101/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   tdw-service-daemon:
@@ -157,16 +171,21 @@ services:
     # to the host: the daemon transport is unauthenticated + plaintext, so it
     # stays internal-only. (To reach it from the host for debugging, attach to
     # the compose network or add a temporary `ports:` override locally.)
-    # Built with --features daemon-postgres so the daemon's own session/rollout
-    # stores are Postgres-backed (durable across restarts), selected at runtime
-    # via TDW_DAEMON_PG_URL. Distinct image tag from the `full`-profile
-    # tdw-service (which builds without features).
+    # Built with --features real-engines so the daemon wires the REAL production
+    # engines (Postgres relational, ClickHouse OLAP, Qdrant vector, Meilisearch
+    # lexical, S3/MinIO blob) AND Postgres-backs its own session/rollout stores
+    # (durable across restarts). Engine selection is driven at runtime by
+    # TDW_PROFILE=live (fail-closed at startup if a required TDW_* connection env
+    # is missing). Distinct image tag from the `full`-profile tdw-service (which
+    # builds without features). udf-wasm enables the real wasmi UDF runtime for
+    # `udf.run` ToolCalls (per-request WasmLimits); without it the deterministic
+    # fixture runtime is used.
     image: finx-plattform/tdw-service:local-pg
     build:
       context: .
       dockerfile: docker/tdw-service.Dockerfile
       args:
-        FEATURES: daemon-postgres
+        FEATURES: real-engines,udf-wasm
     profiles: ["live"]
     depends_on:
       postgres:
@@ -174,10 +193,27 @@ services:
       tdw-bootstrap:
         condition: service_completed_successfully
     environment:
-      TDW_PROFILE: docker
+      # `live` selects the real engines (see TDW_* connection envs below). The
+      # daemon fails closed at startup if any required engine env is missing.
+      TDW_PROFILE: live
       TDW_DAEMON_TCP_BIND: 0.0.0.0:7878
+      # Operability surface (/health, /ready, /metrics) on a separate HTTP
+      # listener. Off unless bound; the healthcheck below probes /health.
+      TDW_DAEMON_HTTP_BIND: 0.0.0.0:9102
       # Postgres-back the daemon's session + rollout stores in live.
       TDW_DAEMON_PG_URL: postgres://tdw:tdw@postgres:5432/tdw
+      # Real-engine connection envs (same backends the bootstrap provisions).
+      TDW_POSTGRES_URL: postgres://tdw:tdw@postgres:5432/tdw
+      TDW_CLICKHOUSE_URL: http://clickhouse:8123
+      TDW_CLICKHOUSE_USER: tdw
+      TDW_CLICKHOUSE_PASSWORD: tdw
+      TDW_QDRANT_URL: http://qdrant:6333
+      TDW_MEILI_URL: http://meilisearch:7700
+      TDW_S3_ENDPOINT: http://minio:9000
+      TDW_S3_BUCKET: tdw-default
+      TDW_S3_ACCESS_KEY: minio
+      TDW_S3_SECRET_KEY: minio123
+      TDW_S3_REGION: us-east-1
       # Production OIDC ingress auth. Read ONLY when TDW_PROFILE is prod|production
       # (this stack runs `docker`, so they are inert here and left commented).
       # Set all five required vars to attach an auth-backed policy; otherwise the
@@ -190,6 +226,14 @@ services:
       # TDW_OIDC_SUBJECT: svc:prod
       # TDW_OIDC_KID: key1
       # TDW_OIDC_ROLES: analyst,udf_runner
+    healthcheck:
+      # Liveness: daemon serving once /health answers 200. /ready additionally
+      # gates on the durable stores being reachable.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9102/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   tdw-mcp-serve:
@@ -202,6 +246,9 @@ services:
     profiles: ["live"]
     command: ["--streamable-http", "0.0.0.0:8788"]
     depends_on:
+      # The MCP ops /ready probe checks daemon reachability; do not make
+      # `docker compose up -d` fail on a transient daemon health race before
+      # the workflow's explicit MCP wait loop can run.
       tdw-service-daemon:
         condition: service_started
     environment:
@@ -212,8 +259,19 @@ services:
       # docs/release/mcp-remote-deployment.md for any non-local exposure.
       TDW_MCP_HTTP_TOKEN: ${TDW_MCP_HTTP_TOKEN:?set TDW_MCP_HTTP_TOKEN (e.g. in .env) before exposing tdw-mcp-serve}
       TDW_MCP_DAEMON_ADDR: tdw-service-daemon:7878
+      # Operability surface (/health, /ready, /metrics) on a separate, token-free
+      # internal listener. /ready probes daemon reachability. Not host-published.
+      TDW_MCP_OPS_BIND: 0.0.0.0:9103
     ports:
       - "8788:8788"
+    healthcheck:
+      # Liveness on the ops listener (the /mcp surface itself requires a bearer
+      # token, so probe the token-free ops /health instead).
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9103/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   tdw-service:

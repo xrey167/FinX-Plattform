@@ -274,9 +274,10 @@ impl MemoryStore {
     }
 }
 
-/// Apply consolidation to the store at the injected `now` (RFC 3339): build
-/// `(memory, age_days)` pairs, call the pure [`consolidation_plan`] planner, then
-/// apply each action — `Promote` rewrites the memory's tier + `last_consolidated`
+/// Apply consolidation to the store at the injected `now` (RFC 3339).
+///
+/// Builds `(memory, age_days)` pairs, calls the pure [`consolidation_plan`] planner, then
+/// applies each action — `Promote` rewrites the memory's tier + `last_consolidated`
 /// (and persists), `Expire` removes the memory. Returns the applied actions.
 ///
 /// `now` is a parameter so the apply step is deterministic and unit-testable
@@ -320,10 +321,10 @@ pub fn consolidate_at(
     Ok(actions)
 }
 
-/// Spawn the periodic consolidation scheduler — the running counterpart to the
-/// pure [`consolidate_at`] step. Mirrors `tdw_app_server::spawn_inmemory_relay`:
-/// each tick it reads the wall clock once, locks the store, and consolidates;
-/// shutdown is cooperative via the [`CancellationToken`].
+/// Spawn the periodic consolidation scheduler — the running counterpart to [`consolidate_at`].
+///
+/// Mirrors `tdw_app_server::spawn_inmemory_relay`: each tick it reads the wall clock once,
+/// locks the store, and consolidates; shutdown is cooperative via the [`CancellationToken`].
 ///
 /// This is the **only** place the real clock is read; the apply step stays
 /// deterministic. A consolidation error on a tick is logged and the loop

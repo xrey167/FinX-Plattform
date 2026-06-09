@@ -1,0 +1,42 @@
+[package]
+name = "tdw-functions-app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Application function definitions (welcome, re-engagement) for the FinX function runtime."
+
+# `smtp` enables the `TransactionalWelcomeMailer` — wraps
+# `tdw_email::TransactionalMailer`. The default build has zero I/O deps so the
+# offline/test workspace builds the welcome function against a mock mailer only.
+[features]
+default = []
+smtp = ["tdw-email/smtp", "dep:tokio"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+tdw-functions = { path = "../tdw-functions" }
+tdw-email = { path = "../tdw-email" }
+tdw-identity = { path = "../tdw-identity" }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serde_json = { workspace = true }
+# End-to-end composition test (`tests/welcome_flow.rs`) only. These are
+# dev-dependencies so they never widen the production dependency graph of this
+# crate. `tdw-service-api/identity` provides the `RegisterUser` dispatcher arm
+# (emits the `user.created` event onto the in-memory outbox); `tdw-functions`
+# with `worker` exposes the `EventRouter` so the test can assert the
+# `user.created → welcome` routing contract; `tdw-identity` is the in-memory
+# user store the registration writes to.
+tdw-service-api = { path = "../tdw-service-api", features = ["identity"] }
+tdw-functions = { path = "../tdw-functions", features = ["worker"] }
+tdw-protocol = { workspace = true }
+
+[lints]
+workspace = true

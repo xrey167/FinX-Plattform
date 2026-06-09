@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::collections::BTreeMap;
 
 pub const CRATE_NAME: &str = "tdw-ml-registry";

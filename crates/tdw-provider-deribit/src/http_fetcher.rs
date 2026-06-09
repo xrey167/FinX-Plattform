@@ -5,12 +5,8 @@
 //! via `reqwest`. No API key is required for public endpoints. Live calls are
 //! additionally gated by `TDW_DERIBIT_LIVE=1` so unattended CI stays offline.
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use reqwest::Client;
 use serde::Deserialize;
-use serde_json::Value;
-use tdw_core::{Credentials, Error, Fetcher, RegistryEntry, Result};
+use tdw_core::http_support::prelude::*;
 
 use crate::{
     BASE_URL, DeribitFundingQuery, DeribitFundingRecord, DeribitGreeks, DeribitInstrument,
@@ -70,33 +66,11 @@ struct RawFundingRecord {
 // Instruments fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Deribit instruments fetcher for `/public/get_instruments`.
-#[derive(Clone, Debug)]
-pub struct DeribitHttpInstrumentsFetcher {
-    base_url: String,
-}
-
-impl Default for DeribitHttpInstrumentsFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DeribitHttpInstrumentsFetcher {
-    /// Override the Deribit base URL (useful for testing against a local mock).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `deribit` / `instruments` slot.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Deribit instruments fetcher for `/public/get_instruments`.
+    pub DeribitHttpInstrumentsFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<DeribitInstrumentsQuery, DeribitInstrument> for DeribitHttpInstrumentsFetcher {
@@ -124,7 +98,7 @@ impl Fetcher<DeribitInstrumentsQuery, DeribitInstrument> for DeribitHttpInstrume
     ) -> Result<Bytes> {
         let path = instruments_request_path(&query.currency, &query.kind)
             .map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -182,33 +156,11 @@ impl Fetcher<DeribitInstrumentsQuery, DeribitInstrument> for DeribitHttpInstrume
 // Order book fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Deribit order-book fetcher for `/public/get_order_book`.
-#[derive(Clone, Debug)]
-pub struct DeribitHttpOrderBookFetcher {
-    base_url: String,
-}
-
-impl Default for DeribitHttpOrderBookFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DeribitHttpOrderBookFetcher {
-    /// Override the Deribit base URL (useful for testing against a local mock).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `deribit` / `order_book` slot.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Deribit order-book fetcher for `/public/get_order_book`.
+    pub DeribitHttpOrderBookFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<DeribitOrderBookQuery, DeribitOrderBook> for DeribitHttpOrderBookFetcher {
@@ -238,7 +190,7 @@ impl Fetcher<DeribitOrderBookQuery, DeribitOrderBook> for DeribitHttpOrderBookFe
     ) -> Result<Bytes> {
         let path = order_book_request_path(&query.instrument_name, query.depth)
             .map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -298,34 +250,12 @@ impl Fetcher<DeribitOrderBookQuery, DeribitOrderBook> for DeribitHttpOrderBookFe
 // Funding rate history fetcher
 // ---------------------------------------------------------------------------
 
-/// Production Deribit funding-rate-history fetcher for
-/// `/public/get_funding_rate_history`.
-#[derive(Clone, Debug)]
-pub struct DeribitHttpFundingFetcher {
-    base_url: String,
-}
-
-impl Default for DeribitHttpFundingFetcher {
-    fn default() -> Self {
-        Self {
-            base_url: BASE_URL.to_string(),
-        }
-    }
-}
-
-impl DeribitHttpFundingFetcher {
-    /// Override the Deribit base URL (useful for testing against a local mock).
-    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
-        self
-    }
-
-    /// Registry entry for the canonical `deribit` / `funding_rate` slot.
-    #[must_use]
-    pub fn registry_entry() -> RegistryEntry {
-        RegistryEntry::fetcher(Self::PROVIDER, Self::ENDPOINT)
-    }
-}
+tdw_core::provider_fetcher_struct!(
+    /// Production Deribit funding-rate-history fetcher for
+    /// `/public/get_funding_rate_history`.
+    pub DeribitHttpFundingFetcher,
+    BASE_URL
+);
 
 #[async_trait]
 impl Fetcher<DeribitFundingQuery, DeribitFundingRecord> for DeribitHttpFundingFetcher {
@@ -368,7 +298,7 @@ impl Fetcher<DeribitFundingQuery, DeribitFundingRecord> for DeribitHttpFundingFe
             query.count,
         )
         .map_err(|e| Error::Provider(e.to_string()))?;
-        let url = format!("{}{path}", self.base_url.trim_end_matches('/'));
+        let url = format!("{}{path}", self.base_url().trim_end_matches('/'));
 
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))

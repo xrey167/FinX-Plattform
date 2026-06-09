@@ -1,0 +1,236 @@
+name: Live Stack
+
+# Heavy end-to-end Docker Compose verification of the `live` and `tools`
+# profiles. This is intentionally NOT a required PR gate (it builds several
+# images and boots the full backend+daemon+worker+mcp topology); it runs on
+# pushes to main, on a nightly schedule, and on manual dispatch. Failures are
+# real (no `continue-on-error`), but the job is not wired into branch
+# protection, so it never blocks merging a PR.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  live-stack:
+    name: Live profile (daemon + worker + mcp round-trip)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The non-loopback MCP bind in the `live` profile requires a token. A real
+      # operator sets a strong value via `.env`; CI uses an ephemeral one that is
+      # also presented on the smoke request below.
+      TDW_MCP_HTTP_TOKEN: ci-live-stack-smoke-token
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Validate live compose model
+        run: docker compose --profile live config >/dev/null && echo "compose model OK"
+
+      - name: Pull live profile base images
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 4); do
+            if docker compose --profile live pull --ignore-buildable; then
+              exit 0
+            fi
+            echo "compose pull failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile live pull --ignore-buildable
+
+      - name: Bring up the live stack
+        run: docker compose --profile live up --build -d
+
+      - name: Show service status
+        if: always()
+        run: docker compose --profile live ps
+
+      - name: Wait for bootstrap to complete
+        run: |
+          set -euo pipefail
+          cid="$(docker compose --profile live ps -aq tdw-bootstrap)"
+          if [ -z "$cid" ]; then
+            echo "tdw-bootstrap container not found"
+            exit 1
+          fi
+          for i in $(seq 1 60); do
+            status="$(docker inspect -f '{{.State.Status}}' "$cid")"
+            if [ "$status" = "exited" ]; then
+              code="$(docker inspect -f '{{.State.ExitCode}}' "$cid")"
+              if [ "$code" = "0" ]; then
+                echo "tdw-bootstrap completed successfully"
+                exit 0
+              fi
+              echo "tdw-bootstrap exited non-zero: $code"
+              docker compose --profile live logs tdw-bootstrap
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "tdw-bootstrap did not complete in time"
+          docker compose --profile live logs tdw-bootstrap
+          exit 1
+
+      - name: Daemon readiness probe
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if docker compose --profile live exec -T tdw-service-daemon curl -fsS http://127.0.0.1:9102/ready; then
+              echo "daemon readiness probe passed"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "daemon readiness probe did not pass"
+          docker compose --profile live logs tdw-service-daemon
+          exit 1
+
+      - name: Worker leases against the Postgres backend
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if docker compose --profile live logs tdw-worker-serve 2>&1 | grep -qiE "serving.*backend=postgres"; then
+              echo "worker is serving against the postgres backend"
+              break
+            fi
+            sleep 3
+          done
+          docker compose --profile live exec -T tdw-worker-serve printenv TDW_WORKER_CONCURRENCY
+          docker compose --profile live logs tdw-worker-serve 2>&1 | grep -qiE "serving.*backend=postgres"
+
+      - name: Daemon dispatch round-trip (Postgres session + rollout stores fill, #112)
+        run: |
+          set -euo pipefail
+          PSQL="docker compose --profile live exec -T postgres psql -U tdw -d tdw -tA -c"
+          job_id="ci-live-dispatch-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          envelope='{
+            "op_id": "019f0000-0000-7000-8000-000000000001",
+            "session_id": "session-live-stack",
+            "sequence": 1,
+            "submitted_by": {
+              "actor_id": "ci-live-stack",
+              "kind": "Worker",
+              "tenant_id": "default"
+            },
+            "op": {
+              "type": "run_query",
+              "sql": "select 1",
+              "plan_id": null,
+              "cost_hint": null
+            }
+          }'
+          docker compose --profile live exec -T postgres psql -U tdw -d tdw <<SQL
+          insert into system.worker_jobs (
+            job_id, queue, envelope_json, max_attempts, not_before_ms, priority,
+            status, attempts, created_at_ms, updated_at_ms
+          )
+          values (
+            '${job_id}', 'default', \$json\$${envelope}\$json\$::jsonb, 3, 0, 10,
+            'Pending', 0,
+            (extract(epoch from clock_timestamp()) * 1000)::bigint,
+            (extract(epoch from clock_timestamp()) * 1000)::bigint
+          )
+          on conflict(job_id) do nothing;
+          SQL
+          # The live worker now has a deliberate queued job to lease and dispatch
+          # to the daemon. The daemon persists session + rollout state to
+          # Postgres, proving the worker -> daemon -> PG round-trip.
+          for i in $(seq 1 40); do
+            status="$($PSQL "SELECT status FROM system.worker_jobs WHERE job_id = '${job_id}'" 2>/dev/null || echo "")"
+            rows="$($PSQL "SELECT count(*) FROM tdw_rollout;" 2>/dev/null || echo "")"
+            if [ "$status" = "Completed" ] && [ -n "$rows" ] && [ "$rows" -gt 0 ] 2>/dev/null; then
+              echo "worker job ${job_id} completed; tdw_rollout has $rows rows after dispatch round-trip"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "worker job ${job_id} did not complete with rollout rows"
+          $PSQL "SELECT job_id, status, attempts, last_error FROM system.worker_jobs WHERE job_id = '${job_id}'"
+          docker compose --profile live logs tdw-service-daemon
+          docker compose --profile live logs tdw-worker-serve
+          exit 1
+
+      - name: MCP Streamable HTTP tool call round-trip
+        run: |
+          set -euo pipefail
+          base="http://127.0.0.1:8788/mcp"
+          auth="Authorization: Bearer ${TDW_MCP_HTTP_TOKEN}"
+          proto="MCP-Protocol-Version: 2025-06-18"
+          # Wait for the MCP server to accept connections.
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base" \
+              -H "$auth" -H "$proto" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}' || true)"
+            if [ "$code" = "200" ]; then
+              break
+            fi
+            sleep 3
+          done
+          # initialize must succeed.
+          init="$(curl -sf -X POST "$base" \
+            -H "$auth" -H "$proto" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}')"
+          echo "initialize: $init"
+          echo "$init" | grep -q '"result"'
+          # tools/list must return the catalog (built-in + daemon-backed tools).
+          tools="$(curl -sf -X POST "$base" \
+            -H "$auth" -H "$proto" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')"
+          echo "tools/list: $tools"
+          echo "$tools" | grep -q '"tools"'
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose --profile live logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose --profile live down -v
+
+  tools-smoke:
+    name: Tools profile (tdw-cli + tdw-mcp streamable-http smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # `docker compose config` interpolates every service regardless of
+      # --profile; the `live`-profile tdw-mcp-serve requires TDW_MCP_HTTP_TOKEN
+      # (no default). This job never starts that service, so an ephemeral value
+      # just satisfies interpolation.
+      TDW_MCP_HTTP_TOKEN: ci-compose-interpolation-only
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Validate tools compose model
+        run: docker compose --profile tools config >/dev/null && echo "compose model OK"
+
+      - name: tdw-cli one-shot smoke against the tools profile
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 3); do
+            if docker compose --profile tools run --rm --build tdw-cli --smoke AAPL; then
+              exit 0
+            fi
+            echo "tdw-cli tools smoke failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile tools run --rm --build tdw-cli --smoke AAPL
+
+      - name: tdw-mcp Streamable HTTP smoke
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 3); do
+            if docker compose --profile tools run --rm --build tdw-mcp --streamable-http-smoke; then
+              exit 0
+            fi
+            echo "tdw-mcp tools smoke failed on attempt $i; retrying after registry backoff"
+            sleep $((i * 20))
+          done
+          docker compose --profile tools run --rm --build tdw-mcp --streamable-http-smoke

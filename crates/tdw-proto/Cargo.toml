@@ -7,11 +7,22 @@ authors.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [dependencies]
 # Runtime only: derives (`::prost::Message`/`Oneof`/`Enumeration`) and encoding
 # for the vendored bindings in `src/finance.gen.rs`. No build-time `prost-build`
 # or system `protoc` — the generated code is committed.
 prost = { workspace = true }
+
+[[example]]
+name = "tdw_proto_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

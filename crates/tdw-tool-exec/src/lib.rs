@@ -13,20 +13,34 @@
 //! (later phases): `Http`/`Mcp` are honestly deferred because a fresh backend has neither
 //! credential wiring nor server resolution, so they cannot run yet.
 
+#![deny(clippy::pedantic, clippy::nursery)]
+pub mod loop_guard;
+
+use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub use loop_guard::{GuardDecision, LoopGuard, LoopGuardBuilder};
 use serde_json::Value;
-use tdw_agent::{EntityKind, Registry, Tool, ToolImplementation, entity_from_resource};
+use tdw_agent::{EntityKind, Registry, Tool, ToolEffect, ToolImplementation, entity_from_resource};
 use tdw_tools::{RegisteredTool, ToolDefinition, ToolHandler, ToolRegistry};
 use thiserror::Error;
+
+mod receipt;
+pub use receipt::{ChainBreak, ChainStatus, GENESIS_PREV_HASH, ReceiptLog, ToolReceipt};
 
 /// Env var holding the comma-separated allow-list of bare command names permitted for
 /// `Command` execution. Unset/empty means *deny all* command execution.
 const ALLOWED_COMMANDS_ENV: &str = "TDW_TOOL_EXEC_ALLOWED_COMMANDS";
+/// Env var selecting the [`AutonomyLevel`] (`full` | `supervised` | `readonly`). Unset or
+/// unparsable means [`AutonomyLevel::Full`] (today's behavior: every effect is allowed).
+const AUTONOMY_ENV: &str = "TDW_TOOL_EXEC_AUTONOMY";
 /// Env var overriding the command execution timeout, in whole seconds.
 const TIMEOUT_SECS_ENV: &str = "TDW_TOOL_EXEC_TIMEOUT_SECS";
+/// Env var toggling opt-in argument validation against the tool's `input_schema`.
+/// `"1"`/`"true"`/`"on"`/`"yes"` => validate; anything else (incl. unset) => off.
+const VALIDATE_ARGS_ENV: &str = "TDW_TOOL_EXEC_VALIDATE_ARGS";
 /// Default command execution timeout when [`TIMEOUT_SECS_ENV`] is unset/unparsable.
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// Default cap on captured stdout/stderr (16 MiB each). Bounds memory so a
@@ -64,6 +78,208 @@ pub enum ExecError {
     /// The tool resource could not be re-typed, or arguments were malformed.
     #[error("bad arguments: {0}")]
     BadArguments(String),
+    /// The tool's declared [`ToolEffect`] risk exceeds what the configured [`AutonomyLevel`]
+    /// permits, so execution was refused *before dispatch*. This is a visible, recoverable
+    /// observation (the agent loop can surface it and choose to escalate autonomy), not a
+    /// silent failure.
+    #[error("tool {tool} blocked: effect {effect} exceeds autonomy level {level}")]
+    Blocked {
+        /// The registry tool name that was refused.
+        tool: String,
+        /// The tool's declared effect (`read-only` | `write-safe` | `destructive`).
+        effect: &'static str,
+        /// The active autonomy level (`full` | `supervised` | `read-only`).
+        level: &'static str,
+    },
+    /// The request arguments did not satisfy the tool's declared `input_schema`. Surfaced
+    /// before dispatch; a visible, recoverable validation observation, never a panic. The MCP
+    /// layer can map this to an invalid-params (`-32602`) style code.
+    #[error("invalid arguments for tool {tool}: {reason}")]
+    InvalidArguments {
+        /// The name of the tool whose arguments failed validation.
+        tool: String,
+        /// A human-readable description of the first constraint that failed.
+        reason: String,
+    },
+}
+
+/// How much of a tool's declared [`ToolEffect`] risk the executor is permitted to run before
+/// dispatch, mirroring readonly/supervised/full autonomy tiers.
+///
+/// The default is [`AutonomyLevel::Full`], which allows every effect — so an executor that does
+/// not opt in behaves exactly as it did before this gate existed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutonomyLevel {
+    /// Allow every effect (`ReadOnly`, `WriteSafe`, `Destructive`). Behavior-preserving default.
+    #[default]
+    Full,
+    /// Allow `ReadOnly` and `WriteSafe`; refuse `Destructive`.
+    Supervised,
+    /// Allow only `ReadOnly`; refuse `WriteSafe` and `Destructive`.
+    ReadOnly,
+}
+
+impl AutonomyLevel {
+    /// Stable lowercase label for this level, used in [`ExecError::Blocked`] and logging.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Supervised => "supervised",
+            Self::ReadOnly => "read-only",
+        }
+    }
+
+    /// Resolve the level from the `TDW_TOOL_EXEC_AUTONOMY` environment variable.
+    ///
+    /// Accepts `full`, `supervised`, or `readonly`/`read-only` (case-insensitive). Any unset,
+    /// empty, or unrecognized value falls back to [`AutonomyLevel::Full`], preserving today's
+    /// behavior unless an operator explicitly opts in.
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var(AUTONOMY_ENV)
+            .ok()
+            .map_or(Self::Full, |raw| Self::parse(&raw))
+    }
+
+    /// Parse a textual level, defaulting to [`AutonomyLevel::Full`] for unrecognized input.
+    ///
+    /// Factored out of [`AutonomyLevel::from_env`] so the mapping can be tested without
+    /// mutating process-global environment variables.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "supervised" => Self::Supervised,
+            "readonly" | "read-only" => Self::ReadOnly,
+            // "full" and anything unrecognized => behavior-preserving default.
+            _ => Self::Full,
+        }
+    }
+
+    /// Decide whether a tool with the given declared `effect` may run at this level.
+    ///
+    /// `ReadOnly` permits only `ToolEffect::ReadOnly`; `Supervised` additionally permits
+    /// `WriteSafe`; `Full` permits everything.
+    const fn permits(self, effect: ToolEffect) -> bool {
+        match self {
+            Self::Full => true,
+            Self::Supervised => !matches!(effect, ToolEffect::Destructive),
+            Self::ReadOnly => matches!(effect, ToolEffect::ReadOnly),
+        }
+    }
+}
+
+/// Stable lowercase label for a [`ToolEffect`], used in [`ExecError::Blocked`].
+const fn effect_label(effect: ToolEffect) -> &'static str {
+    match effect {
+        ToolEffect::ReadOnly => "read-only",
+        ToolEffect::WriteSafe => "write-safe",
+        ToolEffect::Destructive => "destructive",
+    }
+}
+
+/// Exact `Backend` message produced on a command timeout (literal at the timeout site in
+/// [`dispatch_command`]). Matched verbatim so only this specific `Backend` failure is treated
+/// as recoverable.
+const TIMEOUT_BACKEND_MSG: &str = "command timed out";
+
+impl ExecError {
+    /// Whether the agent could plausibly recover by adjusting its request and retrying.
+    #[must_use]
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            Self::BadArguments(_)
+            | Self::InvalidArguments { .. }
+            | Self::ToolNotFound(_)
+            | Self::HandlerNotFound(_) => true,
+            Self::Unbound
+            | Self::NotPermitted(_)
+            | Self::NotYetSupported(_)
+            | Self::Blocked { .. } => false,
+            // Temporary heuristic pending an `ExecError::Timeout` variant: only the exact
+            // timeout message is recoverable; all other backend failures stay non-recoverable.
+            Self::Backend(message) => message == TIMEOUT_BACKEND_MSG,
+        }
+    }
+
+    /// Stable machine tag for this variant, independent of its [`Display`](std::fmt::Display)
+    /// text.
+    #[must_use]
+    fn reason_tag(&self) -> &'static str {
+        match self {
+            Self::Unbound => "unbound",
+            Self::ToolNotFound(_) => "tool_not_found",
+            Self::HandlerNotFound(_) => "handler_not_found",
+            Self::NotPermitted(_) => "not_permitted",
+            Self::NotYetSupported(_) => "not_yet_supported",
+            Self::Backend(message) if message == TIMEOUT_BACKEND_MSG => "backend_timeout",
+            Self::Backend(_) => "backend",
+            Self::BadArguments(_) => "bad_arguments",
+            Self::Blocked { .. } => "blocked",
+            Self::InvalidArguments { .. } => "invalid_arguments",
+        }
+    }
+
+    /// Short stable hint describing how the agent might respond to this variant.
+    #[must_use]
+    fn variant_hint(&self) -> &'static str {
+        match self {
+            Self::Unbound => "tool is listed but not runnable; choose another tool",
+            Self::ToolNotFound(_) => "no such tool; check the tool name",
+            Self::HandlerNotFound(_) => "builtin handler is not registered; check the name",
+            Self::NotPermitted(_) => "blocked by policy; do not retry",
+            Self::NotYetSupported(_) => "this implementation variant is not available yet",
+            Self::Backend(message) if message == TIMEOUT_BACKEND_MSG => {
+                "the command timed out; retry may succeed"
+            }
+            Self::Backend(_) => "backend failure; do not blindly retry",
+            Self::BadArguments(_) | Self::InvalidArguments { .. } => "fix the arguments and retry",
+            Self::Blocked { .. } => "blocked by autonomy policy; do not retry without escalation",
+        }
+    }
+
+    /// Render this error as a model-visible tool-result observation.
+    ///
+    /// Shape: `{tool, is_error: true, reason, detail, hint}`.
+    #[must_use]
+    pub fn to_observation(&self, tool: &str) -> Value {
+        serde_json::json!({
+            "tool": tool,
+            "is_error": true,
+            "reason": self.reason_tag(),
+            "detail": self.to_string(),
+            "hint": self.variant_hint(),
+        })
+    }
+}
+
+/// Per-tool failure counter that caps how many times a given tool may fail before the agent
+/// should stop retrying it. Pure and synchronous: no async, no I/O.
+#[derive(Clone, Debug, Default)]
+pub struct FailureBudget {
+    per_tool: BTreeMap<String, u32>,
+    cap: u32,
+}
+
+impl FailureBudget {
+    /// A new budget allowing up to `cap` failures per tool.
+    #[must_use]
+    pub const fn new(cap: u32) -> Self {
+        Self {
+            per_tool: BTreeMap::new(),
+            cap,
+        }
+    }
+
+    /// Record a failure for `tool`, returning whether the tool is still within budget.
+    pub fn record(&mut self, tool: &str) -> bool {
+        let count = self
+            .per_tool
+            .entry(tool.to_string())
+            .and_modify(|count| *count = count.saturating_add(1))
+            .or_insert(1);
+        *count <= self.cap
+    }
 }
 
 /// The structured result of a successful tool execution.
@@ -97,7 +313,7 @@ impl CommandPolicy {
     /// command names in `list`. The output cap defaults to [`DEFAULT_MAX_OUTPUT_BYTES`]
     /// (override with [`CommandPolicy::with_max_output_bytes`]).
     #[must_use]
-    pub fn new(allowed: Option<Vec<String>>, timeout: Duration) -> Self {
+    pub const fn new(allowed: Option<Vec<String>>, timeout: Duration) -> Self {
         Self {
             allowed,
             timeout,
@@ -164,14 +380,92 @@ impl Default for CommandPolicy {
     }
 }
 
+/// Opt-in toggle for validating request `args` against the resolved tool's declared
+/// `input_schema` *before* dispatch.
+///
+/// Default is [`SchemaValidation::Off`] (behavior-preserving): an executor that does not opt
+/// in dispatches exactly as before. The production default is [`SchemaValidation::from_env`],
+/// which reads `TDW_TOOL_EXEC_VALIDATE_ARGS`. Embedders may opt in explicitly via
+/// [`ToolExecutor::with_arg_validation`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SchemaValidation {
+    /// Do not validate args (behavior-preserving default).
+    #[default]
+    Off,
+    /// Validate args against `input_schema`; reject mismatches with
+    /// [`ExecError::InvalidArguments`].
+    On,
+}
+
+impl SchemaValidation {
+    /// Stable string form (`"off"` / `"on"`), for logging/diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+        }
+    }
+
+    /// Resolve from `TDW_TOOL_EXEC_VALIDATE_ARGS` (the production default).
+    ///
+    /// `"1"`/`"true"`/`"on"`/`"yes"` (case-insensitive) => [`Self::On`]; anything else,
+    /// including unset, => [`Self::Off`].
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var(VALIDATE_ARGS_ENV)
+            .ok()
+            .map_or(Self::Off, |raw| Self::parse(&raw))
+    }
+
+    /// Parse a raw string into a mode (factored out for env-free testing).
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "on" | "yes" => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
 /// Resolves a registry `tool`'s implementation binding and dispatches it to a backend.
 ///
 /// Holds an in-process [`ToolRegistry`] for `Builtin` handlers; `Command { background: false }`
 /// runs via a hardened direct [`std::process::Command`] governed by a [`CommandPolicy`].
-#[derive(Default)]
+///
+/// The [`AutonomyLevel`] gate (default [`AutonomyLevel::Full`]) is consulted before dispatch and
+/// refuses tools whose declared [`ToolEffect`] risk exceeds the level.
+///
+/// When [`SchemaValidation::On`] (via [`ToolExecutor::with_arg_validation`] or the
+/// `TDW_TOOL_EXEC_VALIDATE_ARGS` env default), request `args` are checked against the resolved
+/// tool's `input_schema` *before* dispatch; a mismatch returns
+/// [`ExecError::InvalidArguments`] rather than reaching the backend.
+///
+/// Optionally records an append-only, hash-chained [`ReceiptLog`] of successful
+/// executions (off by default; opt in via [`ToolExecutor::with_receipts`]). When
+/// recording is enabled the executor is **not** `Sync` and must not be shared across
+/// threads for concurrent `execute` (see [`ReceiptLog`]).
 pub struct ToolExecutor {
     builtins: ToolRegistry,
     command_policy: CommandPolicy,
+    autonomy: AutonomyLevel,
+    validate: SchemaValidation,
+    /// `None` = receipt recording disabled (default); `Some(log)` = recording.
+    receipts: Option<ReceiptLog>,
+}
+
+impl Default for ToolExecutor {
+    fn default() -> Self {
+        Self {
+            builtins: ToolRegistry::default(),
+            command_policy: CommandPolicy::default(),
+            // Production default: read the level from the environment (defaults to `Full`
+            // when unset), mirroring `CommandPolicy::from_env`.
+            autonomy: AutonomyLevel::from_env(),
+            validate: SchemaValidation::from_env(),
+            receipts: None,
+        }
+    }
 }
 
 impl ToolExecutor {
@@ -185,6 +479,47 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_command_policy(mut self, policy: CommandPolicy) -> Self {
         self.command_policy = policy;
+        self
+    }
+
+    /// Set the [`AutonomyLevel`] gate consulted before dispatch.
+    ///
+    /// Defaults to [`AutonomyLevel::Full`] (every effect allowed), so calling this is an
+    /// explicit opt-in to a stricter posture.
+    #[must_use]
+    pub const fn with_autonomy(mut self, level: AutonomyLevel) -> Self {
+        self.autonomy = level;
+        self
+    }
+
+    /// Enable the append-only, hash-chained [`ReceiptLog`].
+    ///
+    /// Off by default; calling this is an explicit opt-in. When not enabled there is
+    /// zero behavioral or performance change versus an executor without receipts.
+    ///
+    /// A receipts-enabled executor is **not** `Sync`: do not share it across threads
+    /// for concurrent `execute` (see [`ReceiptLog`]).
+    #[must_use]
+    pub fn with_receipts(mut self) -> Self {
+        self.receipts = Some(ReceiptLog::new());
+        self
+    }
+
+    /// Read-only access to the [`ReceiptLog`], or `None` if recording is disabled.
+    #[must_use]
+    pub const fn receipts(&self) -> Option<&ReceiptLog> {
+        self.receipts.as_ref()
+    }
+
+    /// Opt into (or out of) pre-dispatch argument validation against the tool's
+    /// `input_schema`.
+    ///
+    /// Defaults to the env-derived [`SchemaValidation::from_env`]; [`SchemaValidation::On`]
+    /// makes [`Self::execute`] reject argument/schema mismatches with
+    /// [`ExecError::InvalidArguments`] before any backend runs.
+    #[must_use]
+    pub const fn with_arg_validation(mut self, mode: SchemaValidation) -> Self {
+        self.validate = mode;
         self
     }
 
@@ -216,9 +551,13 @@ impl ToolExecutor {
     /// # Errors
     ///
     /// Returns [`ExecError::ToolNotFound`] if no `tool` named `name` is registered,
-    /// [`ExecError::Unbound`] for an unbound tool, [`ExecError::NotYetSupported`] for a
-    /// deferred variant, [`ExecError::NotPermitted`] for a command rejected by policy,
-    /// [`ExecError::BadArguments`] for a malformed tool resource or command, or
+    /// [`ExecError::Unbound`] for an unbound tool, [`ExecError::InvalidArguments`] when
+    /// argument validation is enabled (see [`Self::with_arg_validation`]) and `args` do not
+    /// satisfy the tool's `input_schema`, [`ExecError::NotYetSupported`] for a deferred
+    /// variant, [`ExecError::NotPermitted`] for a command rejected by policy,
+    /// [`ExecError::BadArguments`] for a malformed tool resource or command,
+    /// [`ExecError::Blocked`] when the tool's declared effect exceeds the configured
+    /// [`AutonomyLevel`], or
     /// [`ExecError::Backend`] for a process failure.
     pub fn execute(
         &self,
@@ -232,7 +571,27 @@ impl ToolExecutor {
         let tool: Tool = entity_from_resource(resource)
             .map_err(|error| ExecError::BadArguments(error.to_string()))?;
 
-        match tool.implementation {
+        // Risk gate: refuse before dispatch if the tool's declared effect exceeds the
+        // configured autonomy level. `Full` (the default) permits everything, so this is a
+        // no-op unless an embedder opted in.
+        if !self.autonomy.permits(tool.effect) {
+            return Err(ExecError::Blocked {
+                tool: name.to_string(),
+                effect: effect_label(tool.effect),
+                level: self.autonomy.as_str(),
+            });
+        }
+
+        if matches!(self.validate, SchemaValidation::On)
+            && let Err(reason) = validate_args(&tool.input_schema, args)
+        {
+            return Err(ExecError::InvalidArguments {
+                tool: name.to_string(),
+                reason,
+            });
+        }
+
+        let result = match tool.implementation {
             ToolImplementation::Unbound => Err(ExecError::Unbound),
             ToolImplementation::Builtin { handler } => self.dispatch_builtin(&handler, args),
             ToolImplementation::Command {
@@ -241,9 +600,10 @@ impl ToolExecutor {
                 background,
             } => {
                 if background {
-                    return Err(ExecError::NotYetSupported("background command (Phase 2)"));
+                    Err(ExecError::NotYetSupported("background command (Phase 2)"))
+                } else {
+                    dispatch_command(&self.command_policy, &command, &command_args)
                 }
-                dispatch_command(&self.command_policy, &command, &command_args)
             }
             ToolImplementation::Http { .. } => {
                 Err(ExecError::NotYetSupported("http (needs credential wiring)"))
@@ -256,7 +616,14 @@ impl ToolExecutor {
             ToolImplementation::Ref { .. } => {
                 Err(ExecError::NotYetSupported("ref resolution (Phase 4)"))
             }
+        };
+
+        // Record a receipt only on success and only when opted in. Errors are not
+        // receipts: the chain tracks completed effects, not rejected attempts.
+        if let (Ok(outcome), Some(log)) = (&result, &self.receipts) {
+            log.append(name, args, outcome);
         }
+        result
     }
 
     fn dispatch_builtin(&self, handler: &str, args: &Value) -> Result<ToolOutcome, ExecError> {
@@ -268,6 +635,131 @@ impl ToolExecutor {
             .call(args.clone())
             .map_err(|error| ExecError::Backend(error.to_string()))?;
         Ok(ToolOutcome { structured })
+    }
+}
+
+/// Validate `args` against a JSON-Schema-ish `schema`. Supports a pragmatic subset:
+/// root/object `type`, `required: [..]`, and per-property `type` from `properties`.
+/// Unknown keywords and absent constraints are ignored (lenient by design). Never panics.
+fn validate_args(schema: &Value, args: &Value) -> Result<(), String> {
+    // If schema is not an object (e.g. `true`/null/missing), accept (nothing to check).
+    let Some(schema_obj) = schema.as_object() else {
+        return Ok(());
+    };
+    // Root `type` check (default "object" per Tool contract: root must be an object).
+    let root_type = schema_obj.get("type");
+    check_type_spec(root_type, "object", args).map_err(|message| format!("root: {message}"))?;
+    // Only object arguments have required/properties semantics. Compound schemas like
+    // `["object", "null"]` are accepted for null and validated for objects.
+    if type_spec_includes(root_type, "object", true) && args.is_object() {
+        let obj = args
+            .as_object()
+            .ok_or_else(|| "expected object arguments".to_string())?;
+        // Required fields present (and non-null).
+        if let Some(req) = schema_obj.get("required").and_then(Value::as_array) {
+            for field in req.iter().filter_map(Value::as_str) {
+                match obj.get(field) {
+                    None | Some(Value::Null) => {
+                        return Err(format!("missing required field: {field}"));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        // Per-property type checks for present keys only (extra keys allowed: open-world).
+        if let Some(props) = schema_obj.get("properties").and_then(Value::as_object) {
+            for (key, pschema) in props {
+                if let Some(actual) = obj.get(key)
+                    && let Some(expected) = pschema.as_object().and_then(|p| p.get("type"))
+                {
+                    check_type_spec(Some(expected), "object", actual)
+                        .map_err(|message| format!("field {key}: {message}"))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_type_spec(
+    expected: Option<&Value>,
+    default_type: &'static str,
+    value: &Value,
+) -> Result<(), String> {
+    match expected {
+        None => check_type(default_type, value),
+        Some(Value::String(expected)) => check_type(expected, value),
+        Some(Value::Array(types)) => {
+            let names = types.iter().filter_map(Value::as_str);
+            if names
+                .clone()
+                .any(|expected| check_type(expected, value).is_ok())
+            {
+                Ok(())
+            } else if let Some(first) = names.into_iter().next() {
+                check_type(first, value)
+            } else {
+                Ok(())
+            }
+        }
+        // Unknown/compound forms are accepted leniently.
+        Some(_) => Ok(()),
+    }
+}
+
+fn type_spec_includes(
+    expected: Option<&Value>,
+    needle: &'static str,
+    default_when_absent: bool,
+) -> bool {
+    match expected {
+        None => default_when_absent,
+        Some(Value::String(expected)) => expected == needle,
+        Some(Value::Array(types)) => types.iter().filter_map(Value::as_str).any(|t| t == needle),
+        Some(_) => false,
+    }
+}
+
+/// Single-keyword type predicate over the JSON-Schema primitive type names.
+/// `integer` => JSON number that is i64/u64 (no fractional part). `number` => any JSON number.
+/// Unknown type names are accepted (lenient). Never panics.
+fn check_type(expected: &str, value: &Value) -> Result<(), String> {
+    let ok = match expected {
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => {
+            value.is_i64()
+                || value.is_u64()
+                || value
+                    .as_f64()
+                    .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
+        }
+        "boolean" => value.is_boolean(),
+        "array" => value.is_array(),
+        "object" => value.is_object(),
+        "null" => value.is_null(),
+        // Unknown/compound (e.g. type arrays) => don't reject.
+        _ => true,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "expected {expected}, got {}",
+            json_type_name(value)
+        ))
+    }
+}
+
+/// Short JSON type name for error messages.
+const fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -337,8 +829,8 @@ fn dispatch_command(
         .map_err(|error| ExecError::Backend(format!("failed to spawn command: {error}")))?;
 
     let cap = policy.max_output_bytes;
-    let stdout_reader = spawn_reader(child.stdout.take(), cap);
-    let stderr_reader = spawn_reader(child.stderr.take(), cap);
+    let stdout_reader = child.stdout.take().map(|stream| spawn_reader(stream, cap));
+    let stderr_reader = child.stderr.take().map(|stream| spawn_reader(stream, cap));
 
     let timeout = policy.timeout;
     let started = Instant::now();
@@ -394,19 +886,17 @@ fn capped_lossy(bytes: &[u8], cap: usize) -> String {
 /// Spawn a thread that drains a piped stream into a byte buffer, reading at
 /// most `cap + 1` bytes so a chatty command cannot exhaust memory (TE2). The
 /// extra byte lets [`capped_lossy`] detect that truncation occurred.
-fn spawn_reader<R>(stream: Option<R>, cap: usize) -> Option<thread::JoinHandle<Vec<u8>>>
+fn spawn_reader<R>(stream: R, cap: usize) -> thread::JoinHandle<Vec<u8>>
 where
     R: std::io::Read + Send + 'static,
 {
-    stream.map(|stream| {
-        thread::spawn(move || {
-            use std::io::Read as _;
-            let mut buffer = Vec::new();
-            let _ = stream
-                .take((cap as u64).saturating_add(1))
-                .read_to_end(&mut buffer);
-            buffer
-        })
+    thread::spawn(move || {
+        use std::io::Read as _;
+        let mut buffer = Vec::new();
+        let _ = stream
+            .take((cap as u64).saturating_add(1))
+            .read_to_end(&mut buffer);
+        buffer
     })
 }
 
@@ -444,12 +934,9 @@ mod tests {
         use std::io::Cursor;
         // A stream larger than the cap is read to at most cap + 1 bytes, so a
         // chatty command can never buffer unbounded output into memory.
-        let handle = spawn_reader(Some(Cursor::new(vec![b'a'; 1000])), 100)
-            .expect("a present stream yields a reader thread");
+        let handle = spawn_reader(Cursor::new(vec![b'a'; 1000]), 100);
         let captured = handle.join().expect("reader thread joins");
         assert_eq!(captured.len(), 101, "reads at most cap + 1 bytes");
-        // An absent stream yields no reader.
-        assert!(spawn_reader(None::<Cursor<Vec<u8>>>, 100).is_none());
     }
 
     #[test]
@@ -512,6 +999,31 @@ mod tests {
             open_world: false,
             implementation,
         }
+    }
+
+    /// Like [`tool_with_impl`] but with an explicit declared [`ToolEffect`], for exercising the
+    /// autonomy gate.
+    fn tool_with_effect(
+        name: &str,
+        effect: ToolEffect,
+        implementation: ToolImplementation,
+    ) -> Tool {
+        let mut tool = tool_with_impl(name, implementation);
+        tool.effect = effect;
+        tool
+    }
+
+    /// Build a `Builtin` tool whose `input_schema` is `schema`, dispatching to `handler`.
+    /// Used to prove the pre-dispatch arg-validation gate against a chosen schema.
+    fn tool_with_schema(name: &str, schema: Value, handler: &str) -> Tool {
+        let mut tool = tool_with_impl(
+            name,
+            ToolImplementation::Builtin {
+                handler: handler.to_string(),
+            },
+        );
+        tool.input_schema = schema;
+        tool
     }
 
     fn registry_with(tool: &Tool) -> Registry {
@@ -619,12 +1131,12 @@ mod tests {
 
     #[test]
     fn command_exceeding_timeout_is_killed() {
-        // A command that runs ~5s on both platforms; the 1s timeout must kill it.
-        // `cmd /c sleep 5` does not exist on Windows, so use a per-OS script.
+        // A command that runs ~2s on both platforms; the 200ms timeout must kill it.
+        // `cmd /c sleep 2` does not exist on Windows, so use a per-OS script.
         let script = if cfg!(windows) {
-            "ping -n 6 127.0.0.1 >NUL"
+            "ping -n 3 127.0.0.1 >NUL"
         } else {
-            "sleep 5"
+            "sleep 2"
         };
         let (command, args) = shell_command(script);
         let tool = tool_with_impl(
@@ -637,7 +1149,7 @@ mod tests {
         );
         let registry = registry_with(&tool);
         let executor = ToolExecutor::new()
-            .with_command_policy(policy(Some(&[shell_bin()]), Duration::from_secs(1)));
+            .with_command_policy(policy(Some(&[shell_bin()]), Duration::from_millis(200)));
 
         let error = executor
             .execute(&registry, "tool.exec.slow", &serde_json::json!({}))
@@ -756,6 +1268,166 @@ mod tests {
     }
 
     #[test]
+    fn destructive_tool_under_supervised_is_blocked() {
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        // Allow-list the shell so a non-blocked path WOULD run: the block must come from the
+        // autonomy gate, not the command policy.
+        let executor = ToolExecutor::new()
+            .with_command_policy(allow(&[shell_bin()]))
+            .with_autonomy(AutonomyLevel::Supervised);
+
+        let error = executor
+            .execute(&registry, "tool.exec.destructive", &serde_json::json!({}))
+            .expect_err("destructive tool under supervised must be blocked");
+        assert!(matches!(
+            error,
+            ExecError::Blocked {
+                ref tool,
+                effect: "destructive",
+                level: "supervised",
+            } if tool == "tool.exec.destructive"
+        ));
+    }
+
+    #[test]
+    fn destructive_tool_under_full_runs() {
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive.full",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        // Full is the explicit value here; behavior must match the unconfigured default.
+        let executor = ToolExecutor::new()
+            .with_command_policy(allow(&[shell_bin()]))
+            .with_autonomy(AutonomyLevel::Full);
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.destructive.full",
+                &serde_json::json!({}),
+            )
+            .unwrap_or_else(|error| panic!("destructive tool under full should run: {error}"));
+        assert_eq!(outcome.structured["exitCode"], 0);
+    }
+
+    #[test]
+    fn destructive_tool_under_default_full_runs() {
+        // Behavior-preservation guard: an executor that never opts into a stricter level still
+        // runs a destructive tool (default autonomy == Full).
+        let (command, args) = shell_command("echo hi");
+        let tool = tool_with_effect(
+            "tool.exec.destructive.default",
+            ToolEffect::Destructive,
+            ToolImplementation::Command {
+                command,
+                args,
+                background: false,
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new().with_command_policy(allow(&[shell_bin()]));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.destructive.default",
+                &serde_json::json!({}),
+            )
+            .unwrap_or_else(|error| {
+                panic!("default-autonomy destructive tool should run: {error}")
+            });
+        assert_eq!(outcome.structured["exitCode"], 0);
+    }
+
+    #[test]
+    fn read_only_tool_under_read_only_runs() {
+        let tool = tool_with_effect(
+            "tool.exec.ro",
+            ToolEffect::ReadOnly,
+            ToolImplementation::Builtin {
+                handler: "tool.exec.ro.handler".to_string(),
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.ro.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_autonomy(AutonomyLevel::ReadOnly);
+
+        let outcome = executor
+            .execute(&registry, "tool.exec.ro", &serde_json::json!({ "ok": 1 }))
+            .unwrap_or_else(|error| panic!("read-only tool under read-only should run: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({ "ok": 1 }));
+    }
+
+    #[test]
+    fn write_safe_tool_under_read_only_is_blocked() {
+        let tool = tool_with_effect(
+            "tool.exec.ws",
+            ToolEffect::WriteSafe,
+            ToolImplementation::Builtin {
+                handler: "tool.exec.ws.handler".to_string(),
+            },
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.ws.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_autonomy(AutonomyLevel::ReadOnly);
+
+        let error = executor
+            .execute(&registry, "tool.exec.ws", &serde_json::json!({}))
+            .expect_err("write-safe tool under read-only must be blocked");
+        assert!(matches!(
+            error,
+            ExecError::Blocked {
+                effect: "write-safe",
+                level: "read-only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn autonomy_parse_maps_known_levels_and_defaults_to_full() {
+        // Exercise the parsing logic without mutating process-global env (mirrors the
+        // CommandPolicy test note).
+        assert_eq!(AutonomyLevel::parse("full"), AutonomyLevel::Full);
+        assert_eq!(
+            AutonomyLevel::parse("Supervised"),
+            AutonomyLevel::Supervised
+        );
+        assert_eq!(AutonomyLevel::parse("readonly"), AutonomyLevel::ReadOnly);
+        assert_eq!(AutonomyLevel::parse("read-only"), AutonomyLevel::ReadOnly);
+        assert_eq!(
+            AutonomyLevel::parse("  READONLY  "),
+            AutonomyLevel::ReadOnly
+        );
+        // Unrecognized / empty => behavior-preserving default.
+        assert_eq!(AutonomyLevel::parse("bogus"), AutonomyLevel::Full);
+        assert_eq!(AutonomyLevel::parse(""), AutonomyLevel::Full);
+        // Default trait impl is also Full.
+        assert_eq!(AutonomyLevel::default(), AutonomyLevel::Full);
+    }
+
+    #[test]
     fn unknown_tool_reports_tool_not_found() {
         let registry = Registry::new();
         let executor = ToolExecutor::new();
@@ -803,5 +1475,369 @@ mod tests {
             ),
             Err(ExecError::BadArguments(_))
         ));
+    }
+
+    // --- self-healing observation helpers ------------------------------------------------
+
+    #[test]
+    fn is_recoverable_classifies_error_variants() {
+        assert!(ExecError::BadArguments("bad".to_string()).is_recoverable());
+        assert!(
+            ExecError::InvalidArguments {
+                tool: "tool.x".to_string(),
+                reason: "missing field".to_string(),
+            }
+            .is_recoverable()
+        );
+        assert!(ExecError::ToolNotFound("t".to_string()).is_recoverable());
+        assert!(ExecError::HandlerNotFound("h".to_string()).is_recoverable());
+
+        assert!(!ExecError::Unbound.is_recoverable());
+        assert!(!ExecError::NotPermitted("nope".to_string()).is_recoverable());
+        assert!(!ExecError::NotYetSupported("later").is_recoverable());
+        assert!(
+            !ExecError::Blocked {
+                tool: "tool.x".to_string(),
+                effect: "destructive",
+                level: "read-only",
+            }
+            .is_recoverable()
+        );
+
+        assert!(!ExecError::Backend("failed to spawn command: x".to_string()).is_recoverable());
+        assert!(ExecError::Backend(TIMEOUT_BACKEND_MSG.to_string()).is_recoverable());
+        assert!(
+            !ExecError::Backend("command timed out while draining".to_string()).is_recoverable()
+        );
+    }
+
+    #[test]
+    fn to_observation_has_stable_shape_and_tags() {
+        let obs = ExecError::BadArguments("missing field".to_string()).to_observation("tool.x");
+        assert_eq!(obs["tool"], "tool.x");
+        assert_eq!(obs["is_error"], true);
+        assert_eq!(obs["reason"], "bad_arguments");
+        assert_eq!(obs["detail"], "bad arguments: missing field");
+        assert!(obs["hint"].is_string());
+
+        let obs = ExecError::NotPermitted("blocked".to_string()).to_observation("tool.y");
+        assert_eq!(obs["tool"], "tool.y");
+        assert_eq!(obs["is_error"], true);
+        assert_eq!(obs["reason"], "not_permitted");
+
+        let obs = ExecError::Backend(TIMEOUT_BACKEND_MSG.to_string()).to_observation("tool.z");
+        assert_eq!(obs["reason"], "backend_timeout");
+
+        let obs = ExecError::Backend("spawn failed".to_string()).to_observation("tool.z");
+        assert_eq!(obs["reason"], "backend");
+
+        let obs = ExecError::InvalidArguments {
+            tool: "tool.arg".to_string(),
+            reason: "missing symbol".to_string(),
+        }
+        .to_observation("tool.arg");
+        assert_eq!(obs["reason"], "invalid_arguments");
+
+        let obs = ExecError::Blocked {
+            tool: "tool.write".to_string(),
+            effect: "write-safe",
+            level: "read-only",
+        }
+        .to_observation("tool.write");
+        assert_eq!(obs["reason"], "blocked");
+    }
+
+    #[test]
+    fn failure_budget_record_returns_true_up_to_cap_then_false() {
+        let mut budget = FailureBudget::new(2);
+        assert!(budget.record("tool.a"));
+        assert!(budget.record("tool.a"));
+        assert!(!budget.record("tool.a"));
+        assert!(!budget.record("tool.a"));
+
+        assert!(budget.record("tool.b"));
+    }
+
+    #[test]
+    fn failure_budget_cap_zero_is_immediately_exceeded() {
+        let mut budget = FailureBudget::new(0);
+        assert!(!budget.record("tool.a"));
+    }
+
+    // --- argument-schema validation (opt-in) ---------------------------------------------
+
+    /// Build a registry + validating executor for a schema-bearing builtin in one step.
+    fn validating_setup(name: &str, schema: Value) -> (Registry, ToolExecutor) {
+        let handler = format!("{name}.handler");
+        let tool = tool_with_schema(name, schema, &handler);
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin(&handler, echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"))
+            .with_arg_validation(SchemaValidation::On);
+        (registry, executor)
+    }
+
+    #[test]
+    fn validation_off_by_default_skips_check() {
+        // No opt-in: a missing required field is *not* rejected (behavior-preserving).
+        let tool = tool_with_schema(
+            "tool.exec.val.off",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+            "tool.exec.val.off.handler",
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new()
+            .with_builtin("tool.exec.val.off.handler", echo_handler)
+            .unwrap_or_else(|error| panic!("builtin should register: {error}"));
+
+        let outcome = executor
+            .execute(&registry, "tool.exec.val.off", &serde_json::json!({}))
+            .unwrap_or_else(|error| panic!("validation off must skip check: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn missing_required_field_is_invalid_arguments() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.req",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let error = executor
+            .execute(&registry, "tool.exec.val.req", &serde_json::json!({}))
+            .expect_err("missing required field must be invalid");
+        match error {
+            ExecError::InvalidArguments { tool, reason } => {
+                assert_eq!(tool, "tool.exec.val.req");
+                assert!(
+                    reason.contains("symbol"),
+                    "reason should name field: {reason}"
+                );
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn present_required_field_passes() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.present",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.present",
+                &serde_json::json!({ "symbol": "AAPL" }),
+            )
+            .unwrap_or_else(|error| panic!("present required field must pass: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "symbol": "AAPL" })
+        );
+    }
+
+    #[test]
+    fn wrong_property_type_is_invalid_arguments() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.wrongtype",
+            serde_json::json!({ "type": "object", "properties": { "limit": { "type": "integer" } } }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.wrongtype",
+                &serde_json::json!({ "limit": "ten" }),
+            )
+            .expect_err("wrong property type must be invalid");
+        match error {
+            ExecError::InvalidArguments { reason, .. } => {
+                assert!(
+                    reason.contains("limit"),
+                    "reason should name field: {reason}"
+                );
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn correct_property_type_passes() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.righttype",
+            serde_json::json!({ "type": "object", "properties": { "limit": { "type": "integer" } } }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.righttype",
+                &serde_json::json!({ "limit": 5 }),
+            )
+            .unwrap_or_else(|error| panic!("correct property type must pass: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "limit": 5 })
+        );
+    }
+
+    #[test]
+    fn extra_unknown_field_allowed() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.extra",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.extra",
+                &serde_json::json!({ "symbol": "x", "extra": 1 }),
+            )
+            .unwrap_or_else(|error| panic!("extra field must be allowed: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "symbol": "x", "extra": 1 })
+        );
+    }
+
+    #[test]
+    fn null_required_field_treated_as_missing() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.null",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.null",
+                &serde_json::json!({ "symbol": Value::Null }),
+            )
+            .expect_err("null required field must be invalid");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+    }
+
+    #[test]
+    fn non_object_schema_accepts_anything() {
+        // A non-object schema (`true`) has nothing to check: lenient/never-panic guard.
+        let (registry, executor) =
+            validating_setup("tool.exec.val.anyschema", serde_json::json!(true));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.anyschema",
+                &serde_json::json!({ "anything": 1 }),
+            )
+            .unwrap_or_else(|error| panic!("non-object schema must accept anything: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "anything": 1 })
+        );
+    }
+
+    #[test]
+    fn validate_gate_runs_before_backend_dispatch() {
+        // The handler is intentionally *not* registered; if the gate fails to short-circuit
+        // we would see HandlerNotFound, not InvalidArguments.
+        let tool = tool_with_schema(
+            "tool.exec.val.shortcircuit",
+            serde_json::json!({ "type": "object", "required": ["symbol"] }),
+            "tool.exec.val.shortcircuit.absent",
+        );
+        let registry = registry_with(&tool);
+        let executor = ToolExecutor::new().with_arg_validation(SchemaValidation::On);
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.shortcircuit",
+                &serde_json::json!({}),
+            )
+            .expect_err("validation must short-circuit before dispatch");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+    }
+
+    #[test]
+    fn schema_validation_parse_maps_known_values_and_defaults_off() {
+        assert_eq!(SchemaValidation::parse("1"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("true"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("ON"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("yes"), SchemaValidation::On);
+        assert_eq!(SchemaValidation::parse("0"), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::parse("bogus"), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::parse(""), SchemaValidation::Off);
+        assert_eq!(SchemaValidation::default(), SchemaValidation::Off);
+    }
+
+    #[test]
+    fn integer_type_accepts_i64_rejects_float() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.int",
+            serde_json::json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+        );
+
+        let error = executor
+            .execute(
+                &registry,
+                "tool.exec.val.int",
+                &serde_json::json!({ "n": 1.5 }),
+            )
+            .expect_err("float must fail integer type");
+        assert!(matches!(error, ExecError::InvalidArguments { .. }));
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.int",
+                &serde_json::json!({ "n": 3 }),
+            )
+            .unwrap_or_else(|error| panic!("i64 must pass integer type: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!({ "n": 3 }));
+    }
+
+    #[test]
+    fn compound_root_type_allows_null_without_object_validation() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.compound",
+            serde_json::json!({
+                "type": ["object", "null"],
+                "required": ["symbol"],
+                "properties": { "symbol": { "type": "string" } }
+            }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.compound",
+                &serde_json::json!(null),
+            )
+            .unwrap_or_else(|error| panic!("compound object/null schema must allow null: {error}"));
+        assert_eq!(outcome.structured["echoed"], serde_json::json!(null));
+    }
+
+    #[test]
+    fn integer_type_accepts_mathematically_integral_float() {
+        let (registry, executor) = validating_setup(
+            "tool.exec.val.intfloat",
+            serde_json::json!({ "type": "object", "properties": { "n": { "type": "integer" } } }),
+        );
+
+        let outcome = executor
+            .execute(
+                &registry,
+                "tool.exec.val.intfloat",
+                &serde_json::json!({ "n": 5.0 }),
+            )
+            .unwrap_or_else(|error| panic!("5.0 must pass integer type: {error}"));
+        assert_eq!(
+            outcome.structured["echoed"],
+            serde_json::json!({ "n": 5.0 })
+        );
     }
 }

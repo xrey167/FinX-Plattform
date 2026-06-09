@@ -10,7 +10,8 @@
 
 use bytes::Bytes;
 use serde_json::json;
-use tdw_core::{Credentials, Fetcher};
+use tdw_core::Fetcher;
+use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_trading_economics::{
     TradingEconomicsCalendarQuery, TradingEconomicsHttpCalendarFetcher,
     TradingEconomicsHttpIndicatorFetcher, TradingEconomicsIndicatorQuery,
@@ -26,34 +27,30 @@ fn calendar_query() -> TradingEconomicsCalendarQuery {
 }
 
 fn calendar_cassette() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "Date": "2024-01-05T13:30:00",
-                "Country": "United States",
-                "Category": "Non Farm Payrolls",
-                "Event": "Non Farm Payrolls",
-                "Actual": "",
-                "Previous": "199000",
-                "Forecast": "170000",
-                "TEForecast": "175000",
-                "Importance": 3
-            },
-            {
-                "Date": "2024-01-05T14:00:00",
-                "Country": "United States",
-                "Category": "Unemployment Rate",
-                "Event": "Unemployment Rate",
-                "Actual": "",
-                "Previous": "3.7",
-                "Forecast": "3.8",
-                "TEForecast": "3.7",
-                "Importance": 1
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "Date": "2024-01-05T13:30:00",
+            "Country": "United States",
+            "Category": "Non Farm Payrolls",
+            "Event": "Non Farm Payrolls",
+            "Actual": "",
+            "Previous": "199000",
+            "Forecast": "170000",
+            "TEForecast": "175000",
+            "Importance": 3
+        },
+        {
+            "Date": "2024-01-05T14:00:00",
+            "Country": "United States",
+            "Category": "Unemployment Rate",
+            "Event": "Unemployment Rate",
+            "Actual": "",
+            "Previous": "3.7",
+            "Forecast": "3.8",
+            "TEForecast": "3.7",
+            "Importance": 1
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -68,20 +65,16 @@ fn indicator_query() -> TradingEconomicsIndicatorQuery {
 }
 
 fn indicator_cassette() -> Bytes {
-    Bytes::from(
-        json!([
-            {
-                "Country": "United States",
-                "Category": "GDP Growth Rate",
-                "DateTime": "2023-10-01",
-                "Value": "1.2",
-                "Frequency": "Quarter",
-                "HistoricalDataSymbol": "UNITEDSTAGSQDP"
-            }
-        ])
-        .to_string()
-        .into_bytes(),
-    )
+    cassette_bytes!([
+        {
+            "Country": "United States",
+            "Category": "GDP Growth Rate",
+            "DateTime": "2023-10-01",
+            "Value": "1.2",
+            "Frequency": "Quarter",
+            "HistoricalDataSymbol": "UNITEDSTAGSQDP"
+        }
+    ])
 }
 
 // ---------------------------------------------------------------------------
@@ -199,13 +192,7 @@ async fn live_calendar_returns_events_when_env_vars_set() {
 
     let fetcher = TradingEconomicsHttpCalendarFetcher::default();
     let query = calendar_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),
@@ -224,13 +211,7 @@ async fn live_indicator_returns_rows_when_env_vars_set() {
 
     let fetcher = TradingEconomicsHttpIndicatorFetcher::default();
     let query = indicator_query();
-    let raw = fetcher
-        .extract_data(&query, &Credentials::default())
-        .await
-        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
-    let rows = fetcher
-        .transform_data(&query, raw)
-        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
 
     assert!(
         !rows.is_empty(),

@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 pub mod openfigi;
 
 use serde::{Deserialize, Serialize};

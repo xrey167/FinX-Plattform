@@ -16,6 +16,12 @@ transport-uds = ["tdw-app-server/transport-uds", "tdw-backend/transport-uds"]
 ## `tdw-service-api/daemon-postgres`). Selected at runtime via `TDW_DAEMON_PG_URL`
 ## / `DATABASE_URL`; built into the `live` compose daemon image.
 daemon-postgres = ["tdw-service-api/daemon-postgres"]
+## Enable the real wasmi UDF runtime in the daemon (forwards to
+## `tdw-service-api/udf-wasm` → `tdw-sandbox/udf-wasm`). With this feature a
+## `udf.run` ToolCall carrying base64 WASM in `source` routes to the wasmi
+## runtime under per-request `WasmLimits`; without it the deterministic fixture
+## runtime is used. Built into the `live` compose daemon image.
+udf-wasm = ["tdw-service-api/udf-wasm"]
 
 [dependencies]
 serde_json = { workspace = true }
@@ -37,6 +43,10 @@ tdw-auth-oidc = { path = "../tdw-auth-oidc" }
 tdw-app-server = { workspace = true }
 tdw-service-api = { path = "../tdw-service-api", features = ["real-postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[[example]]
+name = "tdw_service_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true

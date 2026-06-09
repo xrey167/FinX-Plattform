@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

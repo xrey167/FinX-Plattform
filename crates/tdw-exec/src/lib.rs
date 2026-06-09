@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-
+#![deny(clippy::pedantic, clippy::nursery)]
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::error::Error;

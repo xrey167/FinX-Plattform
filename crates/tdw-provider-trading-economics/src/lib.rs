@@ -57,7 +57,7 @@ impl TradingEconomicsCalendarQuery {
     ///
     /// Returns [`TradingEconomicsError::InvalidImportance`] if
     /// `importance_min` is 0 or greater than 3.
-    pub fn new(importance_min: u8) -> Result<Self> {
+    pub const fn new(importance_min: u8) -> Result<Self> {
         if importance_min == 0 || importance_min > 3 {
             return Err(TradingEconomicsError::InvalidImportance(importance_min));
         }
@@ -95,7 +95,7 @@ impl TradingEconomicsIndicatorQuery {
 // ---------------------------------------------------------------------------
 
 /// A single economic calendar event.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TradingEconomicsCalendarEvent {
     pub date: String,
     pub country: String,
@@ -109,7 +109,7 @@ pub struct TradingEconomicsCalendarEvent {
 }
 
 /// A single country indicator observation.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TradingEconomicsIndicatorRow {
     pub country: String,
     pub category: String,

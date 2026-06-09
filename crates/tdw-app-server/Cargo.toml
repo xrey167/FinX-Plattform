@@ -5,11 +5,21 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+# PERF(doctest-disabled): this crate had ZERO runnable doc examples at round_9; the empty
+# rustdoc doctest harness is skipped to cut warm `cargo test --workspace` time. WARNING: a
+# runnable doc example (```rust / ```no_run / plain ```) added here will be SILENTLY skipped
+# until you delete this line. Crates with real doc-tests keep doctests enabled.
+doctest = false
+
 [features]
 default = ["transport-tcp"]
 transport-tcp = []
 transport-http = []
 transport-uds = []
+# Exposes GET /functions, POST /functions/invoke, and PUT /functions/resume
+# behind the hand-rolled HTTP transport.  Requires transport-http.
+functions-route = ["transport-http", "dep:hmac", "dep:sha2"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -21,6 +31,8 @@ tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tdw-event = { path = "../tdw-event" }
@@ -30,6 +42,10 @@ tdw-event = { path = "../tdw-event" }
 # TEST-POLICY-003 in `docs/quality/test-policy-backlog.md`.
 [target.'cfg(loom)'.dependencies]
 loom = "0.7"
+
+[[example]]
+name = "tdw_app_server_basic"
+path = "examples/basic.rs"
 
 [lints]
 workspace = true
