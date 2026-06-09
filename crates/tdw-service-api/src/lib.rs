@@ -1227,15 +1227,32 @@ impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
 
-fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
-    let mut future = Box::pin(future);
-
-    loop {
-        if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
-            return output;
-        }
+fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    // Live HTTP fetchers (reqwest) need a reactor and timers; the
+    // deterministic in-memory futures don't care either way. The previous
+    // noop-waker busy-poll panicked with "there is no reactor running" the
+    // moment a live provider feature was enabled.
+    match tokio::runtime::Handle::try_current() {
+        // Already inside a runtime (e.g. tdw-worker's #[tokio::main] calling
+        // the sync helpers): a nested runtime/block_on panics, and
+        // block_in_place is multi-thread-only — so drive the future on the
+        // existing runtime from a scoped thread, which is not an async
+        // context.
+        Ok(handle) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| handle.block_on(future))
+                .join()
+                .expect("tdw-service-api block_on: scoped thread panicked")
+        }),
+        Err(_) => tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tdw-service-api block_on: build current-thread runtime")
+            .block_on(future),
     }
 }
 
