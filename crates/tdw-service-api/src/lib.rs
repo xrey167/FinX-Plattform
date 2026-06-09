@@ -161,6 +161,8 @@ use tdw_provider_velodata::{
 };
 use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -329,7 +331,10 @@ pub fn fetch_equity_historical(
 
     match provider {
         "fileset" => block_on(runner.run(&FilesetEquityHistoricalFetcher, params)),
+        #[cfg(not(feature = "provider-yahoo-http"))]
         "yahoo" => block_on(runner.run(&YahooEquityHistoricalFetcher, params)),
+        #[cfg(feature = "provider-yahoo-http")]
+        "yahoo" => block_on(runner.run(&YahooHttpEquityHistoricalFetcher::default(), params)),
         other => Err(Error::Registry(format!("unknown provider: {other}"))),
     }
 }

@@ -17,7 +17,10 @@ use tdw_core::{Error, Result};
 use tdw_hooks::SystemHookHandlerBackend;
 use tdw_protocol::{EventMsg, Op, OpEnvelope, TimeRange};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
+#[cfg(not(feature = "provider-yahoo-http"))]
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 use tdw_runtime::CommandRunner;
 use tdw_sandbox::{LocalUdfSandbox, SandboxRuntime, UdfRequest};
 
@@ -225,7 +228,14 @@ async fn dispatch_ingest(
         }
         let object = match provider {
             "fileset" => runner.run(&FilesetEquityHistoricalFetcher, params).await?,
+            #[cfg(not(feature = "provider-yahoo-http"))]
             "yahoo" => runner.run(&YahooEquityHistoricalFetcher, params).await?,
+            #[cfg(feature = "provider-yahoo-http")]
+            "yahoo" => {
+                runner
+                    .run(&YahooHttpEquityHistoricalFetcher::default(), params)
+                    .await?
+            }
             _ => unreachable!("provider/endpoint validated above"),
         };
         // Per-(op, symbol) dedup token: stable across retries of the same op

@@ -108,6 +108,11 @@ provider-velodata = ["dep:tdw-provider-velodata", "tdw-provider-velodata/http"]
 ## fetcher and registers it.
 provider-binance-http = ["tdw-provider-binance/http"]
 
+## Yahoo is already a non-optional dependency (its offline fileset-backed
+## fetcher stays wired); this feature only turns on its `http` equity-historical
+## fetcher so the live Yahoo chart API is used in the dispatch path.
+provider-yahoo-http = ["tdw-provider-yahoo/http"]
+
 ## Aggregate: enable every live HTTP fetcher at once. Offline-default-preserving
 ## — with no features `default_registry()` still returns only the 3 offline
 ## providers; this only adds the live HTTP fetchers when explicitly enabled.
@@ -142,6 +147,7 @@ all-http-providers = [
     "provider-trading-economics",
     "provider-velodata",
     "provider-binance-http",
+    "provider-yahoo-http",
 ]
 
 [dependencies]
