@@ -152,6 +152,11 @@ pub struct McpServer {
     /// Executes bound registry tools (resolves each tool's `implementation` binding). Used
     /// in `call_tool` for listed registry tools before the built-in `execute_tool` path.
     executor: tdw_tool_exec::ToolExecutor,
+    /// Whether the `tdw.*.sample` evidence/demo tools appear in `tools/list`.
+    /// Defaults from `TDW_MCP_SAMPLE_TOOLS=1` so a real agent's catalog leads
+    /// with data tools; hidden tools remain callable via `tools/call` so the
+    /// packaged smokes keep working.
+    expose_sample_tools: bool,
 }
 
 impl Default for McpServer {
@@ -165,6 +170,7 @@ impl Default for McpServer {
             registry: None,
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
+            expose_sample_tools: sample_tools_enabled(),
         }
     }
 }
@@ -186,7 +192,17 @@ impl McpServer {
             registry: None,
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
+            expose_sample_tools: sample_tools_enabled(),
         }
+    }
+
+    /// Override whether the `*.sample` demo tools are listed in `tools/list`
+    /// (default: only when `TDW_MCP_SAMPLE_TOOLS=1`). Hidden tools remain
+    /// callable via `tools/call`. Consumes and returns `self` for builder use.
+    #[must_use]
+    pub const fn with_sample_tools(mut self, expose: bool) -> Self {
+        self.expose_sample_tools = expose;
+        self
     }
 
     /// A cloneable handle to this server's per-method request metrics, for the
@@ -265,6 +281,12 @@ impl McpServer {
     /// `tools/call` keeps dispatching to the built-in.
     fn all_tool_descriptors(&self) -> Vec<ToolDescriptor> {
         let mut descriptors = tool_descriptors();
+        if !self.expose_sample_tools {
+            // The `*.sample` evidence tools are demo surface: hidden from agents
+            // by default (still callable) so the catalog leads with the real
+            // data and daemon tools.
+            descriptors.retain(|tool| !tool.name.ends_with(".sample"));
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -1783,6 +1805,11 @@ struct ToolDescriptor {
     annotations: Value,
 }
 
+/// `TDW_MCP_SAMPLE_TOOLS=1` opts the `*.sample` demo tools into `tools/list`.
+fn sample_tools_enabled() -> bool {
+    std::env::var("TDW_MCP_SAMPLE_TOOLS").ok().as_deref() == Some("1")
+}
+
 fn tool_descriptors() -> Vec<ToolDescriptor> {
     let mut descriptors = tool_descriptors_evidence();
     descriptors.extend(tool_descriptors_client_and_daemon());
@@ -2846,9 +2873,42 @@ mod tests {
         assert_eq!(tools["error"]["code"], -32002);
     }
 
+    fn visible_builtin_count() -> usize {
+        mcp_tool_catalog()
+            .iter()
+            .filter(|name| !name.ends_with(".sample"))
+            .count()
+    }
+
+    #[test]
+    fn tools_list_hides_sample_tools_by_default_but_keeps_them_callable() {
+        let mut server = McpServer::new().with_sample_tools(false);
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = response["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+        assert!(
+            !tools.iter().any(|tool| {
+                tool["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with(".sample"))
+            }),
+            "sample tools must be hidden from the default catalog"
+        );
+        // Hidden does not mean disabled: the sample tool still executes.
+        let call = decode(&server.handle_json_rpc_line(
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.agent.sample","arguments":{}}}"#,
+        )[0]);
+        assert_eq!(call["result"]["isError"], Value::Bool(false));
+    }
+
     #[test]
     fn tools_list_returns_spec_shaped_descriptors() {
-        let mut server = McpServer::new();
+        let mut server = McpServer::new().with_sample_tools(false);
         initialize(&mut server);
 
         let response = decode(
@@ -2860,7 +2920,7 @@ mod tests {
         assert!(tools.iter().any(|tool| {
             tool["name"] == "tdw.equity.historical" && tool["inputSchema"].is_object()
         }));
-        assert_eq!(mcp_tool_catalog().len(), tools.len());
+        assert_eq!(visible_builtin_count(), tools.len());
     }
 
     #[test]
@@ -2896,7 +2956,9 @@ mod tests {
             .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
-        let mut server = McpServer::new().with_registry(registry);
+        let mut server = McpServer::new()
+            .with_sample_tools(false)
+            .with_registry(registry);
         initialize(&mut server);
 
         let response = decode(
@@ -2920,7 +2982,7 @@ mod tests {
         assert_eq!(registry_descriptor["title"], "Registry Search");
         assert!(registry_descriptor["inputSchema"].is_object());
         // Total = built-ins + the one registry tool.
-        assert_eq!(tools.len(), mcp_tool_catalog().len() + 1);
+        assert_eq!(tools.len(), visible_builtin_count() + 1);
     }
 
     #[test]
@@ -3024,7 +3086,9 @@ mod tests {
             .unwrap_or_else(|error| panic!("tool resource: {error}"))])
         .unwrap_or_else(|error| panic!("registry should build: {error}"));
 
-        let mut server = McpServer::new().with_registry(registry);
+        let mut server = McpServer::new()
+            .with_sample_tools(true)
+            .with_registry(registry);
         initialize(&mut server);
 
         let response = decode(
@@ -4038,7 +4102,9 @@ mod tests {
 
         let registry =
             registry_from_dir(&dir).unwrap_or_else(|error| panic!("registry should load: {error}"));
-        let mut server = McpServer::new().with_registry(registry);
+        let mut server = McpServer::new()
+            .with_sample_tools(false)
+            .with_registry(registry);
         initialize(&mut server);
 
         let response = decode(
@@ -4058,7 +4124,7 @@ mod tests {
                 .any(|tool| tool["name"] == "registry.dir.search"),
             "registry tool loaded from dir should be listed"
         );
-        assert_eq!(tools.len(), mcp_tool_catalog().len() + 1);
+        assert_eq!(tools.len(), visible_builtin_count() + 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
