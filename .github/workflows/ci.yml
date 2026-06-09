@@ -178,6 +178,11 @@ jobs:
         binary: [tdw-service, tdw-cli, tdw-mcp, tdw-worker]
     steps:
       - uses: actions/checkout@v6
+      - name: Free runner disk space (release+live docker builds exhaust the default ~14GB)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker system prune -af 2>/dev/null || true
+          df -h /
       # QEMU enables the linux/arm64 leg of the multi-arch buildx build on the
       # x86_64 runner.
       - uses: docker/setup-qemu-action@v3
@@ -247,6 +252,11 @@ jobs:
       TDW_MCP_HTTP_TOKEN: ci-compose-interpolation-only
     steps:
       - uses: actions/checkout@v6
+      - name: Free runner disk space (release+live docker builds exhaust the default ~14GB)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker system prune -af 2>/dev/null || true
+          df -h /
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: Swatinem/rust-cache@v2
       - run: docker compose --profile minimal config
