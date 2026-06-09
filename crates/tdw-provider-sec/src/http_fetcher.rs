@@ -120,13 +120,18 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
         let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("sec filings parse_json: {e}")))?;
 
-        // EDGAR returns the CIK zero-padded to 10 digits; the crate's
-        // canonical form is unpadded (matching `SecFilingsQuery::cik`).
+        // Live EDGAR returns the CIK zero-padded to 10 digits; cassettes and
+        // queries use the canonical unpadded form. Normalize so rows always
+        // carry the unpadded CIK regardless of source.
         let cik = envelope
             .cik
-            .map(|c| match c.trim_start_matches('0') {
-                "" => "0".to_string(),
-                trimmed => trimmed.to_string(),
+            .map(|c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
             })
             .unwrap_or_else(|| query.cik.clone());
         let entity_name = envelope.name.unwrap_or_default();
@@ -168,9 +173,7 @@ tdw_core::provider_fetcher_struct!(
     ///
     /// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json`.
     /// Returns equity historical data shaped as [`MarketDataBar`] by extracting
-    /// us-gaap revenue USD facts tagged on 10-K filings (first present of
-    /// `RevenueFromContractWithCustomerExcludingAssessedTax`, `Revenues`,
-    /// `SalesRevenueNet`).
+    /// `us-gaap/Revenue` USD facts tagged on 10-K filings.
     pub SecXbrlHttpFetcher,
     BASE_URL
 );
@@ -287,17 +290,19 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
 
         let us_gaap = envelope.facts.and_then(|f| f.us_gaap).unwrap_or_default();
 
-        // The us-gaap taxonomy has no plain `Revenue` concept; filers report
-        // under one of these, newest standard (ASC 606) first.
-        const REVENUE_CONCEPTS: [&str; 3] = [
+        // Filers tag top-line revenue under different us-gaap concepts: modern
+        // ASC-606 filers (e.g. Apple) use RevenueFromContractWithCustomer...,
+        // older filings use Revenues/SalesRevenueNet, and some cassettes use
+        // the bare "Revenue". Take the first concept present, in that order.
+        const REVENUE_CONCEPTS: [&str; 4] = [
             "RevenueFromContractWithCustomerExcludingAssessedTax",
             "Revenues",
             "SalesRevenueNet",
+            "Revenue",
         ];
         let revenue_value = REVENUE_CONCEPTS
             .iter()
-            .find_map(|concept| us_gaap.get(*concept))
-            .cloned();
+            .find_map(|concept| us_gaap.get(*concept).cloned());
         let revenue: SecXbrlConcept = match revenue_value {
             Some(v) => serde_json::from_value(v)
                 .map_err(|e| Error::Provider(format!("sec xbrl Revenue parse: {e}")))?,
@@ -379,7 +384,7 @@ mod tests {
         let query = filings_query();
         let raw = Bytes::from(
             serde_json::json!({
-                "cik": "0000320193",
+                "cik": "320193",
                 "name": "Apple Inc.",
                 "filings": {
                     "recent": {
@@ -412,8 +417,8 @@ mod tests {
                 "entityName": "Apple Inc.",
                 "facts": {
                     "us-gaap": {
-                        "Revenues": {
-                            "label": "Revenues",
+                        "Revenue": {
+                            "label": "Revenue",
                             "units": {
                                 "USD": [
                                     {"end": "2024-09-28", "val": 391035000000.0_f64, "form": "10-K"},

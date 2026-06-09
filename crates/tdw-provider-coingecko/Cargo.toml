@@ -40,16 +40,16 @@ tdw-provider-http = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 
-[[example]]
-name = "basic"
-required-features = ["http"]
-
 [dev-dependencies]
 tdw-provider-testkit = { path = "../tdw-provider-testkit" }
 
 [[test]]
 name = "http_fetcher"
 path = "tests/http_fetcher.rs"
+required-features = ["http"]
+
+[[example]]
+name = "basic"
 required-features = ["http"]
 
 [lints]
