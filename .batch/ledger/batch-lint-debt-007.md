@@ -89,4 +89,4 @@ No AGPL code copied. No `finx-*`, no FinX-XR, no `tdw-provider-openbb`.
 
 ## PR
 
-(to be appended)
+https://github.com/xrey167/FinX-Plattform/pull/261
