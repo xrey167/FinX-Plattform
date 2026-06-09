@@ -170,4 +170,35 @@ mod tests {
         assert_eq!(sequences, (0..16).collect::<Vec<_>>());
         let _ = fs::remove_file(path);
     }
+
+    #[test]
+    fn read_all_skips_blank_lines_and_surfaces_malformed_json() {
+        // Blank and whitespace-only lines between records are ignored.
+        let path = unique_path("tdw-rollout-blank");
+        let json = serde_json::to_string(&record(1)).expect("serialize");
+        {
+            let mut file = File::create(&path).expect("create");
+            writeln!(file, "{json}").expect("write record");
+            writeln!(file).expect("write blank");
+            writeln!(file, "   ").expect("write whitespace");
+            writeln!(file, "{json}").expect("write record");
+        }
+        let records = JsonlRollout::new(&path)
+            .read_all()
+            .unwrap_or_else(|error| panic!("read succeeds: {error}"));
+        assert_eq!(records.len(), 2);
+        let _ = fs::remove_file(&path);
+
+        // A non-empty malformed line surfaces as a Json error (not silently skipped).
+        let bad = unique_path("tdw-rollout-bad");
+        {
+            let mut file = File::create(&bad).expect("create");
+            writeln!(file, "{{not valid json}}").expect("write");
+        }
+        assert!(matches!(
+            JsonlRollout::new(&bad).read_all(),
+            Err(RolloutError::Json(_))
+        ));
+        let _ = fs::remove_file(&bad);
+    }
 }

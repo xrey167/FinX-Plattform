@@ -349,6 +349,48 @@ mod tests {
     }
 
     #[test]
+    fn validation_reports_each_remaining_error_variant() {
+        assert_eq!(
+            validate_chat_request(&ChatRequest {
+                messages: vec![],
+                max_output_tokens: 8,
+            }),
+            Err(LlmError::EmptyMessages)
+        );
+        assert_eq!(
+            validate_chat_request(&ChatRequest {
+                messages: vec![ChatMessage {
+                    role: MessageRole::User,
+                    content: "  ".to_string(),
+                }],
+                max_output_tokens: 8,
+            }),
+            Err(LlmError::EmptyMessageContent)
+        );
+
+        assert_eq!(validate_model_id("   "), Err(LlmError::EmptyModelId));
+
+        // A non-http(s) scheme without whitespace is InvalidBaseUrl, distinct from
+        // the whitespace/control UnsafeBaseUrl path.
+        assert_eq!(
+            validate_base_url("ftp://api.example.com"),
+            Err(LlmError::InvalidBaseUrl)
+        );
+
+        // No user turn present -> EmptyMessages from last_user_message.
+        assert_eq!(
+            last_user_message(&ChatRequest {
+                messages: vec![ChatMessage {
+                    role: MessageRole::System,
+                    content: "policy".to_string(),
+                }],
+                max_output_tokens: 8,
+            }),
+            Err(LlmError::EmptyMessages)
+        );
+    }
+
+    #[test]
     fn llm_error_variants_are_permanent() {
         assert_eq!(
             LlmError::EmptyMessages.retryability(),

@@ -167,4 +167,19 @@ mod tests {
             }]
         );
     }
+
+    #[test]
+    fn aged_mid_term_consolidates_to_long_term() {
+        // Completes the promotion chain working->short->mid->long->core; the
+        // mid->long transition was the one rung not pinned.
+        let mid = memory("note", Retention::MidTerm);
+        assert_eq!(
+            consolidation_plan([(&mid, 7)]), // ttl 7 -> promote to LongTerm
+            vec![ConsolidationAction::Promote {
+                name: "note".to_string(),
+                from: Retention::MidTerm,
+                to: Retention::LongTerm,
+            }]
+        );
+    }
 }

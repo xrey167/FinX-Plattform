@@ -1365,6 +1365,45 @@ mod tests {
         assert!(matches!(error, ExecError::ToolNotFound(name) if name == "tool.exec.nope"));
     }
 
+    #[test]
+    fn command_empty_or_path_traversal_is_bad_arguments() {
+        // Empty command name is rejected by validate_command (before the allow-list).
+        let empty = tool_with_impl(
+            "tool.exec.empty",
+            ToolImplementation::Command {
+                command: String::new(),
+                args: Vec::new(),
+                background: false,
+            },
+        );
+        let empty_registry = registry_with(&empty);
+        let empty_exec = ToolExecutor::new().with_command_policy(allow(&[""]));
+        assert!(matches!(
+            empty_exec.execute(&empty_registry, "tool.exec.empty", &serde_json::json!({})),
+            Err(ExecError::BadArguments(_))
+        ));
+
+        // A `..` in the command name is rejected as path traversal even if allow-listed.
+        let traversal = tool_with_impl(
+            "tool.exec.trav",
+            ToolImplementation::Command {
+                command: "../evil".to_string(),
+                args: Vec::new(),
+                background: false,
+            },
+        );
+        let traversal_registry = registry_with(&traversal);
+        let traversal_exec = ToolExecutor::new().with_command_policy(allow(&["../evil"]));
+        assert!(matches!(
+            traversal_exec.execute(
+                &traversal_registry,
+                "tool.exec.trav",
+                &serde_json::json!({})
+            ),
+            Err(ExecError::BadArguments(_))
+        ));
+    }
+
     // --- self-healing observation helpers ------------------------------------------------
 
     #[test]
