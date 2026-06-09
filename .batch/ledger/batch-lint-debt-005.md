@@ -77,4 +77,8 @@ Only the ledger + `crates/tdw-acp/src/lib.rs`; `.batch/backlog.json` untouched.
 - tdw-acp is not schema-bearing; no xtask schema-sync run.
 
 ## PR
-<to be appended after creation>
+https://github.com/xrey167/FinX-Plattform/pull/259
+
+Pushed as `work/batch-lint-debt-005-match-same-arms` (the `work/batch-lint-debt-005`
+remote ref already exists from the merged `missing_const_for_fn` PR #160 — batch-id
+reuse). Avoided a force-push per the stop conditions.
