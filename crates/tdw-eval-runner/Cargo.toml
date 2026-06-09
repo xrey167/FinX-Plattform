@@ -14,7 +14,6 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-llm = { workspace = true }
