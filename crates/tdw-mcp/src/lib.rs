@@ -379,7 +379,8 @@ impl McpServer {
                     "version": env!("CARGO_PKG_VERSION"),
                 },
                 "instructions": format!(
-                    "TDW exposes deterministic offline tools plus explicitly daemon-backed query and triage tools over MCP stdio or Streamable HTTP. Requested protocol: {requested}."
+                    "TDW exposes deterministic offline tools plus explicitly daemon-backed query and triage tools over MCP stdio or Streamable HTTP. {data_mode} Requested protocol: {requested}.",
+                    data_mode = DATA_MODE_DISCLOSURE,
                 ),
             }),
         )
@@ -1801,7 +1802,9 @@ fn tool_descriptors_evidence() -> Vec<ToolDescriptor> {
         tool(
             "tdw.equity.historical",
             "Fetch Equity Historical",
-            "Fetch deterministic equity historical data through the TDW provider registry.",
+            &format!(
+                "Fetch equity historical data through the TDW provider registry. {DATA_MODE_DISCLOSURE}"
+            ),
             json!({
                 "type": "object",
                 "properties": {
@@ -2019,6 +2022,17 @@ fn registry_tool_not_executable(registry: &Registry, name: &str) -> bool {
             )
         })
 }
+
+/// One-line market-data provenance disclosure, baked in at compile time.
+///
+/// The P1.3 audit found offline fixture bars are indistinguishable from real
+/// market data in tool results, so the server now says which one it serves in
+/// both the `initialize` instructions and the data tools' descriptions.
+#[cfg(feature = "live")]
+const DATA_MODE_DISCLOSURE: &str =
+    "Market-data tools serve LIVE provider data in this build (the `live` feature is enabled).";
+#[cfg(not(feature = "live"))]
+const DATA_MODE_DISCLOSURE: &str = "Market-data tools serve DETERMINISTIC OFFLINE FIXTURES in      this build, not real market data (rebuild with `--features live` for live providers).";
 
 fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
     tool_with_annotations(name, title, description, input_schema, true, true)
