@@ -12,7 +12,7 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_binance::{BinanceHttpTickerPriceFetcher, BinanceTickerPriceQuery};
-use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
+use tdw_provider_testkit::cassette_bytes;
 
 fn sample_query() -> BinanceTickerPriceQuery {
     BinanceHttpTickerPriceFetcher::transform_query(json!({ "symbol": "btcusdt" }))
