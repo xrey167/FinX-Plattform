@@ -37,6 +37,9 @@ impl<G: GraphEngine> GraphTagEngine<G> {
         Self { graph }
     }
 
+    // `map_err(Self::storage)` requires a fn-pointer with owned argument;
+    // taking by reference would break all ten call sites.
+    #[allow(clippy::needless_pass_by_value)]
     fn storage(error: tdw_core::Error) -> TagError {
         TagError::Engine(error.to_string())
     }
@@ -68,7 +71,7 @@ impl<G: GraphEngine> GraphTagEngine<G> {
                 .await
                 .map_err(Self::storage)?;
             match parents.first() {
-                Some((_, parent)) => current = parent.id.clone(),
+                Some((_, parent)) => current.clone_from(&parent.id),
                 None => return Ok(false),
             }
         }
@@ -213,11 +216,11 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
             max_hops: 1,
             ..TraversalFilter::default()
         };
-        let mut found = std::collections::BTreeSet::new();
-        let mut frontier = vec![tag_id.to_string()];
         // Node-count guard, not a depth cap: loud error on a (corrupted)
         // store instead of silent truncation.
         const MAX_TAXONOMY_NODES: usize = 100_000;
+        let mut found = std::collections::BTreeSet::new();
+        let mut frontier = vec![tag_id.to_string()];
         while let Some(current) = frontier.pop() {
             for (_, child) in self
                 .graph
