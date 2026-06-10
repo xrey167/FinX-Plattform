@@ -296,6 +296,31 @@ impl GraphEngine for InMemoryGraphEngine {
         Ok(path)
     }
 
+    async fn edges(
+        &self,
+        rel: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<GraphEdge>> {
+        if limit == 0 {
+            return Err(Error::Storage(
+                "edges limit must be greater than zero".to_string(),
+            ));
+        }
+        let state = self.lock()?;
+        let mut matching: Vec<GraphEdge> = state
+            .edges
+            .iter()
+            .filter(|edge| rel.is_none_or(|rel| edge.rel == rel))
+            .cloned()
+            .collect();
+        drop(state);
+        // Deterministic order regardless of insertion history, so pagination
+        // is stable and backends cannot drift.
+        matching.sort_by_key(edge_sort_key);
+        Ok(matching.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize> {
         let mut state = self.lock()?;
         let before = state.edges.len();

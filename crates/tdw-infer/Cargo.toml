@@ -1,0 +1,21 @@
+[package]
+name = "tdw-infer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-core = { workspace = true }
+tdw-tags = { path = "../tdw-tags" }
+
+[dev-dependencies]
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-taxonomy = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

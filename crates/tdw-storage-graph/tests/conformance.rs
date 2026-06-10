@@ -121,6 +121,56 @@ async fn conformance_suite(any: &AnyGraph) {
         .await
         .unwrap_or_else(|error| panic!("edge replacement must succeed: {error}"));
 
+    // 2b. Edge scan (B7): rel-filtered and unfiltered enumeration in the
+    // contract (from, rel, to, valid_from) order; stable pagination; zero
+    // limit rejected.
+    let listed = g
+        .edges(Some("listed_on"), 0, 10)
+        .await
+        .unwrap_or_else(|error| panic!("edge scan must succeed: {error}"));
+    assert_eq!(listed.len(), 2);
+    assert_eq!(
+        (listed[0].from.as_str(), listed[1].from.as_str()),
+        ("instrument:AAPL", "instrument:MSFT")
+    );
+    assert_eq!(
+        listed[0].props,
+        json!({ "primary": true }),
+        "scan returns the replaced edge's props"
+    );
+    let all_edges = g
+        .edges(None, 0, 100)
+        .await
+        .unwrap_or_else(|error| panic!("unfiltered scan must succeed: {error}"));
+    assert_eq!(all_edges.len(), 4);
+    let mut paged = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = g
+            .edges(None, offset, 3)
+            .await
+            .unwrap_or_else(|error| panic!("paged scan must succeed: {error}"));
+        if page.is_empty() {
+            break;
+        }
+        offset += page.len();
+        paged.extend(page);
+    }
+    assert_eq!(
+        paged, all_edges,
+        "pagination covers every edge exactly once"
+    );
+    assert!(
+        g.edges(None, 0, 0).await.is_err(),
+        "zero limit must be rejected"
+    );
+    assert!(
+        g.edges(Some("no_such_rel"), 0, 5)
+            .await
+            .unwrap_or_else(|error| panic!("empty-rel scan must succeed: {error}"))
+            .is_empty()
+    );
+
     // 3. Directional neighborhoods, deterministic order.
     // BOLT-A4: the (rel, neighbor id, valid_from) order asserted below is part of
     // the GraphEngine contract — every MATCH feeding neighbors() MUST carry an
