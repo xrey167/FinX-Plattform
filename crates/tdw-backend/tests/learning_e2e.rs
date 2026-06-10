@@ -35,6 +35,10 @@ async fn knowledge_index_then_search_returns_the_document() {
                 aliases: vec!["AAPL".to_string()],
             },
             tags: vec!["asset:equity".to_string()],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
         })
         .await
         .expect("knowledge index should succeed");

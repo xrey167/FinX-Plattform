@@ -90,6 +90,15 @@ impl TagStore {
         Ok(())
     }
 
+    /// Whether `tag_id` has a definition. Lets idempotent ingestion define
+    /// missing tags WITHOUT re-defining existing ones — a re-`define` with
+    /// `parent: None` would silently re-parent a taxonomy node to the root
+    /// (knowledge-system B5).
+    #[must_use]
+    pub fn is_defined(&self, tag_id: &str) -> bool {
+        self.definitions.contains_key(tag_id)
+    }
+
     #[must_use]
     pub fn active_tags(&self, entity_id: &str, as_of: &str) -> Vec<String> {
         self.assignments
@@ -258,6 +267,21 @@ fn is_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_defined_reflects_definitions_only() {
+        let mut store = TagStore::default();
+        assert!(!store.is_defined("asset:equity"));
+        store
+            .define(TagDefinition {
+                tag_id: "asset:equity".to_string(),
+                parent: None,
+                ttl_days: None,
+            })
+            .unwrap_or_else(|error| panic!("tag should define: {error}"));
+        assert!(store.is_defined("asset:equity"));
+        assert!(!store.is_defined("asset:bond"));
+    }
 
     #[test]
     fn manages_tag_dag_ttl_provenance_and_stats() {

@@ -64,6 +64,10 @@ async fn knowledge_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
                 aliases: vec!["AAPL".to_string()],
             },
             tags: vec!["asset:equity".to_string()],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
         })
         .await?;
     println!(

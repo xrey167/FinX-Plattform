@@ -56,6 +56,10 @@ async fn e2e_real_qdrant_knowledge_persists_across_index_instances() {
             aliases: vec!["AAPL".to_string()],
         },
         tags: vec!["asset:equity".to_string()],
+        source: None,
+        plane: None,
+        as_of: None,
+        mentions: Vec::new(),
     };
 
     {
