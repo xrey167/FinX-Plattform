@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod improve_scan;
+mod openapi;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -37,6 +38,8 @@ fn main() {
             _ => help(),
         },
         "catalog-check" => catalog_check(),
+        "openapi-sync" => openapi::openapi_sync(),
+        "openapi-check" => openapi::openapi_check(),
         "clean-room-audit" => clean_room_audit(),
         "crate-readiness-check" => crate_readiness_check(),
         "prerelease-check" => prerelease_check(),
@@ -53,7 +56,7 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | catalog-check | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | catalog-check | openapi-sync | openapi-check | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
     );
     Ok(())
 }

@@ -231,12 +231,12 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 | # | Task · scope · gates · done-when | Size | Status |
 |---|---|---|---|
 | L5.1 | **tdw-service-api** (PR #161) · land HTTP+SSE (`POST /ops`, `GET /events/{id}`, `/health`, `/metrics`) over the daemon. Gates: integ. Done-when: #161 merged, REST command callable. | M | in-progress |
-| L5.2 | **tdw-service-api** · REST command-tree mapping logical OpenBB-style routes (`/equity/price/historical?provider=`) onto daemon ops + envelope; auto-OpenAPI. Gates: integ. Done-when: ≥10 routes documented at `/docs`-equiv. | L | todo |
+| L5.2 | **tdw-app-server** + **tdw-service-api** (WS2, G005) · catalog-derived REST route family (`GET /api/v1/{route...}?provider=`) dispatching through the policy-guarded `Op::FetchData` path + the `ResultEnvelope`; generated OpenAPI 3.1 at `GET /openapi.json` (xtask `openapi-sync`/`openapi-check` drift gate). Gates: integ. Done-when: ≥10 routes documented — **done** (44 paths / 12 schemas in `docs/schemas/openapi.json`; e2e tests in `tdw-service-api/tests/rest_route_e2e.rs`). | L | in-progress |
 | L5.3 | **tdw-cli** · command-tree parity (menu/command mirror of routers; `--provider`; `-h`). Gates: smoke. Done-when: `tdw equity price historical --symbol AAPL` works. | M | todo |
 | L5.4 | **tdw-table-format** + **tdw-storage-parquet** · export polish (CSV/XLSX/JSON/Parquet from any envelope; `export_directory`-style config). Gates: unit. Done-when: 4 export formats from one result. | S | todo |
 | L5.5 | **new tdw-charting** · server-side chart spec (Plotly-JSON / Vega) on envelope `chart` field; `chart=true` flag; candlestick + line + indicator overlays. Gates: unit (spec snapshot). Done-when: candlestick spec emitted for price/historical. | L | todo |
 | L5.6 | **tdw-mcp** · dynamic tool discovery + per-route exposure config (mcp_config: expose/methods/exclude_args) over the new REST command tree. Gates: integ. Done-when: agent browses categories, activates subset. | M | todo |
-| L5.7 | **tdw-config** · per-provider credential resolution table + preferences (`output_type`, dirs) mirroring user_settings sections; env + file. Gates: unit. Done-when: all L2/L3 providers resolve keys via one path. | S | todo |
+| L5.7 | **tdw-config** (WS2, G005) · per-provider credential registry (`provider → env var + optional config-file key`) with a lookup/`resolve_credential` fn, mirroring the `user_settings.json` `credentials` section. FRED + EIA wired; remaining provider crates still read their own env vars (full migration is follow-up). Preferences (`output_type`, dirs) remain todo. Gates: unit. Done-when: all L2/L3 providers resolve keys via one path. | S | in-progress |
 
 ---
 

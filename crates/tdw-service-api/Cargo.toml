@@ -15,6 +15,12 @@ storage-fs = ["dep:tdw-storage-fs"]
 ## sandbox crate so the feature tree is consistent.
 udf-wasm = ["tdw-sandbox/udf-wasm"]
 
+## Implement `tdw_app_server::RestApiHandler` for `AppState` so the daemon's
+## catalog-derived REST surface (`GET /api/v1/{route...}`, `GET /openapi.json`)
+## can dispatch through the same policy-guarded `Op::FetchData` path. Forwards
+## `tdw-app-server/rest-api-route` (which implies `transport-http`).
+rest-api-route = ["tdw-app-server/rest-api-route"]
+
 ## Swap the relational engine in `AppState` for the real `PgEngine`
 ## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
