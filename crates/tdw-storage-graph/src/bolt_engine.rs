@@ -382,18 +382,7 @@ impl GraphEngine for BoltGraphEngine {
             .ok_or_else(|| Error::Storage(format!("merge target missing: {target}")))?;
 
         // Alias union (client-side, identical to the reference engine).
-        let mut absorbed_aliases = 0;
-        for alias in source_node
-            .aliases
-            .iter()
-            .chain(std::iter::once(&source_node.label))
-        {
-            if alias != &target_node.label && !target_node.aliases.contains(alias) {
-                target_node.aliases.push(alias.clone());
-                absorbed_aliases += 1;
-            }
-        }
-        target_node.aliases.sort();
+        let absorbed_aliases = absorb_aliases(&source_node, &mut target_node);
 
         // Rewire: read every edge touching the source, compute the surviving
         // identities on the target side, then delete + recreate in Cypher.
@@ -557,8 +546,8 @@ fn compute_rewired(
     (rewired, rewired_edges)
 }
 
-/// The shared edge-upsert Cypher: MERGE on the A2 identity (from, to, rel,
-/// valid_from - endpoints via the pattern, vf as a key property) with all
+/// The shared edge-upsert Cypher: `MERGE` on the A2 identity (from, to, rel,
+/// `valid_from` - endpoints via the pattern, `vf` as a key property) with all
 /// mutable fields SET on both branches. Endpoints must be pre-checked.
 fn edge_merge_query(edge: &GraphEdge) -> Result<neo4rs::Query> {
     Ok(query(
@@ -579,6 +568,20 @@ fn edge_merge_query(edge: &GraphEdge) -> Result<neo4rs::Query> {
     )
     .param("props", encode_json(&edge.props)?)
     .param("prov", encode_provenance(&edge.provenance)?))
+}
+
+/// Union the source's aliases and label onto the target (sorted), returning
+/// how many were newly absorbed - the reference engine's alias semantics.
+fn absorb_aliases(source: &GraphNode, target: &mut GraphNode) -> usize {
+    let mut absorbed = 0;
+    for alias in source.aliases.iter().chain(std::iter::once(&source.label)) {
+        if alias != &target.label && !target.aliases.contains(alias) {
+            target.aliases.push(alias.clone());
+            absorbed += 1;
+        }
+    }
+    target.aliases.sort();
+    absorbed
 }
 
 fn node_passes(node: &GraphNode, filter: &TraversalFilter) -> bool {
