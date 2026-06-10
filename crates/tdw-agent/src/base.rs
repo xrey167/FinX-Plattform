@@ -61,37 +61,9 @@ impl BaseMetadata {
     }
 }
 
-/// Origin tier — how built-in or specialized an entity kind is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum Tier {
-    /// Platform primitive.
-    System,
-    /// Finance/trading-domain specific.
-    Domain,
-    /// User-authored at runtime.
-    Custom,
-}
-
-/// Origin source — whether the kind is defined inside the platform or bridges outside.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub enum Source {
-    /// Defined inside the platform/user.
-    Internal,
-    /// Wraps or mirrors a third-party standard or service.
-    External,
-}
-
-/// Orthogonal entity classification.
-///
-/// This is NOT lineage: where a particular piece of *data* came from is recorded by a
-/// separate `provenance` field. `Origin` classifies the kind itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct Origin {
-    /// How built-in/specialized the kind is.
-    pub tier: Tier,
-    /// Whether the kind bridges outside the platform.
-    pub source: Source,
-}
+// The Origin (tier × source) classification moved to `tdw-taxonomy` (knowledge-system
+// A1); re-exported here so `crate::base::{Origin, Source, Tier}` paths keep working.
+pub use tdw_taxonomy::origin::{Origin, Source, Tier};
 
 /// A tool's effect on the world — the domain effect classification.
 ///

@@ -4078,6 +4078,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tdw-taxonomy",
  "thiserror 2.0.18",
  "validator",
 ]
@@ -5604,6 +5605,16 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tdw-taxonomy"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "validator",
 ]
 
 [[package]]
