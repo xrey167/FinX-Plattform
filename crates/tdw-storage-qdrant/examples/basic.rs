@@ -36,6 +36,7 @@ async fn main() -> tdw_core::Result<()> {
             VectorQuery {
                 vector: vec![1.0, 0.0],
                 top_k: 1,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await?;

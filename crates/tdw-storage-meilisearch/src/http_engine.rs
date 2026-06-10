@@ -172,6 +172,92 @@ impl MeilisearchHttpEngine {
             .map_err(|error| Error::Storage(format!("meilisearch create index body: {error}")))?;
         self.wait_for_task(enqueued.task_uid).await
     }
+
+    /// Declare the attributes a [`TextQuery::filter`](tdw_core::TextQuery) may
+    /// reference. Meilisearch refuses to filter on undeclared attributes, so
+    /// indexers/bootstrap call this once per index before issuing filtered
+    /// searches (settings updates are async; this waits for the task).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an attribute name is invalid, the settings request
+    /// fails, or the resulting Meilisearch task fails.
+    pub async fn ensure_filterable(&self, index: &str, attributes: &[&str]) -> Result<()> {
+        validate_index(index)?;
+        for attribute in attributes {
+            meili_attribute(attribute)?;
+        }
+        let path = format!("/indexes/{index}/settings/filterable-attributes");
+        let response = self
+            .request(reqwest::Method::PUT, &path)?
+            .json(&attributes)
+            .send()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch filterable: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Storage(format!(
+                "meilisearch filterable returned {status}: {body}"
+            )));
+        }
+        let enqueued: EnqueueResponse = response
+            .json()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch filterable body: {error}")))?;
+        self.wait_for_task(enqueued.task_uid).await
+    }
+}
+
+/// Map one shared [`tdw_core::PayloadCondition`] to a Meilisearch filter
+/// expression string. Array semantics line up by construction: Meilisearch
+/// equality on an array attribute means "contains", matching the shared
+/// in-memory evaluator.
+///
+/// `RangeString` is rejected loudly: Meilisearch comparison operators are
+/// numeric-only, and silently returning unfiltered/empty results would
+/// corrupt retrieval semantics. Temporal `as_of` filtering belongs on the
+/// vector channel (Qdrant datetime range) or a numeric field.
+fn meili_filter_expression(condition: &tdw_core::PayloadCondition) -> Result<Value> {
+    let expression = match condition {
+        tdw_core::PayloadCondition::MatchString { key, value } => {
+            format!("{} = {}", meili_attribute(key)?, meili_quote(value))
+        }
+        tdw_core::PayloadCondition::MatchAny { key, values } => {
+            let quoted: Vec<String> = values.iter().map(|value| meili_quote(value)).collect();
+            format!("{} IN [{}]", meili_attribute(key)?, quoted.join(", "))
+        }
+        tdw_core::PayloadCondition::RangeString { key, .. } => {
+            return Err(Error::Storage(format!(
+                "meilisearch backend does not support RangeString (attribute {key:?}): \
+                 comparison filters are numeric-only; use the vector channel for as_of \
+                 range filtering"
+            )));
+        }
+    };
+    Ok(Value::String(expression))
+}
+
+/// Validate an attribute name before interpolation into a filter expression.
+fn meili_attribute(key: &str) -> Result<&str> {
+    if key.is_empty()
+        || !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(Error::Storage(format!(
+            "meilisearch filter attribute {key:?} must be non-empty and contain only \
+             alphanumeric characters, '-', '_' or '.'"
+        )));
+    }
+    Ok(key)
+}
+
+/// Double-quote a filter value, escaping backslashes and quotes so a crafted
+/// value cannot terminate the string and inject filter syntax.
+fn meili_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 #[derive(Deserialize)]
@@ -280,11 +366,29 @@ impl LexicalEngine for MeilisearchHttpEngine {
             ));
         }
         let path = format!("/indexes/{index}/search");
-        let body = json!({
+        let mut body = json!({
             "q": query.text,
             "limit": query.top_k,
             "showRankingScore": true,
         });
+        // Pre-B1 wire shape is preserved for unfiltered queries: the `filter`
+        // key is only present when conditions exist. Filtered attributes must
+        // have been declared via [`MeilisearchHttpEngine::ensure_filterable`].
+        if !query.filter.is_empty()
+            && let Value::Object(map) = &mut body
+        {
+            map.insert(
+                "filter".to_string(),
+                Value::Array(
+                    query
+                        .filter
+                        .must
+                        .iter()
+                        .map(meili_filter_expression)
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+            );
+        }
         let response = self
             .request(reqwest::Method::POST, &path)?
             .json(&body)

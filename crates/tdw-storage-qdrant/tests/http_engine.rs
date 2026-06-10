@@ -70,6 +70,7 @@ async fn qdrant_engine_upserts_and_searches_against_real_qdrant() {
             VectorQuery {
                 vector: vec![0.1, 0.2, 0.3, 0.4],
                 top_k: 2,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await

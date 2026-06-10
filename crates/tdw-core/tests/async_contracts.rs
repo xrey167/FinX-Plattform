@@ -299,6 +299,7 @@ fn vector_and_lexical_payloads_round_trip_json() {
     let query = VectorQuery {
         vector: vec![0.1, 0.2],
         top_k: 3,
+        filter: tdw_core::PayloadFilter::default(),
     };
     let scored = ScoredPoint {
         id: "v1".to_string(),
@@ -313,6 +314,7 @@ fn vector_and_lexical_payloads_round_trip_json() {
     let text_query = TextQuery {
         text: "hello".to_string(),
         top_k: 5,
+        filter: tdw_core::PayloadFilter::default(),
     };
     let scored_doc = ScoredDoc {
         id: "d1".to_string(),
