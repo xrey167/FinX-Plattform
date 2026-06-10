@@ -143,7 +143,7 @@ fn validate_key(key: &str) -> Result<String> {
 /// dimension), and `-`. Crucially this excludes `/`, `?`, `&`, `#` and
 /// whitespace, so a `flow`/`key` interpolated into the `/data/{flow}/{key}?…`
 /// URL path can no longer inject extra path segments or query parameters.
-fn is_sdmx_char(c: char) -> bool {
+const fn is_sdmx_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-')
 }
 

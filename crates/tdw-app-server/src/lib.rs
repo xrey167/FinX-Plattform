@@ -315,9 +315,11 @@ pub struct ServiceLoop<D: Dispatcher + 'static, S: EventSink + 'static> {
 }
 
 /// Snapshot of durability-sink failure counts surfaced by [`ServiceLoop`] for
-/// health/metrics. Non-zero values mean events or cost records failed to
-/// persist while the op still completed (persistence here is best-effort), so a
-/// health check / metrics scrape can detect a silent durability/audit/cost gap.
+/// health/metrics.
+///
+/// Non-zero values mean events or cost records failed to persist while the op
+/// still completed (persistence here is best-effort), so a health check /
+/// metrics scrape can detect a silent durability/audit/cost gap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServiceLoopFailures {
     /// Count of `persist_event` failures since the loop started.

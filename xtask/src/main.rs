@@ -244,7 +244,9 @@ fn measure_workload<F: FnMut(u64)>(mut run: F) -> (f64, u64) {
         let scale = if elapsed.as_nanos() == 0 {
             8
         } else {
-            ((target.as_nanos() / elapsed.as_nanos()) as u64).max(2)
+            u64::try_from(target.as_nanos() / elapsed.as_nanos())
+                .unwrap_or(u64::MAX)
+                .max(2)
         };
         iters = iters.saturating_mul(scale);
     }

@@ -92,7 +92,7 @@ impl EventRouter {
         &self,
         queue: &mut Q,
         event_name: &str,
-        payload: Value,
+        payload: &Value,
         run_id_seed: &str,
         _now_ms: i64,
     ) -> Result<Vec<EnqueueOutcome>, WorkerQueueError>

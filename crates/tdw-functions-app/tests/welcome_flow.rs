@@ -76,6 +76,7 @@ fn make_envelope(op: Op) -> OpEnvelope {
 /// Register → `user.created` → `EventRouter` routing → welcome function →
 /// mock mailer, all in one in-process composition.
 #[tokio::test]
+#[allow(clippy::significant_drop_tightening)] // test: state/outbox outlive the guard block intentionally
 async fn register_user_drives_welcome_email_end_to_end() {
     const REGISTERED_EMAIL: &str = "newuser@example.com";
 

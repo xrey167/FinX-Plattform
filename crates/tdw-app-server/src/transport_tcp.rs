@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 /// Upper bound on concurrently-handled TCP connections. Each accepted
 /// connection holds a permit for its lifetime; once this many are live, further
 /// connections are rejected (closed immediately) instead of spawning unbounded
-/// reader/writer tasks — a connection-exhaustion DoS guard (TT1).
+/// reader/writer tasks — a connection-exhaustion `DoS` guard (TT1).
 const MAX_CONCURRENT_CONNECTIONS: usize = 256;
 
 /// Deadline to receive a frame's body once its length prefix has been read.
