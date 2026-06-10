@@ -1276,9 +1276,12 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_batch_persists_and_reports_dedup_token() {
+        // Uses `fileset` (never feature-swapped) so the test stays hermetic:
+        // under `all-http-providers` the yahoo binding is the live HTTP
+        // fetcher, and dispatching it would hit the network from a unit test.
         let state = offline_fixture_ingest_state().await;
         let env = make_envelope(Op::IngestBatch {
-            provider: "yahoo".to_string(),
+            provider: "fileset".to_string(),
             endpoint: "equity_historical".to_string(),
             symbols: vec!["AAPL".to_string(), "MSFT".to_string()],
             range: None,
@@ -1291,7 +1294,7 @@ mod tests {
                 result: Some(value),
                 ..
             } => {
-                assert_eq!(value["provider"], "yahoo");
+                assert_eq!(value["provider"], "fileset");
                 assert_eq!(value["endpoint"], "equity_historical");
                 assert_eq!(value["table"], "raw.equity_historical");
                 assert!(
@@ -1474,6 +1477,12 @@ mod tests {
         });
         let events = dispatch_op(&state, env).await;
 
+        // The claim under test is ROUTING: the explicit `yahoo` must win over
+        // the first candidate (`fileset`). Under `all-http-providers` the
+        // yahoo binding is the live HTTP fetcher, so the dispatch may fail at
+        // the network layer in an offline CI sandbox — a yahoo-attributed
+        // failure still proves yahoo was selected. The offline default build
+        // always takes the Completed arm.
         match &events[1] {
             EventMsg::Completed {
                 result: Some(value),
@@ -1482,7 +1491,13 @@ mod tests {
                 assert_eq!(value["provider"], "yahoo");
                 assert_eq!(value["endpoint"], "equity_historical");
             }
-            other => panic!("expected Completed, got {other:?}"),
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("yahoo"),
+                    "explicit provider must still be yahoo in the failure, got: {error}"
+                );
+            }
+            other => panic!("expected Completed or a yahoo-attributed Failed, got {other:?}"),
         }
     }
 
@@ -1570,10 +1585,12 @@ mod tests {
     #[tokio::test]
     async fn ingest_concrete_endpoint_bypasses_logical_resolution() {
         // L1.5 backwards-compat: a concrete endpoint (no slash) is dispatched
-        // directly, exactly as before the resolution layer existed.
+        // directly, exactly as before the resolution layer existed. Uses
+        // `fileset` (never feature-swapped) so the test stays hermetic under
+        // `all-http-providers`, where the yahoo binding is the live fetcher.
         let state = offline_fixture_ingest_state().await;
         let env = make_envelope(Op::IngestBatch {
-            provider: "yahoo".to_string(),
+            provider: "fileset".to_string(),
             endpoint: "equity_historical".to_string(),
             symbols: vec!["AAPL".to_string()],
             range: None,
@@ -1585,7 +1602,7 @@ mod tests {
                 result: Some(value),
                 ..
             } => {
-                assert_eq!(value["provider"], "yahoo");
+                assert_eq!(value["provider"], "fileset");
                 assert_eq!(value["endpoint"], "equity_historical");
             }
             other => panic!("expected Completed, got {other:?}"),

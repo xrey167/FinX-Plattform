@@ -22,6 +22,10 @@ COPY . .
 RUN cargo build --release -p tdw-mcp --features live --bin tdw-mcp
 
 FROM debian:bookworm-slim AS runtime
+
+# OCI metadata: links the GHCR package to the repo (source), and carries
+# the description/license into the registry UI.
+LABEL org.opencontainers.image.source="https://github.com/xrey167/FinX-Plattform"       org.opencontainers.image.description="TDW MCP financial-data server (live market data over MCP)"       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 # `curl` is included so the compose/K8s healthcheck can probe the MCP ops
 # endpoints (/health, /ready) on TDW_MCP_OPS_BIND.
 RUN apt-get update \
