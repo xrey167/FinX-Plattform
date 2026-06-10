@@ -36,7 +36,7 @@ use tdw_app_server::Dispatcher;
 )]
 use tdw_core::Fetcher;
 use tdw_core::{Error, Result};
-use tdw_domain::QuoteSnapshot;
+use tdw_domain::{QuoteSnapshot, ResultEnvelope, ResultExtra, Warning};
 #[cfg(feature = "identity")]
 use tdw_event::{EventEnvelope, sample_actor_context};
 use tdw_hooks::SystemHookHandlerBackend;
@@ -113,6 +113,7 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
         Op::GetQuoteSnapshot { provider, symbol } => {
             dispatch_get_quote_snapshot(state, policy, provider, symbol).await
         }
+        Op::FetchData { route, params } => dispatch_fetch_data(state, policy, route, params).await,
         Op::StreamStart {
             provider,
             symbol,
@@ -283,6 +284,329 @@ const fn available_quote_snapshot_providers() -> &'static str {
     {
         "(none — enable a provider-* feature)"
     }
+}
+
+/// Fetch a catalog route's data and return the records directly — no persist.
+///
+/// This is the `Op::FetchData` handler and the runtime home of WS0's catalog
+/// resolution + provider fallback. Flow (mirroring `GetQuoteSnapshot`, a
+/// no-cache read):
+///
+/// 1. **Policy guard first** — `enforce_request_path_with_backend` runs before
+///    any resolution, identical to every other op.
+/// 2. **Catalog resolution** — `route` is looked up in
+///    [`tdw_endpoint_catalog::catalog`]; an unknown route or one absent from
+///    the fetch dispatch table yields a structured error.
+/// 3. **Candidate selection + fallback** — with no explicit `provider`, the
+///    registered candidates are tried in declaration order; a *retryable*
+///    provider-side failure ([`Error::Provider`]/`Storage`/`Registry`) advances
+///    to the next candidate and records a `provider_fallback` warning. A
+///    *validation* failure ([`Error::InvalidQuery`]) fails fast — no fallback.
+///    An explicit `provider` selects exactly one candidate and **never** falls
+///    back.
+/// 4. The standardized records are returned inside a [`ResultEnvelope`] in the
+///    terminal event; nothing is written to any storage layer.
+///
+/// # Errors
+///
+/// Returns [`Error::Provider`] if policy enforcement fails, if `route` is
+/// unknown or not a `Fetch` route, if the route has no registered candidate in
+/// this build, if an explicit provider is not a candidate / not registered, or
+/// if every tried candidate fails (the last error is surfaced).
+async fn dispatch_fetch_data(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    route: &str,
+    params: &Value,
+) -> Result<Value> {
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)?;
+
+    let Some(entry) = tdw_endpoint_catalog::lookup(route) else {
+        return Err(Error::Provider(format!(
+            "unknown catalog route: {route}; known: {}",
+            known_catalog_routes()
+        )));
+    };
+    if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+        return Err(Error::Provider(format!(
+            "catalog route {route} is not a fetch route"
+        )));
+    }
+
+    let requested_provider = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    let runner = CommandRunner::new((*state.registry).clone());
+    let table = fetch_dispatch_table();
+
+    let outcome = resolve_and_fetch(&entry, requested_provider, params, &table, &runner).await?;
+
+    let extra = ResultExtra::default()
+        .with_route(route)
+        .with_argument("provider", outcome.provider);
+    let mut envelope = ResultEnvelope::new(route, outcome.records)
+        .with_provider(outcome.provider)
+        .with_extra(extra);
+    envelope.warnings = outcome.warnings;
+    let body = serde_json::to_value(&envelope)
+        .map_err(|e| Error::Provider(format!("result envelope serialize: {e}")))?;
+    Ok(mask_json_response(
+        json!({ "evidence": evidence, "result": body }),
+        &policy.mask_rules,
+    ))
+}
+
+/// Successful outcome of [`resolve_and_fetch`]: which provider served the
+/// request, the standardized records, and any fallback warnings accumulated.
+#[derive(Debug)]
+struct FetchOutcome {
+    provider: &'static str,
+    records: Vec<Value>,
+    warnings: Vec<Warning>,
+}
+
+/// Resolve a catalog route to a provider and fetch its records, applying the
+/// runtime fallback policy. Pure of policy/evidence/masking so it can be unit
+/// tested with an injected fetch `table` and `runner`.
+///
+/// With no explicit provider, registered candidates are tried in declaration
+/// order: a retryable provider-side error advances to the next candidate (and
+/// records a `provider_fallback` warning naming the failed and next provider);
+/// a validation error ([`Error::InvalidQuery`]) fails fast. An explicit provider
+/// resolves to exactly one candidate and never falls back.
+async fn resolve_and_fetch(
+    entry: &tdw_endpoint_catalog::CatalogEntry,
+    requested_provider: &str,
+    params: &Value,
+    table: &BTreeMap<(&'static str, &'static str), FetchBinding>,
+    runner: &CommandRunner,
+) -> Result<FetchOutcome> {
+    let route = entry.route;
+    let is_registered =
+        |c: &tdw_endpoint_catalog::ProviderCandidate| table.contains_key(&(c.provider, c.endpoint));
+
+    let attempt_order: Vec<tdw_endpoint_catalog::ProviderCandidate> =
+        if requested_provider.is_empty() {
+            let registered: Vec<_> = entry
+                .candidates
+                .iter()
+                .copied()
+                .filter(is_registered)
+                .collect();
+            if registered.is_empty() {
+                return Err(Error::Provider(format!(
+                    "no registered provider for catalog route {route}; candidates: {} \
+                     (enable a provider-* feature)",
+                    catalog_candidate_providers(entry.candidates)
+                )));
+            }
+            registered
+        } else {
+            let Some(candidate) = entry
+                .candidates
+                .iter()
+                .copied()
+                .find(|c| c.provider == requested_provider)
+            else {
+                return Err(Error::Provider(format!(
+                    "provider {requested_provider} does not serve catalog route {route}; \
+                     candidates: {}",
+                    catalog_candidate_providers(entry.candidates)
+                )));
+            };
+            if !is_registered(&candidate) {
+                return Err(Error::Provider(format!(
+                    "provider {requested_provider} serves catalog route {route} but is not \
+                     registered in this build"
+                )));
+            }
+            vec![candidate]
+        };
+
+    let mut warnings: Vec<Warning> = Vec::new();
+    let mut last_error: Option<Error> = None;
+
+    for (index, candidate) in attempt_order.iter().enumerate() {
+        let binding = table
+            .get(&(candidate.provider, candidate.endpoint))
+            .ok_or_else(|| {
+                Error::Provider(format!(
+                    "catalog candidate {}/{} vanished from the fetch dispatch table",
+                    candidate.provider, candidate.endpoint
+                ))
+            })?;
+        match (binding.run)(runner, params.clone()).await {
+            Ok(records) => {
+                return Ok(FetchOutcome {
+                    provider: candidate.provider,
+                    records,
+                    warnings,
+                });
+            }
+            Err(error) => {
+                // Validation errors fail fast — never fall back.
+                if !is_retryable_provider_error(&error) {
+                    return Err(error);
+                }
+                let next = attempt_order
+                    .get(index + 1)
+                    .map_or("(none)", |c| c.provider);
+                warnings.push(Warning::new(
+                    "provider_fallback",
+                    format!(
+                        "provider {} failed ({error}); chosen provider {next}",
+                        candidate.provider
+                    ),
+                ));
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        Error::Provider(format!("no candidate could serve catalog route {route}"))
+    }))
+}
+
+/// Whether `error` is a retryable provider-side failure (fallback-eligible) as
+/// opposed to a validation error (fail-fast).
+///
+/// `InvalidQuery` is a caller/validation error: the same bad params would fail
+/// against every provider, so falling back is pointless and would mask the
+/// real cause. `Provider`, `Storage`, and `Registry` errors are provider-side
+/// and may succeed on a different candidate, so they are retryable.
+const fn is_retryable_provider_error(error: &Error) -> bool {
+    !matches!(error, Error::InvalidQuery(_))
+}
+
+/// Comma-separated, sorted list of known catalog routes for error messages.
+fn known_catalog_routes() -> String {
+    let mut routes: Vec<&'static str> = tdw_endpoint_catalog::catalog()
+        .iter()
+        .map(|e| e.route)
+        .collect();
+    routes.sort_unstable();
+    routes.join(", ")
+}
+
+/// Comma-separated candidate provider names (in preference order).
+fn catalog_candidate_providers(candidates: &[tdw_endpoint_catalog::ProviderCandidate]) -> String {
+    candidates
+        .iter()
+        .map(|c| c.provider)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One entry in the no-persist fetch dispatch table.
+///
+/// Mirrors [`IngestBinding`] but `run` returns the standardized records as JSON
+/// rather than persisting them — the `Op::FetchData` read path writes nothing.
+struct FetchBinding {
+    run: FetchRunner,
+}
+
+type FetchRunner = Box<
+    dyn for<'a> Fn(
+            &'a CommandRunner,
+            Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>>> + Send + 'a>>
+        + Send
+        + Sync,
+>;
+
+/// Build a [`FetchBinding`] for a concrete fetcher, returning its records as
+/// JSON values without persistence.
+fn fetch_binding<F, Q, D>() -> FetchBinding
+where
+    F: tdw_core::Fetcher<Q, D> + Default,
+    Q: tdw_core::QueryParams,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, params: Value| {
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// The no-persist fetch dispatch table for this build.
+///
+/// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
+/// fetcher plus the two always-on offline fixtures — but bound to a
+/// records-returning closure (no bronze write). `Op::FetchData` resolves a
+/// catalog candidate against these keys.
+fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding> {
+    let mut table: BTreeMap<(&'static str, &'static str), FetchBinding> = BTreeMap::new();
+    table.insert(
+        ("fileset", "equity_historical"),
+        fetch_binding::<FilesetEquityHistoricalFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", "equity_historical"),
+        fetch_binding::<SelectedYahooEquityHistoricalFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-akshare")]
+    table.insert(
+        ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::AkShareHttpFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-alpaca")]
+    table.insert(
+        ("alpaca", crate::AlpacaHttpStockBarsFetcher::ENDPOINT),
+        fetch_binding::<crate::AlpacaHttpStockBarsFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-alpha-vantage")]
+    table.insert(
+        ("alpha_vantage", crate::AlphaVantageHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::AlphaVantageHttpFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-ccdata")]
+    table.insert(
+        ("ccdata", crate::CCDataHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::CCDataHttpFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-coingecko")]
+    table.insert(
+        ("coingecko", crate::CoinGeckoHttpOhlcFetcher::ENDPOINT),
+        fetch_binding::<crate::CoinGeckoHttpOhlcFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-databento")]
+    table.insert(
+        ("databento", crate::DatabentoHttpTimeseriesFetcher::ENDPOINT),
+        fetch_binding::<crate::DatabentoHttpTimeseriesFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-fmp")]
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpHistoricalFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-polygon")]
+    table.insert(
+        ("polygon", crate::PolygonHttpAggregatesFetcher::ENDPOINT),
+        fetch_binding::<crate::PolygonHttpAggregatesFetcher, _, _>(),
+    );
+    #[cfg(feature = "provider-tiingo")]
+    table.insert(
+        ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
+        fetch_binding::<crate::TiingoHttpHistoricalFetcher, _, _>(),
+    );
+    table
 }
 
 /// Start a live streaming-ingest task and report its `stream_id`.
@@ -955,6 +1279,18 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     table
 }
 
+/// The `(provider, endpoint)` keys registered in this build's ingest dispatch
+/// table, sorted.
+///
+/// Exposed so conformance tooling (e.g. the feature-gated
+/// `catalog_candidates_all_dispatchable_under_full_providers` test) can verify
+/// every catalog candidate is dispatchable under the build's features without
+/// reaching into the private binding closures.
+#[must_use]
+pub fn ingest_dispatch_pairs() -> Vec<(&'static str, &'static str)> {
+    ingest_dispatch_table().into_keys().collect()
+}
+
 /// Comma-separated, sorted `provider/endpoint` list for the unsupported-pair
 /// error. `BTreeMap` iteration is already sorted, so the output is stable.
 fn available_ingest_pairs(table: &BTreeMap<(&'static str, &'static str), IngestBinding>) -> String {
@@ -1607,6 +1943,235 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // WS0 catalog: FetchData dispatch + runtime fallback conformance
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_data_offline_default_resolves_equity_fixture_network_free() {
+        // The offline default build resolves `equity/price/historical` to the
+        // first registered candidate (`fileset`) and returns its records in the
+        // terminal event without touching the network or any storage layer.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "equity/price/historical".to_string(),
+            params: json!({ "symbol": "AAPL" }),
+        });
+        let events = dispatch_op(&state, env).await;
+
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["result"]["provider"], "fileset");
+                assert_eq!(value["result"]["extra"]["route"], "equity/price/historical");
+                let rows = value["result"]["results"]
+                    .as_array()
+                    .expect("results array");
+                assert!(!rows.is_empty(), "fixture must return rows, got {value}");
+                // No-persist read path: no fallback warning on a clean first hit.
+                assert!(
+                    value["result"]["warnings"]
+                        .as_array()
+                        .expect("warnings array")
+                        .is_empty(),
+                    "no fallback expected on first-candidate success, got {value}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_data_unknown_route_fails_with_known_list() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "equity/does/not/exist".to_string(),
+            params: json!({ "symbol": "AAPL" }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(error.contains("unknown catalog route"), "got: {error}");
+                assert!(
+                    error.contains("equity/price/historical"),
+                    "should list known routes, got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// Offline-only: `provider-fmp` registers `fmp`, so the not-registered
+    /// assertion only holds in the default (no-feature) build. Mirrors
+    /// `ingest_logical_endpoint_unavailable_provider_fails_with_candidates`.
+    #[cfg(not(feature = "provider-fmp"))]
+    #[tokio::test]
+    async fn fetch_data_explicit_unregistered_provider_does_not_fall_back() {
+        // Explicit `provider=fmp` is a candidate but unregistered in the offline
+        // build: it fails fast with a not-registered error and never falls back
+        // to fileset/yahoo.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "equity/price/historical".to_string(),
+            params: json!({ "symbol": "AAPL", "provider": "fmp" }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(
+                    error.contains("not registered in this build"),
+                    "got: {error}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// Catalog ⊆ dispatch table: every `Fetch` candidate the fetch dispatch
+    /// table registers must be a declared catalog candidate (no orphan bindings),
+    /// and the always-on fixtures must be present in both. Under the offline
+    /// default build only the fixtures are registered.
+    #[test]
+    fn catalog_fetch_candidates_are_consistent_with_dispatch_table() {
+        use std::collections::BTreeSet;
+
+        let catalog_pairs: BTreeSet<(&str, &str)> = tdw_endpoint_catalog::catalog()
+            .iter()
+            .flat_map(|e| e.candidates.iter().map(|c| (c.provider, c.endpoint)))
+            .collect();
+
+        let fetch_table = fetch_dispatch_table();
+        for (provider, endpoint) in fetch_table.keys() {
+            assert!(
+                catalog_pairs.contains(&(*provider, *endpoint)),
+                "fetch dispatch table key {provider}/{endpoint} is not a catalog candidate"
+            );
+        }
+
+        // The two offline fixtures are catalog candidates AND registered.
+        assert!(catalog_pairs.contains(&("fileset", "equity_historical")));
+        assert!(catalog_pairs.contains(&("yahoo", "equity_historical")));
+        assert!(fetch_table.contains_key(&("fileset", "equity_historical")));
+        assert!(fetch_table.contains_key(&("yahoo", "equity_historical")));
+
+        // And the same fixtures are present in the ingest (persist) dispatch
+        // table, so a catalog candidate is reachable on both paths.
+        let ingest_table = ingest_dispatch_table();
+        assert!(ingest_table.contains_key(&("fileset", "equity_historical")));
+        assert!(ingest_table.contains_key(&("yahoo", "equity_historical")));
+    }
+
+    /// Dispatch table ⊇ catalog: under `all-http-providers`, EVERY `Fetch`
+    /// candidate declared in the endpoint catalog must have an ingest binding —
+    /// a candidate without one is unreachable dead weight. This is the
+    /// full-table conformance check that `xtask catalog-check` deliberately
+    /// does not perform (an xtask dep on this crate with `all-http-providers`
+    /// would feature-unify every HTTP provider crate into default workspace
+    /// builds and lints). CI runs it via
+    /// `cargo test -p tdw-service-api --features all-http-providers`.
+    #[cfg(feature = "all-http-providers")]
+    #[test]
+    fn catalog_candidates_all_dispatchable_under_full_providers() {
+        use std::collections::BTreeSet;
+
+        let ingest_pairs: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+        for entry in tdw_endpoint_catalog::catalog() {
+            if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+                continue;
+            }
+            for candidate in entry.candidates {
+                assert!(
+                    ingest_pairs.contains(&(candidate.provider, candidate.endpoint)),
+                    "catalog route {} candidate {}/{} has no ingest dispatch binding \
+                     under all-http-providers",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_and_fetch_falls_back_and_warns_on_retryable_error() {
+        // Fallback fixture: register a failing earlier candidate (`fmp`, a
+        // retryable provider error) and a working later one (`akshare` stub) in
+        // an injected fetch table, then resolve `equity/price/historical` with no
+        // explicit provider. The dispatch must skip the failing provider, land on
+        // the working one, and append a `provider_fallback` warning.
+        use tdw_provider_testkit::{FailingEquityHistoricalFetcher, StubEquityHistoricalFetcher};
+
+        let entry =
+            tdw_endpoint_catalog::lookup("equity/price/historical").expect("equity route present");
+
+        let mut table: BTreeMap<(&'static str, &'static str), FetchBinding> = BTreeMap::new();
+        table.insert(
+            ("fmp", "equity_historical"),
+            fetch_binding::<FailingEquityHistoricalFetcher, _, _>(),
+        );
+        table.insert(
+            ("akshare", "hist"),
+            fetch_binding::<StubEquityHistoricalFetcher, _, _>(),
+        );
+
+        let runner = CommandRunner::new(ProviderRegistry::default());
+        let outcome = resolve_and_fetch(&entry, "", &json!({ "symbol": "AAPL" }), &table, &runner)
+            .await
+            .expect("fallback should land on the working candidate");
+
+        // fmp precedes akshare in declaration order, so fmp is tried first
+        // (fails, retryable) and akshare serves the result.
+        assert_eq!(outcome.provider, "akshare");
+        assert_eq!(outcome.records.len(), 1);
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(outcome.warnings[0].category, "provider_fallback");
+        assert!(
+            outcome.warnings[0].message.contains("fmp")
+                && outcome.warnings[0].message.contains("akshare"),
+            "warning must name failed + chosen provider, got: {}",
+            outcome.warnings[0].message
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_and_fetch_fails_fast_on_validation_error_without_fallback() {
+        // A validation error (missing symbol -> Error::InvalidQuery from the
+        // failing fetcher's transform_query) must NOT trigger fallback: the same
+        // bad params would fail every candidate.
+        use tdw_provider_testkit::{FailingEquityHistoricalFetcher, StubEquityHistoricalFetcher};
+
+        let entry =
+            tdw_endpoint_catalog::lookup("equity/price/historical").expect("equity route present");
+
+        let mut table: BTreeMap<(&'static str, &'static str), FetchBinding> = BTreeMap::new();
+        table.insert(
+            ("fmp", "equity_historical"),
+            fetch_binding::<FailingEquityHistoricalFetcher, _, _>(),
+        );
+        table.insert(
+            ("akshare", "hist"),
+            fetch_binding::<StubEquityHistoricalFetcher, _, _>(),
+        );
+
+        let runner = CommandRunner::new(ProviderRegistry::default());
+        // No `symbol` -> transform_query returns Error::InvalidQuery (fail-fast).
+        let error = resolve_and_fetch(&entry, "", &json!({}), &table, &runner)
+            .await
+            .expect_err("a validation error must fail fast, not fall back");
+        assert!(
+            matches!(error, Error::InvalidQuery(_)),
+            "validation error must surface unchanged, got: {error:?}"
+        );
     }
 
     #[test]

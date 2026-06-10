@@ -65,12 +65,13 @@ def count_warnings() -> int:
         sys.stderr.write(proc.stderr[-4000:])
         sys.stderr.write("\nclippy produced no diagnostics (compile error?)\n")
         sys.exit(2)
-    return len(seen)
+    return seen
 
 
 def main() -> int:
     raw = BASELINE_FILE.read_text(encoding="utf-8").strip()
-    actual = count_warnings()
+    warnings = count_warnings()
+    actual = len(warnings)
     if raw == "AUTO":
         print(f"::notice::clippy pedantic+nursery calibration — measured count = "
               f"{actual}. Commit this number to {BASELINE_FILE.relative_to(ROOT)} "
@@ -80,6 +81,13 @@ def main() -> int:
     baseline = int(raw)
     print(f"pedantic+nursery warnings: actual={actual} baseline={baseline}")
     if actual > baseline:
+        # List every counted diagnostic so the offending warnings are
+        # identifiable from the CI log alone (the baseline records only a
+        # number, and counts can differ across platforms via cfg-gated code).
+        for lint, file_name, line_start, column_start in sorted(
+            warnings, key=lambda key: (key[1] or "", key[2] or 0, key[0] or "")
+        ):
+            print(f"  {lint} {file_name}:{line_start}:{column_start}")
         print(f"::error::pedantic+nursery warnings increased: {actual} > baseline "
               f"{baseline}. Resolve the new warning(s) or, for a genuine false "
               f"positive, add a documented #[allow(...)] with a reason. Do not raise "

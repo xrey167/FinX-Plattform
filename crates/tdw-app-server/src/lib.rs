@@ -519,13 +519,10 @@ pub async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = match signal(SignalKind::terminate()) {
-            Ok(sigterm) => sigterm,
-            // If SIGTERM cannot be installed, fall back to ctrl-c only.
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-                return;
-            }
+        // If SIGTERM cannot be installed, fall back to ctrl-c only.
+        let Ok(mut sigterm) = signal(SignalKind::terminate()) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
         };
         tokio::select! {
             biased;

@@ -36,6 +36,7 @@ fn main() {
             Some("report") => mutation_report(args.next()),
             _ => help(),
         },
+        "catalog-check" => catalog_check(),
         "clean-room-audit" => clean_room_audit(),
         "crate-readiness-check" => crate_readiness_check(),
         "prerelease-check" => prerelease_check(),
@@ -52,7 +53,7 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
+        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | catalog-check | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
     );
     Ok(())
 }
@@ -980,6 +981,86 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
         "timeouts": timeouts,
         "other": other,
     })
+}
+
+/// Validate the namespaced endpoint catalog's intrinsic invariants. Mirrors
+/// the `*-schema-check` command structure: pure, offline, and failing with a
+/// structured list of offenders.
+///
+/// Checks, for every catalog entry:
+///   1. **Route grammar** — the route obeys the catalog grammar (lowercase
+///      `[a-z0-9_]` segments separated by `/`).
+///   2. **Schema presence** — both the params and model schema closures produce
+///      a non-trivial JSON schema (a fetch route with empty schemas is a wiring
+///      bug that would surface as an empty `OpenAPI`/SDK shape downstream).
+///   3. **Fetch routes** declare at least one candidate; **Compute routes**
+///      carry none.
+///
+/// Candidate dispatchability (every `Fetch` candidate having an ingest
+/// binding) is deliberately NOT checked here: it needs `tdw-service-api` built
+/// with `all-http-providers`, and an xtask dependency on that would
+/// feature-unify every HTTP provider crate into default workspace builds and
+/// lints. It lives instead as the feature-gated test
+/// `catalog_candidates_all_dispatchable_under_full_providers` in
+/// `tdw-service-api`, run by CI via
+/// `cargo test -p tdw-service-api --features all-http-providers`.
+fn catalog_check() -> Result<(), String> {
+    let mut offenders = Vec::new();
+    let mut routes = 0usize;
+    let mut candidates_seen = 0usize;
+
+    for entry in tdw_endpoint_catalog::catalog() {
+        routes += 1;
+        let route = entry.route;
+
+        if !tdw_endpoint_catalog::is_valid_route(route) {
+            offenders.push(format!("{route}: route violates the catalog grammar"));
+        }
+
+        // Schema presence: both closures must yield a non-empty object schema.
+        if schema_is_trivial(&(entry.params_schema)()) {
+            offenders.push(format!("{route}: params schema is empty/trivial"));
+        }
+        if schema_is_trivial(&(entry.model)()) {
+            offenders.push(format!("{route}: model schema is empty/trivial"));
+        }
+
+        match entry.kind {
+            tdw_endpoint_catalog::EndpointKind::Fetch => {
+                if entry.candidates.is_empty() {
+                    offenders.push(format!("{route}: fetch route has no candidates"));
+                }
+                candidates_seen += entry.candidates.len();
+            }
+            tdw_endpoint_catalog::EndpointKind::Compute => {
+                if !entry.candidates.is_empty() {
+                    offenders.push(format!(
+                        "{route}: compute route must not declare provider candidates"
+                    ));
+                }
+            }
+        }
+    }
+
+    if offenders.is_empty() {
+        println!(
+            "catalog-check passed: {routes} routes, {candidates_seen} candidates; \
+             dispatchability covered by the all-http-providers test in tdw-service-api"
+        );
+        Ok(())
+    } else {
+        Err(format!("catalog-check failed:\n{}", offenders.join("\n")))
+    }
+}
+
+/// Whether a `schemars::Schema` is empty/trivial (no object body to describe a
+/// request or record). A real params/model schema serializes to a JSON object
+/// with at least one descriptive key (`properties`, `$ref`, `type`, …).
+fn schema_is_trivial(schema: &schemars::Schema) -> bool {
+    !matches!(
+        serde_json::to_value(schema),
+        Ok(serde_json::Value::Object(map)) if !map.is_empty()
+    )
 }
 
 fn clean_room_audit() -> Result<(), String> {

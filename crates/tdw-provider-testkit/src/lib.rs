@@ -127,3 +127,6 @@ macro_rules! live_fetch_obbject_nonempty {
         assert!(!obbject.rows.is_empty(), $msg);
     }};
 }
+
+mod failing_fetcher;
+pub use failing_fetcher::{FailingEquityHistoricalFetcher, StubEquityHistoricalFetcher};

@@ -7,9 +7,11 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 prost = { workspace = true }
+schemars = { workspace = true }
 serde_json = { workspace = true }
 tdw-agent = { path = "../crates/tdw-agent" }
 tdw-config = { workspace = true }
+tdw-endpoint-catalog = { workspace = true }
 tdw-event = { path = "../crates/tdw-event" }
 tdw-migration = { path = "../crates/tdw-migration" }
 tdw-proto = { path = "../crates/tdw-proto" }
