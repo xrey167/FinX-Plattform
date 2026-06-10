@@ -9,8 +9,8 @@
 use bytes::Bytes;
 use tdw_core::Fetcher;
 use tdw_provider_eia::{
-    EiaCommodity, EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher, EiaNaturalGasQuery,
-    EiaSpotPriceQuery,
+    EiaCommodity, EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher,
+    EiaNaturalGasQuery, EiaReport, EiaReportQuery, EiaSpotPriceQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -181,6 +181,110 @@ fn natural_gas_transform_query_validates_and_rejects_bad_length() {
 
     EiaHttpNaturalGasFetcher::transform_query(serde_json::json!({ "length": 10_001 }))
         .expect_err("length>10000 must be rejected");
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing report fetcher -> CommodityReportRow
+// ---------------------------------------------------------------------------
+
+fn report_cassette() -> Bytes {
+    cassette_bytes!({
+        "response": {
+            "data": [
+                {
+                    "period": "2026-05-30",
+                    "series": "WCRSTUS1",
+                    "series-description": "Weekly U.S. Ending Stocks of Crude Oil",
+                    "value": "440123",
+                    "units": "thousand barrels"
+                },
+                {
+                    "period": "2026-05-23",
+                    "series": "WCRSTUS1",
+                    "series-description": "Weekly U.S. Ending Stocks of Crude Oil",
+                    "value": ".",
+                    "units": "thousand barrels"
+                },
+                {
+                    "period": "2026-05-16",
+                    "series": "WCRSTUS1",
+                    "series-description": "Weekly U.S. Ending Stocks of Crude Oil",
+                    "value": "441900",
+                    "units": "thousand barrels"
+                }
+            ]
+        }
+    })
+}
+
+#[test]
+fn report_transform_query_injects_report_and_validates_length() {
+    let query = EiaHttpReportFetcher::transform_query(
+        serde_json::json!({ "report": "petroleum_status_report" }),
+    )
+    .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query.report, EiaReport::PetroleumStatusReport);
+    assert_eq!(query.length, 100);
+
+    EiaHttpReportFetcher::transform_query(serde_json::json!({
+        "report": "short_term_energy_outlook",
+        "length": 0
+    }))
+    .expect_err("length=0 must be rejected");
+}
+
+#[test]
+fn report_cassette_decodes_rows_and_keeps_missing_value_as_none() {
+    let fetcher = EiaHttpReportFetcher::default();
+    let query = EiaReportQuery::from_value(&serde_json::json!({
+        "report": "petroleum_status_report"
+    }))
+    .unwrap_or_else(|e| panic!("query must build: {e}"));
+    let rows = fetcher
+        .transform_data(&query, report_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    // The missing-value row is retained (value=None), not skipped.
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    assert_eq!(rows[0].report, "petroleum_status_report");
+    assert_eq!(rows[0].series_id, "WCRSTUS1");
+    assert_eq!(rows[0].period, "2026-05-30");
+    assert_eq!(rows[0].value, Some(440_123.0));
+    assert_eq!(rows[1].value, None);
+    assert_eq!(rows[2].value, Some(441_900.0));
+}
+
+#[test]
+fn report_cassette_rejects_non_numeric_value() {
+    let fetcher = EiaHttpReportFetcher::default();
+    let query = EiaReportQuery::from_value(&serde_json::json!({
+        "report": "short_term_energy_outlook"
+    }))
+    .unwrap_or_else(|e| panic!("query must build: {e}"));
+    let bad = cassette_bytes!({
+        "response": { "data": [
+            { "period": "2026-05", "series": "X", "value": "N/A", "units": "u" }
+        ]}
+    });
+    fetcher
+        .transform_data(&query, bad)
+        .expect_err("non-numeric value must be rejected");
+}
+
+#[tokio::test]
+async fn live_eia_report_returns_rows_when_env_vars_set() {
+    if std::env::var("TDW_EIA_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_EIA_LIVE != 1; skipping live EIA report integration test");
+        return;
+    }
+    let query = EiaReportQuery::from_value(&serde_json::json!({
+        "report": "petroleum_status_report",
+        "length": 5
+    }))
+    .unwrap_or_else(|e| panic!("query must build: {e}"));
+    let fetcher = EiaHttpReportFetcher::default();
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live response must include report rows");
 }
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,10 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
+pub use http_fetcher::{
+    EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
+    EiaReportQuery,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

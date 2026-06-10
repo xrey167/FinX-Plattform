@@ -113,7 +113,10 @@ use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
 #[cfg(feature = "provider-bls")]
 use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
 #[cfg(feature = "provider-cboe")]
-use tdw_provider_cboe::{CboeHttpIndexFetcher, CboeHttpOptionsFetcher};
+use tdw_provider_cboe::{
+    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    CboeHttpOptionsFetcher,
+};
 #[cfg(feature = "provider-ccdata")]
 use tdw_provider_ccdata::CCDataHttpFetcher;
 #[cfg(feature = "provider-coingecko")]
@@ -125,9 +128,11 @@ use tdw_provider_deribit::{
     DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
 };
 #[cfg(feature = "provider-ecb")]
-use tdw_provider_ecb::EcbHttpDataFetcher;
+use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
 #[cfg(feature = "provider-eia")]
-use tdw_provider_eia::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
+use tdw_provider_eia::{
+    EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
+};
 #[cfg(feature = "provider-federal-reserve")]
 use tdw_provider_federal_reserve::{FedFomcDocumentsHttpFetcher, FedMacroSeriesHttpFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
@@ -155,7 +160,9 @@ use tdw_provider_government_us::{
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-nasdaq")]
-use tdw_provider_nasdaq::NasdaqHttpDatasetFetcher;
+use tdw_provider_nasdaq::{
+    NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+};
 #[cfg(feature = "provider-oecd")]
 use tdw_provider_oecd::OecdHttpDataFetcher;
 #[cfg(feature = "provider-polygon")]
@@ -186,6 +193,13 @@ use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 #[cfg(feature = "provider-yahoo-http")]
 use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::{
+    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
+    YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
+    YahooHttpShareStatisticsFetcher,
+};
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -232,6 +246,20 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
     registry.register(SelectedYahooEquityHistoricalFetcher::registry_entry())?;
+    // Keyless Yahoo expansion fetchers (gap-matrix item L2.4); only present when
+    // the real HTTP implementation is enabled.
+    #[cfg(feature = "provider-yahoo-http")]
+    {
+        registry.register(YahooHttpProfileFetcher::registry_entry())?;
+        registry.register(YahooHttpQuoteFetcher::registry_entry())?;
+        registry.register(YahooHttpPricePerformanceFetcher::registry_entry())?;
+        registry.register(YahooHttpDividendsFetcher::registry_entry())?;
+        registry.register(YahooHttpShareStatisticsFetcher::registry_entry())?;
+        registry.register(YahooHttpConsensusFetcher::registry_entry())?;
+        registry.register(YahooHttpOptionsChainFetcher::registry_entry())?;
+        registry.register(YahooHttpFuturesHistoricalFetcher::registry_entry())?;
+        registry.register(YahooHttpFuturesCurveFetcher::registry_entry())?;
+    }
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
     registry.register(AdanosSentimentHttpFetcher::registry_entry())?;
@@ -255,6 +283,11 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CboeHttpIndexFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
     registry.register(CboeHttpOptionsFetcher::registry_entry())?;
+    // Catalog-facing CBOE fetchers emitting tdw_domain models (G004 part 2).
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpIndexSnapshotFetcher::registry_entry())?;
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpOptionsChainFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
@@ -271,10 +304,16 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(DeribitHttpFundingFetcher::registry_entry())?;
     #[cfg(feature = "provider-ecb")]
     registry.register(EcbHttpDataFetcher::registry_entry())?;
+    // Catalog-facing ECB reference-rates fetcher (G004 part 2).
+    #[cfg(feature = "provider-ecb")]
+    registry.register(EcbHttpReferenceRatesFetcher::registry_entry())?;
     #[cfg(feature = "provider-eia")]
     registry.register(EiaHttpSpotPriceFetcher::registry_entry())?;
     #[cfg(feature = "provider-eia")]
     registry.register(EiaHttpNaturalGasFetcher::registry_entry())?;
+    // Catalog-facing EIA report fetcher (G004 part 2).
+    #[cfg(feature = "provider-eia")]
+    registry.register(EiaHttpReportFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
     registry.register(FinraOtcSummaryHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-finra")]
@@ -348,6 +387,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(HuggingFaceHttpTextGenerationFetcher::registry_entry())?;
     #[cfg(feature = "provider-nasdaq")]
     registry.register(NasdaqHttpDatasetFetcher::registry_entry())?;
+    // Catalog-facing NASDAQ calendar fetcher (G004 part 2).
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpCalendarFetcher::registry_entry())?;
     #[cfg(feature = "provider-oecd")]
     registry.register(OecdHttpDataFetcher::registry_entry())?;
     #[cfg(feature = "provider-polygon")]

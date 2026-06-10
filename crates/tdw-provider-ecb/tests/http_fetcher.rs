@@ -11,7 +11,9 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
-use tdw_provider_ecb::{EcbDataQuery, EcbHttpDataFetcher};
+use tdw_provider_ecb::{
+    EcbDataQuery, EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher, EcbReferenceRatesQuery,
+};
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> EcbDataQuery {
@@ -142,6 +144,106 @@ fn transform_query_rejects_missing_fields() {
     assert!(
         EcbHttpDataFetcher::transform_query(json!({ "flow": "EXR" })).is_err(),
         "missing key/start_period/end_period must error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing reference-rates fetcher (currency/reference_rates)
+// ---------------------------------------------------------------------------
+
+/// A wildcard EXR `jsondata` response: two currencies (USD, GBP) across two days.
+/// The series dimension carries CURRENCY so each row resolves to its pair.
+fn reference_rates_cassette() -> Bytes {
+    cassette_bytes!({
+        "dataSets": [{
+            "series": {
+                "0:0:0:0:0": {
+                    "observations": {
+                        "0": [1.0934, 0, null],
+                        "1": [1.0945, 0, null]
+                    }
+                },
+                "0:1:0:0:0": {
+                    "observations": {
+                        "0": [0.8534, 0, null],
+                        "1": [0.8540, 0, null]
+                    }
+                }
+            }
+        }],
+        "structure": {
+            "dimensions": {
+                "series": [
+                    { "id": "FREQ", "values": [{ "id": "D" }] },
+                    { "id": "CURRENCY", "values": [{ "id": "USD" }, { "id": "GBP" }] },
+                    { "id": "CURRENCY_DENOM", "values": [{ "id": "EUR" }] },
+                    { "id": "EXR_TYPE", "values": [{ "id": "SP00" }] },
+                    { "id": "EXR_SUFFIX", "values": [{ "id": "A" }] }
+                ],
+                "observation": [{
+                    "id": "TIME_PERIOD",
+                    "values": [
+                        { "id": "2024-01-02" },
+                        { "id": "2024-01-03" }
+                    ]
+                }]
+            }
+        }
+    })
+}
+
+#[test]
+fn cassette_reference_rates_resolves_per_currency_macro_series() {
+    let fetcher = EcbHttpReferenceRatesFetcher::default();
+    let query = EcbHttpReferenceRatesFetcher::transform_query(json!({}))
+        .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    let rows = fetcher
+        .transform_data(&query, reference_rates_cassette())
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    // Two currencies x two days, sorted by (currency, date): GBP then USD.
+    assert_eq!(rows.len(), 4, "rows={rows:#?}");
+    assert_eq!(rows[0].series_id, "GBP");
+    assert_eq!(rows[0].date, "2024-01-02");
+    assert_eq!(rows[0].value, Some(0.8534));
+    assert_eq!(rows[0].frequency.as_deref(), Some("daily"));
+    assert_eq!(rows[2].series_id, "USD");
+    assert_eq!(rows[2].value, Some(1.0934));
+}
+
+#[test]
+fn reference_rates_transform_query_accepts_optional_window() {
+    let query = EcbHttpReferenceRatesFetcher::transform_query(json!({
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    assert!(query.params.start_date.is_some());
+    assert!(query.params.end_date.is_some());
+
+    // An inverted window is rejected by the shared StandardParams validation.
+    assert!(
+        EcbHttpReferenceRatesFetcher::transform_query(json!({
+            "start_date": "2024-02-01",
+            "end_date": "2024-01-01"
+        }))
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn live_ecb_reference_rates_returns_rows_when_env_var_set() {
+    if std::env::var("TDW_ECB_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_ECB_LIVE != 1; skipping live ECB reference-rates integration test");
+        return;
+    }
+    let fetcher = EcbHttpReferenceRatesFetcher::default();
+    let query = EcbReferenceRatesQuery::from_value(&json!({}))
+        .unwrap_or_else(|error| panic!("query should build: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(
+        !rows.is_empty(),
+        "live response must include reference rates"
     );
 }
 

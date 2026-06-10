@@ -4,7 +4,10 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{CboeHttpIndexFetcher, CboeHttpOptionsFetcher};
+pub use http_fetcher::{
+    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    CboeHttpOptionsFetcher,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
