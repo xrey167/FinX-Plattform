@@ -20,6 +20,10 @@ COPY . .
 RUN cargo build --release --bin tdw-worker ${FEATURES:+--features "$FEATURES"}
 
 FROM debian:bookworm-slim AS runtime
+
+# OCI metadata: links the GHCR package to the repo (source), and carries
+# the description/license into the registry UI.
+LABEL org.opencontainers.image.source="https://github.com/xrey167/FinX-Plattform"       org.opencontainers.image.description="TDW background worker"       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 # `curl` is included so the compose/K8s healthcheck can probe the worker's ops
 # endpoints (/health, /ready) on TDW_WORKER_HTTP_BIND.
 RUN apt-get update \
