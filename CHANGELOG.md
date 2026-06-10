@@ -14,6 +14,63 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+Staged as the `v1.2.0` release notes (the tag cut renames this section): the
+"live data through MCP" release. `tdw-mcp` becomes a real product surface —
+an MCP client (Claude Desktop/Code or any other) connects and pulls live
+market data across asset classes, with the distribution image, release
+binaries, quickstart, and nightly live verification to back it.
+
+### Added
+
+- **`tdw-mcp` serves live market data.** The `live` feature swaps the offline
+  fixture for real provider transports and registers every live HTTP provider
+  (#269); distribution images (#271) and release binaries (#272) build with it.
+- **Generic `tdw.provider.fetch` MCP tool** — every compiled-in provider and
+  endpoint is callable through one schema'd tool: equities, FX/macro (ECB,
+  FRED), crypto OHLC (Binance, CoinGecko), SEC filings/fundamentals (#274).
+- **MCP quickstart** ([`docs/products/mcp-quickstart.md`](docs/products/mcp-quickstart.md)):
+  GHCR one-liner, released binary, Claude Desktop/Code config, and the
+  provider API-key story (#271, #272).
+- **Yahoo cookie+crumb handshake** — profile, quote snapshot, and options
+  endpoints now work live; plus a live Binance WebSocket test and SEC fixture
+  pinning (#268).
+- **Nightly `live-smoke` job** — keyless-provider live tests plus a real MCP
+  stdio session asserting live AAPL bars; FRED runs when its key secret is
+  provisioned (#275).
+- **Performance benchmark + regression ratchet** `xtask` (#263) and per-crate
+  `pedantic`+`nursery` deny walls across 58 clean crates (#257, #244).
+- **G005–G007 hardening landed** via the g002 reconciliation (#264, #265):
+  centralized provider HTTP timeouts (10s connect / 30s total — bounded I/O
+  for every provider), shared SQL/path validators in `tdw-core`, app-server
+  durability-failure counters, `tdw-tool-exec` output caps, and wire-boundary
+  validation for the new alert/user/quote ops.
+- **Provider data expansions**: FRED macro/rates/spreads cluster (#251),
+  Yahoo profile/quote/discovery/options/futures (#254), FMP fundamentals
+  (#252); application function jobs behind the off-by-default `functions`
+  feature (#246, #248, #249).
+
+### Changed
+
+- **MCP `tools/list` hides the `*.sample` demo tools by default** so an
+  agent's catalog leads with data and daemon tools; opt back in with
+  `TDW_MCP_SAMPLE_TOOLS=1`. Hidden tools remain callable (#273).
+- **Hooks default permission posture is now `Ask`** (was hard `Deny`),
+  unified across `HookExecutionPolicy`, `PermissionRules`, and `TdwConfig`
+  (HK2/CFG2): an unmatched action surfaces for approval instead of being
+  silently denied — and still never executes without an explicit Allow (#265).
+
+### Fixed
+
+- SEC live-API conformance: CIK normalized to the canonical unpadded form;
+  XBRL revenue resolves through a concept fallback chain so modern ASC-606
+  filers (e.g. Apple) return data; CoinGecko gained its missing live test
+  (#267).
+- Dispatcher tests are hermetic under `all-http-providers` (no hidden network
+  dependence), and docker-heavy CI jobs free runner disk before building the
+  release+live images (#277).
+- Release binaries and images build `tdw-mcp` with live data — a fresh
+  install no longer answers with canned bars (#271, #272).
+
 ## [1.1.0] - 2026-06-08
 
 Security, observability, feature-platform, and production-readiness release on
