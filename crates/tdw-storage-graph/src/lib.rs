@@ -307,6 +307,37 @@ impl GraphEngine for InMemoryGraphEngine {
         Ok(removed)
     }
 
+    async fn replace_edges(&self, from: &str, rel: &str, new_edges: Vec<GraphEdge>) -> Result<()> {
+        for edge in &new_edges {
+            validate_graph_edge(edge)?;
+            if edge.from != from || edge.rel != rel {
+                return Err(Error::Storage(format!(
+                    "replace_edges: edge {} -{}-> {} does not match ({from}, {rel})",
+                    edge.from, edge.rel, edge.to
+                )));
+            }
+        }
+        let mut state = self.lock()?;
+        for edge in &new_edges {
+            if !state.nodes.contains_key(&edge.to) {
+                return Err(Error::Storage(format!(
+                    "edge endpoint missing: {} -{}-> {}",
+                    edge.from, edge.rel, edge.to
+                )));
+            }
+        }
+        if !state.nodes.contains_key(from) {
+            return Err(Error::Storage(format!("edge endpoint missing: {from}")));
+        }
+        // Retract + add under ONE lock: no observable orphan window.
+        state
+            .edges
+            .retain(|edge| !(edge.from == from && edge.rel == rel));
+        state.edges.extend(new_edges);
+        drop(state);
+        Ok(())
+    }
+
     async fn merge_entities(
         &self,
         source: &str,

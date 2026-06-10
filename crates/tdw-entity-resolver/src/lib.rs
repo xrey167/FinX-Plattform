@@ -127,7 +127,10 @@ pub fn identifier_to_graph(
         return Err(ResolveError::InvalidIdentifier);
     }
     let scheme = record.scheme.trim().to_ascii_lowercase();
-    let value = record.value.trim().to_string();
+    // The value is lowercased too: the in-memory resolver matches values
+    // case-INSENSITIVELY, so the graph key must be canonical or the two
+    // resolve paths silently diverge on case-mismatched lookups.
+    let value = record.value.trim().to_ascii_lowercase();
     let node_id = format!("symbol:{scheme}:{value}");
     let node = tdw_core::GraphNode {
         id: node_id.clone(),
@@ -174,7 +177,7 @@ pub async fn resolve_by_identifier_graph(
     let node_id = format!(
         "symbol:{}:{}",
         scheme.trim().to_ascii_lowercase(),
-        value.trim()
+        value.trim().to_ascii_lowercase()
     );
     let filter = tdw_core::TraversalFilter {
         rels: Some(vec!["identifies".to_string()]),
@@ -324,7 +327,10 @@ mod tests {
             instrument_id: "INST-AAPL-XNAS".to_string(),
         })
         .unwrap_or_else(|error| panic!("crosswalk should convert: {error:?}"));
-        assert_eq!(node.id, "symbol:figi:BBG000B9XRY4");
+        assert_eq!(
+            node.id, "symbol:figi:bbg000b9xry4",
+            "canonical lowercase key"
+        );
         tdw_core::GraphEngine::upsert_nodes(&graph, vec![node])
             .await
             .unwrap_or_else(|error| panic!("symbol should upsert: {error}"));
@@ -332,7 +338,9 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("edge should upsert: {error}"));
 
-        let candidates = resolve_by_identifier_graph(&graph, "figi", "BBG000B9XRY4")
+        // Case parity with the in-memory resolver: a lowercase query finds an
+        // uppercase-ingested value (and vice versa).
+        let candidates = resolve_by_identifier_graph(&graph, "FIGI", "bbg000b9xry4")
             .await
             .unwrap_or_else(|error| panic!("graph resolve should succeed: {error}"));
         assert_eq!(candidates.len(), 1);

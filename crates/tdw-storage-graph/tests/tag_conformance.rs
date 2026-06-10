@@ -233,6 +233,34 @@ async fn conformance_suite(engine: &dyn TagEngine) {
     );
 }
 
+/// Taxonomies deeper than the graph layer's traversal hop cap must still
+/// return ALL transitive descendants on every backend (regression for the
+/// silent MAX_HOPS truncation the A5 review caught).
+async fn deep_taxonomy_suite(engine: &dyn TagEngine) {
+    let mut parent: Option<String> = None;
+    let mut expected = Vec::new();
+    for level in 0..12_u8 {
+        let tag = format!("deep:level-{level:02}");
+        engine
+            .define(definition(&tag, parent.as_deref()))
+            .await
+            .unwrap_or_else(|error| panic!("{tag} should define: {error}"));
+        if level > 0 {
+            expected.push(tag.clone());
+        }
+        parent = Some(tag);
+    }
+    expected.sort();
+    assert_eq!(
+        engine
+            .descendants("deep:level-00")
+            .await
+            .unwrap_or_else(|error| panic!("descendants should succeed: {error}")),
+        expected,
+        "all 11 transitive descendants, beyond the traversal hop cap"
+    );
+}
+
 #[tokio::test]
 async fn in_memory_tag_engine_meets_the_contract() {
     conformance_suite(&InMemoryTagEngine::default()).await;
@@ -241,4 +269,10 @@ async fn in_memory_tag_engine_meets_the_contract() {
 #[tokio::test]
 async fn graph_backed_tag_engine_meets_the_contract() {
     conformance_suite(&GraphTagEngine::new(InMemoryGraphEngine::default())).await;
+}
+
+#[tokio::test]
+async fn deep_taxonomies_are_complete_on_both_backends() {
+    deep_taxonomy_suite(&InMemoryTagEngine::default()).await;
+    deep_taxonomy_suite(&GraphTagEngine::new(InMemoryGraphEngine::default())).await;
 }

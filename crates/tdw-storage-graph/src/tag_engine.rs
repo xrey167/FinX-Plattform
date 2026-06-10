@@ -131,14 +131,14 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
             }])
             .await
             .map_err(Self::storage)?;
-        // Re-parenting replaces the hierarchy edge (delete-then-add).
-        self.graph
-            .delete_edges(&definition.tag_id, "subtag_of", None)
-            .await
-            .map_err(Self::storage)?;
-        if let Some(parent) = &definition.parent {
-            self.graph
-                .upsert_edges(vec![GraphEdge {
+        // Re-parenting replaces the hierarchy edge ATOMICALLY: retract + add
+        // happen in one engine operation, so no failure window can silently
+        // promote the tag to a root.
+        let new_parent_edges = definition
+            .parent
+            .as_ref()
+            .map(|parent| {
+                vec![GraphEdge {
                     from: definition.tag_id.clone(),
                     to: parent.clone(),
                     rel: "subtag_of".to_string(),
@@ -148,11 +148,13 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
                     },
                     valid_from: None,
                     valid_to: None,
-                }])
-                .await
-                .map_err(Self::storage)?;
-        }
-        Ok(())
+                }]
+            })
+            .unwrap_or_default();
+        self.graph
+            .replace_edges(&definition.tag_id, "subtag_of", new_parent_edges)
+            .await
+            .map_err(Self::storage)
     }
 
     async fn assign(&self, assignment: TagAssignment) -> Result<(), TagError> {
@@ -200,25 +202,41 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
 
     async fn descendants(&self, tag_id: &str) -> Result<Vec<String>, TagError> {
         // Children point AT their parent, so descendants are the transitive
-        // INCOMING subtag_of closure.
+        // INCOMING subtag_of closure. Iterative per-level hops rather than
+        // expand(): the trait promises ALL transitive descendants, and the
+        // hop-capped expand would silently truncate taxonomies deeper than
+        // MAX_HOPS while the in-process store does not.
         let filter = TraversalFilter {
             rels: Some(vec!["subtag_of".to_string()]),
             kinds: Some(vec![EntityKind::Tag]),
             direction: Direction::In,
-            max_hops: tdw_core::MAX_HOPS,
+            max_hops: 1,
             ..TraversalFilter::default()
         };
-        let subgraph = self
-            .graph
-            .expand(&[tag_id.to_string()], &filter)
-            .await
-            .map_err(Self::storage)?;
-        Ok(subgraph
-            .nodes
-            .into_iter()
-            .map(|node| node.id)
-            .filter(|id| id != tag_id)
-            .collect())
+        let mut found = std::collections::BTreeSet::new();
+        let mut frontier = vec![tag_id.to_string()];
+        // Node-count guard, not a depth cap: loud error on a (corrupted)
+        // store instead of silent truncation.
+        const MAX_TAXONOMY_NODES: usize = 100_000;
+        while let Some(current) = frontier.pop() {
+            for (_, child) in self
+                .graph
+                .neighbors(&current, &filter)
+                .await
+                .map_err(Self::storage)?
+            {
+                if found.insert(child.id.clone()) {
+                    frontier.push(child.id);
+                }
+                if found.len() > MAX_TAXONOMY_NODES {
+                    return Err(TagError::Engine(
+                        "taxonomy exceeded 100000 nodes (corrupted store?)".to_string(),
+                    ));
+                }
+            }
+        }
+        found.remove(tag_id);
+        Ok(found.into_iter().collect())
     }
 
     async fn entities_with_tag(&self, tag_id: &str, as_of: &str) -> Result<Vec<String>, TagError> {
