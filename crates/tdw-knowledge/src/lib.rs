@@ -3,6 +3,7 @@
 
 pub mod indexer;
 pub mod reindex;
+pub mod runtime;
 
 use std::sync::Arc;
 
