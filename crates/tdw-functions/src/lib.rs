@@ -505,7 +505,7 @@ mod worker_tests {
     };
 
     use serde_json::json;
-    use tdw_worker::{InMemoryWorkerQueue, JobHandler, WorkerJob, WorkerQueueError};
+    use tdw_worker::{InMemoryWorkerQueue, JobHandler, WorkerJob};
 
     use super::{
         FunctionDef, FunctionRegistry, InMemoryRunStore, InMemoryStepStore, RunStatus, RunStore,
