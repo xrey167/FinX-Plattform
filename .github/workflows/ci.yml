@@ -70,7 +70,9 @@ jobs:
       - run: cargo test -p tdw-udf-wasm --features wasmi
       - run: cargo test -p tdw-sandbox --features udf-wasm
       - run: cargo test -p tdw-app-server --features transport-http
+      - run: cargo test -p tdw-app-server --features rest-api-route
       - run: cargo test -p tdw-service-api --features all-http-providers
+      - run: cargo test -p tdw-service-api --features rest-api-route
       - run: cargo deny check
       - run: cargo run -p xtask -- schema-sync
       - run: git diff --exit-code -- docs/schemas/agent
@@ -79,6 +81,9 @@ jobs:
       - run: cargo run -p xtask -- quality-gate check
       - run: cargo run -p xtask -- crate-readiness-check
       - run: cargo run -p xtask -- catalog-check
+      - run: cargo run -p xtask -- openapi-sync
+      - run: git diff --exit-code -- docs/schemas/openapi.json
+      - run: cargo run -p xtask -- openapi-check
       - run: cargo run -p xtask -- clean-room-audit
 
   coverage:

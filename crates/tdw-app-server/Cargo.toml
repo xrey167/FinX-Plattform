@@ -20,6 +20,12 @@ transport-uds = []
 # Exposes GET /functions, POST /functions/invoke, and PUT /functions/resume
 # behind the hand-rolled HTTP transport.  Requires transport-http.
 functions-route = ["transport-http", "dep:hmac", "dep:sha2"]
+# Exposes the catalog-derived REST surface: GET /api/v1/{route...}?<params>
+# and GET /openapi.json behind the hand-rolled HTTP transport. Routes are data,
+# resolved through the same policy-guarded fetch path Op::FetchData uses (via a
+# RestApiHandler trait seam implemented by tdw-service-api). Requires
+# transport-http.
+rest-api-route = ["transport-http"]
 
 [dependencies]
 async-trait = { workspace = true }

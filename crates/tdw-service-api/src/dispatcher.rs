@@ -361,6 +361,103 @@ async fn dispatch_fetch_data(
     ))
 }
 
+/// Classified failure of [`rest_fetch_data`], so the REST transport can map it
+/// to the right HTTP status without re-inspecting the opaque error string.
+///
+/// `route` resolution / shape problems and `InvalidQuery` validation are caller
+/// errors (HTTP `400`); a provider-side failure after every candidate is tried
+/// is upstream (HTTP `502`). The unknown-route message carries the known-routes
+/// list so clients can discover valid routes.
+#[cfg(feature = "rest-api-route")]
+#[derive(Debug)]
+pub enum RestFetchError {
+    /// The route is not in the catalog or is not a fetch route. The message
+    /// includes the known-routes list. Maps to HTTP `400`.
+    UnknownRoute(String),
+    /// A query-parameter validation error ([`Error::InvalidQuery`]). Maps to
+    /// HTTP `400`.
+    InvalidParams(String),
+    /// Policy enforcement or a provider-side failure (every candidate failed).
+    /// Maps to HTTP `502`.
+    Provider(String),
+}
+
+/// REST seam for the catalog fetch path.
+///
+/// Resolves `route` and fetches through the SAME policy-guarded path
+/// `Op::FetchData` uses, returning the `ResultEnvelope`-shaped body (no
+/// `{evidence, result}` wrapper — the REST surface returns the envelope
+/// directly) or a classified [`RestFetchError`].
+///
+/// This is the public entry point the `tdw-app-server` REST route family calls
+/// through the `RestApiHandler` trait (implemented in [`crate::rest_handler`]).
+/// It reuses the exact same policy guard, catalog resolution, dispatch table,
+/// and provider-fallback logic as [`dispatch_fetch_data`]; only the error
+/// classification and the response framing differ.
+///
+/// # Errors
+///
+/// Returns [`RestFetchError`] classified for HTTP status mapping (see the enum).
+#[cfg(feature = "rest-api-route")]
+pub async fn rest_fetch_data(
+    state: &AppState,
+    route: &str,
+    params: Value,
+) -> std::result::Result<Value, RestFetchError> {
+    let policy = state
+        .policy
+        .as_ref()
+        .ok_or_else(|| RestFetchError::Provider("daemon policy not configured".to_string()))?;
+
+    let mut backend = SystemHookHandlerBackend::default();
+    let evidence =
+        enforce_request_path_with_backend(policy, ServiceEndpoint::IngestBatch, &mut backend)
+            .map_err(|error| RestFetchError::Provider(error.to_string()))?;
+    // The policy guard succeeded; REST returns the envelope directly, so the
+    // evidence block is intentionally not surfaced to the client (mirroring the
+    // OBBject-style response shape) — bind it to make that explicit.
+    let _ = evidence;
+
+    let Some(entry) = tdw_endpoint_catalog::lookup(route) else {
+        return Err(RestFetchError::UnknownRoute(format!(
+            "unknown catalog route: {route}; known: {}",
+            known_catalog_routes()
+        )));
+    };
+    if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+        return Err(RestFetchError::UnknownRoute(format!(
+            "catalog route {route} is not a fetch route; known: {}",
+            known_catalog_routes()
+        )));
+    }
+
+    let requested_provider = params
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+
+    let runner = CommandRunner::new((*state.registry).clone());
+    let table = fetch_dispatch_table();
+
+    let outcome = resolve_and_fetch(&entry, requested_provider, &params, &table, &runner)
+        .await
+        .map_err(|error| match error {
+            Error::InvalidQuery(message) => RestFetchError::InvalidParams(message),
+            other => RestFetchError::Provider(other.to_string()),
+        })?;
+
+    let extra = ResultExtra::default()
+        .with_route(route)
+        .with_argument("provider", outcome.provider);
+    let mut envelope = ResultEnvelope::new(route, outcome.records)
+        .with_provider(outcome.provider)
+        .with_extra(extra);
+    envelope.warnings = outcome.warnings;
+    serde_json::to_value(&envelope)
+        .map_err(|e| RestFetchError::Provider(format!("result envelope serialize: {e}")))
+}
+
 /// Successful outcome of [`resolve_and_fetch`]: which provider served the
 /// request, the standardized records, and any fallback warnings accumulated.
 #[derive(Debug)]

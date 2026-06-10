@@ -36,6 +36,11 @@ pub mod functions_route;
 #[cfg(all(feature = "functions-route", not(loom)))]
 pub use functions_route::{FunctionEntry, FunctionsHandler, HandlerError, SigningConfig};
 
+#[cfg(all(feature = "rest-api-route", not(loom)))]
+pub mod rest_route;
+#[cfg(all(feature = "rest-api-route", not(loom)))]
+pub use rest_route::{RestApiHandler, RestError, serve_rest_http};
+
 // Shared service-operability surface (/health, /ready, /metrics). The pure
 // renderer and route classifier are always available; the async listener is
 // gated out under `--cfg loom` (it uses `tokio::net`).
