@@ -110,6 +110,187 @@ jobs:
           name: fuzz-artifacts
           path: fuzz/artifacts/**
 
+  # P2.4: bounded live soak — Binance BTCUSDT trade websocket → ClickHouse
+  # ingestion for a 25-minute window, with integrity assertions on the persisted
+  # rows. Each nightly run contributes one data point to the cumulative long-run
+  # signal; the 25-min budget fits within the 60-min job timeout.
+  binance-clickhouse-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: nightly-binance-clickhouse-soak
+      cancel-in-progress: false
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.5
+        env:
+          CLICKHOUSE_USER: tdw
+          CLICKHOUSE_PASSWORD: tdw
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports:
+          - "8123:8123"
+        options: >-
+          --health-cmd "wget -q -O- http://127.0.0.1:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build soak binary
+        run: >
+          cargo build
+          -p tdw-service-api
+          --example binance_clickhouse_soak
+          --features real-clickhouse,ws
+          --target-dir target
+
+      - name: Run bounded soak (25 min)
+        env:
+          TDW_CLICKHOUSE_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASS: tdw
+          TDW_SOAK_DURATION_SECS: "1500"
+          TDW_SOAK_SYMBOL: BTCUSDT
+        run: ./target/debug/examples/binance_clickhouse_soak
+
+      - name: Assert integrity — row count floor
+        env:
+          TDW_CLICKHOUSE_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASS: tdw
+        run: |
+          set -euo pipefail
+          # (a) Row count > floor: 25 min of BTCUSDT trades; 1000 is conservative
+          # (typical rate is ~5–15 ticks/s, so expect 7500–22500 rows in 25 min).
+          rows=$(python3 - <<'PY'
+          import urllib.request, urllib.parse, base64, json, sys
+          url = "http://127.0.0.1:8123"
+          sql = "SELECT count() AS n FROM raw.tick WHERE symbol='BTCUSDT' FORMAT JSON"
+          req = urllib.request.Request(url, data=sql.encode(), method="POST")
+          creds = base64.b64encode(b"tdw:tdw").decode()
+          req.add_header("Authorization", f"Basic {creds}")
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              data = json.load(resp)
+          n = int(data["data"][0]["n"])
+          print(n)
+          PY
+          )
+          echo "rows ingested: $rows"
+          if [ "$rows" -lt 1000 ]; then
+            echo "FAIL: row count $rows is below the floor of 1000"
+            exit 1
+          fi
+          echo "PASS: row count $rows >= 1000"
+
+      - name: Assert integrity — no runaway duplicates
+        env:
+          TDW_CLICKHOUSE_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASS: tdw
+        run: |
+          set -euo pipefail
+          # (b) Duplicate rate: rows with identical (symbol, ts, price, size)
+          # beyond a 0.1% tolerance indicate a dedup regression.  ClickHouse's
+          # content-addressed insert_deduplication_token makes exact-duplicate
+          # batches idempotent; a small tolerance covers sub-millisecond
+          # exchange timestamp collisions on different trades (different price/size
+          # on the same ms), which are not true duplicates.
+          python3 - <<'PY'
+          import urllib.request, base64, json, sys
+          url = "http://127.0.0.1:8123"
+          def query(sql):
+              req = urllib.request.Request(url, data=sql.encode(), method="POST")
+              creds = base64.b64encode(b"tdw:tdw").decode()
+              req.add_header("Authorization", f"Basic {creds}")
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  return json.load(resp)
+          total = int(query("SELECT count() AS n FROM raw.tick WHERE symbol='BTCUSDT' FORMAT JSON")["data"][0]["n"])
+          dupes = int(query(
+              "SELECT sum(cnt - 1) AS excess FROM ("
+              "  SELECT count() AS cnt FROM raw.tick WHERE symbol='BTCUSDT'"
+              "  GROUP BY symbol, ts, price, size HAVING cnt > 1"
+              ") FORMAT JSON"
+          )["data"][0]["excess"])
+          rate = dupes / total if total > 0 else 0.0
+          print(f"duplicates={dupes} total={total} rate={rate:.4%}")
+          if rate > 0.001:
+              print(f"FAIL: duplicate rate {rate:.4%} exceeds 0.1% tolerance")
+              sys.exit(1)
+          print(f"PASS: duplicate rate {rate:.4%} within tolerance")
+          PY
+
+      - name: Assert integrity — ingestion lag
+        env:
+          TDW_CLICKHOUSE_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASS: tdw
+        run: |
+          set -euo pipefail
+          # (c) Max ingestion lag: newest row ts must be within 10 minutes of now.
+          # A larger gap would indicate the stream stalled for most of the window.
+          python3 - <<'PY'
+          import urllib.request, base64, json, sys, time, datetime
+          url = "http://127.0.0.1:8123"
+          sql = "SELECT max(ts) AS last_ts FROM raw.tick WHERE symbol='BTCUSDT' FORMAT JSON"
+          req = urllib.request.Request(url, data=sql.encode(), method="POST")
+          creds = base64.b64encode(b"tdw:tdw").decode()
+          req.add_header("Authorization", f"Basic {creds}")
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              data = json.load(resp)
+          last_ts_str = data["data"][0]["last_ts"]
+          print(f"last ingested ts: {last_ts_str}")
+          # ClickHouse DateTime64 returns ISO-style string; parse it.
+          last_ts = datetime.datetime.fromisoformat(last_ts_str.replace(" ", "T")).replace(tzinfo=datetime.timezone.utc)
+          now = datetime.datetime.now(datetime.timezone.utc)
+          lag_secs = (now - last_ts).total_seconds()
+          print(f"lag from now: {lag_secs:.0f}s")
+          if lag_secs > 600:
+              print(f"FAIL: newest row is {lag_secs:.0f}s old — stream may have stalled")
+              sys.exit(1)
+          print(f"PASS: newest row is {lag_secs:.0f}s old (within 600s)")
+          PY
+
+      - name: Emit step summary
+        if: always()
+        env:
+          TDW_CLICKHOUSE_URL: http://127.0.0.1:8123
+          TDW_CLICKHOUSE_USER: tdw
+          TDW_CLICKHOUSE_PASS: tdw
+        run: |
+          python3 - <<'PY'
+          import urllib.request, base64, json, os, datetime
+          url = "http://127.0.0.1:8123"
+          def query(sql):
+              req = urllib.request.Request(url, data=sql.encode(), method="POST")
+              req.add_header("Authorization", f"Basic {base64.b64encode(b'tdw:tdw').decode()}")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return json.load(r)
+              except Exception as e:
+                  return {"data": [{"n": "error", "first_ts": "n/a", "last_ts": "n/a", "excess": "n/a"}], "error": str(e)}
+          rows  = query("SELECT count() AS n FROM raw.tick WHERE symbol='BTCUSDT' FORMAT JSON")["data"][0]["n"]
+          agg   = query("SELECT min(ts) AS first_ts, max(ts) AS last_ts FROM raw.tick WHERE symbol='BTCUSDT' FORMAT JSON")["data"][0]
+          first, last = agg["first_ts"], agg["last_ts"]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          lines = [
+              "",
+              "## P2.4 Nightly Soak — BTCUSDT",
+              "| Metric | Value |",
+              "|--------|-------|",
+              f"| Rows ingested | {rows} |",
+              f"| First tick ts | {first} |",
+              f"| Last tick ts  | {last} |",
+              f"| Run date (UTC)| {datetime.datetime.utcnow().strftime('%Y-%m-%d')} |",
+          ]
+          if summary:
+              with open(summary, "a") as f:
+                  f.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+
   # P1.5: prove the live data path nightly — env-gated provider live tests plus
   # a real MCP stdio session fetching live bars. These hit external public APIs,
   # so they run here (not in PR CI) and fail loudly on live regressions.
