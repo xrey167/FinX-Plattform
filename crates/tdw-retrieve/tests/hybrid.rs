@@ -114,6 +114,20 @@ async fn fixture() -> Fixture {
     graph.upsert_nodes(nodes).await.expect("graph nodes");
     graph.upsert_edges(edges).await.expect("graph edges");
 
+    seed_taxonomy(tags.as_ref()).await;
+
+    Fixture {
+        embedder,
+        vectors,
+        lexical,
+        tags,
+        graph,
+    }
+}
+
+/// Taxonomy `sector:all` -> `sector:tech`; acme holds `sector:tech` from
+/// 2026-01-10, open-ended.
+async fn seed_taxonomy(tags: &dyn TagEngine) {
     tags.define(TagDefinition {
         tag_id: "sector:all".to_string(),
         parent: None,
@@ -137,14 +151,6 @@ async fn fixture() -> Fixture {
     })
     .await
     .expect("assign sector:tech");
-
-    Fixture {
-        embedder,
-        vectors,
-        lexical,
-        tags,
-        graph,
-    }
 }
 
 fn node(id: &str, kind: EntityKind) -> GraphNode {
