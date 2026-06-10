@@ -485,3 +485,175 @@ fn derivation_index_round_trips() {
     let restored = DerivationIndex::from_json(&json).expect("from_json");
     assert_eq!(restored, index);
 }
+
+/// 3-lens review B1 (precursor): deriving over an existing same-triple edge
+/// must neither clobber its provenance nor enter the derivation index.
+#[tokio::test]
+async fn derivation_never_reasserts_an_existing_triple() {
+    let graph = seed_graph(
+        &["a", "b", "x"],
+        vec![
+            edge("a", "supplier_of", "b"),
+            edge("b", "listed_on", "x"),
+            // Pre-existing BASE fact with the exact shape the rule derives.
+            edge("a", "exposed_to", "x"),
+        ],
+    )
+    .await;
+    let tags: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+    let mut engine = InferEngine::default();
+    engine
+        .hot_reload(vec![InferRule::DeriveEdge {
+            rule_id: "exposure".to_string(),
+            stratum: 0,
+            when: pattern(&["supplier_of", "listed_on"]),
+            derived_type: "exposed_to".to_string(),
+        }])
+        .expect("rules");
+    let report = engine.run_full(&graph, &tags, NOW).await.expect("run");
+    assert_eq!(
+        report.derived_edges, 0,
+        "existing triple is never re-asserted"
+    );
+    let exposed = graph.edges(Some("exposed_to"), 0, 16).await.expect("scan");
+    assert_eq!(exposed.len(), 1);
+    assert!(
+        matches!(exposed[0].provenance, Provenance::Ingest { .. }),
+        "base provenance untouched: {:?}",
+        exposed[0].provenance
+    );
+    assert!(
+        !engine
+            .derivation_index()
+            .contains(&edge_key("a", "exposed_to", "x")),
+        "a base fact never enters the derivation index"
+    );
+}
+
+/// 3-lens review B1: retraction removes ONLY Rule-provenance edges; a base
+/// edge sharing the (from, rel, to) shape — even with a different
+/// `valid_from` — survives.
+#[tokio::test]
+async fn retract_preserves_same_shaped_base_edges() {
+    let graph = seed_graph(
+        &["a", "b", "x"],
+        vec![edge("a", "supplier_of", "b"), edge("b", "listed_on", "x")],
+    )
+    .await;
+    let tags: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+    let mut engine = InferEngine::default();
+    engine
+        .hot_reload(vec![InferRule::DeriveEdge {
+            rule_id: "exposure".to_string(),
+            stratum: 0,
+            when: pattern(&["supplier_of", "listed_on"]),
+            derived_type: "exposed_to".to_string(),
+        }])
+        .expect("rules");
+    let report = engine.run_full(&graph, &tags, NOW).await.expect("run");
+    assert_eq!(report.derived_edges, 1);
+
+    // A human-authored edge with the same shape lands AFTER derivation,
+    // under a different validity identity.
+    let mut base = edge("a", "exposed_to", "x");
+    base.valid_from = Some("2020-01-01T00:00:00Z".to_string());
+    graph.upsert_edges(vec![base]).await.expect("base edge");
+    assert_eq!(rel_count(&graph, "exposed_to").await, 2);
+
+    let retract = engine
+        .retract(&graph, &tags, &edge_key("a", "supplier_of", "b"))
+        .await
+        .expect("retract");
+    assert_eq!(retract.removed_edges, 1, "only the derived edge is removed");
+    let survivors = graph.edges(Some("exposed_to"), 0, 16).await.expect("scan");
+    assert_eq!(survivors.len(), 1);
+    assert!(
+        matches!(survivors[0].provenance, Provenance::Ingest { .. }),
+        "the base fact survives retraction: {:?}",
+        survivors[0].provenance
+    );
+}
+
+/// A restored (possibly forged/stale) derivation index cannot make `retract`
+/// delete a base edge: the Rule-provenance check preserves it and reports it.
+#[tokio::test]
+async fn forged_index_cannot_delete_base_edges() {
+    let graph = seed_graph(
+        &["a", "b", "x"],
+        vec![
+            edge("a", "supplier_of", "b"),
+            edge("a", "exposed_to", "x"), // base fact, Ingest provenance
+        ],
+    )
+    .await;
+    let tags: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+    let mut forged = DerivationIndex::default();
+    forged.record(
+        edge_key("a", "exposed_to", "x"),
+        Derivation {
+            rule_id: "evil".to_string(),
+            version: 1,
+            support: vec![edge_key("a", "supplier_of", "b")],
+        },
+    );
+    let mut engine = InferEngine::default().with_derivation_index(forged);
+    let report = engine
+        .retract(&graph, &tags, &edge_key("a", "supplier_of", "b"))
+        .await
+        .expect("retract");
+    assert_eq!(report.removed_edges, 0);
+    assert_eq!(
+        report.preserved_base_edges,
+        vec![edge_key("a", "exposed_to", "x")]
+    );
+    assert_eq!(rel_count(&graph, "exposed_to").await, 1, "base edge intact");
+}
+
+/// 3-lens review N1: `max_derived` bounds each RUN, not the engine lifetime —
+/// two runs each under the limit must both succeed.
+#[tokio::test]
+async fn max_derived_is_per_run_not_cumulative() {
+    let graph = seed_graph(
+        &["a", "b", "x", "c", "d", "y"],
+        vec![edge("a", "supplier_of", "b"), edge("b", "listed_on", "x")],
+    )
+    .await;
+    let tags: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+    let mut engine = InferEngine::with_limits(RunLimits {
+        max_iterations: 32,
+        max_derived: 1,
+    });
+    engine
+        .hot_reload(vec![InferRule::DeriveEdge {
+            rule_id: "exposure".to_string(),
+            stratum: 0,
+            when: pattern(&["supplier_of", "listed_on"]),
+            derived_type: "exposed_to".to_string(),
+        }])
+        .expect("rules");
+    assert_eq!(
+        engine
+            .run_full(&graph, &tags, NOW)
+            .await
+            .expect("first run")
+            .derived_edges,
+        1
+    );
+    // New base facts arrive; the second run derives one MORE fact — under
+    // the per-run limit even though the lifetime total is now 2.
+    graph
+        .upsert_edges(vec![
+            edge("c", "supplier_of", "d"),
+            edge("d", "listed_on", "y"),
+        ])
+        .await
+        .expect("more edges");
+    assert_eq!(
+        engine
+            .run_full(&graph, &tags, NOW)
+            .await
+            .expect("second run must not trip a cumulative limit")
+            .derived_edges,
+        1
+    );
+}

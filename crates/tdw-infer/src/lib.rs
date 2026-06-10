@@ -89,6 +89,13 @@ pub struct InferReport {
 /// What one [`InferEngine::retract`] removed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RetractReport {
+    /// Derived-edge keys whose graph edge was NOT deleted: the triple was
+    /// absent, or every matching edge carried non-`Rule` provenance (a base
+    /// fact this engine must never destroy). The index entry is still
+    /// dropped. Also the safety net against a forged
+    /// [`DerivationIndex::from_json`]: a restored index cannot make
+    /// `retract` delete base edges.
+    pub preserved_base_edges: Vec<String>,
     /// Derived edges deleted from the graph.
     pub removed_edges: usize,
     /// Derived TAGS that could NOT be removed (append-only store, no unassign).
@@ -132,6 +139,13 @@ pub enum InferError {
         producer_stratum: u8,
         /// The derived type at issue.
         derived_type: String,
+    },
+    /// A chain join materialized more candidates than the engine's memory
+    /// bound (8 × `max_derived`, floor 4096) — a fan-out explosion guard.
+    #[error("chain-join materialization bound exceeded: {bound}")]
+    JoinBoundExceeded {
+        /// The bound that was exceeded.
+        bound: usize,
     },
     /// The run derived more facts than [`RunLimits::max_derived`].
     #[error("max_derived limit exceeded: {limit}")]
@@ -187,6 +201,25 @@ impl InferEngine {
     #[must_use]
     pub const fn derivation_index(&self) -> &DerivationIndex {
         &self.derivations
+    }
+
+    /// Chain-join materialization ceiling: generous headroom over
+    /// `max_derived` (candidates legitimately include already-derived
+    /// triples), floored so tiny test limits do not strangle the join.
+    const fn join_bound(&self) -> usize {
+        let scaled = self.limits.max_derived.saturating_mul(8);
+        if scaled > 4096 { scaled } else { 4096 }
+    }
+
+    /// Resume from a persisted derivation index ([`DerivationIndex::from_json`]).
+    ///
+    /// The index is TRUSTED state from the operator's own persistence — but a
+    /// forged or stale index still cannot destroy base facts: `retract`
+    /// verifies `Rule` provenance on the graph edge before deleting anything.
+    #[must_use]
+    pub fn with_derivation_index(mut self, derivations: DerivationIndex) -> Self {
+        self.derivations = derivations;
+        self
     }
 
     /// Atomically replace the rule set: EVERY rule validates (shape + stratification) or
@@ -296,11 +329,34 @@ impl InferEngine {
         let mut report = RetractReport::default();
         for key in &invalid {
             if let Some((from, derived_type, to)) = parse_edge_key(key) {
-                let removed = graph
-                    .delete_edges(from, derived_type, Some(to))
-                    .await
-                    .map_err(|error| InferError::Graph(error.to_string()))?;
-                report.removed_edges += removed;
+                // Surgical removal: only Rule-provenance edges may be deleted.
+                // `delete_edges` keys on (from, rel, to) alone and would
+                // destroy a same-shaped BASE fact (3-lens review B1) —
+                // instead, atomically replace the node's (from, rel, *) set
+                // with the non-derived survivors.
+                let mut survivors = Vec::new();
+                let mut removed = 0_usize;
+                for edge in scan_rel(graph, derived_type).await? {
+                    if edge.from != from {
+                        continue;
+                    }
+                    if edge.to == to && matches!(edge.provenance, Provenance::Rule { .. }) {
+                        removed += 1;
+                    } else {
+                        survivors.push(edge);
+                    }
+                }
+                if removed > 0 {
+                    graph
+                        .replace_edges(from, derived_type, survivors)
+                        .await
+                        .map_err(|error| InferError::Graph(error.to_string()))?;
+                    report.removed_edges += removed;
+                } else {
+                    // Indexed as derived but absent or shadowed by a
+                    // non-derived edge — preserved, never deleted.
+                    report.preserved_base_edges.push(key.clone());
+                }
                 self.derivations.remove(key);
             } else if key.starts_with("tag:") {
                 // Append-only store: cannot unassign. Report and keep the
@@ -310,6 +366,8 @@ impl InferEngine {
         }
         report.unremovable_tags.sort();
         report.unremovable_tags.dedup();
+        report.preserved_base_edges.sort();
+        report.preserved_base_edges.dedup();
         Ok(report)
     }
 
@@ -332,6 +390,10 @@ impl InferEngine {
         strata.sort_unstable();
         strata.dedup();
 
+        // Per-RUN bound: facts derived by THIS run, not the engine's lifetime
+        // accumulation — a long-lived engine must not trip the limit on a run
+        // that adds almost nothing (3-lens review N1).
+        let mut derived_this_run = 0_usize;
         for stratum in strata {
             loop {
                 if report.iterations >= self.limits.max_iterations {
@@ -353,9 +415,10 @@ impl InferEngine {
                         }
                     };
                     new_this_iteration += derived.edges + derived.tags;
+                    derived_this_run += derived.edges + derived.tags;
                     report.derived_edges += derived.edges;
                     report.assigned_tags += derived.tags;
-                    if self.derivations.len() > self.limits.max_derived {
+                    if derived_this_run > self.limits.max_derived {
                         return Err(InferError::DerivedLimitExceeded {
                             limit: self.limits.max_derived,
                         });
@@ -386,6 +449,15 @@ impl InferEngine {
         };
 
         let matches = self.match_chain(graph, when).await?;
+        // Existing (from, to) pairs of the derived type — base facts, or facts
+        // derived by earlier runs. A derived edge NEVER re-asserts an existing
+        // triple: upserting over a same-identity base edge would silently
+        // clobber its provenance, and recording it in the index would put a
+        // base fact's shape into the retraction set (3-lens review B1).
+        let mut existing: BTreeSet<(String, String)> = BTreeSet::new();
+        for edge in scan_rel(graph, derived_type).await? {
+            existing.insert((edge.from.clone(), edge.to.clone()));
+        }
         let mut new_edges = Vec::new();
         let mut counted = 0_usize;
         for matched in matches {
@@ -394,7 +466,9 @@ impl InferEngine {
                 continue;
             }
             let key = edge_key(&matched.from, derived_type, &matched.to);
-            if self.derivations.contains(&key) {
+            if self.derivations.contains(&key)
+                || existing.contains(&(matched.from.clone(), matched.to.clone()))
+            {
                 continue;
             }
             new_edges.push(GraphEdge {
@@ -566,6 +640,16 @@ impl InferEngine {
                         let mut support = support.clone();
                         support.push(edge_key(&edge.from, &edge.rel, &edge.to));
                         next.push((head.clone(), edge.to.clone(), support));
+                        // Bound the join MATERIALIZATION — a memory guard
+                        // distinct from max_derived (candidates include
+                        // already-derived triples a steady-state re-run
+                        // legitimately re-matches, so the fact limit must
+                        // not apply here).
+                        if next.len() > self.join_bound() {
+                            return Err(InferError::JoinBoundExceeded {
+                                bound: self.join_bound(),
+                            });
+                        }
                     }
                 }
             }
