@@ -1,4 +1,4 @@
-//! The entity-kind registry: the 50 classified kinds and their manifest groups.
+//! The entity-kind registry: the 51 classified kinds and their manifest groups.
 //!
 //! Serialized form matches the registry's lowercase token convention (e.g. `agentrouter`,
 //! `knowledgegraph`, `resourcedefinition`). `storage_mapping` is intentionally absent — it
@@ -99,12 +99,15 @@ pub enum EntityKind {
     Provider,
     Symbol,
     Venue,
+    /// A taxonomy tag, stored as a first-class graph node from A5 on (children
+    /// via `subtag_of` edges, assignments via temporal `tagged` edges).
+    Tag,
 }
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order (domain appended last; see the
     /// declaration-order note on the enum).
-    pub const ALL: [Self; 50] = [
+    pub const ALL: [Self; 51] = [
         Self::Agent,
         Self::Personality,
         Self::Prompt,
@@ -155,6 +158,7 @@ impl EntityKind {
         Self::Provider,
         Self::Symbol,
         Self::Venue,
+        Self::Tag,
     ];
 
     /// The manifest group this kind belongs to.
@@ -210,7 +214,8 @@ impl EntityKind {
             | Self::Dataset
             | Self::Provider
             | Self::Symbol
-            | Self::Venue => Group::Domain,
+            | Self::Venue
+            | Self::Tag => Group::Domain,
         }
     }
 
@@ -249,7 +254,7 @@ mod tests {
         for kind in EntityKind::ALL {
             assert!(seen.insert(kind), "duplicate kind: {kind:?}");
         }
-        assert_eq!(seen.len(), 50);
+        assert_eq!(seen.len(), 51);
     }
 
     #[test]
@@ -267,7 +272,7 @@ mod tests {
         assert_eq!(count(Group::Governance), 6);
         assert_eq!(count(Group::Infra), 5);
         assert_eq!(count(Group::Meta), 1);
-        assert_eq!(count(Group::Domain), 7);
+        assert_eq!(count(Group::Domain), 8);
     }
 
     #[test]
@@ -288,6 +293,7 @@ mod tests {
         check(EntityKind::EnvironmentVariable, "environmentvariable");
         check(EntityKind::Instrument, "instrument");
         check(EntityKind::Venue, "venue");
+        check(EntityKind::Tag, "tag");
     }
 
     #[test]

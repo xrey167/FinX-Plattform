@@ -351,6 +351,42 @@ impl GraphEngine for BoltGraphEngine {
         Ok(None)
     }
 
+    async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize> {
+        let count_q = query(
+            "MATCH (a:E {id:$from})-[r:R {rel:$rel}]->(b:E) \
+             WHERE $to_all OR b.id = $to RETURN count(r) AS c",
+        )
+        .param("from", from)
+        .param("rel", rel)
+        .param("to_all", to.is_none())
+        .param("to", to.unwrap_or_default());
+        let mut stream = self
+            .graph
+            .execute(count_q)
+            .await
+            .map_err(|error| Error::Storage(format!("bolt delete count: {error}")))?;
+        let removed = stream
+            .next()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt delete count row: {error}")))?
+            .and_then(|row| row.get::<i64>("c").ok())
+            .unwrap_or(0);
+        self.graph
+            .run(
+                query(
+                    "MATCH (a:E {id:$from})-[r:R {rel:$rel}]->(b:E) \
+                     WHERE $to_all OR b.id = $to DELETE r",
+                )
+                .param("from", from)
+                .param("rel", rel)
+                .param("to_all", to.is_none())
+                .param("to", to.unwrap_or_default()),
+            )
+            .await
+            .map_err(|error| Error::Storage(format!("bolt delete: {error}")))?;
+        usize::try_from(removed).map_err(|error| Error::Storage(format!("bolt count: {error}")))
+    }
+
     async fn merge_entities(
         &self,
         source: &str,

@@ -10,6 +10,10 @@
 #[cfg(feature = "bolt")]
 pub mod bolt_engine;
 
+pub mod tag_engine;
+
+pub use tag_engine::GraphTagEngine;
+
 #[cfg(feature = "bolt")]
 pub use bolt_engine::BoltGraphEngine;
 
@@ -290,6 +294,17 @@ impl GraphEngine for InMemoryGraphEngine {
         let path = Self::search_path(&state, from, to, filter);
         drop(state);
         Ok(path)
+    }
+
+    async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize> {
+        let mut state = self.lock()?;
+        let before = state.edges.len();
+        state.edges.retain(|edge| {
+            !(edge.from == from && edge.rel == rel && to.is_none_or(|to| edge.to == to))
+        });
+        let removed = before - state.edges.len();
+        drop(state);
+        Ok(removed)
     }
 
     async fn merge_entities(

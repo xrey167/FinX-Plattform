@@ -217,6 +217,12 @@ pub trait GraphEngine: Send + Sync {
         filter: &TraversalFilter,
     ) -> Result<Option<Vec<GraphEdge>>>;
 
+    /// Delete every edge leaving `from` with relationship `rel` (optionally
+    /// restricted to a single `to` endpoint), returning how many were removed.
+    /// The retraction primitive tag re-parenting (A5) and rule re-derivation
+    /// (B7) build on.
+    async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize>;
+
     /// Really merge `source` into `target`: union aliases (plus the source label),
     /// rewire every source edge to the target (provenance preserved, would-be
     /// self-loops dropped), tombstone the source (`props.merged_into = target`), and
