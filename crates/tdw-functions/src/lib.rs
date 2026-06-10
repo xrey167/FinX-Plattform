@@ -609,11 +609,9 @@ mod worker_tests {
     fn enqueue_invoke_duplicate_is_dedup() {
         let mut queue = InMemoryWorkerQueue::default();
         enqueue_invoke(&mut queue, "fn-c", json!({}), "run-d", "job-d").expect("first");
-        let result = enqueue_invoke(&mut queue, "fn-c", json!({}), "run-d", "job-d");
-        assert!(
-            matches!(result, Err(WorkerQueueError::DuplicateJob(_))),
-            "duplicate must be rejected"
-        );
+        let outcome = enqueue_invoke(&mut queue, "fn-c", json!({}), "run-d", "job-d")
+            .expect("duplicate enqueue is not an error");
+        assert!(!outcome.inserted, "duplicate must not insert");
     }
 
     // -----------------------------------------------------------------------
