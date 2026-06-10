@@ -13,6 +13,11 @@
 //! `TDW_POSTGRES_TEST_URL` is set, mirroring `tests/pg_outbox.rs`.
 
 #![forbid(unsafe_code)]
+// The async facade is load-bearing only when `--features postgres` compiles
+// the PgOutboxStore match arms; in the offline build the Mem-only bodies have
+// no awaits, tripping pedantic `unused_async`. A documented allow beats
+// cfg-splitting every signature in a test-support enum.
+#![allow(clippy::unused_async)]
 
 use serde_json::Value;
 use tdw_event::{EventEnvelope, sample_event};
