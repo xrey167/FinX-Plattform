@@ -221,6 +221,20 @@ pub enum Op {
         provider: String,
         symbol: String,
     },
+    /// Fetch a catalog route's data and return the records directly, without
+    /// persistence. `route` is a slash-namespaced logical endpoint
+    /// (e.g. `equity/price/historical`) resolved through the endpoint catalog;
+    /// `params` is the route's normalized request arguments (the
+    /// `serde_json::Value` the route's `StandardParams` decode from), and may
+    /// carry an explicit `provider` to pin a candidate. This is a **no-cache
+    /// read** like `GetQuoteSnapshot`: the daemon runs the resolved fetcher and
+    /// returns the result in the terminal event without writing to any storage
+    /// layer. Serializes as `fetch_data`.
+    FetchData {
+        route: String,
+        #[serde(default)]
+        params: Value,
+    },
     /// Start a live streaming-ingest task for `provider`/`symbol`, draining the
     /// provider's websocket subscription into the (optional) `table` (defaulting
     /// to the provider's bronze landing table). Serializes as `stream_start`.
@@ -333,6 +347,7 @@ impl Op {
                 require(symbol, "symbol")
             }
             Self::StreamStop { stream_id } => require(stream_id, "stream_id"),
+            Self::FetchData { route, .. } => require(route, "route"),
             Self::CreateAlert {
                 symbol,
                 target_price,

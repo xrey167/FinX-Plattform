@@ -58,56 +58,29 @@ pub fn is_logical_endpoint(endpoint: &str) -> bool {
 /// serve the logical endpoint is listed regardless of enabled features;
 /// availability is filtered against the dispatch table at resolution time.
 ///
-/// Only logical endpoints with ≥2 candidate providers are listed (a single
-/// provider needs no resolution layer). Each candidate's `(provider, endpoint)`
-/// pair must match a key wired into the ingest dispatch table for that provider
-/// to be reachable.
+/// This is now a thin projection of the namespaced endpoint catalog
+/// ([`tdw_endpoint_catalog::catalog`]): every `Fetch` route with ≥2 candidates
+/// is mapped to its ordered `(provider, endpoint)` list. Single-candidate and
+/// `Compute` routes are skipped — a single provider needs no resolution layer.
+/// The catalog is the single source of truth for routes, candidates, and order;
+/// this layer keeps its original public shape so callers and tests are
+/// unaffected.
 pub fn logical_endpoint_table() -> BTreeMap<&'static str, Vec<ProviderCandidate>> {
-    const fn candidate(provider: &'static str, endpoint: &'static str) -> ProviderCandidate {
-        ProviderCandidate { provider, endpoint }
-    }
-
     let mut table: BTreeMap<&'static str, Vec<ProviderCandidate>> = BTreeMap::new();
-
-    // Equity OHLC history. The two offline fixture fetchers lead the order so an
-    // unkeyed default build resolves network-free; the keyed HTTP providers
-    // follow. All map to canonical equity/bar fetchers in the dispatch table.
-    table.insert(
-        "equity/price/historical",
-        vec![
-            candidate("fileset", "equity_historical"),
-            candidate("yahoo", "equity_historical"),
-            candidate("fmp", "equity_historical"),
-            candidate("tiingo", "historical"),
-            candidate("polygon", "aggregates"),
-            candidate("alpaca", "stock_bars"),
-            candidate("alpha_vantage", "market_data"),
-            candidate("databento", "timeseries"),
-            candidate("akshare", "hist"),
-        ],
-    );
-
-    // Crypto OHLC history. Both candidates are feature-gated, so this logical
-    // endpoint is unresolvable in an offline build (a structured error names the
-    // candidates), and resolvable once either crypto provider is enabled.
-    table.insert(
-        "crypto/price/historical",
-        vec![
-            candidate("coingecko", "ohlc"),
-            candidate("ccdata", "crypto_ohlcv"),
-        ],
-    );
-
-    // Index OHLC history. Bar providers that also serve index symbols; both
-    // feature-gated.
-    table.insert(
-        "index/price/historical",
-        vec![
-            candidate("polygon", "aggregates"),
-            candidate("databento", "timeseries"),
-        ],
-    );
-
+    for entry in tdw_endpoint_catalog::catalog() {
+        if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch || entry.candidates.len() < 2 {
+            continue;
+        }
+        let candidates = entry
+            .candidates
+            .iter()
+            .map(|c| ProviderCandidate {
+                provider: c.provider,
+                endpoint: c.endpoint,
+            })
+            .collect();
+        table.insert(entry.route, candidates);
+    }
     table
 }
 

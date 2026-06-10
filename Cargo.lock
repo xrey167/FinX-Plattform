@@ -4256,6 +4256,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tdw-endpoint-catalog",
  "tdw-protocol",
 ]
 
@@ -4588,6 +4589,16 @@ dependencies = [
  "tdw-embed",
  "thiserror 2.0.18",
  "tokio",
+]
+
+[[package]]
+name = "tdw-endpoint-catalog"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "tdw-core",
+ "tdw-domain",
 ]
 
 [[package]]
@@ -5321,9 +5332,13 @@ dependencies = [
 name = "tdw-provider-testkit"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
+ "schemars",
+ "serde",
  "serde_json",
  "tdw-core",
+ "tdw-domain",
 ]
 
 [[package]]
@@ -5547,6 +5562,7 @@ dependencies = [
  "tdw-domain",
  "tdw-embed",
  "tdw-embed-local",
+ "tdw-endpoint-catalog",
  "tdw-entity-resolver",
  "tdw-eval-runner",
  "tdw-event",
@@ -5591,6 +5607,7 @@ dependencies = [
  "tdw-provider-polygon",
  "tdw-provider-sec",
  "tdw-provider-seeking-alpha",
+ "tdw-provider-testkit",
  "tdw-provider-tiingo",
  "tdw-provider-tmx",
  "tdw-provider-tradier",
@@ -7270,13 +7287,16 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "schemars",
  "serde_json",
  "tdw-agent",
  "tdw-config",
+ "tdw-endpoint-catalog",
  "tdw-event",
  "tdw-migration",
  "tdw-proto",
  "tdw-protocol",
+ "tdw-service-api",
  "tdw-sql-codegen",
 ]
 

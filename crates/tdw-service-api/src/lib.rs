@@ -32,7 +32,7 @@ mod stream_ingest;
 pub mod user_events;
 
 pub use app_state::{AppState, OidcPolicyError};
-pub use dispatcher::dispatch_op;
+pub use dispatcher::{dispatch_op, ingest_dispatch_pairs};
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
     ServiceEndpoint, enforce_request_path_with_backend, mask_json_response,

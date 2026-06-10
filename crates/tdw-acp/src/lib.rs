@@ -180,6 +180,20 @@ fn validate_op(op: &Op) -> Result<()> {
             validate_token("provider", provider)?;
             validate_token("symbol", symbol)
         }
+        Op::FetchData { route, .. } => {
+            // The route is a slash-namespaced catalog endpoint, so it cannot go
+            // through `validate_token` (which rejects '/'); enforce the catalog
+            // route grammar instead. `params` is an opaque request payload the
+            // resolved fetcher validates downstream.
+            if route.trim().is_empty() {
+                return Err(AcpValidationError::EmptyField { field: "route" });
+            }
+            if tdw_endpoint_catalog::is_valid_route(route) {
+                Ok(())
+            } else {
+                Err(AcpValidationError::UnsafeField { field: "route" })
+            }
+        }
         Op::CreateAlert {
             symbol, condition, ..
         } => {

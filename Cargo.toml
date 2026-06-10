@@ -79,6 +79,7 @@ tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
 tdw-core = { path = "crates/tdw-core" }
 tdw-domain = { path = "crates/tdw-domain" }
+tdw-endpoint-catalog = { path = "crates/tdw-endpoint-catalog" }
 tdw-exec = { path = "crates/tdw-exec" }
 tdw-knowledge = { path = "crates/tdw-knowledge" }
 tdw-llm = { path = "crates/tdw-llm" }
