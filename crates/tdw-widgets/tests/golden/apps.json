@@ -1,0 +1,53 @@
+{
+  "FinX Market Overview": {
+    "description": "A starter market dashboard: equity history and quote, the US Treasury yield curve, and CPI.",
+    "mcp_servers": [
+      {
+        "name": "tdw-mcp",
+        "url": "http://127.0.0.1:7878"
+      }
+    ],
+    "name": "FinX Market Overview",
+    "prompts": [
+      "Show the price history for AAPL.",
+      "What is the latest quote for MSFT?",
+      "Summarize the current US Treasury yield curve."
+    ],
+    "tabs": {
+      "overview": {
+        "id": "overview",
+        "layout": [
+          {
+            "h": 12,
+            "i": "equity_price_historical",
+            "w": 20,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 12,
+            "i": "equity_price_quote",
+            "w": 20,
+            "x": 20,
+            "y": 0
+          },
+          {
+            "h": 12,
+            "i": "fixedincome_government_yield_curve",
+            "w": 20,
+            "x": 0,
+            "y": 12
+          },
+          {
+            "h": 12,
+            "i": "economy_cpi",
+            "w": 20,
+            "x": 20,
+            "y": 12
+          }
+        ],
+        "name": "Overview"
+      }
+    }
+  }
+}

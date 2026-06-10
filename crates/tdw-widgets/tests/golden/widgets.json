@@ -1,0 +1,4373 @@
+{
+  "commodity_petroleum_status_report": {
+    "category": "commodity",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "EIA Weekly Petroleum Status Report (WPSR) series rows.",
+    "endpoint": "/widget-data/commodity/petroleum_status_report",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "commodity_petroleum_status_report",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Petroleum Status Report",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "commodity_short_term_energy_outlook": {
+    "category": "commodity",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "EIA Short-Term Energy Outlook (STEO) series rows.",
+    "endpoint": "/widget-data/commodity/short_term_energy_outlook",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "commodity_short_term_energy_outlook",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Short Term Energy Outlook",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "crypto_price_historical": {
+    "category": "crypto",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Historical OHLCV bars for a crypto trading pair.",
+    "endpoint": "/widget-data/crypto/price/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "crypto_price_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Historical",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "BTCUSD"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "currency_reference_rates": {
+    "category": "currency",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Daily euro foreign-exchange reference rates (all pairs), ECB-backed.",
+    "endpoint": "/widget-data/currency/reference_rates",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "currency_reference_rates",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Reference Rates",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "derivatives_futures_curve": {
+    "category": "derivatives",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Futures forward curve (per-expiry contract last prices), Yahoo-backed.",
+    "endpoint": "/widget-data/derivatives/futures/curve",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "derivatives_futures_curve",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Curve",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "derivatives_futures_historical": {
+    "category": "derivatives",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Historical OHLCV bars for a futures continuation symbol, Yahoo-backed.",
+    "endpoint": "/widget-data/derivatives/futures/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "derivatives_futures_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Historical",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "derivatives_options_chains": {
+    "category": "derivatives",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "ask",
+            "headerName": "Ask"
+          },
+          {
+            "cellDataType": "number",
+            "field": "bid",
+            "headerName": "Bid"
+          },
+          {
+            "cellDataType": "text",
+            "field": "contract_symbol",
+            "headerName": "Contract Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "delta",
+            "headerName": "Delta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "expiration",
+            "formatterFn": "percent",
+            "headerName": "Expiration"
+          },
+          {
+            "cellDataType": "number",
+            "field": "gamma",
+            "headerName": "Gamma"
+          },
+          {
+            "cellDataType": "number",
+            "field": "implied_volatility",
+            "headerName": "Implied Volatility"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_price",
+            "headerName": "Last Price"
+          },
+          {
+            "cellDataType": "number",
+            "field": "open_interest",
+            "headerName": "Open Interest"
+          },
+          {
+            "cellDataType": "text",
+            "field": "option_type",
+            "headerName": "Option Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "rho",
+            "headerName": "Rho"
+          },
+          {
+            "cellDataType": "number",
+            "field": "strike",
+            "headerName": "Strike"
+          },
+          {
+            "cellDataType": "number",
+            "field": "theta",
+            "headerName": "Theta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "underlying_symbol",
+            "headerName": "Underlying Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "vega",
+            "headerName": "Vega"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Delayed options chain (calls and puts across expiries), Yahoo-backed.",
+    "endpoint": "/widget-data/derivatives/options/chains",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "derivatives_options_chains",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Chains",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "economy_cpi": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "FRED Consumer Price Index series.",
+    "endpoint": "/widget-data/economy/cpi",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_cpi",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Consumer Price Index",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_fred_search": {
+    "category": "economy",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "frequency",
+            "headerName": "Frequency"
+          },
+          {
+            "cellDataType": "number",
+            "field": "popularity",
+            "headerName": "Popularity"
+          },
+          {
+            "cellDataType": "text",
+            "field": "series_id",
+            "headerName": "Series Id"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "units",
+            "headerName": "Units"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Search FRED series metadata by free text (discovery, no observations).",
+    "endpoint": "/widget-data/economy/fred_search",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "economy_fred_search",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Fred Search",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "economy_gdp_nominal": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Nominal Gross Domestic Product, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/gdp/nominal",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_gdp_nominal",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Nominal",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_gdp_real": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Real Gross Domestic Product, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/gdp/real",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_gdp_real",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Real",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_money_measures": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Full H.6 money stock measures table (Federal Reserve, keyless).",
+    "endpoint": "/widget-data/economy/money_measures",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_money_measures",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Money Measures",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_money_measures_m1": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "M1 money stock, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/money_measures/m1",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_money_measures_m1",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "M1",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_money_measures_m2": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "M2 money stock, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/money_measures/m2",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_money_measures_m2",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "M2",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_pce": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Personal Consumption Expenditures price index, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/pce",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_pce",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Pce",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_inflation_expectations": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "University of Michigan inflation expectations, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/survey/inflation_expectations",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_inflation_expectations",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Inflation Expectations",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_nonfarm_payrolls": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Total nonfarm payroll employment, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/survey/nonfarm_payrolls",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_nonfarm_payrolls",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Nonfarm Payrolls",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_university_of_michigan": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "University of Michigan consumer sentiment, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/survey/university_of_michigan",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_university_of_michigan",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "University Of Michigan",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_unemployment": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Unemployment rate, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/unemployment",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_unemployment",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Unemployment",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "equity_calendar_dividends": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "dividend",
+            "headerName": "Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "eps_estimate",
+            "headerName": "Eps Estimate"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "payment_date",
+            "headerName": "Payment Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "record_date",
+            "headerName": "Record Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Upcoming dividend calendar (ex-date, amount, pay date), NASDAQ-backed.",
+    "endpoint": "/widget-data/equity/calendar/dividends",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_calendar_dividends",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Dividends",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_calendar_earnings": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "dividend",
+            "headerName": "Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "eps_estimate",
+            "headerName": "Eps Estimate"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "payment_date",
+            "headerName": "Payment Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "record_date",
+            "headerName": "Record Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Upcoming earnings calendar (date, EPS estimate), NASDAQ-backed.",
+    "endpoint": "/widget-data/equity/calendar/earnings",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_calendar_earnings",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Earnings",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_calendar_ipo": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "dividend",
+            "headerName": "Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "eps_estimate",
+            "headerName": "Eps Estimate"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "payment_date",
+            "headerName": "Payment Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "record_date",
+            "headerName": "Record Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Upcoming IPO calendar (price, shares, exchange), NASDAQ-backed.",
+    "endpoint": "/widget-data/equity/calendar/ipo",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_calendar_ipo",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Ipo",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_estimates_consensus": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "analyst",
+            "headerName": "Analyst"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "high",
+            "headerName": "High"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "low",
+            "headerName": "Low"
+          },
+          {
+            "cellDataType": "number",
+            "field": "mean",
+            "headerName": "Mean"
+          },
+          {
+            "cellDataType": "number",
+            "field": "number_of_analysts",
+            "headerName": "Number Of Analysts"
+          },
+          {
+            "cellDataType": "text",
+            "field": "recommendation",
+            "headerName": "Recommendation"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Analyst consensus and price targets for a symbol, Yahoo-backed.",
+    "endpoint": "/widget-data/equity/estimates/consensus",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_estimates_consensus",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Consensus",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_fundamental_dividends": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "action_type",
+            "headerName": "Action Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "cash_amount",
+            "headerName": "Cash Amount"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "ex_date",
+            "headerName": "Ex Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "split_ratio",
+            "formatterFn": "percent",
+            "headerName": "Split Ratio"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Historical cash dividends for an equity symbol, Yahoo-backed.",
+    "endpoint": "/widget-data/equity/fundamental/dividends",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_dividends",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Dividends",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_ownership_form_13f": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "holder",
+            "headerName": "Holder"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "percentage",
+            "formatterFn": "percent",
+            "headerName": "Percentage"
+          },
+          {
+            "cellDataType": "text",
+            "field": "relationship",
+            "headerName": "Relationship"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "transaction_type",
+            "headerName": "Transaction Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "SEC Form 13F-HR institutional-holdings filing index by CIK (keyless).",
+    "endpoint": "/widget-data/equity/ownership/form_13f",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_ownership_form_13f",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Form 13f",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_ownership_share_statistics": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "holder",
+            "headerName": "Holder"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "percentage",
+            "formatterFn": "percent",
+            "headerName": "Percentage"
+          },
+          {
+            "cellDataType": "text",
+            "field": "relationship",
+            "headerName": "Relationship"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "transaction_type",
+            "headerName": "Transaction Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Share statistics (float, shares outstanding, ownership), Yahoo-backed.",
+    "endpoint": "/widget-data/equity/ownership/share_statistics",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_ownership_share_statistics",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Share Statistics",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_price_historical": {
+    "category": "equity",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "End-of-day OHLCV price history for an equity symbol.",
+    "endpoint": "/widget-data/equity/price/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "equity_price_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Equity Historical Prices",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "equity_price_performance": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "one_day",
+            "headerName": "One Day"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_month",
+            "headerName": "One Month"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_week",
+            "headerName": "One Week"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_year",
+            "headerName": "One Year"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "three_month",
+            "headerName": "Three Month"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ytd",
+            "headerName": "Ytd"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Period total returns (one-day through one-year) for a symbol, Yahoo-backed.",
+    "endpoint": "/widget-data/equity/price/performance",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_price_performance",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Performance",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_price_quote": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "change",
+            "headerName": "Change"
+          },
+          {
+            "cellDataType": "number",
+            "field": "change_percent",
+            "formatterFn": "percent",
+            "headerName": "Change Percent"
+          },
+          {
+            "cellDataType": "number",
+            "field": "current_price",
+            "headerName": "Current Price"
+          },
+          {
+            "cellDataType": "number",
+            "field": "prev_close",
+            "headerName": "Prev Close"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ts_ms",
+            "headerName": "Ts Ms"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Latest last-price quote snapshot for an equity symbol.",
+    "endpoint": "/widget-data/equity/price/quote",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_price_quote",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Equity Quote",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_profile": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "logo_url",
+            "headerName": "Logo Url"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap_millions",
+            "headerName": "Market Cap Millions"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "ticker",
+            "headerName": "Ticker"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
+    "endpoint": "/widget-data/equity/profile",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_profile",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Profile",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_shorts_fails_to_deliver": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "holder",
+            "headerName": "Holder"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "percentage",
+            "formatterFn": "percent",
+            "headerName": "Percentage"
+          },
+          {
+            "cellDataType": "text",
+            "field": "relationship",
+            "headerName": "Relationship"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "transaction_type",
+            "headerName": "Transaction Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "SEC fails-to-deliver records for an equity symbol (keyless).",
+    "endpoint": "/widget-data/equity/shorts/fails_to_deliver",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_shorts_fails_to_deliver",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Fails To Deliver",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_holdings": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "balance",
+            "headerName": "Balance"
+          },
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "cusip",
+            "headerName": "Cusip"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fund_symbol",
+            "headerName": "Fund Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "holding_name",
+            "headerName": "Holding Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "isin",
+            "headerName": "Isin"
+          },
+          {
+            "cellDataType": "text",
+            "field": "report_date",
+            "headerName": "Report Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value_usd",
+            "headerName": "Value Usd"
+          },
+          {
+            "cellDataType": "number",
+            "field": "weight_pct",
+            "formatterFn": "percent",
+            "headerName": "Weight Pct"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "ETF constituent holdings from SEC N-PORT (NPORT-P) disclosures (keyless).",
+    "endpoint": "/widget-data/etf/holdings",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_holdings",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Holdings",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "fixedincome_bond_indices_us_corporate_hy": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "ICE BofA US High Yield index effective yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/bond_indices/us_corporate_hy",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_bond_indices_us_corporate_hy",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Us Corporate Hy",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_corporate_commercial_paper_90d": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "90-Day AA nonfinancial commercial paper rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/corporate/commercial_paper/90d",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_corporate_commercial_paper_90d",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "90d",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_corporate_spot_rates_10y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "10-Year HQM corporate bond spot rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/corporate/spot_rates/10y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_corporate_spot_rates_10y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "10y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_dealer_stats": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Primary dealer net positioning statistics (Federal Reserve, keyless).",
+    "endpoint": "/widget-data/fixedincome/government/dealer_stats",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_dealer_stats",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Dealer Stats",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_tips_yields_10y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "10-Year TIPS constant-maturity yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/government/tips_yields/10y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_tips_yields_10y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "10y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_treasury_auctions": {
+    "category": "fixedincome",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "auction_date",
+            "headerName": "Auction Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "bid_to_cover_ratio",
+            "formatterFn": "percent",
+            "headerName": "Bid To Cover Ratio"
+          },
+          {
+            "cellDataType": "text",
+            "field": "cusip",
+            "headerName": "Cusip"
+          },
+          {
+            "cellDataType": "number",
+            "field": "high_yield",
+            "formatterFn": "percent",
+            "headerName": "High Yield"
+          },
+          {
+            "cellDataType": "number",
+            "field": "interest_rate",
+            "headerName": "Interest Rate"
+          },
+          {
+            "cellDataType": "text",
+            "field": "issue_date",
+            "headerName": "Issue Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "maturity_date",
+            "headerName": "Maturity Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "offering_amount",
+            "headerName": "Offering Amount"
+          },
+          {
+            "cellDataType": "text",
+            "field": "security_term",
+            "headerName": "Security Term"
+          },
+          {
+            "cellDataType": "text",
+            "field": "security_type",
+            "headerName": "Security Type"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "US Treasury security auction results (US Treasury FiscalData, keyless).",
+    "endpoint": "/widget-data/fixedincome/government/treasury_auctions",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_auctions",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Treasury Auctions",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "fixedincome_government_treasury_prices": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "US Treasury security reference prices (US Treasury FiscalData, keyless).",
+    "endpoint": "/widget-data/fixedincome/government/treasury_prices",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_prices",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Treasury Prices",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_treasury_rates_10y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "10-Year Treasury constant-maturity yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/government/treasury_rates/10y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_rates_10y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "10y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_treasury_rates_2y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "2-Year Treasury constant-maturity yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/government/treasury_rates/2y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_rates_2y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "2y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_treasury_rates_30y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "30-Year Treasury constant-maturity yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/government/treasury_rates/30y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_rates_30y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "30y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_treasury_rates_3m": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "3-Month Treasury constant-maturity yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/government/treasury_rates/3m",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_treasury_rates_3m",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "3m",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_government_yield_curve": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Treasury par yields across maturities.",
+    "endpoint": "/widget-data/fixedincome/government/yield_curve",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_government_yield_curve",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "US Treasury Yield Curve",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_mortgage_indices_30y_fixed": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "30-Year fixed-rate mortgage average, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/mortgage_indices/30y_fixed",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_mortgage_indices_30y_fixed",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "30y Fixed",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_dpcredit": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Discount window primary credit rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/dpcredit",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_dpcredit",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Dpcredit",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_ecb": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "ECB deposit facility rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/ecb",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_ecb",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Ecb",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_effr": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Effective Federal Funds Rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/effr",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_effr",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Effr",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_estr": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Euro Short-Term Rate (€STR), FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/estr",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_estr",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Estr",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_iorb": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Interest Rate on Reserve Balances, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/iorb",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_iorb",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Iorb",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_overnight_bank_funding": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Overnight Bank Funding Rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/overnight_bank_funding",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_overnight_bank_funding",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Overnight Bank Funding",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_sofr": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Secured Overnight Financing Rate, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/sofr",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_sofr",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sofr",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_rate_sonia": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Sterling Overnight Index Average (SONIA), FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/rate/sonia",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_rate_sonia",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sonia",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_spreads_tcm_10y2y": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "10-Year minus 2-Year Treasury constant-maturity spread, FRED-backed.",
+    "endpoint": "/widget-data/fixedincome/spreads/tcm/10y2y",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_spreads_tcm_10y2y",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "10y2y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_spreads_tcm_10y3m": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "10-Year minus 3-Month Treasury constant-maturity spread, FRED-backed.",
+    "endpoint": "/widget-data/fixedincome/spreads/tcm/10y3m",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_spreads_tcm_10y3m",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "10y3m",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_spreads_treasury_effr_3m": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "3-Month Treasury minus Federal Funds Rate spread, FRED-backed.",
+    "endpoint": "/widget-data/fixedincome/spreads/treasury_effr/3m",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_spreads_treasury_effr_3m",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "3m",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "index_price_historical": {
+    "category": "index",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Historical OHLCV bars for a market index.",
+    "endpoint": "/widget-data/index/price/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "index_price_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Historical",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "index_snapshots": {
+    "category": "index",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "change",
+            "headerName": "Change"
+          },
+          {
+            "cellDataType": "number",
+            "field": "change_percent",
+            "formatterFn": "percent",
+            "headerName": "Change Percent"
+          },
+          {
+            "cellDataType": "number",
+            "field": "current_price",
+            "headerName": "Current Price"
+          },
+          {
+            "cellDataType": "number",
+            "field": "prev_close",
+            "headerName": "Prev Close"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ts_ms",
+            "headerName": "Ts Ms"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Delayed US-index quote snapshot (price, change), CBOE-backed.",
+    "endpoint": "/widget-data/index/snapshots",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "index_snapshots",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Snapshots",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_fed_fomc_documents": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "doc_type",
+            "headerName": "Doc Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "FOMC meeting documents index from the Federal Reserve (keyless).",
+    "endpoint": "/widget-data/regulators/fed/fomc_documents",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_fed_fomc_documents",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Fomc Documents",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_cik_map": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Map ticker symbols to SEC CIKs via SEC company_tickers.json (keyless).",
+    "endpoint": "/widget-data/regulators/sec/cik_map",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_cik_map",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Cik Map",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  }
+}
