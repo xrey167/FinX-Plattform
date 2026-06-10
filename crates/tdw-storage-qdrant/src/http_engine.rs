@@ -375,13 +375,13 @@ fn qdrant_filter(filter: &tdw_core::PayloadFilter) -> Value {
     let must: Vec<Value> = filter
         .must
         .iter()
-        .map(|condition| match condition {
-            tdw_core::PayloadCondition::MatchString { key, value } => json!({
+        .filter_map(|condition| match condition {
+            tdw_core::PayloadCondition::MatchString { key, value } => Some(json!({
                 "key": key, "match": { "value": value },
-            }),
-            tdw_core::PayloadCondition::MatchAny { key, values } => json!({
+            })),
+            tdw_core::PayloadCondition::MatchAny { key, values } => Some(json!({
                 "key": key, "match": { "any": values },
-            }),
+            })),
             tdw_core::PayloadCondition::RangeString { key, gte, lte } => {
                 let mut range = serde_json::Map::new();
                 if let Some(bound) = gte {
@@ -390,7 +390,14 @@ fn qdrant_filter(filter: &tdw_core::PayloadFilter) -> Value {
                 if let Some(bound) = lte {
                     range.insert("lte".to_string(), Value::String(bound.clone()));
                 }
-                json!({ "key": key, "range": Value::Object(range) })
+                if range.is_empty() {
+                    // A boundless range matches everything; Qdrant rejects an
+                    // empty range object (HTTP 400), and the shared in-memory
+                    // evaluator treats it as match-all — omit the condition so
+                    // both backends agree.
+                    return None;
+                }
+                Some(json!({ "key": key, "range": Value::Object(range) }))
             }
         })
         .collect();
@@ -401,6 +408,22 @@ fn qdrant_filter(filter: &tdw_core::PayloadFilter) -> Value {
 mod tests {
     use super::{create_conflict_is_benign, existing_vector_size, qdrant_filter};
     use serde_json::json;
+
+    #[test]
+    fn qdrant_filter_omits_boundless_ranges_instead_of_emitting_empty_objects() {
+        use tdw_core::{PayloadCondition, PayloadFilter};
+        // Qdrant rejects {"range": {}} with HTTP 400; a boundless range is
+        // match-all, so the condition is dropped — agreeing with the shared
+        // in-memory evaluator, which also matches everything for it.
+        let mapped = qdrant_filter(&PayloadFilter {
+            must: vec![PayloadCondition::RangeString {
+                key: "as_of".to_string(),
+                gte: None,
+                lte: None,
+            }],
+        });
+        assert_eq!(mapped, json!({ "must": [] }));
+    }
 
     #[test]
     fn qdrant_filter_maps_every_condition_form() {

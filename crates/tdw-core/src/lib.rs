@@ -321,6 +321,14 @@ pub enum PayloadCondition {
     /// Lexical backends may reject this condition loudly: Meilisearch comparison
     /// filters are numeric-only, so temporal range filtering belongs on the
     /// vector channel (the in-memory lexical engine supports it for tests).
+    ///
+    /// # Temporal convention
+    ///
+    /// Both bounds are **inclusive** (`[gte, lte]`, a closed interval) — matching
+    /// Qdrant's range semantics. This DIFFERS from the graph layer's half-open
+    /// `[valid_from, valid_to)` windows: when deriving a `RangeString` from a
+    /// graph validity window, do NOT pass the exclusive `valid_to` directly as
+    /// `lte`, or documents stamped exactly at the boundary leak in.
     RangeString {
         key: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,9 +395,10 @@ fn string_field_matches(payload: &Value, key: &str, value: &str) -> bool {
 pub struct VectorQuery {
     pub vector: Vec<f32>,
     pub top_k: usize,
-    /// Payload filter applied before scoring; empty = unfiltered (the pre-B1 wire
-    /// shape, preserved via `serde(default)`).
-    #[serde(default)]
+    /// Payload filter applied before scoring; empty = unfiltered. The pre-B1 wire
+    /// shape is preserved in BOTH directions: old JSON deserializes (`default`)
+    /// and an unfiltered query serializes without the field (`skip_serializing_if`).
+    #[serde(default, skip_serializing_if = "PayloadFilter::is_empty")]
     pub filter: PayloadFilter,
 }
 
@@ -423,9 +432,10 @@ pub struct LexicalDoc {
 pub struct TextQuery {
     pub text: String,
     pub top_k: usize,
-    /// Fields filter applied before scoring; empty = unfiltered (the pre-B1 wire
-    /// shape, preserved via `serde(default)`).
-    #[serde(default)]
+    /// Fields filter applied before scoring; empty = unfiltered. The pre-B1 wire
+    /// shape is preserved in BOTH directions: old JSON deserializes (`default`)
+    /// and an unfiltered query serializes without the field (`skip_serializing_if`).
+    #[serde(default, skip_serializing_if = "PayloadFilter::is_empty")]
     pub filter: PayloadFilter,
 }
 
@@ -808,6 +818,12 @@ mod tests {
         assert!(knn.filter.is_empty());
         let text = TextQuery::text("volatility", 5);
         assert!(text.filter.is_empty());
+        // The pre-B1 wire shape holds in the SERIALIZE direction too: an
+        // unfiltered query emits no `filter` key at all.
+        let encoded = serde_json::to_value(&knn).expect("vector query should serialize");
+        assert!(encoded.get("filter").is_none());
+        let encoded = serde_json::to_value(&text).expect("text query should serialize");
+        assert!(encoded.get("filter").is_none());
         // Pre-B1 wire shapes still deserialize (filter defaults to empty).
         let decoded: VectorQuery = serde_json::from_value(json!({ "vector": [1.0], "top_k": 5 }))
             .expect("pre-B1 vector query should deserialize");
