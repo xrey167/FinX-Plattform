@@ -102,11 +102,11 @@ pub enum Predicate {
         target_kind: Option<String>,
     },
     /// Every sub-predicate holds.
-    All(Vec<Predicate>),
+    All(Vec<Self>),
     /// At least one sub-predicate holds.
-    Any(Vec<Predicate>),
+    Any(Vec<Self>),
     /// The sub-predicate does not hold.
-    Not(Box<Predicate>),
+    Not(Box<Self>),
 }
 
 /// v1 name for [`Predicate`], kept so existing constructors compile unchanged.

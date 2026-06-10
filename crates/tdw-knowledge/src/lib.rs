@@ -129,6 +129,9 @@ impl KnowledgeIndex {
         now: &str,
     ) -> Result<()> {
         validate_document(&document)?;
+        if !is_date(now) {
+            return Err(KnowledgeError::InvalidDocumentField("now"));
+        }
         let embedding = self
             .embedder
             .embed(&document.body)
@@ -283,6 +286,19 @@ fn is_tag_id(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, ':' | '_' | '-')
         })
+}
+
+/// `YYYY-MM-DD` shape check, mirroring the tag store's assignment validation —
+/// enforced up front so a tagless document (whose tag loop never reaches
+/// `TagStore::assign`) cannot silently swallow a garbage `now`.
+fn is_date(value: &str) -> bool {
+    value.len() == 10
+        && value.as_bytes()[4] == b'-'
+        && value.as_bytes()[7] == b'-'
+        && value
+            .chars()
+            .enumerate()
+            .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
 }
 
 #[must_use]
@@ -461,6 +477,24 @@ mod tests {
             .await
             .expect_err("invalid document id should fail");
         assert!(matches!(error, KnowledgeError::InvalidDocumentField("id")));
+        // A garbage `now` must error LOUDLY even on a tagless document, whose
+        // tag loop never reaches the store's own date validation.
+        let tagless = KnowledgeDocument {
+            id: "doc-tagless".to_string(),
+            body: "AAPL".to_string(),
+            entity: Entity {
+                entity_id: "instrument:AAPL".to_string(),
+                kind: EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: vec!["AAPL".to_string()],
+            },
+            tags: Vec::new(),
+        };
+        let error = index
+            .index_document_at(tagless, "not-a-date")
+            .await
+            .expect_err("garbage now should fail before any storage step");
+        assert!(matches!(error, KnowledgeError::InvalidDocumentField("now")));
         assert!(matches!(
             index.search(" ", 1).await,
             Err(KnowledgeError::InvalidQuery("query"))
