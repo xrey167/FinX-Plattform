@@ -36,7 +36,10 @@ type DocSpec<'a> = (&'a str, &'a str, &'a str, Option<&'a str>, &'a [&'a str]);
 
 /// Corpus: doc-a describes instrument:acme (tagged sector:tech, dated
 /// 2026-01-15), doc-b describes instrument:beta (dated 2026-03-01,
-/// supplier_of-linked to acme), doc-c describes instrument:gamma (UNDATED).
+/// supplier_of-linked to acme), doc-c describes instrument:gamma (UNDATED),
+/// and doc-x is a SECOND, UNDATED acme document — the leak probe: acme holds
+/// sector:tech, so a leaky tag channel or graph expansion would surface
+/// doc-x under a temporal query even though the payload gate hides it.
 async fn fixture() -> Fixture {
     let embedder = Arc::new(HashEmbeddingProvider::default());
     let vectors = Arc::new(InMemoryVectorEngine::default());
@@ -44,7 +47,7 @@ async fn fixture() -> Fixture {
     let tags = Arc::new(InMemoryTagEngine::default());
     let graph = Arc::new(InMemoryGraphEngine::default());
 
-    let docs: [DocSpec<'_>; 3] = [
+    let docs: [DocSpec<'_>; 4] = [
         (
             "doc-a",
             "instrument:acme",
@@ -65,6 +68,13 @@ async fn fixture() -> Fixture {
             "gamma holdings earnings note without a publication date",
             None,
             &[],
+        ),
+        (
+            "doc-x",
+            "instrument:acme",
+            "acme archived strategy memo with no publication date",
+            None,
+            &["sector:tech"],
         ),
     ];
 
@@ -94,7 +104,14 @@ async fn fixture() -> Fixture {
             fields: payload,
         });
         nodes.push(node(entity_id, EntityKind::Instrument));
-        nodes.push(node(&format!("document:{doc_id}"), EntityKind::Document));
+        // Document graph nodes carry the same contract props the vector and
+        // lexical payloads do — the graph channels filter on them.
+        let mut document_node = node(&format!("document:{doc_id}"), EntityKind::Document);
+        document_node.props = json!({"plane": "platform"});
+        if let Some(as_of) = as_of {
+            document_node.props["as_of"] = json!(as_of);
+        }
+        nodes.push(document_node);
         edges.push(edge(
             entity_id,
             &format!("document:{doc_id}"),
@@ -255,7 +272,8 @@ async fn hybrid_fusion_combines_vector_lexical_and_tag_channels() {
     assert_eq!(
         hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(),
         vec!["doc-a"],
-        "only the sector:tech-tagged, in-date document survives"
+        "only the sector:tech-tagged, in-date document survives — doc-x \
+         (acme's UNDATED doc) must not leak through the tag channel"
     );
     let channels: Vec<Channel> = hits[0]
         .explanation
@@ -296,6 +314,45 @@ async fn as_of_excludes_later_and_undated_documents() {
     assert!(
         !ids.contains(&"doc-c"),
         "undated docs are excluded by temporal queries: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"doc-x"),
+        "undated docs of a TAGGED entity must not leak either: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn graph_expansion_respects_as_of() {
+    let fixture = fixture().await;
+    let retriever = full_retriever(&fixture);
+    // doc-b is dated AFTER as_of; reaching instrument:beta via supplier_of
+    // expansion must not smuggle its document past the temporal gate, and
+    // acme's own undated doc-x must stay invisible too.
+    let query = KnowledgeQuery::try_new(
+        "acme",
+        5,
+        QueryFilter {
+            as_of: Some("2026-02-01".to_string()),
+            ..QueryFilter::default()
+        },
+        Some(GraphExpansion {
+            k_hop: 1,
+            edge_types: vec!["supplier_of".to_string()],
+            per_hit_limit: 4,
+            decay: 0.5,
+        }),
+    )
+    .expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
+    assert!(ids.contains(&"doc-a"), "{ids:?}");
+    assert!(
+        !ids.contains(&"doc-b"),
+        "expansion must not bypass as_of for later-dated docs: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"doc-x"),
+        "expansion must not bypass as_of for undated docs: {ids:?}"
     );
 }
 
@@ -342,6 +399,10 @@ async fn query_validation_rejects_bad_input() {
     assert!(KnowledgeQuery::try_new("  ", 5, QueryFilter::default(), None).is_err());
     assert!(KnowledgeQuery::try_new("q", 0, QueryFilter::default(), None).is_err());
     assert!(
+        KnowledgeQuery::try_new("q", 257, QueryFilter::default(), None).is_err(),
+        "top_k above MAX_TOP_K must be rejected"
+    );
+    assert!(
         KnowledgeQuery::try_new(
             "q",
             5,
@@ -354,7 +415,13 @@ async fn query_validation_rejects_bad_input() {
         .is_err(),
         "as_of must be YYYY-MM-DD"
     );
-    for (k_hop, per_hit_limit, decay) in [(0, 4, 0.5), (4, 4, 0.5), (1, 0, 0.5), (1, 4, 0.0)] {
+    for (k_hop, per_hit_limit, decay) in [
+        (0, 4, 0.5),
+        (4, 4, 0.5),
+        (1, 0, 0.5),
+        (1, 65, 0.5),
+        (1, 4, 0.0),
+    ] {
         assert!(
             KnowledgeQuery::try_new(
                 "q",

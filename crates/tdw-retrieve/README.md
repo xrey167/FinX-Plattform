@@ -23,7 +23,13 @@ Design points:
 - **Temporal queries are leakage-safe by construction.** `as_of` is a
   tag-date (`YYYY-MM-DD`) mapped onto normalized timestamps for the payload
   filter; documents dated later — and documents without a date — are
-  structurally invisible. The tag channel runs only on temporal queries.
+  structurally invisible. The tag channel runs only on temporal queries, and
+  the graph-derived paths (tag channel, graph expansion) re-apply the same
+  contract through document-node props (`as_of`, `plane`) plus the entity
+  node's kind — no channel is a way around the payload gate. Ingestion (B5)
+  stamps those props when it writes `described_by` edges.
+- **Hostile-query bounds.** `top_k <= 256` and expansion `per_hit_limit <= 64`
+  are hard `try_new` errors; hops are capped at 3 and expansion seeds at 8.
 - **Failures are loud.** A failing channel surfaces its engine's error;
   nothing degrades silently.
 

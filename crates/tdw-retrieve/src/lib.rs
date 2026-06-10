@@ -17,7 +17,11 @@
 //! the vector/lexical payload condition maps it onto the graph layer's
 //! normalized timestamps via [`tdw_tags::date_to_timestamp`], and documents
 //! WITHOUT an `as_of` payload field are excluded by a temporal query (dated
-//! retrieval is leakage-safe by construction, never best-effort).
+//! retrieval is leakage-safe by construction, never best-effort). The
+//! graph-derived paths — the tag channel and graph expansion — enforce the
+//! same contract through document-node props (the `document_visible`
+//! `as_of`/`plane` mirror plus the entity node's kind), so no channel is a
+//! way around the payload gate.
 
 pub mod rrf;
 
@@ -39,6 +43,12 @@ pub use rrf::{Fused, RRF_K, RankedEntry, rrf_fuse};
 pub const DESCRIBED_BY: &str = "described_by";
 /// Document node ids are the document id under this prefix.
 pub const DOCUMENT_PREFIX: &str = "document:";
+/// Hard ceiling on `top_k`. Bounds the per-channel fan-out
+/// (`channel_top_k = 4 * top_k`) and expansion seeding so a hostile query
+/// cannot amplify work without limit (B8 exposes this layer to agents).
+pub const MAX_TOP_K: usize = 256;
+/// Hard ceiling on per-seed, per-hop expansion breadth.
+pub const MAX_PER_HIT_LIMIT: usize = 64;
 
 /// Which channel produced a piece of evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +170,11 @@ impl KnowledgeQuery {
                 "top_k must be greater than zero".into(),
             ));
         }
+        if top_k > MAX_TOP_K {
+            return Err(Error::InvalidQuery(format!(
+                "top_k must be at most {MAX_TOP_K}, got {top_k}"
+            )));
+        }
         if let Some(as_of) = &filter.as_of
             && !is_date(as_of)
         {
@@ -173,6 +188,12 @@ impl KnowledgeQuery {
             }
             if expansion.per_hit_limit == 0 {
                 return Err(Error::InvalidQuery("per_hit_limit must be > 0".into()));
+            }
+            if expansion.per_hit_limit > MAX_PER_HIT_LIMIT {
+                return Err(Error::InvalidQuery(format!(
+                    "per_hit_limit must be at most {MAX_PER_HIT_LIMIT}, got {}",
+                    expansion.per_hit_limit
+                )));
             }
             if !(expansion.decay > 0.0 && expansion.decay <= 1.0) {
                 return Err(Error::InvalidQuery("decay must be in (0, 1]".into()));
@@ -203,6 +224,13 @@ fn is_date(value: &str) -> bool {
 struct DocMeta {
     entity_id: String,
     tags: Vec<String>,
+}
+
+/// One expansion seed: a fused hit whose entity anchors the BFS.
+struct Seed {
+    doc: String,
+    entity: String,
+    score: f64,
 }
 
 /// Ranked lists plus per-document metadata from one channel fan-out.
@@ -297,34 +325,23 @@ impl Retriever {
 
         // 5. Graph expansion of the top fused hits.
         if let (Some(expansion), Some(graph)) = (&query.expand, &self.graph) {
-            let seeds: Vec<(String, String, f64)> = fused
+            let seeds: Vec<Seed> = fused
                 .iter()
                 .take(query.top_k.min(8))
                 .filter_map(|candidate| {
-                    run.meta.get(&candidate.id).map(|doc_meta| {
-                        (
-                            candidate.id.clone(),
-                            doc_meta.entity_id.clone(),
-                            candidate.score,
-                        )
+                    run.meta.get(&candidate.id).map(|doc_meta| Seed {
+                        doc: candidate.id.clone(),
+                        entity: doc_meta.entity_id.clone(),
+                        score: candidate.score,
                     })
                 })
                 .collect();
-            for (seed_doc, seed_entity, seed_score) in seeds {
-                if seed_entity.is_empty() {
+            for seed in seeds {
+                if seed.entity.is_empty() {
                     continue;
                 }
-                self.expand_seed(
-                    graph.as_ref(),
-                    expansion,
-                    &query.filter,
-                    &seed_doc,
-                    &seed_entity,
-                    seed_score,
-                    &expanded_tags,
-                    &mut hits,
-                )
-                .await?;
+                self.expand_seed(graph.as_ref(), expansion, &query.filter, &seed, &mut hits)
+                    .await?;
             }
         }
 
@@ -421,7 +438,17 @@ impl Retriever {
                     .await
                     .map_err(|error| Error::Storage(error.to_string()))?
                 {
-                    for doc_id in entity_documents(graph.as_ref(), &entity).await? {
+                    // The payload contract's entity_kind condition, applied
+                    // via the entity's graph node.
+                    if let Some(kinds) = &query.filter.entity_kinds {
+                        let Some(entity_node) = graph.node(&entity).await? else {
+                            continue;
+                        };
+                        if !kinds.contains(&entity_node.kind) {
+                            continue;
+                        }
+                    }
+                    for doc_id in entity_documents(graph.as_ref(), &entity, &query.filter).await? {
                         run.meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
                             entity_id: entity.clone(),
                             tags: vec![tag.clone()],
@@ -445,16 +472,12 @@ impl Retriever {
 
     /// BFS from one seed entity, contributing decayed scores to the documents
     /// of reached neighbors, with the reaching path recorded for explanation.
-    #[allow(clippy::too_many_arguments)] // internal helper mirroring the search state
     async fn expand_seed(
         &self,
         graph: &dyn GraphEngine,
         expansion: &GraphExpansion,
         filter: &QueryFilter,
-        seed_doc: &str,
-        seed_entity: &str,
-        seed_score: f64,
-        expanded_tags: &[String],
+        seed: &Seed,
         hits: &mut BTreeMap<String, RetrievedHit>,
     ) -> Result<()> {
         let traversal = TraversalFilter {
@@ -464,9 +487,8 @@ impl Retriever {
             direction: Direction::Both,
             max_hops: 1,
         };
-        let mut visited = std::collections::BTreeSet::from([seed_entity.to_string()]);
-        let mut frontier: Vec<(String, Vec<PathStep>)> =
-            vec![(seed_entity.to_string(), Vec::new())];
+        let mut visited = std::collections::BTreeSet::from([seed.entity.clone()]);
+        let mut frontier: Vec<(String, Vec<PathStep>)> = vec![(seed.entity.clone(), Vec::new())];
         for hop in 1..=expansion.k_hop {
             let mut next = Vec::new();
             for (anchor, path) in &frontier {
@@ -482,9 +504,9 @@ impl Retriever {
                         edge_type: edge.rel.clone(),
                         to: edge.to.clone(),
                     });
-                    let contribution = seed_score * expansion.decay.powi(i32::from(hop));
-                    for doc_id in entity_documents(graph, &node.id).await? {
-                        if doc_id == seed_doc {
+                    let contribution = seed.score * expansion.decay.powi(i32::from(hop));
+                    for doc_id in entity_documents(graph, &node.id, filter).await? {
+                        if doc_id == seed.doc {
                             continue;
                         }
                         let entry = hits.entry(doc_id.clone()).or_insert_with(|| RetrievedHit {
@@ -492,19 +514,12 @@ impl Retriever {
                             entity_id: node.id.clone(),
                             score: 0.0,
                             tags: Vec::new(),
-                            explanation: HitExplanation {
-                                matched_tags: expanded_tags
-                                    .iter()
-                                    .filter(|tag| node.aliases.contains(tag))
-                                    .cloned()
-                                    .collect(),
-                                ..HitExplanation::default()
-                            },
+                            explanation: HitExplanation::default(),
                         });
                         entry.score += contribution;
                         if entry.explanation.graph_path.is_none() {
                             entry.explanation.graph_path = Some(next_path.clone());
-                            entry.explanation.seed_hit = Some(seed_doc.to_string());
+                            entry.explanation.seed_hit = Some(seed.doc.clone());
                         }
                     }
                     next.push((node.id, next_path));
@@ -562,20 +577,50 @@ fn assemble_hits(
 }
 
 /// Documents described by an entity (via `described_by` edges to
-/// `document:<id>` nodes), sorted.
-async fn entity_documents(graph: &dyn GraphEngine, entity_id: &str) -> Result<Vec<String>> {
-    let filter = TraversalFilter {
+/// `document:<id>` nodes) that are VISIBLE under the query filter.
+///
+/// Graph-derived documents must satisfy the same contract the payload filter
+/// enforces on the vector/lexical channels — otherwise the tag channel and
+/// graph expansion would be the leak around the `as_of` gate.
+async fn entity_documents(
+    graph: &dyn GraphEngine,
+    entity_id: &str,
+    filter: &QueryFilter,
+) -> Result<Vec<String>> {
+    let traversal = TraversalFilter {
         rels: Some(vec![DESCRIBED_BY.to_string()]),
         direction: Direction::Out,
         max_hops: 1,
         ..TraversalFilter::default()
     };
     Ok(graph
-        .neighbors(entity_id, &filter)
+        .neighbors(entity_id, &traversal)
         .await?
         .into_iter()
+        .filter(|(_, node)| document_visible(&node.props, filter))
         .filter_map(|(_, node)| node.id.strip_prefix(DOCUMENT_PREFIX).map(ToOwned::to_owned))
         .collect())
+}
+
+/// Mirror of the payload contract for document GRAPH nodes (`props.as_of`,
+/// `props.plane`): on a temporal query a document without `as_of` is
+/// excluded, and a missing `plane` fails a plane-scoped query — graph-derived
+/// hits are never more permissive than payload-filtered ones.
+fn document_visible(props: &serde_json::Value, filter: &QueryFilter) -> bool {
+    if let Some(as_of) = &filter.as_of {
+        let cutoff = date_to_timestamp(as_of);
+        match props.get("as_of").and_then(serde_json::Value::as_str) {
+            Some(doc_as_of) if doc_as_of <= cutoff.as_str() => {}
+            _ => return false,
+        }
+    }
+    if let Some(plane) = &filter.plane {
+        match props.get("plane").and_then(serde_json::Value::as_str) {
+            Some(doc_plane) if doc_plane == plane => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// Build the cross-channel payload filter from the query filter. Contract
