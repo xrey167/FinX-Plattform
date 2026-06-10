@@ -47,7 +47,7 @@ Grouped by role, not by tranche. Each crate is documented in detail in its
 | `tdw-service-api/` | Service-side glue type for the `tdw-app-*` pair. |
 | `tdw-mcp/` | MCP server binary (stdio + HTTP/SSE) — exposes Fetchers and Streamers as tools, re-emits streaming progress as MCP notifications. |
 | `tdw-acp/` | Outward Agent Client Protocol boundary for future IDE / TUI clients. |
-| `tdw-cli/` | Local CLI binary that drives `CommandRunner` directly. |
+| `tdw-cli/` | Local CLI binary that drives `CommandRunner` directly; `kg reindex --embedder` offline collection rebuild (B6). |
 | `tdw-tui/` | ratatui `EventMsg` renderer. |
 | `tdw-worker/` | RiverQueue-backed worker binary; same `CommandRunner` code path as the service. |
 | `tdw-rollout/` | Append-only JSONL replay archive. |
@@ -113,7 +113,7 @@ See ADR-0001 and the clean-room rule.
 | `tdw-llm-anthropic/` | Anthropic Claude adapter. |
 | `tdw-llm-openai-compat/` | OpenAI-compatible adapter (also serves local/llama.cpp endpoints). |
 | `tdw-embed/` | `EmbeddingProvider` trait + dispatcher. |
-| `tdw-embed-local/` | fastembed-rs / candle (bge-large-en-v1.5 default). |
+| `tdw-embed-local/` | Deterministic hash embedder (offline default) + `model`-gated pure-Rust candle BERT embedder loaded from a local directory (B6). |
 | `tdw-embed-openai/` | OpenAI `text-embedding-3-large`. |
 | `tdw-embed-google/` | Google `text-embedding-004`. |
 

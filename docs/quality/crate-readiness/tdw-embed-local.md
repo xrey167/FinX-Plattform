@@ -1,6 +1,6 @@
 # tdw-embed-local Readiness Worksheet
 
-Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embedding, and Model Adapter Crates.
+Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embedding, and Model Adapter Crates. Updated by knowledge-system overhaul B6 (real local model).
 
 ## Baseline Inventory
 
@@ -34,7 +34,8 @@ Owner tranche: G004-provider-embedding-and-model-adapter-crates - Provider, Embe
 
 - Local hash embeddings are deterministic and validate through the shared embedding contract.
 - Constructor now rejects empty model IDs instead of silently creating an unnamed provider.
-- Follow-up boundary: production-grade local model inference can replace the hash adapter behind the same trait.
+- B6: the production-local path is real — `model`-gated `LocalModelEmbeddingProvider` loads a BERT-family model (config.json + tokenizer.json + model.safetensors) from a LOCAL directory via the pure-Rust candle stack (CPU only, no network, no auto-download): tokenize → forward → mean-pool over the attention mask → L2 normalize. The hash provider remains the offline test default.
+- B6 testing posture: offline error-path tests always run under `--features model`; the full provider-contract leg (determinism, validate_embedding, batch parity) is env-gated on `TDW_LOCAL_MODEL_DIR` and self-skips without it (Bolt-conformance precedent) — NOT live-verified in CI, where model weights are unavailable. Live verification is an operator step before flipping `knowledge.embedding.provider = local`.
 
 ## Verification
 

@@ -12,9 +12,33 @@ license = "MIT OR Apache-2.0"
 # until you delete this line. Crates with real doc-tests keep doctests enabled.
 doctest = false
 
+[features]
+# Off by default: the bare crate stays dependency-light (hash provider only).
+# `model` pulls in the pure-Rust candle BERT stack for the real local embedder.
+default = []
+model = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:serde_json",
+    "dep:tokio",
+]
+
 [dependencies]
 async-trait = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
+# `model`-gated, pure-Rust (no accelerate/cuda/mkl) BERT embedding stack.
+# CPU only; default-features = false keeps the candle crates from enabling any
+# native math backend, so the crate builds on a Windows host with no C toolchain.
+candle-core = { version = "0.9", default-features = false, optional = true }
+candle-nn = { version = "0.9", default-features = false, optional = true }
+candle-transformers = { version = "0.9", default-features = false, optional = true }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"], optional = true }
+serde_json = { workspace = true, optional = true }
+# `block_in_place` (used to keep synchronous candle inference off the async poll
+# path) needs the multi-thread runtime, which the workspace tokio already enables.
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

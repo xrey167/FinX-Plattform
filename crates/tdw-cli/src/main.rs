@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
+
+mod reindex;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -37,6 +40,15 @@ async fn main() -> Result<(), CliError> {
         );
         let _ = std::fs::remove_dir_all(&root);
         return Ok(());
+    }
+
+    // kg reindex: offline engine maintenance, no daemon connection
+    // (knowledge-system B6).
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "reindex")
+    {
+        return reindex::run(&args).await;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).
