@@ -41,7 +41,7 @@ use tdw_kg::{Entity, EntityKind};
 
 # async fn run() -> tdw_knowledge::Result<()> {
 let mut index = KnowledgeIndex::default(); // offline hash embedder + in-process vectors
-index.index_document(KnowledgeDocument {
+index.index_document_at(KnowledgeDocument {
     id: "doc-1".to_string(),
     body: "AAPL equity momentum research".to_string(),
     entity: Entity {
@@ -51,7 +51,7 @@ index.index_document(KnowledgeDocument {
         aliases: vec!["AAPL".to_string()],
     },
     tags: vec!["asset:equity".to_string()],
-}).await?;
+}, "2026-06-10").await?;
 
 let hits = index.search("AAPL momentum", 1).await?;
 assert_eq!(hits[0].id, "doc-1");
