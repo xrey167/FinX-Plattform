@@ -32,7 +32,7 @@ services:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
       # HTTP ping endpoint available since ClickHouse 20.x; returns "Ok." on 200.
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8123/ping || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -48,14 +48,9 @@ services:
       - "6334:6334"
     volumes:
       - qdrant-data:/qdrant/storage
-    healthcheck:
-      # /healthz is the canonical liveness probe (returns HTTP 200 when ready).
-      # CI uses the same endpoint (ci.yml "Wait for Qdrant" step).
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6333/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+    # No in-container healthcheck: the qdrant image is distroless (no shell,
+    # curl, or wget), so exec-based probes cannot run. Readiness is checked
+    # from outside (CI wait-step curls :6333/healthz from the host).
 
   # getmeili/meilisearch:v1.15.2 — latest stable 1.x release as of 2025-06; the
   # crate talks to the /indexes and /tasks REST API, stable across 1.x.
