@@ -1346,7 +1346,7 @@ pub fn resource_definitions() -> Vec<ResourceDefinition> {
             group: TDW_API_GROUP.to_string(),
             kind,
             manifest_group: kind.group(),
-            spec_schema: Some(spec_schema_for(kind)),
+            spec_schema: spec_schema_for(kind),
             has_data_facets: kind.is_data_kind(),
             autonomy_capable: kind.is_autonomy_capable(),
         })
@@ -1355,8 +1355,17 @@ pub fn resource_definitions() -> Vec<ResourceDefinition> {
 
 /// JSON Schema for a kind's spec, when a concrete Rust type backs it. The
 /// `resourcedefinition` kind returns its own schema, making the registry self-describing.
-fn spec_schema_for(kind: EntityKind) -> Value {
-    match kind {
+/// The warehouse `domain` kinds are `candidate` kinds carrying `None` until their spec
+/// types land (knowledge-system A3).
+fn spec_schema_for(kind: EntityKind) -> Option<Value> {
+    let schema = match kind {
+        EntityKind::Instrument
+        | EntityKind::Account
+        | EntityKind::Strategy
+        | EntityKind::Dataset
+        | EntityKind::Provider
+        | EntityKind::Symbol
+        | EntityKind::Venue => return None,
         EntityKind::Agent => schema_json::<AgentCard>(),
         EntityKind::Skill => schema_json::<AgentSkill>(),
         EntityKind::Tool => schema_json::<Tool>(),
@@ -1400,7 +1409,8 @@ fn spec_schema_for(kind: EntityKind) -> Value {
         EntityKind::DataStore => schema_json::<DataStore>(),
         EntityKind::SecretStore => schema_json::<SecretStore>(),
         EntityKind::Observability => schema_json::<Observability>(),
-    }
+    };
+    Some(schema)
 }
 
 /// DEPRECATED (pre-taxonomy): the legacy fixed schema bundle.
@@ -1800,13 +1810,16 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing definition: {kind:?}"))
         };
 
-        // every kind now carries a concrete spec schema.
+        // kinds with a concrete Rust spec type carry their schema; the warehouse
+        // `domain` kinds are `candidate` kinds carrying `None` until their spec
+        // types land (knowledge-system A3).
         assert!(find(EntityKind::Agent).spec_schema.is_some());
         assert!(
             resource_definitions()
                 .iter()
-                .all(|d| d.spec_schema.is_some())
+                .all(|d| d.spec_schema.is_some() || d.kind.group() == Group::Domain)
         );
+        assert!(find(EntityKind::Instrument).spec_schema.is_none());
         // facet flags come straight from the kind registry.
         assert!(find(EntityKind::Agent).autonomy_capable);
         assert!(!find(EntityKind::Skill).autonomy_capable);
