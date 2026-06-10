@@ -1,16 +1,16 @@
 # tdw-storage-graph Readiness Worksheet
 
-Owner tranche: knowledge-system overhaul A2 - Graph Engine Contract.
+Owner tranche: knowledge-system overhaul A2/A4 - Graph Engine Contract + Bolt Backend.
 
 ## Baseline Inventory
 
 - Manifest: crates\tdw-storage-graph\Cargo.toml
 - Target kinds: lib, test
-- Local dependencies: tdw-core
-- External dependencies: async-trait; serde_json
+- Local dependencies: tdw-core, tdw-taxonomy
+- External dependencies: async-trait; serde_json; neo4rs (optional, `bolt`)
 - Dev dependencies: tdw-taxonomy; tokio
 - Reverse local dependencies: none yet (tdw-kg facades over it in slice A3)
-- Feature flags: none (the Bolt backend lands feature-gated in slice A4)
+- Feature flags: bolt=[dep:neo4rs] — the real graph-database backend (Memgraph primary, Neo4j-compatible) over Bolt v5 + Cypher (A4)
 - Test attributes detected: 2 (lib) + 1 conformance suite
 - tests/ directory: yes (cross-backend conformance)
 - README: yes
@@ -21,7 +21,7 @@ Owner tranche: knowledge-system overhaul A2 - Graph Engine Contract.
 
 - [x] Manifest correctness reviewed: workspace lints, publish=false, MIT OR Apache-2.0.
 - [x] Dependency direction reviewed: implements the tdw-core GraphEngine trait; taxonomy only in dev-deps (kind enum flows in through tdw-core types).
-- [x] Feature flags reviewed: none in A2; A4 adds the Bolt leg behind a feature + env gate mirroring the Qdrant/Postgres precedent.
+- [x] Feature flags reviewed: `bolt` gates neo4rs; the conformance Bolt leg self-skips unless TDW_BOLT_TEST_URL is set (disposable test instance only — the leg wipes the graph), mirroring the Qdrant/Postgres precedent.
 - [x] Public API and error contracts reviewed: empty batches, missing endpoints, invalid ids/labels/aliases/provenance/windows, oversized hop budgets, and self-merges are explicit Error::Storage / Error::InvalidQuery rejections.
 - [x] Runtime behavior reviewed: half-open [valid_from, valid_to) as_of filtering; deterministic sorted read orders; edge identity (from, to, rel, valid_from) upsert-replacement; BFS expansion and shortest path are hop-bounded by MAX_HOPS.
 - [x] Tests and coverage evidence recorded: conformance suite covers round-trips, direction/rel/kind/as_of filters, hop-bounded expand, shortest path incl. budget and unreachability, and full merge semantics (alias union, rewiring with duplicate/self-loop dropping, tombstone, Manual-provenance audit edge).
@@ -32,7 +32,7 @@ Owner tranche: knowledge-system overhaul A2 - Graph Engine Contract.
 
 ## Findings
 
-- In-memory reference engine is the deterministic conformance baseline; the dedicated graph database (Memgraph via Bolt) joins the same suite in A4.
+- In-memory reference engine is the deterministic conformance baseline; the Bolt backend (A4) runs the SAME suite against Memgraph (docker compose service `memgraph`, profiles full/live). Injection posture: fixed label `E` / relationship type `R`, every caller value a bind parameter, props/provenance as JSON strings, open validity bounds as the '' sentinel. expand/shortest_path reuse the reference BFS over the Cypher hop primitive for behavioral parity (per-hop round-trips; optimization deferred).
 - Merge is a real merge (rewiring + tombstone + audit), replacing tdw-kg's audit-only manual_merge from slice A3 onward.
 
 ## Verification
@@ -42,4 +42,4 @@ Owner tranche: knowledge-system overhaul A2 - Graph Engine Contract.
 
 ## Verdict
 
-Ready with follow-ups. The Bolt backend and its conformance leg land in knowledge-system slice A4; tdw-kg adoption lands in A3.
+Ready with follow-ups. Bolt backend + conformance leg landed (A4); durable tag adoption lands in A5; per-hop traversal optimization deferred.
