@@ -9,7 +9,7 @@
 //!   `tdw-taxonomy` — the 5 local kinds this crate used to define (Instrument,
 //!   Account, Strategy, Agent, Dataset) are a subset of it, so existing
 //!   constructors compile unchanged. SERDE NOTE: kinds now serialize to the
-//!   registry's lowercase tokens (`"instrument"`), not the old PascalCase
+//!   registry's lowercase tokens (`"instrument"`), not the old `PascalCase`
 //!   (`"Instrument"`). Nothing durable stored the old tokens (the Postgres KG
 //!   tables were never wired); in-repo fixtures are updated in this change.
 //! * [`KnowledgeGraph::manual_merge`] is now a REAL merge with the same
