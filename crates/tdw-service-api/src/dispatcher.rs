@@ -627,6 +627,57 @@ fn insert_fred_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     );
 }
 
+/// Register the keyless Yahoo expansion fetch bindings (gap-matrix item L2.4),
+/// keyed by each fetcher's `ENDPOINT` const — the same key its catalog candidate
+/// declares. Mirrors [`insert_yahoo_ingest_bindings`] so the fetch and ingest
+/// paths stay in lockstep; a conformance test keeps these keys and the catalog
+/// candidates in sync.
+#[cfg(feature = "provider-yahoo-http")]
+fn insert_yahoo_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::{
+        YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
+        YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+        YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
+        YahooHttpShareStatisticsFetcher,
+    };
+    table.insert(
+        ("yahoo", YahooHttpProfileFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpProfileFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpQuoteFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpQuoteFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpPricePerformanceFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpPricePerformanceFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpDividendsFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpDividendsFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpShareStatisticsFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpShareStatisticsFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpConsensusFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpConsensusFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpOptionsChainFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpOptionsChainFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpFuturesHistoricalFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpFuturesHistoricalFetcher, _, _>(),
+    );
+    table.insert(
+        ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
+        fetch_binding::<YahooHttpFuturesCurveFetcher, _, _>(),
+    );
+}
+
 /// The no-persist fetch dispatch table for this build.
 ///
 /// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
@@ -643,6 +694,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
         ("yahoo", "equity_historical"),
         fetch_binding::<SelectedYahooEquityHistoricalFetcher, _, _>(),
     );
+    #[cfg(feature = "provider-yahoo-http")]
+    insert_yahoo_fetch_bindings(&mut table);
     #[cfg(feature = "provider-akshare")]
     table.insert(
         ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
@@ -1498,6 +1551,57 @@ fn insert_fred_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Register the keyless Yahoo expansion ingest bindings (gap-matrix item L2.4),
+/// keyed identically to [`insert_yahoo_fetch_bindings`] and bound to each route's
+/// bronze landing table. The bronze table for each row shape matches the catalog
+/// route's `bronze_table`, so the `JSONEachRow` landing write stays
+/// schema-coherent.
+#[cfg(feature = "provider-yahoo-http")]
+fn insert_yahoo_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    use crate::{
+        YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
+        YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+        YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
+        YahooHttpShareStatisticsFetcher,
+    };
+    table.insert(
+        ("yahoo", YahooHttpProfileFetcher::ENDPOINT),
+        binding::<YahooHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpQuoteFetcher::ENDPOINT),
+        binding::<YahooHttpQuoteFetcher, _, _>("raw.price_quote"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpPricePerformanceFetcher::ENDPOINT),
+        binding::<YahooHttpPricePerformanceFetcher, _, _>("raw.price_performance"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpDividendsFetcher::ENDPOINT),
+        binding::<YahooHttpDividendsFetcher, _, _>("raw.corporate_action"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpShareStatisticsFetcher::ENDPOINT),
+        binding::<YahooHttpShareStatisticsFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpConsensusFetcher::ENDPOINT),
+        binding::<YahooHttpConsensusFetcher, _, _>("raw.estimate"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpOptionsChainFetcher::ENDPOINT),
+        binding::<YahooHttpOptionsChainFetcher, _, _>("raw.option_contract"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpFuturesHistoricalFetcher::ENDPOINT),
+        binding::<YahooHttpFuturesHistoricalFetcher, _, _>("raw.equity_historical"),
+    );
+    table.insert(
+        ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
+        binding::<YahooHttpFuturesCurveFetcher, _, _>("raw.futures_curve_point"),
+    );
+}
+
 /// The registry-driven ingest dispatch table for this build.
 ///
 /// Each `(provider, endpoint)` key mirrors a feature-enabled `Fetcher`
@@ -1518,6 +1622,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
         ("yahoo", "equity_historical"),
         binding::<SelectedYahooEquityHistoricalFetcher, _, _>("raw.equity_historical"),
     );
+    #[cfg(feature = "provider-yahoo-http")]
+    insert_yahoo_ingest_bindings(&mut table);
     // Feature-enabled `MarketDataBar` (canonical OHLC bar) fetchers land in the
     // shared bronze bar table. Each arm mirrors a `provider-*` feature wired into
     // `default_registry`.
@@ -2169,6 +2275,7 @@ mod tests {
         feature = "provider-polygon",
         feature = "provider-sec",
         feature = "provider-tiingo",
+        feature = "provider-yahoo-http",
     )))]
     #[tokio::test]
     async fn ingest_dispatch_table_offline_default_is_exactly_two_fixtures() {
@@ -2722,6 +2829,67 @@ mod tests {
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command
+            );
+        }
+    }
+
+    /// Catalog <-> Yahoo expansion sync (gap-matrix L2.4): every Yahoo-backed
+    /// catalog candidate has a fetch and an ingest dispatch binding under the
+    /// `provider-yahoo-http` build, and each binding key matches the candidate's
+    /// declared endpoint. Pins the catalog rows, the dispatch tables, and the
+    /// registered Yahoo fetchers to one set of endpoint keys.
+    #[cfg(feature = "provider-yahoo-http")]
+    #[test]
+    fn yahoo_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        // The nine Yahoo expansion endpoints projected by L2.4; the always-on
+        // `equity_historical` fixture endpoint is covered by the equity route
+        // tests and excluded here.
+        const YAHOO_EXPANSION_ENDPOINTS: &[&str] = &[
+            "equity_profile",
+            "equity_quote",
+            "price_performance",
+            "dividends",
+            "share_statistics",
+            "analyst_consensus",
+            "options_chains",
+            "futures_historical",
+            "futures_curve",
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                if candidate.provider != "yahoo"
+                    || !YAHOO_EXPANSION_ENDPOINTS.contains(&candidate.endpoint)
+                {
+                    continue;
+                }
+                let key = (candidate.provider, candidate.endpoint);
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} yahoo candidate {} has no fetch binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} yahoo candidate {} has no ingest binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                covered.insert(candidate.endpoint);
+            }
+        }
+
+        for endpoint in YAHOO_EXPANSION_ENDPOINTS {
+            assert!(
+                covered.contains(endpoint),
+                "yahoo expansion endpoint {endpoint} is not referenced by any catalog route"
             );
         }
     }

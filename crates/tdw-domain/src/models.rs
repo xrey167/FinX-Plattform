@@ -477,6 +477,51 @@ pub struct FomcDocument {
     pub url: Option<String>,
 }
 
+/// Period price-performance row (1-day / 1-week / 1-month / 3-month / YTD / 1-year).
+///
+/// Standardizes `equity/price/performance`: the period total-return figures for a
+/// single symbol. Each value is a fractional return (e.g. `0.012` is `+1.2%`);
+/// fields are [`Option`] because provider coverage of each period varies.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct PricePerformance {
+    /// Underlying symbol.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Most-recent price used to anchor the period returns.
+    pub price: Option<f64>,
+    /// One-day return (fraction).
+    pub one_day: Option<f64>,
+    /// One-week (five-day) return (fraction).
+    pub one_week: Option<f64>,
+    /// One-month return (fraction).
+    pub one_month: Option<f64>,
+    /// Three-month return (fraction).
+    pub three_month: Option<f64>,
+    /// Year-to-date return (fraction).
+    pub ytd: Option<f64>,
+    /// One-year (fifty-two-week) return (fraction).
+    pub one_year: Option<f64>,
+}
+
+/// One point on a futures forward curve: a contract and its last price.
+///
+/// Standardizes `derivatives/futures/curve`: one row per expiry along a root's
+/// forward curve. `price`/`expiration` are [`Option`] because providers do not
+/// always report a last price or a normalized expiry for every contract.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FuturesCurvePoint {
+    /// Root / underlying futures symbol the curve belongs to.
+    #[validate(length(min = 1))]
+    pub underlying: String,
+    /// Contract symbol for this expiry.
+    #[validate(length(min = 1))]
+    pub contract_symbol: String,
+    /// Last traded price for the contract.
+    pub price: Option<f64>,
+    /// Contract expiry date in `YYYY-MM-DD` form when the provider reports it.
+    pub expiration: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +628,46 @@ mod tests {
         let bad = Estimate {
             kind: String::new(),
             ..est
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn price_performance_round_trips_and_validates() {
+        let perf = PricePerformance {
+            symbol: "AAPL".to_string(),
+            price: Some(202.0),
+            one_day: Some(0.012),
+            one_week: None,
+            one_month: Some(0.034),
+            three_month: Some(0.08),
+            ytd: Some(0.15),
+            one_year: Some(0.27),
+        };
+        assert!(perf.validate().is_ok());
+        round_trip(&perf);
+
+        let bad = PricePerformance {
+            symbol: String::new(),
+            ..perf
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn futures_curve_point_round_trips_and_validates() {
+        let point = FuturesCurvePoint {
+            underlying: "ES=F".to_string(),
+            contract_symbol: "ESM26.CME".to_string(),
+            price: Some(5300.0),
+            expiration: Some("2026-06-19".to_string()),
+        };
+        assert!(point.validate().is_ok());
+        round_trip(&point);
+
+        let bad = FuturesCurvePoint {
+            contract_symbol: String::new(),
+            ..point
         };
         assert!(bad.validate().is_err());
     }

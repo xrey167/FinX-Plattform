@@ -186,6 +186,13 @@ use tdw_provider_ws_mock::MockEquityStreamer;
 use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 #[cfg(feature = "provider-yahoo-http")]
 use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
+#[cfg(feature = "provider-yahoo-http")]
+use tdw_provider_yahoo::{
+    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
+    YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
+    YahooHttpShareStatisticsFetcher,
+};
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
 use tdw_runtime::CommandRunner;
@@ -232,6 +239,20 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
     registry.register(SelectedYahooEquityHistoricalFetcher::registry_entry())?;
+    // Keyless Yahoo expansion fetchers (gap-matrix item L2.4); only present when
+    // the real HTTP implementation is enabled.
+    #[cfg(feature = "provider-yahoo-http")]
+    {
+        registry.register(YahooHttpProfileFetcher::registry_entry())?;
+        registry.register(YahooHttpQuoteFetcher::registry_entry())?;
+        registry.register(YahooHttpPricePerformanceFetcher::registry_entry())?;
+        registry.register(YahooHttpDividendsFetcher::registry_entry())?;
+        registry.register(YahooHttpShareStatisticsFetcher::registry_entry())?;
+        registry.register(YahooHttpConsensusFetcher::registry_entry())?;
+        registry.register(YahooHttpOptionsChainFetcher::registry_entry())?;
+        registry.register(YahooHttpFuturesHistoricalFetcher::registry_entry())?;
+        registry.register(YahooHttpFuturesCurveFetcher::registry_entry())?;
+    }
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
     registry.register(AdanosSentimentHttpFetcher::registry_entry())?;

@@ -27,8 +27,8 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | price/historical (OHLCV) | HAVE | yahoo, polygon, alpaca, tiingo, fmp, cboe, tmx, alpha-vantage, databento | done |
-| price/quote + price/performance | PARTIAL | quote via tradier/cboe/fmp; `performance` (period returns) MISSING | todo |
-| search / profile / market_snapshots / historical_market_cap | PARTIAL | sec/fmp search exist; `profile`, `market_snapshots`, `historical_market_cap` MISSING | todo |
+| price/quote + price/performance | HAVE | quote + performance standardized via yahoo (keyless, L2.4); also quote via tradier/cboe/fmp | done |
+| search / profile / market_snapshots / historical_market_cap | PARTIAL | `profile` standardized via yahoo (keyless, L2.4); sec/fmp search exist; `market_snapshots`, `historical_market_cap` MISSING | in-progress |
 | screener | MISSING | no finviz/fmp screener endpoint | todo |
 | fundamentals (balance/income/cash/ratios/metrics) | PARTIAL | fmp has many endpoints wired but not normalized to the 4 statements + ratios cluster; intrinio/polygon variants MISSING | todo |
 | fundamentals growth (balance/income/cash growth) | MISSING | fmp growth endpoints not wired | todo |
