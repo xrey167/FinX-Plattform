@@ -5427,6 +5427,7 @@ dependencies = [
  "tdw-protocol",
  "tdw-service-api",
  "tdw-tool-exec",
+ "tdw-widgets",
  "tokio",
 ]
 

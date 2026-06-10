@@ -36,7 +36,10 @@ rejected `-32002`.
 Built-in tools (`tool_descriptors()`): deterministic offline samples —
 `tdw.providers.list`, `tdw.equity.historical`, `tdw.progress.sample`,
 `tdw.agent.sample`, `tdw.extensibility.sample`, `tdw.event_spine.sample`,
-`tdw.kg_tag.sample`, `tdw.client_event.sample` — and two **daemon-backed** tools:
+`tdw.kg_tag.sample`, `tdw.client_event.sample`; three **read-only widget-catalog**
+tools backed by `tdw-widgets` — `tdw.widgets.list`, `tdw.widgets.describe`,
+`tdw.apps.list` (so a Workspace agent can introspect the same catalog the
+`widgets.json` citations point back to) — and two **daemon-backed** tools:
 `tdw.daemon.triage` and `tdw.daemon.query.submit`. Registry tools (from an
 attached `tdw-agent` registry) are appended to `tools/list`; built-ins win on
 name collision, and registry tools execute through the `ToolExecutor` (or report
@@ -82,8 +85,17 @@ http:    POST /mcp body ─▶ handle_json_rpc_line ─▶ JSON or SSE response
   matching `Authorization: Bearer` token, compared in **constant time**
   (`constant_time_str_eq` over a fixed FNV digest, via `subtle::ConstantTimeEq`)
   so neither the token value nor its length leaks through timing.
-- **Origin allow-list**: only `localhost`/`127.0.0.1`/`::1` origins are accepted
-  (`origin_is_allowed`); others get `403`.
+- **Origin allow-list**: `localhost`/`127.0.0.1`/`::1` origins are always
+  accepted (`origin_is_allowed`); others get `403`. Extra exact origins can be
+  allow-listed via the `TDW_MCP_ALLOWED_ORIGINS` env var (comma-separated; each
+  entry normalized like an incoming `Origin` — scheme + host lowercased, trailing
+  `/`/path dropped — and matched exactly; blank or scheme-less entries are
+  ignored). Unset/empty leaves the loopback-only default unchanged. To register
+  `tdw-mcp` as an `mcp_server` for a browser Workspace at `https://pro.openbb.co`,
+  set `TDW_MCP_ALLOWED_ORIGINS=https://pro.openbb.co` (it is **not** a default).
+  The pure core is `origin_is_allowed_with(origin, allowed)`, unit-tested without
+  mutating the process environment. The bearer-token rule is independent: a
+  non-loopback bind still requires `TDW_MCP_HTTP_TOKEN`.
 - **Protocol-version pinning**: a mismatched `MCP-Protocol-Version` header is
   `400`.
 - **Bounded I/O**: header (`16 KiB`) and body (`1 MiB`) caps; malformed requests
