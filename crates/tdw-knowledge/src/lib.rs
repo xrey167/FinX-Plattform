@@ -3,11 +3,12 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tdw_core::{VectorEngine, VectorPoint, VectorQuery};
+use serde_json::json;
+use tdw_core::{VectorEngine, VectorPoint};
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_kg::{Entity, KnowledgeGraph, Relationship, validate_entity};
+use tdw_retrieve::{KnowledgeQuery, QueryFilter, Retriever};
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use thiserror::Error;
@@ -178,28 +179,48 @@ impl KnowledgeIndex {
             .map_err(|error| KnowledgeError::Storage(error.to_string()))
     }
 
+    /// Vector search, delegated to a single-channel [`tdw_retrieve::Retriever`]
+    /// (knowledge-system B4). Single-channel RRF preserves the engine's KNN
+    /// order exactly, and the returned `score` is the channel's raw vector
+    /// score, so the pre-B4 contract is unchanged. One caveat: a point whose
+    /// payload carries `entity_id` but lacks `tags` now yields empty tags
+    /// instead of an error (the retriever cannot distinguish missing from
+    /// empty); a missing `entity_id` still errors.
+    ///
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
     pub async fn search(&self, query: &str, top_k: usize) -> Result<Vec<KnowledgeHit>> {
         validate_query(query, top_k)?;
-        let embedding = self
-            .embedder
-            .embed(query)
-            .await
-            .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
-        let hits = self
-            .vectors
-            .search_knn(&self.collection, VectorQuery::knn(embedding.vector, top_k))
-            .await
+        let retriever = Retriever::new(
+            Arc::clone(&self.embedder),
+            Arc::clone(&self.vectors),
+            self.collection.clone(),
+        );
+        let knowledge_query = KnowledgeQuery::try_new(query, top_k, QueryFilter::default(), None)
             .map_err(|error| KnowledgeError::Storage(error.to_string()))?;
+        let hits = retriever
+            .search(&knowledge_query)
+            .await
+            .map_err(|error| match error {
+                tdw_core::Error::Provider(message) => KnowledgeError::Embedding(message),
+                other => KnowledgeError::Storage(other.to_string()),
+            })?;
         hits.into_iter()
             .map(|hit| {
+                if hit.entity_id.is_empty() {
+                    return Err(KnowledgeError::InvalidPayloadField("entity_id"));
+                }
+                let score = hit
+                    .explanation
+                    .channels
+                    .first()
+                    .map_or(0.0, |evidence| evidence.raw_score);
                 Ok(KnowledgeHit {
                     id: hit.id,
-                    score: hit.score,
-                    entity_id: payload_str(&hit.payload, "entity_id")?.to_string(),
-                    tags: payload_string_array(&hit.payload, "tags")?,
+                    score,
+                    entity_id: hit.entity_id,
+                    tags: hit.tags,
                 })
             })
             .collect()
@@ -249,28 +270,6 @@ pub fn validate_query(query: &str, top_k: usize) -> Result<()> {
         return Err(KnowledgeError::InvalidQuery("top_k"));
     }
     Ok(())
-}
-
-fn payload_str<'a>(payload: &'a Value, field: &'static str) -> Result<&'a str> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or(KnowledgeError::InvalidPayloadField(field))
-}
-
-fn payload_string_array(payload: &Value, field: &'static str) -> Result<Vec<String>> {
-    payload
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or(KnowledgeError::InvalidPayloadField(field))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(ToOwned::to_owned)
-                .ok_or(KnowledgeError::InvalidPayloadField(field))
-        })
-        .collect()
 }
 
 fn is_identifier(value: &str) -> bool {

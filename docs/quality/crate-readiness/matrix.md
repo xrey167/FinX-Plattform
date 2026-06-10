@@ -95,6 +95,7 @@ Refreshed during G001-crate-by-crate-release-blocker-inven on 2026-06-07 from `c
 | [tdw-provider-ws-mock](tdw-provider-ws-mock.md) | crate-by-crate release audit | lib | tdw-core, tdw-domain | tdw-service-api | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-provider-yahoo](tdw-provider-yahoo.md) | crate-by-crate release audit | lib, test | tdw-core, tdw-domain, tdw-provider-fileset | tdw-service-api | default; http=[dep:reqwest,dep:tokio] | 6 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-replay](tdw-replay.md) | crate-by-crate release audit | lib | tdw-cdc, tdw-protocol, tdw-rollout | tdw-service-api | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
+| [tdw-retrieve](tdw-retrieve.md) | knowledge-system overhaul B4 | lib, test | tdw-core, tdw-embed, tdw-tags, tdw-taxonomy | tdw-knowledge | none | 8 | README, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-rewrite](tdw-rewrite.md) | crate-by-crate release audit | lib | none | none | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-rollout](tdw-rollout.md) | crate-by-crate release audit | example, lib | tdw-core, tdw-protocol | tdw-replay, tdw-service-api, tdw-session | postgres=[dep:tdw-core] | 2 | README, ARCHITECTURE, examples, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-runtime](tdw-runtime.md) | crate-by-crate release audit | lib, test | tdw-core | tdw-backend, tdw-service-api | none | 9 | worksheet | Current worksheet. | Ready with follow-ups |

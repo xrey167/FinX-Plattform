@@ -1,0 +1,24 @@
+[package]
+name = "tdw-retrieve"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+tdw-tags = { path = "../tdw-tags" }
+tdw-taxonomy = { workspace = true }
+
+[dev-dependencies]
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

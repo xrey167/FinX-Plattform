@@ -137,6 +137,7 @@ See ADR-0001 and the clean-room rule.
 | Crate | Role |
 |-------|------|
 | `tdw-knowledge/` | Retrieval facade over embeddings + vector storage + KG + tags + syntax summaries. |
+| `tdw-retrieve/` | Hybrid retriever: vector + lexical + tag channels fused with RRF, as_of filtering, explained graph expansion (B4). |
 | `tdw-taxonomy/` | Unified entity taxonomy: 50-kind registry, facets, Origin (tier×source); leaf crate shared by agent + warehouse planes. |
 | `tdw-kg/` | Knowledge-graph primitives. |
 | `tdw-tags/` | Tag taxonomy. |

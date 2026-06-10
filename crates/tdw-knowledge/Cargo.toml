@@ -19,6 +19,7 @@ tdw-core = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-kg = { path = "../tdw-kg" }
+tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 tdw-tags = { path = "../tdw-tags" }
 thiserror = { workspace = true }

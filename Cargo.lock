@@ -4740,6 +4740,7 @@ dependencies = [
  "tdw-embed",
  "tdw-embed-local",
  "tdw-kg",
+ "tdw-retrieve",
  "tdw-storage-qdrant",
  "tdw-tags",
  "thiserror 2.0.18",
@@ -5478,6 +5479,23 @@ dependencies = [
  "tdw-cdc",
  "tdw-protocol",
  "tdw-rollout",
+]
+
+[[package]]
+name = "tdw-retrieve"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-embed",
+ "tdw-embed-local",
+ "tdw-storage-graph",
+ "tdw-storage-meilisearch",
+ "tdw-storage-qdrant",
+ "tdw-tags",
+ "tdw-taxonomy",
+ "tokio",
 ]
 
 [[package]]
