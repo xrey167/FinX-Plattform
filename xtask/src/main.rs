@@ -983,9 +983,9 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
     })
 }
 
-/// Validate the namespaced endpoint catalog against the full ingest dispatch
-/// table. Mirrors the `*-schema-check` command structure: pure, offline, and
-/// failing with a structured list of offenders.
+/// Validate the namespaced endpoint catalog's intrinsic invariants. Mirrors
+/// the `*-schema-check` command structure: pure, offline, and failing with a
+/// structured list of offenders.
 ///
 /// Checks, for every catalog entry:
 ///   1. **Route grammar** — the route obeys the catalog grammar (lowercase
@@ -993,20 +993,21 @@ fn summarize_outcomes(name: &str, parsed: &serde_json::Value) -> serde_json::Val
 ///   2. **Schema presence** — both the params and model schema closures produce
 ///      a non-trivial JSON schema (a fetch route with empty schemas is a wiring
 ///      bug that would surface as an empty `OpenAPI`/SDK shape downstream).
-///   3. **Candidate dispatchability** — every `Fetch` route candidate's
-///      `(provider, endpoint)` exists in the build's ingest dispatch table.
-///      `xtask` builds `tdw-service-api` with `all-http-providers`, so this is
-///      the *full* table; a candidate with no matching binding is unreachable.
-///   4. **Compute routes** carry no provider candidates.
+///   3. **Fetch routes** declare at least one candidate; **Compute routes**
+///      carry none.
+///
+/// Candidate dispatchability (every `Fetch` candidate having an ingest
+/// binding) is deliberately NOT checked here: it needs `tdw-service-api` built
+/// with `all-http-providers`, and an xtask dependency on that would
+/// feature-unify every HTTP provider crate into default workspace builds and
+/// lints. It lives instead as the feature-gated test
+/// `catalog_candidates_all_dispatchable_under_full_providers` in
+/// `tdw-service-api`, run by CI via
+/// `cargo test -p tdw-service-api --features all-http-providers`.
 fn catalog_check() -> Result<(), String> {
-    let dispatch_pairs: std::collections::BTreeSet<(&'static str, &'static str)> =
-        tdw_service_api::ingest_dispatch_pairs()
-            .into_iter()
-            .collect();
-
     let mut offenders = Vec::new();
     let mut routes = 0usize;
-    let mut candidates_checked = 0usize;
+    let mut candidates_seen = 0usize;
 
     for entry in tdw_endpoint_catalog::catalog() {
         routes += 1;
@@ -1029,15 +1030,7 @@ fn catalog_check() -> Result<(), String> {
                 if entry.candidates.is_empty() {
                     offenders.push(format!("{route}: fetch route has no candidates"));
                 }
-                for candidate in entry.candidates {
-                    candidates_checked += 1;
-                    if !dispatch_pairs.contains(&(candidate.provider, candidate.endpoint)) {
-                        offenders.push(format!(
-                            "{route}: candidate {}/{} is not in the ingest dispatch table",
-                            candidate.provider, candidate.endpoint
-                        ));
-                    }
-                }
+                candidates_seen += entry.candidates.len();
             }
             tdw_endpoint_catalog::EndpointKind::Compute => {
                 if !entry.candidates.is_empty() {
@@ -1051,8 +1044,8 @@ fn catalog_check() -> Result<(), String> {
 
     if offenders.is_empty() {
         println!(
-            "catalog-check passed: {routes} routes, {candidates_checked} candidates verified \
-             against the ingest dispatch table"
+            "catalog-check passed: {routes} routes, {candidates_seen} candidates; \
+             dispatchability covered by the all-http-providers test in tdw-service-api"
         );
         Ok(())
     } else {
@@ -1064,11 +1057,10 @@ fn catalog_check() -> Result<(), String> {
 /// request or record). A real params/model schema serializes to a JSON object
 /// with at least one descriptive key (`properties`, `$ref`, `type`, …).
 fn schema_is_trivial(schema: &schemars::Schema) -> bool {
-    match serde_json::to_value(schema) {
-        Ok(serde_json::Value::Object(map)) => map.is_empty(),
-        Ok(_) => true,
-        Err(_) => true,
-    }
+    !matches!(
+        serde_json::to_value(schema),
+        Ok(serde_json::Value::Object(map)) if !map.is_empty()
+    )
 }
 
 fn clean_room_audit() -> Result<(), String> {

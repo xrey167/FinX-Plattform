@@ -1280,9 +1280,12 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
 }
 
 /// The `(provider, endpoint)` keys registered in this build's ingest dispatch
-/// table, sorted. Exposed so out-of-crate tooling (`xtask catalog-check`) can
-/// verify every catalog candidate is dispatchable under the build's features
-/// without reaching into the private binding closures.
+/// table, sorted.
+///
+/// Exposed so conformance tooling (e.g. the feature-gated
+/// `catalog_candidates_all_dispatchable_under_full_providers` test) can verify
+/// every catalog candidate is dispatchable under the build's features without
+/// reaching into the private binding closures.
 #[must_use]
 pub fn ingest_dispatch_pairs() -> Vec<(&'static str, &'static str)> {
     ingest_dispatch_table().into_keys().collect()
@@ -2066,6 +2069,37 @@ mod tests {
         let ingest_table = ingest_dispatch_table();
         assert!(ingest_table.contains_key(&("fileset", "equity_historical")));
         assert!(ingest_table.contains_key(&("yahoo", "equity_historical")));
+    }
+
+    /// Dispatch table ⊇ catalog: under `all-http-providers`, EVERY `Fetch`
+    /// candidate declared in the endpoint catalog must have an ingest binding —
+    /// a candidate without one is unreachable dead weight. This is the
+    /// full-table conformance check that `xtask catalog-check` deliberately
+    /// does not perform (an xtask dep on this crate with `all-http-providers`
+    /// would feature-unify every HTTP provider crate into default workspace
+    /// builds and lints). CI runs it via
+    /// `cargo test -p tdw-service-api --features all-http-providers`.
+    #[cfg(feature = "all-http-providers")]
+    #[test]
+    fn catalog_candidates_all_dispatchable_under_full_providers() {
+        use std::collections::BTreeSet;
+
+        let ingest_pairs: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+        for entry in tdw_endpoint_catalog::catalog() {
+            if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+                continue;
+            }
+            for candidate in entry.candidates {
+                assert!(
+                    ingest_pairs.contains(&(candidate.provider, candidate.endpoint)),
+                    "catalog route {} candidate {}/{} has no ingest dispatch binding \
+                     under all-http-providers",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -7296,7 +7296,6 @@ dependencies = [
  "tdw-migration",
  "tdw-proto",
  "tdw-protocol",
- "tdw-service-api",
  "tdw-sql-codegen",
 ]
 
