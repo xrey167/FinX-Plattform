@@ -36,7 +36,7 @@ apply(entity_id, label, &mut store):
             LabelContains { label: l }   => label.contains(l),
         }
         if matched:
-            build TagAssignment { entity_id, tag_id, provenance: "rule:<rule_id>" }
+            build TagAssignment { entity_id, tag_id, assigned_at: now, provenance: "rule:<rule_id>@v<version>" }
             store.assign(assignment)?      // may fail -> RuleError::Tag
             collect assignment
     ▶ Vec<TagAssignment>
@@ -60,7 +60,7 @@ second line of defence — a rule referencing an undefined tag surfaces as
 - **JSON path** (`JsonPathEquals`): `path` must start with `$.`, contain no `..`
   and no control chars; `value` non-empty.
 - **Label** (`LabelContains`): non-empty, control-char-free.
-- Every applied assignment carries `provenance = "rule:<rule_id>"`, so produced
+- Every applied assignment carries `provenance = "rule:<rule_id>@v<version>"`, so produced
   tags are auditable back to the rule that created them.
-- Pure and deterministic; `assigned_at` is a fixed literal so the apply path takes
-  no clock. No I/O, no global state.
+- Pure and deterministic; `assigned_at` is the caller-injected `now` date, so the
+  apply path takes no clock itself. No I/O, no global state.

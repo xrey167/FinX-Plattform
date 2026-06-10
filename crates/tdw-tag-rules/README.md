@@ -13,7 +13,8 @@ A `TagRule` says "if this predicate matches, tag the entity with `tag_id`". The
 - validates every rule on load — including rejecting unsafe SQL predicates and
   malformed JSON paths — before it can ever fire;
 - `apply`s the rule set to an `(entity_id, label)` pair, writing matched
-  assignments into a `TagStore` with `provenance = "rule:<rule_id>"`.
+  assignments into a `TagStore` with `provenance = "rule:<rule_id>@v<version>"`,
+  so every derived assignment traces to the exact rule-set version that fired.
 
 Three predicate kinds are supported: `SqlContains`, `JsonPathEquals`,
 `LabelContains` (the current matcher evaluates all three against the supplied
@@ -47,8 +48,8 @@ engine.hot_reload(vec![TagRule {
     predicate: RulePredicate::LabelContains { label: "AAPL".to_string() },
 }])?;
 
-let assigned = engine.apply("instrument:AAPL", "AAPL", &mut tags)?;
-assert_eq!(assigned[0].provenance, "rule:equity-symbol");
+let assigned = engine.apply("instrument:AAPL", "AAPL", "2026-06-10", &mut tags)?;
+assert_eq!(assigned[0].provenance, "rule:equity-symbol@v1");
 assert_eq!(engine.version(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```

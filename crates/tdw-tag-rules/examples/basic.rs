@@ -34,7 +34,7 @@ fn main() {
 
     // Meaningful operation: apply the rule to a tagged value.
     let assigned = engine
-        .apply("instrument:AAPL", "AAPL", &mut tags)
+        .apply("instrument:AAPL", "AAPL", "2026-06-10", &mut tags)
         .expect("rule should apply");
     println!(
         "engine version {} produced {} assignment(s)",

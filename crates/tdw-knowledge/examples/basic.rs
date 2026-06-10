@@ -14,17 +14,20 @@ async fn main() {
     let mut index = KnowledgeIndex::default();
 
     index
-        .index_document(KnowledgeDocument {
-            id: "doc-1".to_string(),
-            body: "AAPL equity momentum research".to_string(),
-            entity: Entity {
-                entity_id: "instrument:AAPL".to_string(),
-                kind: EntityKind::Instrument,
-                label: "Apple".to_string(),
-                aliases: vec!["AAPL".to_string()],
+        .index_document_at(
+            KnowledgeDocument {
+                id: "doc-1".to_string(),
+                body: "AAPL equity momentum research".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec!["AAPL".to_string()],
+                },
+                tags: vec!["asset:equity".to_string()],
             },
-            tags: vec!["asset:equity".to_string()],
-        })
+            "2026-05-22",
+        )
         .await
         .expect("indexing should succeed");
 
