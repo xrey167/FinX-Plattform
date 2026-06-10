@@ -1,7 +1,7 @@
 //! Cross-backend behavioral conformance for the session cost ledger
 //! (go-live P2.6, slice 3).
 //!
-//! ONE suite of assertions runs verbatim against the SQLite store and the
+//! ONE suite of assertions runs verbatim against the `SQLite` store and the
 //! Postgres store: `append_cost` is idempotent per `(session_id,
 //! operation_id)` (the op pipeline is at-least-once, so a retried append must
 //! never double-count), distinct operations accumulate, and `cost_entries`
