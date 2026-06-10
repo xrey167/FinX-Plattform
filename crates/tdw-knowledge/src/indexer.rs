@@ -116,12 +116,13 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 /// The manifest's content hash over every indexed-relevant document field
-/// (body, label, tags, plane, `as_of`, mentions, source) — id is the manifest
-/// KEY, not part of the hash.
+/// (body, entity id/label/kind, tags, plane, `as_of`, mentions, source) —
+/// the document id is the manifest KEY, not part of the hash.
 #[must_use]
 pub fn content_hash(document: &KnowledgeDocument) -> String {
     let canonical = json!({
         "body": document.body,
+        "entity_id": document.entity.entity_id,
         "label": document.entity.label,
         "kind": document.entity.kind,
         "tags": document.tags,
@@ -226,11 +227,16 @@ impl KnowledgeIndexer {
             return Ok(IndexOutcome::SkippedUnchanged);
         }
 
-        // Auto-tagging: rule-assigned tags also join the document's payload
-        // tags so the retrieval channels see them.
-        for assignment in self.apply_rules(&document, now).await? {
-            if !document.tags.contains(&assignment.tag_id) {
-                document.tags.push(assignment.tag_id);
+        // Auto-tagging, then payload-tag stamping: the payload carries the
+        // entity's FULL active tag set at `now` (fresh rule assignments
+        // included — they were just assigned at `now`), not only the
+        // document's own tags. Without this, a document of an entity that
+        // already holds a rule tag would be invisible to payload tag filters
+        // even though the tag channel would surface its entity.
+        self.apply_rules(&document, now).await?;
+        for tag in self.index.active_tags(&document.entity.entity_id, now) {
+            if !document.tags.contains(&tag) {
+                document.tags.push(tag);
             }
         }
         document.tags.sort();
@@ -355,20 +361,33 @@ async fn write_durable_graph(graph: &dyn GraphEngine, document: &KnowledgeDocume
     if let Some(timestamp) = &as_of_ts {
         document_props["as_of"] = json!(timestamp);
     }
-    let mut nodes = vec![
-        document.entity.to_graph_node(),
-        GraphNode {
-            id: format!("document:{}", document.id),
-            kind: EntityKind::Document,
-            label: document.entity.label.clone(),
-            aliases: Vec::new(),
-            props: document_props,
-            valid_from: as_of_ts.clone(),
-            valid_to: None,
-        },
-    ];
+    // The document node is OURS — full upsert. The entity node is written
+    // only when absent: a richer node (props, validity) may already exist
+    // and a wholesale upsert from the props-less in-process projection would
+    // clobber it.
+    let mut nodes = vec![GraphNode {
+        id: format!("document:{}", document.id),
+        kind: EntityKind::Document,
+        label: document.entity.label.clone(),
+        aliases: Vec::new(),
+        props: document_props,
+        valid_from: as_of_ts.clone(),
+        valid_to: None,
+    }];
+    if graph
+        .node(&document.entity.entity_id)
+        .await
+        .map_err(storage)?
+        .is_none()
+    {
+        nodes.push(document.entity.to_graph_node());
+    }
     for mention in &document.mentions {
-        // Stubs only — a mention must never overwrite a real node.
+        // Stubs only — never for the document's own entity (it is already in
+        // this batch; upsert_nodes is last-wins) and never over a real node.
+        if mention == &document.entity.entity_id {
+            continue;
+        }
         if graph.node(mention).await.map_err(storage)?.is_none() {
             nodes.push(GraphNode {
                 id: mention.clone(),
@@ -396,6 +415,12 @@ async fn write_durable_graph(graph: &dyn GraphEngine, document: &KnowledgeDocume
         valid_to: None,
     }];
     for mention in &document.mentions {
+        // A document mentioning its own entity carries no information — and
+        // a self-loop edge is exactly the shape that has bitten Both-direction
+        // traversals before.
+        if mention == &document.entity.entity_id {
+            continue;
+        }
         edges.push(GraphEdge {
             from: document.entity.entity_id.clone(),
             to: mention.clone(),
@@ -417,13 +442,19 @@ async fn write_durable_graph(graph: &dyn GraphEngine, document: &KnowledgeDocume
 #[must_use]
 pub fn article_to_document(article: &Article, plane: &str) -> KnowledgeDocument {
     let url_hash = fnv1a64(article.url.as_bytes());
+    // News titles/summaries are UNTRUSTED external content; control
+    // characters (ANSI escapes, NUL, raw newlines in the label) are stripped
+    // at this boundary — the label validators downstream reject them loudly,
+    // and one hostile feed item must not fail a whole ingest sweep.
+    let title = strip_control(&article.title);
+    let summary = strip_control(&article.summary);
     KnowledgeDocument {
         id: format!("news-{url_hash:016x}"),
-        body: format!("{}\n{}", article.title, article.summary),
+        body: format!("{title}\n{summary}"),
         entity: Entity {
             entity_id: format!("news:{url_hash:016x}"),
             kind: EntityKind::Document,
-            label: article.title.clone(),
+            label: title,
             aliases: Vec::new(),
         },
         tags: Vec::new(),
@@ -439,6 +470,14 @@ pub fn article_to_document(article: &Article, plane: &str) -> KnowledgeDocument 
             .map(|symbol| format!("instrument:{symbol}"))
             .collect(),
     }
+}
+
+/// Drop control characters (keep everything printable, including unicode).
+fn strip_control(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect()
 }
 
 /// UTC calendar date (`YYYY-MM-DD`) of a Unix epoch in milliseconds.

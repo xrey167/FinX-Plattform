@@ -489,12 +489,17 @@ impl Backend {
         self.knowledge_index_at(doc, &today).await
     }
 
-    /// Batch-ingest documents effective `now` — the re-index sweep path
-    /// (knowledge-system B5). One `embed_batch` round-trip embeds the whole
-    /// batch (native batch endpoints on API embedders), then each document
-    /// indexes through the same write path as [`Backend::knowledge_index_at`].
-    /// Validation is all-or-nothing up front; the index mutex is held for the
-    /// duration of the batch so a sweep is atomic with respect to searches.
+    /// Batch-index documents effective `now` (knowledge-system B5). One
+    /// `embed_batch` round-trip embeds the whole batch (native batch
+    /// endpoints on API embedders), then each document indexes through the
+    /// same write path as [`Backend::knowledge_index_at`] — the BARE index
+    /// path (vector + in-process graph/tags). Rules, lexical co-index,
+    /// durable-graph stamping, and manifest idempotency live on
+    /// `tdw_knowledge::indexer::KnowledgeIndexer`, which is not yet hosted by
+    /// the daemon (wiring planned with the B8 knowledge runtime). Validation
+    /// is all-or-nothing up front; the index mutex is held for the duration
+    /// of the batch, so [`Backend::knowledge_search`] never observes a
+    /// half-applied batch.
     ///
     /// # Errors
     ///

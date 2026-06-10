@@ -293,6 +293,123 @@ fn article_converts_with_stable_id_date_and_mentions() {
     assert!(matches!(document.source, Some(DocumentSource::News { .. })));
 }
 
+#[tokio::test]
+async fn rule_tags_do_not_duplicate_across_reindexes() {
+    let mut rules = RuleEngine::default();
+    rules
+        .hot_reload(vec![TagRule {
+            rule_id: "earnings-mention".to_string(),
+            tag_id: "topic:earnings".to_string(),
+            predicate: Predicate::FieldContains {
+                field: "body".to_string(),
+                needle: "earnings".to_string(),
+            },
+        }])
+        .expect("valid rule");
+    let (indexer, _graph) = indexer_with_graph();
+    let mut indexer = indexer.with_rules(rules);
+    let mut seed = acme_doc();
+    seed.id = "doc-taxonomy-seed".to_string();
+    seed.tags = vec!["topic:earnings".to_string()];
+    seed.body = "taxonomy seed".to_string();
+    indexer.index_at(seed, "2026-03-01").await.expect("seed");
+
+    // Three content-changing re-indexes: the rule fires each time, but the
+    // already-active guard must keep exactly ONE assignment.
+    for round in 0..3 {
+        let mut document = acme_doc();
+        document.body = format!("acme earnings update round {round}");
+        indexer
+            .index_at(document, "2026-03-06")
+            .await
+            .expect("re-index");
+    }
+    let active = indexer.index().active_tags("instrument:ACME", "2026-03-06");
+    let earnings = active
+        .iter()
+        .filter(|tag| tag.as_str() == "topic:earnings")
+        .count();
+    assert_eq!(earnings, 1, "rule tag must not duplicate: {active:?}");
+}
+
+#[test]
+fn content_hash_tracks_entity_identity() {
+    let document = acme_doc();
+    let mut moved = acme_doc();
+    moved.entity.entity_id = "instrument:ACME-NEW".to_string();
+    assert_ne!(
+        content_hash(&document),
+        content_hash(&moved),
+        "entity re-resolution must invalidate the manifest entry"
+    );
+}
+
+#[tokio::test]
+async fn self_mention_neither_clobbers_entity_nor_writes_a_self_loop() {
+    let (mut indexer, graph) = indexer_with_graph();
+    let mut document = acme_doc();
+    document.mentions = vec![
+        "instrument:ACME".to_string(), // self
+        "instrument:BETA".to_string(),
+    ];
+    indexer
+        .index_at(document, "2026-03-06")
+        .await
+        .expect("index");
+    let entity = graph
+        .node("instrument:ACME")
+        .await
+        .expect("graph read")
+        .expect("entity node");
+    assert_eq!(
+        entity.kind,
+        EntityKind::Instrument,
+        "no Primitive stub clobber"
+    );
+    assert!(entity.props.get("mention_stub").is_none());
+    let mentions = graph
+        .neighbors(
+            "instrument:ACME",
+            &TraversalFilter {
+                rels: Some(vec!["mentions".to_string()]),
+                direction: Direction::Out,
+                max_hops: 1,
+                ..TraversalFilter::default()
+            },
+        )
+        .await
+        .expect("neighbors");
+    assert!(
+        mentions
+            .iter()
+            .all(|(_, node)| node.id == "instrument:BETA"),
+        "no self-loop mentions edge"
+    );
+}
+
+#[test]
+fn hostile_article_title_is_sanitized() {
+    let article = Article::new(
+        "Acme beats\u{1b}[2J\u{7}\nFAKE: SEC HALTS TRADING",
+        "https://example.com/hostile",
+        "wire",
+        1_773_100_800_000,
+        "summary\u{0}with nul",
+        vec!["ACME".to_string()],
+    );
+    let document = article_to_document(&article, "platform");
+    assert!(
+        !document.entity.label.chars().any(char::is_control),
+        "control characters must be stripped at the trust boundary"
+    );
+    assert!(document.entity.label.contains("Acme beats"));
+    assert!(!document.body.contains('\u{0}'));
+    // And the validators reject any label that slips through another path.
+    let mut forged = acme_doc();
+    forged.entity.label = "evil\u{1b}[2J".to_string();
+    assert!(tdw_knowledge::validate_document(&forged).is_err());
+}
+
 #[test]
 fn epoch_to_date_handles_boundaries() {
     assert_eq!(date_from_epoch_ms(0), "1970-01-01");
