@@ -48,6 +48,7 @@ fixings, BTC OHLC, and Apple's filings through two tools.
 | Surface | What it gives you | Docs |
 |---|---|---|
 | `tdw-mcp` | Live financial data tools for AI agents | [quickstart](mcp-quickstart.md) |
+| OpenBB parity (REST + Workspace + copilot) | Catalog-derived `GET /api/v1` + OpenAPI, OpenBB Workspace data backend + copilot | [openbb-parity](openbb-parity.md) |
 | `tdw-service` + `tdw-worker` | Self-hosted, event-sourced ingestion warehouse | [local stack runbook](../release/local-stack-runbook.md) |
 | `tdw-cli` / `tdw-tui` | Operator tooling | [release docs](../release.md) |
 | `tdw-backend` | Embeddable Rust facade (roadmap: crates.io) | [architecture](../architecture.md) |

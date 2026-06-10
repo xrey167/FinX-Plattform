@@ -110,14 +110,20 @@ address:
 ```sh
 cargo run -p tdw-backend --features agent-route --target-dir target
 # with, in the environment:
-#   TDW_WORKSPACE_BIND=127.0.0.1:6900     # the agent + workspace family bind
+#   TDW_AGENT_BIND=127.0.0.1:6900         # the agent listener bind (gates this surface)
 #   TDW_WORKSPACE_API_KEY=<optional shared key>   # fail-closed when set
 #   TDW_WORKSPACE_CORS_ORIGINS=https://pro.openbb.co  # optional override
 ```
 
-CORS + auth are shared with the WSB1 workspace family: the default origins are
-`https://pro.openbb.co` plus the documented local dev origins; setting
-`TDW_WORKSPACE_API_KEY` requires every request to present a matching
+The agent listener is gated on its **own** bind variable, `TDW_AGENT_BIND`
+(the workspace-backend family uses `TDW_WORKSPACE_BIND`); the two surfaces run
+on separate ports. The `agents.json` `endpoints.query` URL is composed from
+`TDW_AGENT_BIND`, so it always points back at this listener.
+
+CORS + auth are **shared** with the WSB1 workspace family and keyed on the
+`TDW_WORKSPACE_*` variables: the default origins are `https://pro.openbb.co`
+plus the documented local dev origins (override with `TDW_WORKSPACE_CORS_ORIGINS`);
+setting `TDW_WORKSPACE_API_KEY` requires every request to present a matching
 `X-TDW-API-KEY` header (constant-time compared, fail-closed). Bind a loopback
 address unless you front the daemon with a token / mTLS / reverse-proxy layer.
 
@@ -128,7 +134,7 @@ gates to answer against a real LLM.
 
 ## Manual Workspace interop checklist
 
-1. **Start the daemon** with `--features agent-route` and `TDW_WORKSPACE_BIND`
+1. **Start the daemon** with `--features agent-route` and `TDW_AGENT_BIND`
    set (see Setup). Confirm `GET http://127.0.0.1:6900/agents.json` returns the
    one-copilot document above.
 2. **Register the copilot in Workspace.** In `pro.openbb.co`, add a custom
