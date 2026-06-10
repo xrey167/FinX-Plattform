@@ -22,8 +22,6 @@ pub enum WorkerQueueError {
     InvalidJob(String),
     #[error("invalid worker: {0}")]
     InvalidWorker(String),
-    #[error("duplicate job_id: {0}")]
-    DuplicateJob(String),
     #[error("unknown job_id: {0}")]
     UnknownJob(String),
     #[error("invalid persisted status: {0}")]
@@ -179,7 +177,14 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
             .iter()
             .any(|existing| existing.job.job_id == job.job_id)
         {
-            return Err(WorkerQueueError::DuplicateJob(job.job_id));
+            // Cross-backend contract (P2.6 conformance): a duplicate job_id is
+            // acknowledged idempotently, never an error — byte-for-byte the
+            // SQLite/Postgres `ON CONFLICT DO NOTHING` semantics, so code
+            // prototyped here behaves identically on the durable backends.
+            return Ok(EnqueueOutcome {
+                job_id: job.job_id,
+                inserted: false,
+            });
         }
 
         let job_id = job.job_id.clone();
