@@ -206,40 +206,32 @@ impl GraphEngine for BoltGraphEngine {
         for edge in &edges {
             validate_graph_edge(edge)?;
         }
-        for edge in edges {
-            // MERGE inside MATCH yields zero rows when an endpoint is missing,
-            // which is exactly the loud rejection the contract requires.
-            let q = query(
-                "MATCH (a:E {id:$from}), (b:E {id:$to}) \
-                 MERGE (a)-[r:R {rel:$rel, vf:$vf}]->(b) \
-                 SET r.props=$props, r.provenance=$prov, r.vt=$vt \
-                 RETURN r.rel AS rel",
-            )
-            .param("from", edge.from.clone())
-            .param("to", edge.to.clone())
-            .param("rel", edge.rel.clone())
-            .param("vf", edge.valid_from.unwrap_or_else(|| OPEN_BOUND.into()))
-            .param("vt", edge.valid_to.unwrap_or_else(|| OPEN_BOUND.into()))
-            .param("props", encode_json(&edge.props)?)
-            .param("prov", encode_provenance(&edge.provenance)?);
-            let mut stream = self
-                .graph
-                .execute(q)
-                .await
-                .map_err(|error| Error::Storage(format!("bolt edge upsert: {error}")))?;
-            if stream
-                .next()
-                .await
-                .map_err(|error| Error::Storage(format!("bolt edge upsert row: {error}")))?
-                .is_none()
-            {
-                return Err(Error::Storage(format!(
-                    "edge endpoint missing: {} -{}-> {}",
-                    edge.from, edge.rel, edge.to
-                )));
+        // Endpoint existence is checked BEFORE any write so the batch is
+        // all-or-nothing (the in-memory engine checks under one lock); the
+        // writes then commit in one transaction, matching upsert_nodes.
+        for edge in &edges {
+            for endpoint in [&edge.from, &edge.to] {
+                if self.node(endpoint).await?.is_none() {
+                    return Err(Error::Storage(format!(
+                        "edge endpoint missing: {} -{}-> {}",
+                        edge.from, edge.rel, edge.to
+                    )));
+                }
             }
         }
-        Ok(())
+        let mut txn = self
+            .graph
+            .start_txn()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt txn: {error}")))?;
+        for edge in edges {
+            txn.run(edge_merge_query(&edge)?)
+                .await
+                .map_err(|error| Error::Storage(format!("bolt edge upsert: {error}")))?;
+        }
+        txn.commit()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt commit: {error}")))
     }
 
     async fn node(&self, id: &str) -> Result<Option<GraphNode>> {
@@ -434,31 +426,34 @@ impl GraphEngine for BoltGraphEngine {
             tombstone_props = serde_json::json!({ "merged_into": target });
         }
 
-        // Apply: drop source edges, write tombstone + target aliases.
-        self.graph
-            .run(query("MATCH (s:E {id:$id})-[r:R]-() DELETE r").param("id", source))
+        // Apply ALL writes in ONE transaction: a mid-sequence failure must
+        // never leave a half-merged graph (edges gone, no tombstone), which
+        // would both corrupt reads and wedge retries on the already-merged
+        // guard. Rewired/audit edge endpoints are known to exist from the
+        // reads above, so the inline MERGE needs no endpoint probe.
+        let mut txn = self
+            .graph
+            .start_txn()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt txn: {error}")))?;
+        txn.run(query("MATCH (s:E {id:$id})-[r:R]-() DELETE r").param("id", source))
             .await
             .map_err(|error| Error::Storage(format!("bolt merge delete: {error}")))?;
-        self.graph
-            .run(
-                query("MATCH (s:E {id:$id}) SET s.props=$props")
-                    .param("id", source)
-                    .param("props", encode_json(&tombstone_props)?),
-            )
-            .await
-            .map_err(|error| Error::Storage(format!("bolt merge tombstone: {error}")))?;
-        self.graph
-            .run(
-                query("MATCH (t:E {id:$id}) SET t.aliases=$aliases")
-                    .param("id", target)
-                    .param("aliases", target_node.aliases.clone()),
-            )
-            .await
-            .map_err(|error| Error::Storage(format!("bolt merge aliases: {error}")))?;
-        if !rewired.is_empty() {
-            self.upsert_edges(rewired).await?;
-        }
-        self.upsert_edges(vec![GraphEdge {
+        txn.run(
+            query("MATCH (s:E {id:$id}) SET s.props=$props")
+                .param("id", source)
+                .param("props", encode_json(&tombstone_props)?),
+        )
+        .await
+        .map_err(|error| Error::Storage(format!("bolt merge tombstone: {error}")))?;
+        txn.run(
+            query("MATCH (t:E {id:$id}) SET t.aliases=$aliases")
+                .param("id", target)
+                .param("aliases", target_node.aliases.clone()),
+        )
+        .await
+        .map_err(|error| Error::Storage(format!("bolt merge aliases: {error}")))?;
+        let audit = GraphEdge {
             from: source.to_string(),
             to: target.to_string(),
             rel: "merged_into".to_string(),
@@ -468,8 +463,15 @@ impl GraphEngine for BoltGraphEngine {
             },
             valid_from: None,
             valid_to: None,
-        }])
-        .await?;
+        };
+        for edge in rewired.into_iter().chain(std::iter::once(audit)) {
+            txn.run(edge_merge_query(&edge)?)
+                .await
+                .map_err(|error| Error::Storage(format!("bolt merge edge: {error}")))?;
+        }
+        txn.commit()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt commit: {error}")))?;
 
         Ok(MergeReport {
             source: source.to_string(),
@@ -553,6 +555,30 @@ fn compute_rewired(
         rewired.push(edge);
     }
     (rewired, rewired_edges)
+}
+
+/// The shared edge-upsert Cypher: MERGE on the A2 identity (from, to, rel,
+/// valid_from - endpoints via the pattern, vf as a key property) with all
+/// mutable fields SET on both branches. Endpoints must be pre-checked.
+fn edge_merge_query(edge: &GraphEdge) -> Result<neo4rs::Query> {
+    Ok(query(
+        "MATCH (a:E {id:$from}), (b:E {id:$to}) \
+         MERGE (a)-[r:R {rel:$rel, vf:$vf}]->(b) \
+         SET r.props=$props, r.provenance=$prov, r.vt=$vt",
+    )
+    .param("from", edge.from.clone())
+    .param("to", edge.to.clone())
+    .param("rel", edge.rel.clone())
+    .param(
+        "vf",
+        edge.valid_from.clone().unwrap_or_else(|| OPEN_BOUND.into()),
+    )
+    .param(
+        "vt",
+        edge.valid_to.clone().unwrap_or_else(|| OPEN_BOUND.into()),
+    )
+    .param("props", encode_json(&edge.props)?)
+    .param("prov", encode_provenance(&edge.provenance)?))
 }
 
 fn node_passes(node: &GraphNode, filter: &TraversalFilter) -> bool {
