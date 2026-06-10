@@ -21,7 +21,7 @@ use tdw_taxonomy::EntityKind;
 use crate::{Error, Result};
 
 /// A typed graph node.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphNode {
     /// Namespaced graph id (e.g. `instrument:AAPL`), grammar `[A-Za-z0-9:._-]+`.
     pub id: String,
@@ -44,7 +44,7 @@ pub struct GraphNode {
 }
 
 /// A typed, provenance-carrying graph edge.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphEdge {
     /// Source node id.
     pub from: String,
@@ -117,7 +117,7 @@ pub enum Direction {
 }
 
 /// Filter applied by every graph read.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraversalFilter {
     /// Restrict to these relationship types; `None` = all.
     #[serde(default)]
@@ -151,11 +151,11 @@ impl Default for TraversalFilter {
 }
 
 /// A deterministic (id-sorted) subgraph snapshot.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subgraph {
     /// Reached nodes, sorted by id.
     pub nodes: Vec<GraphNode>,
-    /// Traversed edges, sorted by (from, rel, to, valid_from).
+    /// Traversed edges, sorted by `(from, rel, to, valid_from)`.
     pub edges: Vec<GraphEdge>,
 }
 
@@ -196,8 +196,8 @@ pub trait GraphEngine: Send + Sync {
     /// Fetch one node by id.
     async fn node(&self, id: &str) -> Result<Option<GraphNode>>;
 
-    /// One-hop neighborhood of `id` under `filter` (direction, rels, kinds, as_of).
-    /// Deterministic order: (rel, neighbor id, valid_from).
+    /// One-hop neighborhood of `id` under `filter` (direction, rels, kinds, `as_of`).
+    /// Deterministic order: `(rel, neighbor id, valid_from)`.
     async fn neighbors(
         &self,
         id: &str,
@@ -256,7 +256,7 @@ pub fn validate_graph_node(node: &GraphNode) -> Result<()> {
     {
         return Err(Error::Storage(format!("invalid alias on node {}", node.id)));
     }
-    validate_window(&node.valid_from, &node.valid_to)
+    validate_window(node.valid_from.as_deref(), node.valid_to.as_deref())
         .map_err(|detail| Error::Storage(format!("node {}: {detail}", node.id)))
 }
 
@@ -276,7 +276,7 @@ pub fn validate_graph_edge(edge: &GraphEdge) -> Result<()> {
             edge.from, edge.rel, edge.to
         )));
     }
-    validate_window(&edge.valid_from, &edge.valid_to).map_err(|detail| {
+    validate_window(edge.valid_from.as_deref(), edge.valid_to.as_deref()).map_err(|detail| {
         Error::Storage(format!(
             "edge {} -{}-> {}: {detail}",
             edge.from, edge.rel, edge.to
@@ -322,8 +322,8 @@ fn validate_provenance(provenance: &Provenance) -> std::result::Result<(), Strin
 }
 
 fn validate_window(
-    valid_from: &Option<String>,
-    valid_to: &Option<String>,
+    valid_from: Option<&str>,
+    valid_to: Option<&str>,
 ) -> std::result::Result<(), String> {
     for bound in [valid_from, valid_to].into_iter().flatten() {
         if !is_timestampish(bound) {

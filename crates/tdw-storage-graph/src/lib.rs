@@ -85,14 +85,14 @@ fn reached_id<'e>(edge: &'e GraphEdge, anchor: &str, direction: Direction) -> Op
     if edge.from == edge.to {
         return None;
     }
-    let outgoing = edge.from == anchor;
-    let incoming = edge.to == anchor;
-    match direction {
-        Direction::Out if outgoing => Some(&edge.to),
-        Direction::In if incoming => Some(&edge.from),
-        Direction::Both if outgoing => Some(&edge.to),
-        Direction::Both if incoming => Some(&edge.from),
-        _ => None,
+    let follow_out = matches!(direction, Direction::Out | Direction::Both) && edge.from == anchor;
+    let follow_in = matches!(direction, Direction::In | Direction::Both) && edge.to == anchor;
+    if follow_out {
+        Some(&edge.to)
+    } else if follow_in {
+        Some(&edge.from)
+    } else {
+        None
     }
 }
 
@@ -128,6 +128,41 @@ impl InMemoryGraphEngine {
         });
         reached
     }
+
+    /// Hop-bounded BFS from `from` to `to` within a held state; `None` when
+    /// unreachable. BFS level order makes the first arrival the shortest path.
+    fn search_path(
+        state: &GraphState,
+        from: &str,
+        to: &str,
+        filter: &TraversalFilter,
+    ) -> Option<Vec<GraphEdge>> {
+        if !state.nodes.contains_key(from) || !state.nodes.contains_key(to) {
+            return None;
+        }
+        if from == to {
+            return Some(Vec::new());
+        }
+        let mut visited = BTreeSet::from([from.to_string()]);
+        let mut frontier = VecDeque::from([(from.to_string(), Vec::<GraphEdge>::new())]);
+        while let Some((anchor, path)) = frontier.pop_front() {
+            if path.len() >= usize::from(filter.max_hops) {
+                continue;
+            }
+            for (edge, node) in Self::hop(state, &anchor, filter) {
+                if !visited.insert(node.id.clone()) {
+                    continue;
+                }
+                let mut next_path = path.clone();
+                next_path.push(edge);
+                if node.id == to {
+                    return Some(next_path);
+                }
+                frontier.push_back((node.id, next_path));
+            }
+        }
+        None
+    }
 }
 
 #[async_trait]
@@ -145,6 +180,7 @@ impl GraphEngine for InMemoryGraphEngine {
         for node in nodes {
             state.nodes.insert(node.id.clone(), node);
         }
+        drop(state);
         Ok(())
     }
 
@@ -178,6 +214,7 @@ impl GraphEngine for InMemoryGraphEngine {
                 state.edges.push(edge);
             }
         }
+        drop(state);
         Ok(())
     }
 
@@ -244,31 +281,9 @@ impl GraphEngine for InMemoryGraphEngine {
     ) -> Result<Option<Vec<GraphEdge>>> {
         validate_traversal_filter(filter)?;
         let state = self.lock()?;
-        if !state.nodes.contains_key(from) || !state.nodes.contains_key(to) {
-            return Ok(None);
-        }
-        if from == to {
-            return Ok(Some(Vec::new()));
-        }
-        let mut visited = BTreeSet::from([from.to_string()]);
-        let mut frontier = VecDeque::from([(from.to_string(), Vec::<GraphEdge>::new())]);
-        while let Some((anchor, path)) = frontier.pop_front() {
-            if path.len() >= usize::from(filter.max_hops) {
-                continue;
-            }
-            for (edge, node) in Self::hop(&state, &anchor, filter) {
-                if !visited.insert(node.id.clone()) {
-                    continue;
-                }
-                let mut next_path = path.clone();
-                next_path.push(edge);
-                if node.id == to {
-                    return Ok(Some(next_path));
-                }
-                frontier.push_back((node.id, next_path));
-            }
-        }
-        Ok(None)
+        let path = Self::search_path(&state, from, to, filter);
+        drop(state);
+        Ok(path)
     }
 
     async fn merge_entities(
@@ -376,6 +391,7 @@ impl GraphEngine for InMemoryGraphEngine {
             valid_to: None,
         });
 
+        drop(state);
         Ok(MergeReport {
             source: source.to_string(),
             target: target.to_string(),
