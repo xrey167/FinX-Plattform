@@ -31,10 +31,10 @@ This starts:
 |---------------------|------------------------------------|-----------------------------------------------------------------------------|
 | `postgres`          | `postgres:17-alpine`               | Healthcheck via `pg_isready`                                                |
 | `clickhouse`        | `clickhouse/clickhouse-server:25.5`| OLAP backend                                                                |
-| `qdrant`            | `qdrant/qdrant:latest`             | Vector backend                                                              |
-| `meilisearch`       | `getmeili/meilisearch:latest`      | Lexical backend                                                             |
-| `minio`             | `minio/minio:latest`               | Healthcheck via `/minio/health/live`                                        |
-| `minio-init`        | `minio/mc:latest`                  | Creates the `tdw-default` bucket once, then exits                           |
+| `qdrant`            | `qdrant/qdrant:v1.14.1`            | Vector backend                                                              |
+| `meilisearch`       | `getmeili/meilisearch:v1.15.2`     | Lexical backend                                                             |
+| `minio`             | `minio/minio:RELEASE.2025-05-24T17-08-30Z` | Healthcheck via `/minio/health/live`                              |
+| `minio-init`        | `minio/mc:RELEASE.2025-05-21T01-59-54Z`    | Creates the `tdw-default` bucket once, then exits                 |
 | `tdw-bootstrap`     | built from `Dockerfile.bootstrap`  | Applies G013 Postgres schemas, writes the S3 marker, and creates the ClickHouse `tdw` DB + marker table, Qdrant `tdw-default` collection, and Meilisearch `tdw-default` index, then exits |
 | `tdw-worker-serve`  | `docker/tdw-worker.Dockerfile` (`FEATURES=postgres`) | Long-running `tdw-worker --serve` over **Postgres** (`PgWorkerQueue`, self-migrates `system.worker_jobs`); starts after bootstrap |
 | `tdw-service-daemon`| `docker/tdw-service.Dockerfile` (`FEATURES=real-engines`) | Long-running daemon running `TDW_PROFILE=live`, so it wires the **real** engines (Postgres, ClickHouse, Qdrant, Meilisearch, S3/MinIO) from the `TDW_*` connection envs and Postgres-backs its own session/rollout stores; binds `0.0.0.0:7878` (`TDW_DAEMON_TCP_BIND`); **internal-only** (not host-published — its transport is unauthenticated plaintext) |
