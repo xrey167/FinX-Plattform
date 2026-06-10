@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Manual trigger: runs the FULL pipeline including the Container Image jobs
+  # (the changes job treats a dispatch as image-affecting), so a container run
+  # can be produced on demand — e.g. after a workflow-only change that the
+  # paths filter would otherwise skip.
+  workflow_dispatch:
 
 # Cancel superseded runs on a PR branch when it is pushed again (rebases,
 # auto-update-branch). Runs on `main` are never cancelled so post-merge
@@ -149,6 +154,9 @@ jobs:
           fi
 
           image_affecting=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            image_affecting=true
+          fi
           while IFS= read -r path; do
             case "$path" in
               Cargo.lock|Cargo.toml|rust-toolchain.toml|crates/*|docker/*|docker-compose.yaml)
@@ -165,7 +173,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, changes]
     if: needs.changes.outputs.image_affecting == 'true'
-    timeout-minutes: 60
+    # 2026-06-09: all 4 jobs hit the old 60m ceiling on main pushes (runs
+    # 27232277621, 27234315481, 27234668403) — the arm64 leg builds the Rust
+    # workspace under QEMU emulation and, without an external layer cache,
+    # every run recompiled from scratch. The gha cache below makes warm runs
+    # fit easily; 120m is the cold-cache backstop.
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -198,6 +211,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: finx-plattform-${{ matrix.binary }}:ci
+          cache-from: type=gha,scope=image-${{ matrix.binary }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.binary }}
       - name: Scan image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -232,6 +247,8 @@ jobs:
           tags: |
             ${{ steps.image.outputs.ref }}:sha-${{ github.sha }}
             ${{ steps.image.outputs.ref }}:latest
+          cache-from: type=gha,scope=image-${{ matrix.binary }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.binary }}
       - name: Attest image provenance
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/attest-build-provenance@v4
