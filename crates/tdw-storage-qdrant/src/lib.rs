@@ -97,6 +97,7 @@ impl VectorEngine for InMemoryVectorEngine {
             }
             let collected = points
                 .iter()
+                .filter(|point| query.filter.matches(&point.payload))
                 .map(|point| ScoredPoint {
                     id: point.id.clone(),
                     score: dot_product(&point.vector, &query.vector),
@@ -188,6 +189,7 @@ mod tests {
                 VectorQuery {
                     vector: vec![1.0, 0.0],
                     top_k: 1,
+                    filter: tdw_core::PayloadFilter::default(),
                 },
             )
             .await
@@ -202,6 +204,7 @@ mod tests {
                     VectorQuery {
                         vector: vec![1.0],
                         top_k: 1,
+                        filter: tdw_core::PayloadFilter::default(),
                     },
                 )
                 .await
@@ -215,10 +218,89 @@ mod tests {
                     VectorQuery {
                         vector: vec![1.0, 0.0],
                         top_k: 0,
+                        filter: tdw_core::PayloadFilter::default(),
                     },
                 )
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn payload_filter_excludes_points_before_scoring() {
+        use tdw_core::{PayloadCondition, PayloadFilter};
+        let engine = InMemoryVectorEngine::default();
+        engine
+            .upsert(
+                "research",
+                vec![
+                    VectorPoint {
+                        id: "equity-doc".to_string(),
+                        vector: vec![1.0, 0.0],
+                        payload: serde_json::json!({
+                            "tags": ["asset:equity"],
+                            "as_of": "2026-01-01T00:00:00Z",
+                        }),
+                    },
+                    VectorPoint {
+                        id: "crypto-doc".to_string(),
+                        vector: vec![0.99, 0.1],
+                        payload: serde_json::json!({
+                            "tags": ["asset:crypto"],
+                            "as_of": "2026-06-01T00:00:00Z",
+                        }),
+                    },
+                ],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("points should upsert: {error}"));
+
+        // Tag filter: the otherwise-best crypto hit is excluded entirely.
+        let filtered = engine
+            .search_knn(
+                "research",
+                VectorQuery {
+                    vector: vec![1.0, 0.0],
+                    top_k: 2,
+                    filter: PayloadFilter {
+                        must: vec![PayloadCondition::MatchAny {
+                            key: "tags".to_string(),
+                            values: vec!["asset:equity".to_string()],
+                        }],
+                    },
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("filtered search should succeed: {error}"));
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|hit| hit.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["equity-doc"]
+        );
+
+        // as_of range filter hides later documents (leakage safety).
+        let as_of = engine
+            .search_knn(
+                "research",
+                VectorQuery {
+                    vector: vec![1.0, 0.0],
+                    top_k: 2,
+                    filter: PayloadFilter {
+                        must: vec![PayloadCondition::RangeString {
+                            key: "as_of".to_string(),
+                            gte: None,
+                            lte: Some("2026-03-01T00:00:00Z".to_string()),
+                        }],
+                    },
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("as_of search should succeed: {error}"));
+        assert_eq!(
+            as_of.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(),
+            vec!["equity-doc"]
         );
     }
 }

@@ -36,6 +36,7 @@ async fn main() -> tdw_core::Result<()> {
             TextQuery {
                 text: "volatility".to_string(),
                 top_k: 5,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await?;

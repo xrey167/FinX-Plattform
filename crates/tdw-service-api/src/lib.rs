@@ -873,6 +873,7 @@ pub async fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvid
             VectorQuery {
                 vector: embedding.vector,
                 top_k: 1,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await?;
@@ -882,6 +883,7 @@ pub async fn index_research_note(note: ResearchNote) -> Result<ResearchIndexEvid
             TextQuery {
                 text: "Fixture".to_string(),
                 top_k: 1,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await?;

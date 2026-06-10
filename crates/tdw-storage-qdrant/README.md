@@ -66,7 +66,7 @@ use tdw_storage_qdrant::InMemoryVectorEngine;
 # async fn run() -> tdw_core::Result<()> {
 let engine = InMemoryVectorEngine::default();
 engine.upsert("research", vec![VectorPoint { id: "a".into(), vector: vec![1.0, 0.0], payload: json!({}) }]).await?;
-let hits = engine.search_knn("research", VectorQuery { vector: vec![1.0, 0.0], top_k: 1 }).await?;
+let hits = engine.search_knn("research", VectorQuery::knn(vec![1.0, 0.0], 1)).await?;
 assert_eq!(hits[0].id, "a");
 # Ok(())
 # }

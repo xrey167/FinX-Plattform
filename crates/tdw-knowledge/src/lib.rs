@@ -178,13 +178,7 @@ impl KnowledgeIndex {
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
         let hits = self
             .vectors
-            .search_knn(
-                &self.collection,
-                VectorQuery {
-                    vector: embedding.vector,
-                    top_k,
-                },
-            )
+            .search_knn(&self.collection, VectorQuery::knn(embedding.vector, top_k))
             .await
             .map_err(|error| KnowledgeError::Storage(error.to_string()))?;
         hits.into_iter()

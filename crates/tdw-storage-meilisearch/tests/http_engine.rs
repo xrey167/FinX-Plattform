@@ -65,6 +65,7 @@ async fn meilisearch_engine_indexes_and_searches_against_real_meilisearch() {
             TextQuery {
                 text: "rocket".to_string(),
                 top_k: 5,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await
@@ -95,6 +96,7 @@ async fn meilisearch_engine_rejects_empty_query() {
             TextQuery {
                 text: "   ".to_string(),
                 top_k: 5,
+                filter: tdw_core::PayloadFilter::default(),
             },
         )
         .await

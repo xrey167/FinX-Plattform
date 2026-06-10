@@ -54,6 +54,7 @@ impl LexicalEngine for InMemoryLexicalEngine {
                 .ok_or_else(|| Error::Storage(format!("unknown lexical index: {index}")))?;
             let collected = docs
                 .iter()
+                .filter(|doc| query.filter.matches(&doc.fields))
                 .map(|doc| {
                     let body = doc.body.to_ascii_lowercase();
                     // Match count -> f32 relevance score; match counts are tiny.
@@ -145,6 +146,7 @@ mod tests {
                 TextQuery {
                     text: "volatility".to_string(),
                     top_k: 5,
+                    filter: tdw_core::PayloadFilter::default(),
                 },
             )
             .await
@@ -159,6 +161,7 @@ mod tests {
                     TextQuery {
                         text: String::new(),
                         top_k: 1,
+                        filter: tdw_core::PayloadFilter::default(),
                     },
                 )
                 .await
@@ -171,10 +174,56 @@ mod tests {
                     TextQuery {
                         text: "volatility".to_string(),
                         top_k: 0,
+                        filter: tdw_core::PayloadFilter::default(),
                     },
                 )
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn fields_filter_excludes_matching_docs() {
+        use tdw_core::{PayloadCondition, PayloadFilter};
+        let engine = InMemoryLexicalEngine::default();
+        engine
+            .index(
+                "research",
+                vec![
+                    LexicalDoc {
+                        id: "aapl-note".to_string(),
+                        body: "volatility note".to_string(),
+                        fields: serde_json::json!({ "symbol": "AAPL" }),
+                    },
+                    LexicalDoc {
+                        id: "msft-note".to_string(),
+                        body: "volatility note".to_string(),
+                        fields: serde_json::json!({ "symbol": "MSFT" }),
+                    },
+                ],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("documents should index: {error}"));
+
+        let docs = engine
+            .search_text(
+                "research",
+                TextQuery {
+                    text: "volatility".to_string(),
+                    top_k: 5,
+                    filter: PayloadFilter {
+                        must: vec![PayloadCondition::MatchString {
+                            key: "symbol".to_string(),
+                            value: "AAPL".to_string(),
+                        }],
+                    },
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("filtered search should succeed: {error}"));
+        assert_eq!(
+            docs.iter().map(|doc| doc.id.as_str()).collect::<Vec<_>>(),
+            vec!["aapl-note"]
         );
     }
 }

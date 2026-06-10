@@ -66,7 +66,7 @@ use tdw_storage_meilisearch::InMemoryLexicalEngine;
 # async fn run() -> tdw_core::Result<()> {
 let engine = InMemoryLexicalEngine::default();
 engine.index("research", vec![LexicalDoc { id: "note-1".into(), body: "AAPL volatility note".into(), fields: json!({}) }]).await?;
-let hits = engine.search_text("research", TextQuery { text: "volatility".into(), top_k: 5 }).await?;
+let hits = engine.search_text("research", TextQuery::text("volatility", 5)).await?;
 assert_eq!(hits[0].id, "note-1");
 # Ok(())
 # }
