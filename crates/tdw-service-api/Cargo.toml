@@ -326,5 +326,10 @@ tokio = { workspace = true, features = ["macros", "rt", "time"] }
 name = "tdw_service_api_basic"
 path = "examples/basic.rs"
 
+[[example]]
+name = "binance_clickhouse_soak"
+path = "examples/binance_clickhouse_soak.rs"
+required-features = ["real-clickhouse", "ws"]
+
 [lints]
 workspace = true
