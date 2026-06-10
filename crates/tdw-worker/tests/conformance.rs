@@ -2,7 +2,7 @@
 //!
 //! ONE suite of assertions runs verbatim against every backend so the
 //! backends cannot silently drift apart: a workflow prototyped on the
-//! in-memory queue must behave identically when promoted to SQLite or
+//! in-memory queue must behave identically when promoted to `SQLite` or
 //! Postgres. This pins the contract the audit items WK1/WK3 fixed
 //! (duplicate-`job_id` rejection, idempotent complete) plus priority
 //! ordering and the retry → dead-letter path.
