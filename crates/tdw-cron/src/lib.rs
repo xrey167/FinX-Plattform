@@ -308,9 +308,10 @@ pub fn build_job(trigger: &ScheduledTrigger, fire_slot_ms: i64) -> Result<Worker
 /// 2. Calls [`due_triggers`] to find all triggers whose next fire slot after
 ///    `last_tick_ms` is `<= now_ms`.
 /// 3. For each due trigger builds a [`WorkerJob`] via [`build_job`] and calls
-///    [`DurableWorkerQueue::enqueue`].  A `DuplicateJob` outcome (idempotent
-///    re-fire on the same slot) is silently ignored; other errors are logged
-///    and the loop continues.
+///    [`DurableWorkerQueue::enqueue`].  A duplicate slot comes back as
+///    `inserted == false` (idempotent re-fire, identical across all queue
+///    backends) and is silently ignored; errors are logged and the loop
+///    continues.
 /// 4. Advances `last_tick_ms` to `now_ms`.
 /// 5. Waits `tick` before the next iteration (or exits promptly on cancel).
 ///
@@ -368,9 +369,6 @@ where
                                         );
                                     }
                                     // !inserted → duplicate slot, silently ignored
-                                }
-                                Err(tdw_worker::WorkerQueueError::DuplicateJob(_)) => {
-                                    // Idempotent: same fire slot already enqueued.
                                 }
                                 Err(error) => {
                                     eprintln!(
@@ -443,7 +441,7 @@ mod tests {
 
     use super::*;
     use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
-    use tdw_worker::{EnqueueOutcome, InMemoryWorkerQueue, WorkerJobStatus, WorkerQueueError};
+    use tdw_worker::{EnqueueOutcome, InMemoryWorkerQueue, WorkerJobStatus};
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -784,12 +782,12 @@ mod tests {
         let outcome1 = queue.enqueue(job1).expect("first enqueue succeeds");
         assert!(outcome1.inserted);
 
-        // Second enqueue of the same job_id → DuplicateJob from InMemoryWorkerQueue.
-        let result2 = queue.enqueue(job2);
-        assert!(
-            matches!(result2, Err(WorkerQueueError::DuplicateJob(_))),
-            "duplicate slot must be rejected"
-        );
+        // Second enqueue of the same job_id is acknowledged idempotently —
+        // the cross-backend contract pinned by tdw-worker's conformance suite.
+        let outcome2 = queue
+            .enqueue(job2)
+            .expect("duplicate enqueue is not an error");
+        assert!(!outcome2.inserted, "duplicate slot must not insert");
 
         // Only one job was actually captured.
         assert_eq!(queue.captured.len(), 1);
