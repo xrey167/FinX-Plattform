@@ -13,7 +13,7 @@ use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_fred::{
     FredHttpMacroSeriesFetcher, FredHttpRateObservationFetcher, FredHttpSeriesObservationsFetcher,
-    FredSeriesObservationsQuery,
+    FredHttpSeriesSearchFetcher, FredHttpYieldCurveFetcher, FredSeriesObservationsQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -267,6 +267,165 @@ async fn live_fred_macro_series_returns_data_when_env_vars_set() {
         "live macro response must include observations"
     );
     assert_eq!(rows[0].series_id, "UNRATE");
+}
+
+// ---------------------------------------------------------------------------
+// Yield-curve fetcher (fixedincome/government/yield_curve -> YieldCurvePoint)
+// ---------------------------------------------------------------------------
+
+/// The combined-legs intermediate shape `FredHttpYieldCurveFetcher::extract_data`
+/// produces and `transform_data` consumes: one entry per Treasury tenor with its
+/// decoded (date, value) observations.
+fn yield_curve_cassette() -> Bytes {
+    cassette_bytes!([
+        {
+            "maturity": "3m",
+            "series_id": "DGS3MO",
+            "currency": "USD",
+            "observations": [
+                { "date": "2024-06-03", "value": 5.40 },
+                { "date": "2024-06-04", "value": 5.41 }
+            ]
+        },
+        {
+            "maturity": "10y",
+            "series_id": "DGS10",
+            "currency": "USD",
+            "observations": [
+                { "date": "2024-06-03", "value": 4.42 }
+            ]
+        }
+    ])
+}
+
+#[test]
+fn yield_curve_fetcher_merges_legs_into_points() {
+    let fetcher = FredHttpYieldCurveFetcher::default();
+    let query = FredHttpYieldCurveFetcher::transform_query(json!({}))
+        .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let rows = fetcher
+        .transform_data(&query, yield_curve_cassette())
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    assert_eq!(
+        rows.len(),
+        3,
+        "two 3m points + one 10y point; rows={rows:#?}"
+    );
+    assert!(rows.iter().all(|p| p.curve_id == "us_treasury"));
+    assert!(rows.iter().all(|p| p.currency.as_deref() == Some("USD")));
+    let three_month: Vec<_> = rows.iter().filter(|p| p.maturity == "3m").collect();
+    assert_eq!(three_month.len(), 2);
+    assert_eq!(three_month[0].date, "2024-06-03");
+    assert_eq!(three_month[0].value, Some(5.40));
+    let ten_year: Vec<_> = rows.iter().filter(|p| p.maturity == "10y").collect();
+    assert_eq!(ten_year.len(), 1);
+    assert_eq!(ten_year[0].value, Some(4.42));
+}
+
+#[tokio::test]
+async fn live_fred_yield_curve_returns_points_when_env_vars_set() {
+    if std::env::var("TDW_FRED_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FRED_LIVE != 1; skipping live FRED yield-curve integration test");
+        return;
+    }
+
+    let fetcher = FredHttpYieldCurveFetcher::default();
+    let query = FredHttpYieldCurveFetcher::transform_query(json!({ "limit": 5 }))
+        .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+
+    assert!(!rows.is_empty(), "live yield curve must include points");
+    assert!(rows.iter().all(|p| p.curve_id == "us_treasury"));
+}
+
+// ---------------------------------------------------------------------------
+// Series-search fetcher (economy/fred_search -> SeriesSearchResult)
+// ---------------------------------------------------------------------------
+
+fn search_cassette() -> Bytes {
+    cassette_bytes!({
+        "realtime_start": "2026-05-27",
+        "realtime_end": "2026-05-27",
+        "order_by": "search_rank",
+        "sort_order": "desc",
+        "count": 2,
+        "offset": 0,
+        "limit": 1000,
+        "seriess": [
+            {
+                "id": "CPIAUCSL",
+                "title": "Consumer Price Index for All Urban Consumers: All Items",
+                "frequency": "Monthly",
+                "units": "Index 1982-1984=100",
+                "popularity": 95
+            },
+            {
+                "id": "",
+                "title": "skipped: empty id"
+            }
+        ]
+    })
+}
+
+#[test]
+fn series_search_fetcher_normalizes_results_and_skips_empty_ids() {
+    let fetcher = FredHttpSeriesSearchFetcher::default();
+    let query = FredHttpSeriesSearchFetcher::transform_query(json!({ "search_text": "cpi" }))
+        .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let rows = fetcher
+        .transform_data(&query, search_cassette())
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    assert_eq!(rows.len(), 1, "empty-id row skipped; rows={rows:#?}");
+    assert_eq!(rows[0].series_id, "CPIAUCSL");
+    assert_eq!(rows[0].frequency.as_deref(), Some("Monthly"));
+    assert_eq!(rows[0].popularity, Some(95));
+    assert!(
+        rows[0]
+            .title
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Consumer Price Index")
+    );
+}
+
+#[test]
+fn series_search_fetcher_rejects_blank_query_and_surfaces_error_envelope() {
+    assert!(FredHttpSeriesSearchFetcher::transform_query(json!({ "search_text": "   " })).is_err());
+    assert!(FredHttpSeriesSearchFetcher::transform_query(json!({})).is_err());
+
+    let fetcher = FredHttpSeriesSearchFetcher::default();
+    let query = FredHttpSeriesSearchFetcher::transform_query(json!({ "search_text": "cpi" }))
+        .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    let envelope = cassette_bytes!({
+        "error_code": 400,
+        "error_message": "Bad Request."
+    });
+    let err = fetcher
+        .transform_data(&query, envelope)
+        .expect_err("error envelope must be propagated");
+    assert!(err.to_string().contains("fred api error 400"));
+}
+
+#[tokio::test]
+async fn live_fred_search_returns_results_when_env_vars_set() {
+    if std::env::var("TDW_FRED_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FRED_LIVE != 1; skipping live FRED search integration test");
+        return;
+    }
+
+    let fetcher = FredHttpSeriesSearchFetcher::default();
+    let query = FredHttpSeriesSearchFetcher::transform_query(json!({
+        "search_text": "unemployment rate",
+        "limit": 5
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+
+    assert!(!rows.is_empty(), "live search must include results");
 }
 
 #[tokio::test]

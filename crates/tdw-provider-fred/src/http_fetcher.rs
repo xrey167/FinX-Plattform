@@ -8,11 +8,11 @@
 use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{MacroSeries, RateObservation};
+use tdw_domain::{MacroSeries, RateObservation, SeriesSearchResult, YieldCurvePoint};
 
 use crate::{
-    BASE_URL, FredCatalogQuery, FredObservation, FredSeriesObservationsQuery,
-    series_observations_request,
+    BASE_URL, FredCatalogQuery, FredObservation, FredSearchQuery, FredSeriesObservationsQuery,
+    FredYieldCurveQuery, YIELD_CURVE_LEGS, fred_search_request, series_observations_request,
 };
 
 const API_KEY_ENV: &str = "FRED_API_KEY";
@@ -357,5 +357,233 @@ impl Fetcher<FredCatalogQuery, RateObservation> for FredHttpRateObservationFetch
                 currency: Some(endpoint.currency.to_string()),
             })
             .collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FredHttpSeriesSearchFetcher — economy/fred_search -> SeriesSearchResult
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FRED `series/search` metadata fetcher.
+    ///
+    /// Standardizes `economy/fred_search`: a free-text query against FRED's
+    /// `series/search` endpoint, normalized to [`tdw_domain::SeriesSearchResult`].
+    /// This is a discovery endpoint — it returns series metadata, not
+    /// observations — so it carries no bronze landing table.
+    pub FredHttpSeriesSearchFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize)]
+struct FredSearchEnvelope {
+    #[serde(default)]
+    seriess: Vec<FredSearchSeries>,
+    #[serde(default)]
+    error_code: Option<i64>,
+    #[serde(default)]
+    error_message: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FredSearchSeries {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    frequency: Option<String>,
+    #[serde(default)]
+    units: Option<String>,
+    #[serde(default)]
+    popularity: Option<i64>,
+}
+
+#[async_trait]
+impl Fetcher<FredSearchQuery, SeriesSearchResult> for FredHttpSeriesSearchFetcher {
+    const PROVIDER: &'static str = "fred";
+    const ENDPOINT: &'static str = "fred_search";
+
+    fn transform_query(params: Value) -> Result<FredSearchQuery> {
+        FredSearchQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &FredSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        // Reuse the shared request builder for its api-key guard + percent
+        // encoding contract, then issue the GET via the shared client.
+        fred_search_request(&query.search_text, true)
+            .map_err(|error| Error::Provider(error.to_string()))?;
+        let api_key = fred_api_key()?;
+        let endpoint = format!("{}/series/search", self.base_url().trim_end_matches('/'));
+        let mut query_params = vec![
+            ("search_text", query.search_text.clone()),
+            ("api_key", api_key),
+            ("file_type", "json".to_string()),
+        ];
+        let limit = query.params.limit.unwrap_or(0);
+        if limit > 0 {
+            query_params.push(("limit", limit.to_string()));
+        }
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent(USER_AGENT)
+            .build()
+            .map_err(|error| Error::Provider(format!("fred client: {error}")))?;
+        let response = client
+            .get(&endpoint)
+            .query(&query_params)
+            .send()
+            .await
+            .map_err(|error| Error::Provider(format!("fred search: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "fred search returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|error| Error::Provider(format!("fred read body: {error}")))
+    }
+
+    fn transform_data(
+        &self,
+        _query: &FredSearchQuery,
+        raw: Bytes,
+    ) -> Result<Vec<SeriesSearchResult>> {
+        let envelope: FredSearchEnvelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("fred parse_json: {error}")))?;
+        if let Some(error_code) = envelope.error_code {
+            return Err(Error::Provider(format!(
+                "fred api error {error_code}: {}",
+                envelope.error_message.unwrap_or_default()
+            )));
+        }
+        let mut rows = Vec::with_capacity(envelope.seriess.len());
+        for series in envelope.seriess {
+            if series.id.is_empty() {
+                continue;
+            }
+            rows.push(SeriesSearchResult {
+                series_id: series.id,
+                title: series.title,
+                frequency: series.frequency,
+                units: series.units,
+                popularity: series.popularity,
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FredHttpYieldCurveFetcher — fixedincome/government/yield_curve ->
+// YieldCurvePoint (aggregates the four Treasury constant-maturity legs)
+// ---------------------------------------------------------------------------
+
+/// One leg's decoded observations, tagged with its tenor, ready to merge into
+/// the combined curve. The intermediate combined envelope is a JSON array of
+/// these so the `transform_data` path is exercisable from a recorded fixture.
+#[derive(serde::Serialize, Deserialize)]
+struct YieldCurveLeg {
+    maturity: String,
+    series_id: String,
+    currency: String,
+    observations: Vec<YieldCurveLegObservation>,
+}
+
+#[derive(serde::Serialize, Deserialize)]
+struct YieldCurveLegObservation {
+    date: String,
+    value: f64,
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FRED Treasury yield-curve fetcher.
+    ///
+    /// Standardizes `fixedincome/government/yield_curve` by fetching the four
+    /// Treasury constant-maturity series (3m / 2y / 10y / 30y) and merging them
+    /// into one [`tdw_domain::YieldCurvePoint`] per `(date, maturity)`. The legs
+    /// are fetched sequentially; a recorded combined fixture drives the
+    /// offline-testable `transform_data` path.
+    pub FredHttpYieldCurveFetcher,
+    BASE_URL
+);
+
+impl FredHttpYieldCurveFetcher {
+    /// Resolve and fetch one curve leg, returning its tagged observations.
+    async fn fetch_leg(
+        &self,
+        command: &str,
+        maturity: &str,
+        params: &StandardParams,
+    ) -> Result<YieldCurveLeg> {
+        let endpoint = crate::catalog::resolve(command).ok_or_else(|| {
+            Error::Provider(format!("yield_curve leg command not in catalog: {command}"))
+        })?;
+        let raw =
+            fetch_series_observations(self.base_url(), endpoint.series_id, params, None).await?;
+        let parsed = parse_observations(&raw)?;
+        Ok(YieldCurveLeg {
+            maturity: maturity.to_string(),
+            series_id: endpoint.series_id.to_string(),
+            currency: endpoint.currency.to_string(),
+            observations: parsed
+                .into_iter()
+                .map(|observation| YieldCurveLegObservation {
+                    date: observation.date,
+                    value: observation.value,
+                })
+                .collect(),
+        })
+    }
+}
+
+#[async_trait]
+impl Fetcher<FredYieldCurveQuery, YieldCurvePoint> for FredHttpYieldCurveFetcher {
+    const PROVIDER: &'static str = "fred";
+    const ENDPOINT: &'static str = "yield_curve";
+
+    fn transform_query(params: Value) -> Result<FredYieldCurveQuery> {
+        FredYieldCurveQuery::from_value(&params)
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FredYieldCurveQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let mut legs = Vec::with_capacity(YIELD_CURVE_LEGS.len());
+        for (command, maturity) in YIELD_CURVE_LEGS {
+            legs.push(self.fetch_leg(command, maturity, &query.params).await?);
+        }
+        let combined = serde_json::to_vec(&legs)
+            .map_err(|error| Error::Provider(format!("yield_curve encode: {error}")))?;
+        Ok(Bytes::from(combined))
+    }
+
+    fn transform_data(
+        &self,
+        _query: &FredYieldCurveQuery,
+        raw: Bytes,
+    ) -> Result<Vec<YieldCurvePoint>> {
+        let legs: Vec<YieldCurveLeg> = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yield_curve parse_json: {error}")))?;
+        let mut rows = Vec::new();
+        for leg in legs {
+            for observation in leg.observations {
+                rows.push(YieldCurvePoint {
+                    curve_id: "us_treasury".to_string(),
+                    date: observation.date,
+                    maturity: leg.maturity.clone(),
+                    value: Some(observation.value),
+                    currency: Some(leg.currency.clone()),
+                });
+            }
+        }
+        Ok(rows)
     }
 }

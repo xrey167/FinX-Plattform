@@ -156,6 +156,20 @@ pub fn is_valid_route(route: &str) -> bool {
     segments >= 1
 }
 
+/// Derive the canonical dispatch-table `endpoint` key for a single-series
+/// catalog route by replacing each route separator with `'_'`.
+///
+/// The FRED macro/rate cluster routes map one-to-one onto a `(provider="fred",
+/// endpoint=<this key>)` dispatch binding. Keeping the derivation here — beside
+/// the route grammar it depends on — lets the catalog routers, the runtime
+/// dispatch table, and the conformance tests agree on one spelling without any
+/// crate depending on the FRED provider. Example: `economy/cpi` → `economy_cpi`,
+/// `fixedincome/rate/sofr` → `fixedincome_rate_sofr`.
+#[must_use]
+pub fn endpoint_key_for_route(route: &str) -> String {
+    route.replace(ROUTE_SEP, "_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

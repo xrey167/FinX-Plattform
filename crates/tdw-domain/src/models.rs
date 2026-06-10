@@ -198,6 +198,51 @@ pub struct RateObservation {
     pub currency: Option<String>,
 }
 
+/// A single point on a sovereign yield curve.
+///
+/// Standardizes `fixedincome/government/yield_curve`: one row = one (date,
+/// maturity) constant-maturity Treasury yield. The aggregating fetcher emits one
+/// `YieldCurvePoint` per (observation date, tenor) by merging the individual
+/// constant-maturity series (3m / 2y / 10y / 30y). `value` is optional for
+/// missing observations, mirroring [`RateObservation`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct YieldCurvePoint {
+    /// Curve identifier, e.g. `"us_treasury"`.
+    #[validate(length(min = 1))]
+    pub curve_id: String,
+    /// Observation date.
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Maturity tenor label, e.g. `"3m"`, `"2y"`, `"10y"`, `"30y"`.
+    #[validate(length(min = 1))]
+    pub maturity: String,
+    /// Observed yield (percent). Optional for missing observations.
+    pub value: Option<f64>,
+    /// ISO 4217 currency the yield is denominated in.
+    pub currency: Option<String>,
+}
+
+/// A FRED series-search metadata result.
+///
+/// Standardizes `economy/fred_search` (FRED `series/search`). One row = one
+/// matched series; all descriptive fields beyond the id are optional since the
+/// search API may omit them. Carries no observations — it is a discovery result
+/// that callers feed into the macro/rate observation endpoints.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SeriesSearchResult {
+    /// FRED series id, e.g. `"CPIAUCSL"`.
+    #[validate(length(min = 1))]
+    pub series_id: String,
+    /// Human-readable series title.
+    pub title: Option<String>,
+    /// Frequency label, e.g. `"Monthly"`, `"Daily"`.
+    pub frequency: Option<String>,
+    /// Units label, e.g. `"Index 1982-1984=100"`.
+    pub units: Option<String>,
+    /// FRED popularity score (higher is more popular).
+    pub popularity: Option<i64>,
+}
+
 /// A single option contract within a chain.
 ///
 /// Standardizes `derivatives/options/chains` (cboe/deribit/intrinio/tmx/tradier/
@@ -442,6 +487,51 @@ mod tests {
         let bad = RateObservation {
             rate_id: String::new(),
             ..rate
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn yield_curve_point_round_trips_and_validates() {
+        let point = YieldCurvePoint {
+            curve_id: "us_treasury".to_string(),
+            date: "2026-06-06".to_string(),
+            maturity: "10y".to_string(),
+            value: Some(4.21),
+            currency: Some("USD".to_string()),
+        };
+        assert!(point.validate().is_ok());
+        round_trip(&point);
+
+        let missing = YieldCurvePoint {
+            value: None,
+            ..point.clone()
+        };
+        assert!(missing.validate().is_ok());
+        round_trip(&missing);
+
+        let bad = YieldCurvePoint {
+            maturity: String::new(),
+            ..point
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn series_search_result_round_trips_and_validates() {
+        let result = SeriesSearchResult {
+            series_id: "CPIAUCSL".to_string(),
+            title: Some("Consumer Price Index for All Urban Consumers".to_string()),
+            frequency: Some("Monthly".to_string()),
+            units: Some("Index 1982-1984=100".to_string()),
+            popularity: Some(95),
+        };
+        assert!(result.validate().is_ok());
+        round_trip(&result);
+
+        let bad = SeriesSearchResult {
+            series_id: String::new(),
+            ..result
         };
         assert!(bad.validate().is_err());
     }

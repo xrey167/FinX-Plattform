@@ -45,25 +45,25 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| fred_series / fred_search / fred_release / fred_regional | PARTIAL | tdw-provider-fred (series obs) HAVE; search/release_table/regional MISSING | todo |
-| cpi / pce / gdp / unemployment / interest_rates | PARTIAL | fred/oecd raw series HAVE; standardized macro cluster (cpi/gdp/...) MISSING | todo |
+| fred_series / fred_search / fred_release / fred_regional | PARTIAL | tdw-provider-fred (series obs) HAVE; **fred_search HAVE** (economy/fred_search dispatchable end-to-end); release_table/regional MISSING | todo |
+| cpi / pce / gdp / unemployment / interest_rates | HAVE | fred-backed standardized macro cluster dispatchable end-to-end (economy/cpi, economy/pce, economy/gdp/{real,nominal}, economy/unemployment) | done |
 | calendar (economic events) | PARTIAL | trading-economics raw; standardized calendar MISSING | todo |
 | indicators / available_indicators / country_profile | MISSING | needs econdb + imf | todo |
-| money_measures / central_bank_holdings / primary_dealer_* / fomc_documents | MISSING | needs dedicated federal_reserve provider | todo |
+| money_measures / central_bank_holdings / primary_dealer_* / fomc_documents | PARTIAL | **money_measures/{m1,m2} HAVE** (fred-backed, dispatchable end-to-end); central_bank_holdings/primary_dealer_*/fomc_documents need dedicated federal_reserve provider | todo |
 | balance_of_payments / direction_of_trade / shipping/* | MISSING | needs imf provider | todo |
-| survey/* (nonfarm, sloos, sentiment, regional Fed surveys) | MISSING | fred-backed cluster not wired | todo |
+| survey/* (nonfarm, sloos, sentiment, regional Fed surveys) | PARTIAL | **survey/{nonfarm_payrolls,university_of_michigan,inflation_expectations} HAVE** (fred-backed, dispatchable end-to-end); sloos/regional Fed surveys MISSING | todo |
 | survey/bls_search + bls_series | PARTIAL | tdw-provider-bls (series) HAVE; search MISSING | todo |
 
 ### 3. fixedincome (30 cmds)
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| government/yield_curve + treasury_rates | MISSING | needs fred/federal_reserve/fmp curve cluster | todo |
-| government/treasury_prices/auctions/tips/svensson | MISSING | needs government-us + fred | todo |
-| rate/* (sofr, effr, estr, ecb, sonia, ameribor, iorb, ...) | MISSING | fred-backed rate cluster not wired | todo |
-| spreads/* (tcm, tcm_effr, treasury_effr) | MISSING | fred-backed | todo |
-| corporate/* (bond_prices, commercial_paper, spot/hqm) | MISSING | needs tmx + fred | todo |
-| bond_indices / mortgage_indices | MISSING | fred-backed | todo |
+| government/yield_curve + treasury_rates | HAVE | fred-backed end-to-end: government/yield_curve (3m/2y/10y/30y aggregate) + government/treasury_rates/{3m,2y,10y,30y} + government/tips_yields/10y | done |
+| government/treasury_prices/auctions/tips/svensson | PARTIAL | **tips_yields/10y HAVE** (fred-backed); treasury_prices/auctions/svensson need government-us | todo |
+| rate/* (sofr, effr, estr, ecb, sonia, ameribor, iorb, ...) | HAVE | fred-backed rate cluster dispatchable end-to-end: rate/{sofr,effr,estr,sonia,ecb,iorb,dpcredit,overnight_bank_funding} (ameribor MISSING) | done |
+| spreads/* (tcm, tcm_effr, treasury_effr) | HAVE | fred-backed end-to-end: spreads/tcm/{10y2y,10y3m}, spreads/treasury_effr/3m | done |
+| corporate/* (bond_prices, commercial_paper, spot/hqm) | PARTIAL | **corporate/spot_rates/10y (HQM) + corporate/commercial_paper/90d HAVE** (fred-backed); bond_prices needs tmx | todo |
+| bond_indices / mortgage_indices | HAVE | fred-backed end-to-end: bond_indices/us_corporate_hy, mortgage_indices/30y_fixed | done |
 
 ### 4. derivatives (11 cmds)
 
