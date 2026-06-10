@@ -30,6 +30,7 @@ fn assignment(entity: &str, tag: &str, assigned: &str, expires: Option<&str>) ->
 }
 
 /// The behavioral contract, asserted identically for every backend.
+#[allow(clippy::too_many_lines)] // one linear contract narrative, per the A2/outbox suite precedent
 async fn conformance_suite(engine: &dyn TagEngine) {
     // 1. Taxonomy: parents must exist; cycles are rejected; re-parenting works.
     assert!(matches!(
@@ -235,7 +236,7 @@ async fn conformance_suite(engine: &dyn TagEngine) {
 
 /// Taxonomies deeper than the graph layer's traversal hop cap must still
 /// return ALL transitive descendants on every backend (regression for the
-/// silent MAX_HOPS truncation the A5 review caught).
+/// silent `MAX_HOPS` truncation the A5 review caught).
 async fn deep_taxonomy_suite(engine: &dyn TagEngine) {
     let mut parent: Option<String> = None;
     let mut expected = Vec::new();

@@ -26,6 +26,10 @@ use tdw_core::{Direction, GraphEdge, GraphEngine, GraphNode, Provenance, Travers
 use tdw_tags::{TagAssignment, TagDefinition, TagEngine, TagError, date_to_timestamp};
 use tdw_taxonomy::EntityKind;
 
+/// Node-count guard for taxonomy walks — not a depth cap: a (corrupted)
+/// store errs loudly instead of silently truncating.
+const MAX_TAXONOMY_NODES: usize = 100_000;
+
 /// [`TagEngine`] over any [`GraphEngine`] backend.
 pub struct GraphTagEngine<G> {
     graph: G,
@@ -37,7 +41,7 @@ impl<G: GraphEngine> GraphTagEngine<G> {
         Self { graph }
     }
 
-    fn storage(error: tdw_core::Error) -> TagError {
+    fn storage(error: impl std::fmt::Display) -> TagError {
         TagError::Engine(error.to_string())
     }
 
@@ -68,7 +72,7 @@ impl<G: GraphEngine> GraphTagEngine<G> {
                 .await
                 .map_err(Self::storage)?;
             match parents.first() {
-                Some((_, parent)) => current = parent.id.clone(),
+                Some((_, parent)) => current.clone_from(&parent.id),
                 None => return Ok(false),
             }
         }
@@ -215,9 +219,6 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
         };
         let mut found = std::collections::BTreeSet::new();
         let mut frontier = vec![tag_id.to_string()];
-        // Node-count guard, not a depth cap: loud error on a (corrupted)
-        // store instead of silent truncation.
-        const MAX_TAXONOMY_NODES: usize = 100_000;
         while let Some(current) = frontier.pop() {
             for (_, child) in self
                 .graph
