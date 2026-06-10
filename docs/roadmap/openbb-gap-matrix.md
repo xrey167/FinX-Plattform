@@ -17,6 +17,48 @@ in place as work lands.
 
 ---
 
+## P1 roll-up — 2026-06-11 (OpenBB-parity phase 1 closed)
+
+> **Scoreboard snapshot.** The endpoint catalog (`tdw-endpoint-catalog`) now exposes
+> **80 routes / 71 provider candidates** (`xtask catalog-check` green): **60 `Fetch`
+> routes** (each a `GET /api/v1/<route>` and an OpenBB-Workspace widget) + **20
+> `technical/*` `Compute` routes**. The generated OpenAPI 3.1 document
+> (`docs/schemas/openapi.json`) carries **60 paths / 21 schemas**, drift-gated by
+> `xtask openapi-check`. Single entry point: [`docs/products/openbb-parity.md`](../products/openbb-parity.md).
+
+**P1 phases landed (verified in-tree):**
+
+- **G001 catalog spine** — `tdw-endpoint-catalog` (`CatalogEntry`, `Op::FetchData`, ordered
+  provider candidates with runtime fallback); `provider_resolve.rs` delegates to it.
+- **G002 FRED** — macro / rate / spread / fixedincome cluster (cpi/pce/gdp/unemployment,
+  sofr/effr/estr/ecb/sonia/iorb, tcm spreads, yield curve, bond + mortgage indices).
+- **G003 SEC / Treasury / Fed** — `etf/holdings` (N-PORT), `equity/ownership/form_13f`,
+  `equity/shorts/fails_to_deliver`, `regulators/sec/cik_map`, `government/treasury_prices`,
+  `government/treasury_auctions`, `regulators/fed/fomc_documents`,
+  `fixedincome/government/dealer_stats` (`tdw-provider-government-us` + `-federal-reserve`).
+- **G004 keyless wave** — Yahoo (quote/profile/performance/calendars/estimates) + ECB
+  `currency/reference_rates` + CBOE `index/snapshots` + EIA `commodity/*` + multi-provider
+  `derivatives/options/chains`, `derivatives/futures/{curve,historical}`.
+- **G005 REST + OpenAPI** — catalog-derived `GET /api/v1/*`, generated `GET /openapi.json`,
+  `xtask openapi-sync`/`openapi-check` drift gate. (L5.1, L5.2 → **done**.)
+- **G006 technical analytics** — 20 `technical/*` `Compute` routes + `technical.*` MCP tools
+  (`tdw-analytics-technical`).
+- **G007 widgets backend** — `tdw-widgets` + `/widgets.json` `/apps.json` `/widget-data`
+  (`docs/products/openbb-workspace-backend.md`). (L5.8 → **done**.)
+- **G008 copilot bridge** — `tdw-openbb-agent` + `/agents.json` `/v1/query` SSE
+  (`docs/products/openbb-workspace-agent.md`). (L5.9 → **done**.)
+- **G009 MCP alignment** — `TDW_MCP_ALLOWED_ORIGINS`, read-only widget-catalog tools,
+  widget-citation contract test. (L5.10 → **done**.)
+- **G016 LLM streaming** — `StreamingLanguageModel` driving the copilot SSE stream.
+
+**Still open after P1 (P2/P3):** keyed providers (FMP fundamentals/screener, Polygon,
+Benzinga/Tiingo/Intrinio), Python SDK (L5.3-adjacent), CLI + routines + export
+(L5.3/L5.4), charting (L5.5), MCP dynamic exposure (L5.6), full credential-registry
+migration (L5.7 — only FRED + EIA wired), quant + econometrics analytics (L4.2/L4.3),
+and the examples suite (WS-B4).
+
+---
+
 ## Part 1 — Gap Matrix (command-cluster level)
 
 Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted),
@@ -33,12 +75,12 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | fundamentals (balance/income/cash/ratios/metrics) | PARTIAL | fmp has many endpoints wired but not normalized to the 4 statements + ratios cluster; intrinio/polygon variants MISSING | todo |
 | fundamentals growth (balance/income/cash growth) | MISSING | fmp growth endpoints not wired | todo |
 | fundamentals extras (dividends, splits, eps history, employees, esg, mgmt, transcript, segments) | PARTIAL | sec/fmp raw; standardized cluster MISSING | todo |
-| estimates (price_target, consensus, forward_*) | PARTIAL | benzinga/seeking-alpha raw; standardized estimates cluster MISSING | todo |
+| estimates (price_target, consensus, forward_*) | PARTIAL | **`equity/estimates/consensus` HAVE** (standardized, G004); benzinga/seeking-alpha raw; price_target/forward_* still MISSING | in-progress |
 | calendar (dividend/earnings/ipo/splits/events) | PARTIAL | dividend/earnings/ipo standardized via nasdaq (keyless public calendar API, G004p2); benzinga earnings raw; splits/events MISSING | in-progress |
 | compare (peers/groups/company_facts) | MISSING | — | todo |
 | discovery (active/gainers/losers/...) | MISSING | no fmp/yahoo discovery endpoints | todo |
-| ownership (insider/institutional/13f/gov_trades/share_stats) | PARTIAL | sec facts raw; standardized ownership cluster MISSING | todo |
-| shorts (short_interest/short_volume/fails_to_deliver) | PARTIAL | finra short interest HAVE; stockgrid short_volume + sec FTD MISSING | todo |
+| ownership (insider/institutional/13f/gov_trades/share_stats) | PARTIAL | **`equity/ownership/form_13f` + `equity/ownership/share_statistics` HAVE** (SEC, keyless, G003); insider/institutional/gov_trades still MISSING | in-progress |
+| shorts (short_interest/short_volume/fails_to_deliver) | PARTIAL | finra short interest HAVE; **`equity/shorts/fails_to_deliver` HAVE** (SEC FTD, G003); stockgrid short_volume still MISSING | in-progress |
 | darkpool/otc | HAVE | finra OTC weekly | done |
 
 ### 2. economy (46 cmds)
@@ -49,7 +91,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | cpi / pce / gdp / unemployment / interest_rates | HAVE | fred-backed standardized macro cluster dispatchable end-to-end (economy/cpi, economy/pce, economy/gdp/{real,nominal}, economy/unemployment) | done |
 | calendar (economic events) | PARTIAL | trading-economics raw; standardized calendar MISSING | todo |
 | indicators / available_indicators / country_profile | MISSING | needs econdb + imf | todo |
-| money_measures / central_bank_holdings / primary_dealer_* / fomc_documents | PARTIAL | **money_measures/{m1,m2} HAVE** (fred-backed, dispatchable end-to-end); central_bank_holdings/primary_dealer_*/fomc_documents need dedicated federal_reserve provider | todo |
+| money_measures / central_bank_holdings / primary_dealer_* / fomc_documents | PARTIAL | **money_measures/{m1,m2} HAVE** (fred-backed); **`regulators/fed/fomc_documents` + `fixedincome/government/dealer_stats` HAVE** (tdw-provider-federal-reserve, keyless, G003); central_bank_holdings still needs federal_reserve | in-progress |
 | balance_of_payments / direction_of_trade / shipping/* | MISSING | needs imf provider | todo |
 | survey/* (nonfarm, sloos, sentiment, regional Fed surveys) | PARTIAL | **survey/{nonfarm_payrolls,university_of_michigan,inflation_expectations} HAVE** (fred-backed, dispatchable end-to-end); sloos/regional Fed surveys MISSING | todo |
 | survey/bls_search + bls_series | PARTIAL | tdw-provider-bls (series) HAVE; search MISSING | todo |
@@ -59,7 +101,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | government/yield_curve + treasury_rates | HAVE | fred-backed end-to-end: government/yield_curve (3m/2y/10y/30y aggregate) + government/treasury_rates/{3m,2y,10y,30y} + government/tips_yields/10y | done |
-| government/treasury_prices/auctions/tips/svensson | PARTIAL | **tips_yields/10y HAVE** (fred-backed); treasury_prices/auctions/svensson need government-us | todo |
+| government/treasury_prices/auctions/tips/svensson | PARTIAL | **`government/treasury_prices` + `government/treasury_auctions` HAVE** (tdw-provider-government-us, keyless, G003) and **tips_yields/10y HAVE** (fred-backed); svensson still MISSING | in-progress |
 | rate/* (sofr, effr, estr, ecb, sonia, ameribor, iorb, ...) | HAVE | fred-backed rate cluster dispatchable end-to-end: rate/{sofr,effr,estr,sonia,ecb,iorb,dpcredit,overnight_bank_funding} (ameribor MISSING) | done |
 | spreads/* (tcm, tcm_effr, treasury_effr) | HAVE | fred-backed end-to-end: spreads/tcm/{10y2y,10y3m}, spreads/treasury_effr/3m | done |
 | corporate/* (bond_prices, commercial_paper, spot/hqm) | PARTIAL | **corporate/spot_rates/10y (HQM) + corporate/commercial_paper/90d HAVE** (fred-backed); bond_prices needs tmx | todo |
@@ -71,22 +113,22 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 |---|---|---|---|
 | options/chains | HAVE | cboe, deribit | done |
 | options/unusual / snapshots / surface | MISSING | needs intrinio (+ IV surface compute) | todo |
-| futures/historical / curve / instruments / info | PARTIAL | deribit instruments HAVE; futures curve/historical cluster MISSING | todo |
+| futures/historical / curve / instruments / info | HAVE | catalog routes `derivatives/futures/historical` + `derivatives/futures/curve` landed (G004 keyless wave); deribit instruments HAVE; instruments/info long-tail deferred | done |
 
 ### 5. etf (14 cmds)
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | search / info / historical | PARTIAL | historical reuses price; etf search/info MISSING | todo |
-| holdings / sectors / countries / equity_exposure / nport | MISSING | needs fmp + sec N-PORT | todo |
+| holdings / sectors / countries / equity_exposure / nport | PARTIAL | **`etf/holdings` HAVE** (keyless, SEC N-PORT `NPORT-P` disclosures, G003); sectors/countries/equity_exposure still need fmp | in-progress |
 | price_performance / discovery (active/gainers/losers) | MISSING | needs fmp + wsj | todo |
 
 ### 6. index (9 cmds)
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| price/historical | PARTIAL | cboe/polygon bars reusable; index symbology MISSING | todo |
-| constituents / available / search / snapshots / sectors | MISSING | needs cboe/fmp/tmx index endpoints | todo |
+| price/historical | HAVE | catalog route `index/price/historical` landed (G004); cboe/polygon bars | done |
+| constituents / available / search / snapshots / sectors | PARTIAL | **`index/snapshots` HAVE** (CBOE, G004); constituents/available/search/sectors still need cboe/fmp/tmx index endpoints | in-progress |
 | sp500_multiples (Shiller PE) | MISSING | needs nasdaq | todo |
 
 ### 7. crypto (4 cmds)
@@ -101,14 +143,14 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | price/historical / snapshots / search | MISSING | no FX OHLCV cluster (fmp/polygon/tiingo) | todo |
-| reference_rates (ECB) | PARTIAL | tdw-provider-ecb HAVE (SDW); reference_rates shape MISSING | todo |
+| reference_rates (ECB) | HAVE | catalog route `currency/reference_rates` landed (ECB-backed, keyless, G004); tdw-provider-ecb HAVE (SDW) | done |
 
 ### 9. commodity (8 cmds)
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | price/spot | PARTIAL | fred-backed; standardized spot cluster MISSING | todo |
-| petroleum_status / energy_outlook / psd_* (EIA) | PARTIAL | tdw-provider-eia (spot) HAVE; report endpoints MISSING | todo |
+| petroleum_status / energy_outlook / psd_* (EIA) | PARTIAL | **`commodity/petroleum_status_report` + `commodity/short_term_energy_outlook` HAVE** (EIA report endpoints, G004); tdw-provider-eia (spot) HAVE; psd_* still MISSING | in-progress |
 
 ### 10. news (3 cmds)
 
@@ -121,7 +163,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| sec/* (cik_map, symbol_map, filings utils, litigation) | PARTIAL | tdw-provider-sec (filings, facts) HAVE; cik/symbol map + utils MISSING | todo |
+| sec/* (cik_map, symbol_map, filings utils, litigation) | PARTIAL | **`regulators/sec/cik_map` HAVE** (keyless, G003); tdw-provider-sec (filings, facts) HAVE; symbol_map/utils/litigation still MISSING | in-progress |
 | cftc/cot + cot_search | MISSING | needs cftc provider | todo |
 
 ### 12–13. analysis routers (technical 28 / quantitative 23 / econometrics 16 / famafrench 7)
@@ -230,15 +272,15 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 
 | # | Task · scope · gates · done-when | Size | Status |
 |---|---|---|---|
-| L5.1 | **tdw-service-api** (PR #161) · land HTTP+SSE (`POST /ops`, `GET /events/{id}`, `/health`, `/metrics`) over the daemon. Gates: integ. Done-when: #161 merged, REST command callable. | M | in-progress |
-| L5.2 | **tdw-app-server** + **tdw-service-api** (WS2, G005) · catalog-derived REST route family (`GET /api/v1/{route...}?provider=`) dispatching through the policy-guarded `Op::FetchData` path + the `ResultEnvelope`; generated OpenAPI 3.1 at `GET /openapi.json` (xtask `openapi-sync`/`openapi-check` drift gate). Gates: integ. Done-when: ≥10 routes documented — **done** (44 paths / 12 schemas in `docs/schemas/openapi.json`; e2e tests in `tdw-service-api/tests/rest_route_e2e.rs`). | L | in-progress |
+| L5.1 | **tdw-service-api** (PR #161) · land HTTP+SSE (`POST /op`, `GET /events/{id}`, `/health`, `/metrics`) over the daemon. Gates: integ. Done-when: #161 merged, REST command callable — **done** (`POST /op` + `GET /events/{id}` + `/health` + `/metrics` served by `tdw-app-server/src/transport_http.rs`; the catalog REST family in `rest_route.rs` builds on it). | M | done |
+| L5.2 | **tdw-app-server** + **tdw-service-api** (WS2, G005) · catalog-derived REST route family (`GET /api/v1/{route...}?provider=`) dispatching through the policy-guarded `Op::FetchData` path + the `ResultEnvelope`; generated OpenAPI 3.1 at `GET /openapi.json` (xtask `openapi-sync`/`openapi-check` drift gate). Gates: integ. Done-when: ≥10 routes documented — **done** (60 paths / 21 schemas in `docs/schemas/openapi.json`, drift-gated by `openapi-check`; e2e tests in `tdw-service-api/tests/rest_route_e2e.rs`). | L | done |
 | L5.3 | **tdw-cli** · command-tree parity (menu/command mirror of routers; `--provider`; `-h`). Gates: smoke. Done-when: `tdw equity price historical --symbol AAPL` works. | M | todo |
 | L5.4 | **tdw-table-format** + **tdw-storage-parquet** · export polish (CSV/XLSX/JSON/Parquet from any envelope; `export_directory`-style config). Gates: unit. Done-when: 4 export formats from one result. | S | todo |
 | L5.5 | **new tdw-charting** · server-side chart spec (Plotly-JSON / Vega) on envelope `chart` field; `chart=true` flag; candlestick + line + indicator overlays. Gates: unit (spec snapshot). Done-when: candlestick spec emitted for price/historical. | L | todo |
 | L5.6 | **tdw-mcp** · dynamic tool discovery + per-route exposure config (mcp_config: expose/methods/exclude_args) over the new REST command tree. Gates: integ. Done-when: agent browses categories, activates subset. | M | todo |
 | L5.7 | **tdw-config** (WS2, G005) · per-provider credential registry (`provider → env var + optional config-file key`) with a lookup/`resolve_credential` fn, mirroring the `user_settings.json` `credentials` section. FRED + EIA wired; remaining provider crates still read their own env vars (full migration is follow-up). Preferences (`output_type`, dirs) remain todo. Gates: unit. Done-when: all L2/L3 providers resolve keys via one path. | S | in-progress |
-| L5.8 | **new tdw-widgets** + **tdw-app-server** (WSB1, G007) · OpenBB Workspace bridge: serve `GET /widgets.json`, `GET /apps.json`, `GET /widget-data/{route...}` byte-compatible with the published backends-for-openbb contract, derived automatically from the endpoint catalog (60 Fetch widgets); CORS + optional `X-TDW-API-KEY` auth (fail-closed non-loopback). Env-gated on `TDW_WORKSPACE_BIND`. Compute routes excluded for v1 (follow-up). Gates: integ. Done-when: `widgets.json` parses in Workspace + a widget renders — **done** (derivation + serde round-trips + golden snapshot + e2e in `tdw-service-api/tests/workspace_route_e2e.rs`; manual Workspace interop checklist in `docs/products/openbb-workspace-backend.md`). | L | in-progress |
-| L5.9 | **new tdw-openbb-agent** + **tdw-app-server** (WSB2, G008) · OpenBB Workspace **agent protocol** bridge: make registry agents callable *from* Workspace as custom copilots. Serve `GET /agents.json` (one default copilot) + `POST /v1/query` (the openbb-ai SSE protocol — `reasoning_step` / `message_chunk` / `get_widget_data` / `citations` / `table` / `chart`), a thin transport over the pure `tdw-openbb-agent` mapping crate driving the G016 `StreamingLanguageModel` (offline `StubLanguageModel` by default). Stateless two-request widget-data pattern. CORS + optional `X-TDW-API-KEY` auth reused from the WSB1 family. Gates: integ. Done-when: `agents.json` parses + `POST /query` streams an answer + the two-request widget-data round trip closes — **done** (serde round-trips + golden SSE frames + two-request folding unit tests; e2e in `tdw-service-api/tests/agent_route_e2e.rs`; manual Workspace copilot checklist in `docs/products/openbb-workspace-agent.md`). v1 exposes one copilot (registry projection is a follow-up). | L | in-progress |
+| L5.8 | **new tdw-widgets** + **tdw-app-server** (WSB1, G007) · OpenBB Workspace bridge: serve `GET /widgets.json`, `GET /apps.json`, `GET /widget-data/{route...}` byte-compatible with the published backends-for-openbb contract, derived automatically from the endpoint catalog (60 Fetch widgets); CORS + optional `X-TDW-API-KEY` auth (fail-closed non-loopback). Env-gated on `TDW_WORKSPACE_BIND`. Compute routes excluded for v1 (follow-up). Gates: integ. Done-when: `widgets.json` parses in Workspace + a widget renders — **done** (derivation + serde round-trips + golden snapshot + e2e in `tdw-service-api/tests/workspace_route_e2e.rs`; manual Workspace interop checklist in `docs/products/openbb-workspace-backend.md`). | L | done |
+| L5.9 | **new tdw-openbb-agent** + **tdw-app-server** (WSB2, G008) · OpenBB Workspace **agent protocol** bridge: make registry agents callable *from* Workspace as custom copilots. Serve `GET /agents.json` (one default copilot) + `POST /v1/query` (the openbb-ai SSE protocol — `reasoning_step` / `message_chunk` / `get_widget_data` / `citations` / `table` / `chart`), a thin transport over the pure `tdw-openbb-agent` mapping crate driving the G016 `StreamingLanguageModel` (offline `StubLanguageModel` by default). Stateless two-request widget-data pattern. CORS + optional `X-TDW-API-KEY` auth reused from the WSB1 family. Gates: integ. Done-when: `agents.json` parses + `POST /query` streams an answer + the two-request widget-data round trip closes — **done** (serde round-trips + golden SSE frames + two-request folding unit tests; e2e in `tdw-service-api/tests/agent_route_e2e.rs`; agent listener gated on `TDW_AGENT_BIND`, sharing the `TDW_WORKSPACE_*` CORS/key posture; manual Workspace copilot checklist in `docs/products/openbb-workspace-agent.md`). v1 exposes one copilot (registry projection is a follow-up). | L | done |
 | L5.10 | **tdw-mcp** (WSB3, G009) · make `tdw-mcp` registrable as a Workspace app `mcp_server` and align the widget-citation contract. Configurable Streamable-HTTP origin allow-list via `TDW_MCP_ALLOWED_ORIGINS` (comma-separated exact origins, loopback-default unchanged, `https://pro.openbb.co` opt-in; bearer-token rule untouched); read-only widget-catalog tools `tdw.widgets.list` / `tdw.widgets.describe` / `tdw.apps.list` backed by tdw-widgets; a contract test asserting every widget `mcp_tool.tool_id` resolves to a real tdw-mcp tool. Gates: unit (origin allow-list, widget tools, citation contract). Done-when: `tdw-mcp` registerable as an app `mcp_server` and no widget can cite a nonexistent MCP tool — **done** (tests in `crates/tdw-mcp/src/lib.rs`; registration docs in `docs/products/openbb-workspace-backend.md`). | S | done |
 
 ---
