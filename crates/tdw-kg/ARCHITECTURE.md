@@ -46,8 +46,10 @@ Two tiers per mutation:
 - `manual_merge(source, target, approved_by)` — a REAL merge (A3): unions the
   source's aliases and label onto the target, re-points every source edge at the
   target (duplicates and would-be self-loops drop), tombstones the source
-  (`merged_into` reports its target), and records a `source->target
-  approved_by=…` audit entry. Returns `false` (no-op) for a self-merge, a
+  (`merged_into` reports its target; `live_entities()` excludes it so resolution
+  never matches absorbed aliases), records a traversable `merged_into` audit
+  edge (so `neighbors(source)` surfaces the target — A2 parity), and appends a
+  `source->target approved_by=…` audit log line. Returns `false` (no-op) for a self-merge, a
   missing endpoint, an already-merged source, or an empty/control-bearing
   approver. Approval is mandatory and audited, never silent. Semantics match
   `GraphEngine::merge_entities` so the durable engine swap (A5) is

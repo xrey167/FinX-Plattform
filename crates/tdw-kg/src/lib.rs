@@ -167,6 +167,16 @@ impl KnowledgeGraph {
         self.merged.get(entity_id).map(String::as_str)
     }
 
+    /// Every NON-tombstoned entity, in id order. This is the set entity
+    /// resolution must run over — a tombstoned source still answers
+    /// [`KnowledgeGraph::entity`] for audit purposes but must never win
+    /// resolution again (its aliases were absorbed by the merge target).
+    pub fn live_entities(&self) -> impl Iterator<Item = &Entity> {
+        self.entities
+            .values()
+            .filter(|entity| !self.merged.contains_key(&entity.entity_id))
+    }
+
     #[must_use]
     pub fn neighbors(&self, entity_id: &str) -> Vec<&Entity> {
         let ids = self
@@ -261,8 +271,16 @@ impl KnowledgeGraph {
         }
         self.edges = kept;
 
-        // Tombstone + audit.
+        // Tombstone + audit. The audit is a REAL traversable edge (A2 parity:
+        // `neighbors(source)` surfaces the merge target), plus the human-readable
+        // log line.
         self.merged.insert(source.to_string(), target.to_string());
+        self.edges.push(Relationship {
+            from: source.to_string(),
+            to: target.to_string(),
+            rel_type: "merged_into".to_string(),
+            provenance: format!("manual:{approved_by}"),
+        });
         self.merge_audit
             .push(format!("{source}->{target} approved_by={approved_by}"));
         Some(MergeOutcome {
@@ -464,6 +482,23 @@ mod tests {
         );
         assert!(!kg.manual_merge("instrument:APPLE-DUP", "instrument:AAPL", "architect"));
         assert_eq!(kg.merge_audit().len(), 1, "no duplicate audit entry");
+        // The audit is a TRAVERSABLE edge (A2 parity): the tombstoned source's
+        // only neighbor is its merge target.
+        assert_eq!(
+            kg.neighbors("instrument:APPLE-DUP")
+                .iter()
+                .map(|entity| entity.entity_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["instrument:AAPL"]
+        );
+        // Resolution must run over live entities only: the tombstoned source
+        // is excluded, so its stale aliases can never win resolution again.
+        assert_eq!(
+            kg.live_entities()
+                .map(|entity| entity.entity_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["account:alpha", "instrument:AAPL"]
+        );
         // The account's holds-neighborhood is exactly the target, once.
         assert_eq!(
             kg.neighbors("account:alpha")
