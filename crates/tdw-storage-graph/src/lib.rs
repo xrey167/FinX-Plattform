@@ -7,6 +7,12 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "bolt")]
+pub mod bolt_engine;
+
+#[cfg(feature = "bolt")]
+pub use bolt_engine::BoltGraphEngine;
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Mutex;
 

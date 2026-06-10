@@ -5,13 +5,21 @@ edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+# Real graph database backend over the Bolt protocol (Memgraph primary;
+# Neo4j-compatible by construction). Gated so the default offline build pulls
+# in no neo4rs/tokio-network dependency.
+bolt = ["dep:neo4rs"]
+
 [dependencies]
 async-trait = { workspace = true }
+neo4rs = { workspace = true, optional = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
+tdw-taxonomy = { workspace = true }
 
 [dev-dependencies]
-tdw-taxonomy = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

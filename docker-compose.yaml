@@ -52,6 +52,19 @@ services:
     # curl, or wget), so exec-based probes cannot run. Readiness is checked
     # from outside (CI wait-step curls :6333/healthz from the host).
 
+  # memgraph/memgraph:2.22.1 — pinned stable 2.x; the tdw-storage-graph Bolt
+  # backend (knowledge-system A4) speaks plain Bolt v5 + Cypher, stable across
+  # 2.x. Neo4j works as a drop-in (same Bolt engine); Memgraph is the primary.
+  memgraph:
+    image: memgraph/memgraph:2.22.1
+    profiles: ["full", "live"]
+    ports:
+      - "7687:7687"
+    volumes:
+      - memgraph-data:/var/lib/memgraph
+    # Readiness is checked from outside (Bolt handshake on :7687); the image
+    # ships no curl/wget for exec-based probes.
+
   # getmeili/meilisearch:v1.15.2 — latest stable 1.x release as of 2025-06; the
   # crate talks to the /indexes and /tasks REST API, stable across 1.x.
   meilisearch:
@@ -392,6 +405,7 @@ services:
     restart: "no"
 
 volumes:
+  memgraph-data:
   postgres-data:
   clickhouse-data:
   qdrant-data:

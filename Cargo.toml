@@ -72,6 +72,7 @@ wasmi = "0.31"
 # build deps) so it compiles on Windows CI without a C toolchain.
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "tokio1", "tokio1-rustls-tls", "builder"] }
 
+neo4rs = "0.8"
 tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-taxonomy = { path = "crates/tdw-taxonomy" }
 tdw-config = { path = "crates/tdw-config" }

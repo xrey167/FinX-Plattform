@@ -20,13 +20,16 @@ use tdw_storage_graph::InMemoryGraphEngine;
 
 enum AnyGraph {
     Mem(InMemoryGraphEngine),
-    // A4 adds: #[cfg(feature = "bolt")] Bolt(tdw_storage_graph::BoltGraphEngine),
+    #[cfg(feature = "bolt")]
+    Bolt(tdw_storage_graph::BoltGraphEngine),
 }
 
 impl AnyGraph {
     fn engine(&self) -> &dyn GraphEngine {
         match self {
             Self::Mem(engine) => engine,
+            #[cfg(feature = "bolt")]
+            Self::Bolt(engine) => engine,
         }
     }
 }
@@ -436,4 +439,28 @@ async fn conformance_suite(any: &AnyGraph) {
 #[tokio::test]
 async fn in_memory_engine_meets_the_graph_contract() {
     conformance_suite(&AnyGraph::Mem(InMemoryGraphEngine::default())).await;
+}
+
+/// The Bolt leg (A4): the SAME suite against a real Memgraph/Neo4j server.
+/// Compiles with `--features bolt` and self-skips unless `TDW_BOLT_TEST_URL`
+/// is set (e.g. `bolt://127.0.0.1:7687`), mirroring the Postgres-leg
+/// precedent in `tdw-outbox/tests/conformance.rs`. The target graph is WIPED
+/// per run — point it at a disposable test instance only.
+#[cfg(feature = "bolt")]
+#[tokio::test]
+async fn bolt_engine_meets_the_graph_contract() {
+    let Ok(uri) = std::env::var("TDW_BOLT_TEST_URL") else {
+        eprintln!("TDW_BOLT_TEST_URL unset; skipping bolt conformance leg");
+        return;
+    };
+    let user = std::env::var("TDW_BOLT_TEST_USER").unwrap_or_default();
+    let password = std::env::var("TDW_BOLT_TEST_PASSWORD").unwrap_or_default();
+    let engine = tdw_storage_graph::BoltGraphEngine::connect(&uri, &user, &password)
+        .await
+        .unwrap_or_else(|error| panic!("bolt connect must succeed: {error}"));
+    engine
+        .wipe_for_tests()
+        .await
+        .unwrap_or_else(|error| panic!("bolt wipe must succeed: {error}"));
+    conformance_suite(&AnyGraph::Bolt(engine)).await;
 }
