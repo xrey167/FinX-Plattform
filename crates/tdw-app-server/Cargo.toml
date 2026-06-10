@@ -32,6 +32,14 @@ rest-api-route = ["transport-http"]
 # catalog (via tdw-widgets); widget-data reuses the same policy-guarded fetch
 # seam (RestApiHandler) the REST family uses. Requires transport-http.
 workspace-route = ["transport-http", "rest-api-route", "dep:tdw-widgets", "dep:subtle"]
+# Exposes the OpenBB Workspace *agent protocol* bridge surface: GET
+# /agents.json (the copilot discovery document) and POST /v1/query (the SSE
+# copilot protocol). Like workspace-route, CORS + optional X-TDW-API-KEY auth
+# are stamped at the transport; the agent loop (parse -> map -> drive the
+# StreamingLanguageModel) is delegated through the AgentBridgeHandler trait seam
+# (implemented in tdw-service-api) so this crate stays I/O-only and depends just
+# on the pure tdw-openbb-agent mapping crate. Requires workspace-route.
+agent-route = ["workspace-route", "dep:tdw-openbb-agent"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -42,6 +50,7 @@ tdw-config = { workspace = true }
 tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
 tdw-widgets = { workspace = true, optional = true }
+tdw-openbb-agent = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 hmac = { workspace = true, optional = true }

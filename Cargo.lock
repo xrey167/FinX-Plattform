@@ -4936,6 +4936,7 @@ dependencies = [
  "tdw-bus",
  "tdw-config",
  "tdw-event",
+ "tdw-openbb-agent",
  "tdw-outbox",
  "tdw-protocol",
  "tdw-widgets",
@@ -5447,6 +5448,15 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tdw-openbb-agent"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-llm",
 ]
 
 [[package]]
@@ -6260,6 +6270,7 @@ dependencies = [
  "tdw-llm-anthropic",
  "tdw-llm-openai-compat",
  "tdw-mask",
+ "tdw-openbb-agent",
  "tdw-outbox",
  "tdw-pipe",
  "tdw-protocol",

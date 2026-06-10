@@ -104,6 +104,7 @@ tdw-storage-fs = { path = "crates/tdw-storage-fs" }
 tdw-test-utils = { path = "crates/tdw-test-utils" }
 tdw-service-api = { path = "crates/tdw-service-api" }
 tdw-widgets = { path = "crates/tdw-widgets" }
+tdw-openbb-agent = { path = "crates/tdw-openbb-agent" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -96,6 +96,15 @@ workspace-route = [
     "tdw-service-api/rest-api-route",
     "tdw-app-server/workspace-route",
 ]
+## Serve the OpenBB Workspace *agent protocol* bridge (`GET /agents.json`,
+## `POST /v1/query` SSE copilot) on an env-gated listener (`TDW_AGENT_BIND`).
+## Forwards `tdw-service-api/agent-route` (which provides `AgentBridgeState` and
+## implies `workspace-route`) and `tdw-app-server/agent-route`. Reuses the same
+## CORS + optional `X-TDW-API-KEY` auth as the workspace bridge.
+agent-route = [
+    "tdw-service-api/agent-route",
+    "tdw-app-server/agent-route",
+]
 
 [[bin]]
 name = "tdw-backend"
