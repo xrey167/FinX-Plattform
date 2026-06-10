@@ -64,6 +64,46 @@ pub fn build_embedding_request(
     })
 }
 
+/// Build one batched embeddings request against Gemini's native
+/// `:batchEmbedContents` endpoint (one round-trip embeds every text,
+/// knowledge-system B2). Offline: no network here.
+///
+/// # Errors
+///
+/// Returns an error variant if the key is missing, the model is empty, the
+/// batch is empty, or any input is empty.
+pub fn build_batch_embedding_request(
+    model: &str,
+    inputs: &[String],
+    api_key_present: bool,
+) -> Result<EmbeddingHttpRequest> {
+    if !api_key_present {
+        return Err(GoogleEmbeddingAdapterError::MissingApiKey);
+    }
+    let model = normalize_component(model, GoogleEmbeddingAdapterError::EmptyModel)?;
+    if inputs.is_empty() {
+        return Err(GoogleEmbeddingAdapterError::EmptyInput);
+    }
+    let requests = inputs
+        .iter()
+        .map(|input| {
+            normalize_component(input, GoogleEmbeddingAdapterError::EmptyInput).map(|input| {
+                json!({
+                    "model": format!("models/{model}"),
+                    "content": { "parts": [{ "text": input }] }
+                })
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(EmbeddingHttpRequest {
+        provider: PROVIDER_ID,
+        base_url: DEFAULT_BASE_URL.to_string(),
+        path: format!("/models/{model}:batchEmbedContents"),
+        api_key_required: true,
+        body: json!({ "requests": requests }),
+    })
+}
+
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
@@ -92,6 +132,25 @@ fn normalize_component(value: &str, error: GoogleEmbeddingAdapterError) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_batch_request_against_native_endpoint() {
+        let inputs = vec!["macro note".to_string(), "equity note".to_string()];
+        let request = build_batch_embedding_request("gemini-embedding-001", &inputs, true)
+            .unwrap_or_else(|error| panic!("batch request should build: {error}"));
+        assert!(request.path.ends_with(":batchEmbedContents"));
+        assert_eq!(request.body["requests"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            request.body["requests"][1]["content"]["parts"][0]["text"],
+            "equity note"
+        );
+        assert!(build_batch_embedding_request("model", &[], true).is_err());
+        assert!(
+            build_batch_embedding_request("model", &["ok".to_string(), " ".to_string()], true)
+                .is_err()
+        );
+        assert!(build_batch_embedding_request("model", &inputs, false).is_err());
+    }
 
     #[test]
     fn builds_request_and_decodes_vector_without_network_call() {

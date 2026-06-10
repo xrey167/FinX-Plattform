@@ -34,6 +34,54 @@ pub trait EmbeddingProvider: Send + Sync {
     ///
     /// Returns an error variant if the underlying operation fails.
     async fn embed(&self, text: &str) -> Result<Embedding>;
+
+    /// Embed many texts, preserving input order (knowledge-system B2).
+    ///
+    /// The default implementation loops over [`EmbeddingProvider::embed`], so
+    /// every provider gets batching for free; providers with a native batch
+    /// endpoint (`OpenAI`, Google) override this with one round-trip. The
+    /// contract every implementation must hold — enforced by
+    /// [`validate_batch`] — is: the result has exactly one embedding per
+    /// input, in input order, and each embedding passes
+    /// [`validate_embedding`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbeddingError::EmptyInput`] for an empty batch (every
+    /// implementation must reject it — the native provider endpoints do, and
+    /// the contract is uniform), or an error if any input is empty, any
+    /// underlying embed fails, or the batch contract is violated.
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Embedding>> {
+        if texts.is_empty() {
+            return Err(EmbeddingError::EmptyInput);
+        }
+        let mut embeddings = Vec::with_capacity(texts.len());
+        for text in texts {
+            embeddings.push(self.embed(text).await?);
+        }
+        validate_batch(texts, &embeddings)?;
+        Ok(embeddings)
+    }
+}
+
+/// The batch contract: exactly one valid embedding per input.
+///
+/// # Errors
+///
+/// Returns [`EmbeddingError::Provider`] on a length mismatch, or the first
+/// per-embedding validation failure.
+pub fn validate_batch(texts: &[String], embeddings: &[Embedding]) -> Result<()> {
+    if embeddings.len() != texts.len() {
+        return Err(EmbeddingError::Provider(format!(
+            "batch length mismatch: {} inputs, {} embeddings",
+            texts.len(),
+            embeddings.len()
+        )));
+    }
+    for embedding in embeddings {
+        validate_embedding(embedding)?;
+    }
+    Ok(())
 }
 
 /// # Errors
@@ -73,6 +121,55 @@ mod tests {
                 vector: vec![1.0],
             })
         }
+    }
+
+    #[tokio::test]
+    async fn default_embed_batch_loops_in_order_and_validates() {
+        let provider = ConstantProvider;
+        let texts = vec!["alpha".to_string(), "beta".to_string()];
+        let embeddings = provider
+            .embed_batch(&texts)
+            .await
+            .unwrap_or_else(|error| panic!("batch should embed: {error}"));
+        assert_eq!(embeddings.len(), 2);
+        assert!(embeddings.iter().all(|e| e.model_id == "constant"));
+
+        // An empty BATCH is rejected up front — uniform with the native
+        // provider endpoints, which also reject it.
+        assert!(matches!(
+            provider.embed_batch(&[]).await,
+            Err(EmbeddingError::EmptyInput)
+        ));
+        // An empty input inside the batch fails through the per-text path.
+        assert!(
+            provider
+                .embed_batch(&["ok".to_string(), String::new()])
+                .await
+                .is_err()
+        );
+        // The shared contract validator rejects length mismatches and bad vectors.
+        let good = Embedding {
+            model_id: "constant".to_string(),
+            vector: vec![1.0],
+        };
+        assert!(
+            validate_batch(&texts, std::slice::from_ref(&good)).is_err(),
+            "mismatch"
+        );
+        assert!(
+            validate_batch(
+                &texts,
+                &[
+                    good,
+                    Embedding {
+                        model_id: "constant".to_string(),
+                        vector: vec![f32::NAN],
+                    },
+                ],
+            )
+            .is_err(),
+            "non-finite member"
+        );
     }
 
     #[tokio::test]

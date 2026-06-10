@@ -117,6 +117,36 @@ impl OpenAiEmbeddingHttpClient {
         let envelope: EmbeddingsEnvelope = response.json().await?;
         parse_response(&self.model_id, envelope)
     }
+
+    /// Post every input in ONE `POST /v1/embeddings` round-trip (the API's
+    /// native array form) and decode the vectors back in input order
+    /// (knowledge-system B2).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an invalid batch, transport failure, non-success
+    /// status, or a response whose entry count differs from the input count.
+    pub async fn embed_batch(
+        &self,
+        inputs: &[String],
+    ) -> Result<Vec<Embedding>, OpenAiEmbeddingHttpError> {
+        let request = crate::build_batch_embedding_request(&self.model_id, inputs, true)?;
+        let response = self
+            .client
+            .post(embeddings_url(&self.base_url)?)
+            .bearer_auth(&self.api_key)
+            .header("content-type", "application/json")
+            .json(&request.body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(OpenAiEmbeddingHttpError::Http { status, body });
+        }
+        let envelope: EmbeddingsEnvelope = response.json().await?;
+        parse_batch_response(&self.model_id, envelope, inputs.len())
+    }
 }
 
 /// Bridge the real OpenAI HTTP client onto the workspace
@@ -134,6 +164,16 @@ impl EmbeddingProvider for OpenAiEmbeddingHttpClient {
         OpenAiEmbeddingHttpClient::embed(self, text)
             .await
             .map_err(|error| EmbeddingError::Provider(error.to_string()))
+    }
+
+    /// Native batch override (B2): one HTTP round-trip instead of the default
+    /// per-text loop, then the shared batch-contract validation.
+    async fn embed_batch(&self, texts: &[String]) -> tdw_embed::Result<Vec<Embedding>> {
+        let embeddings = OpenAiEmbeddingHttpClient::embed_batch(self, texts)
+            .await
+            .map_err(|error| EmbeddingError::Provider(error.to_string()))?;
+        tdw_embed::validate_batch(texts, &embeddings)?;
+        Ok(embeddings)
     }
 }
 
@@ -197,6 +237,48 @@ pub(crate) struct EmbeddingsEnvelope {
 #[derive(Deserialize)]
 pub(crate) struct EmbeddingData {
     embedding: Vec<f32>,
+    /// Position of this entry's input in the request batch. OpenAI documents
+    /// entries in order but indexes them explicitly; sorting by `index` makes
+    /// input-order pairing robust rather than assumed.
+    #[serde(default)]
+    index: usize,
+}
+
+/// Parse a batched envelope back into input-ordered embeddings, enforcing the
+/// batch contract (entry count == input count) before any decode.
+pub(crate) fn parse_batch_response(
+    model_id: &str,
+    envelope: EmbeddingsEnvelope,
+    expected: usize,
+) -> Result<Vec<Embedding>, OpenAiEmbeddingHttpError> {
+    if envelope.data.len() != expected {
+        return Err(OpenAiEmbeddingHttpError::InvalidResponse(format!(
+            "openai batch response had {} entries for {} inputs",
+            envelope.data.len(),
+            expected
+        )));
+    }
+    let mut data = envelope.data;
+    data.sort_by_key(|entry| entry.index);
+    // The sorted indexes must be exactly 0..n: a missing, duplicate, or sparse
+    // index set would otherwise decode into the WRONG caller slots silently —
+    // mis-pairing is corruption, so it is a loud contract violation instead.
+    if let Some(position) = data
+        .iter()
+        .enumerate()
+        .find(|(position, entry)| *position != entry.index)
+    {
+        return Err(OpenAiEmbeddingHttpError::InvalidResponse(format!(
+            "openai batch response indexes are not the permutation 0..{expected}: \
+             found index {} at position {}",
+            position.1.index, position.0
+        )));
+    }
+    data.into_iter()
+        .map(|entry| {
+            decode_embedding(model_id, entry.embedding).map_err(OpenAiEmbeddingHttpError::Adapter)
+        })
+        .collect()
 }
 
 /// Parse an OpenAI embeddings envelope into the workspace
@@ -222,6 +304,73 @@ pub(crate) fn parse_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_response_sorts_by_index_and_enforces_count() {
+        // Entries arrive out of order; index pairing restores input order.
+        let envelope = EmbeddingsEnvelope {
+            data: vec![
+                EmbeddingData {
+                    embedding: vec![0.2],
+                    index: 1,
+                },
+                EmbeddingData {
+                    embedding: vec![0.1],
+                    index: 0,
+                },
+            ],
+        };
+        let embeddings = parse_batch_response("text-embedding-3-small", envelope, 2)
+            .unwrap_or_else(|error| panic!("batch should parse: {error}"));
+        assert_eq!(embeddings[0].vector, vec![0.1]);
+        assert_eq!(embeddings[1].vector, vec![0.2]);
+
+        // A short response is a contract violation, not a silent truncation.
+        let short = EmbeddingsEnvelope {
+            data: vec![EmbeddingData {
+                embedding: vec![0.1],
+                index: 0,
+            }],
+        };
+        assert!(matches!(
+            parse_batch_response("text-embedding-3-small", short, 2),
+            Err(OpenAiEmbeddingHttpError::InvalidResponse(_))
+        ));
+    }
+
+    #[test]
+    fn batch_response_rejects_duplicate_and_sparse_indexes() {
+        // Duplicate ([0,0]) and sparse ([0,2]) index sets pass a bare count
+        // check but would decode into the WRONG caller slots — both must be
+        // loud contract violations, never silent mis-pairing.
+        for indexes in [[0_usize, 0], [0, 2]] {
+            let envelope = EmbeddingsEnvelope {
+                data: indexes
+                    .iter()
+                    .map(|&index| EmbeddingData {
+                        embedding: vec![0.1],
+                        index,
+                    })
+                    .collect(),
+            };
+            assert!(
+                matches!(
+                    parse_batch_response("text-embedding-3-small", envelope, 2),
+                    Err(OpenAiEmbeddingHttpError::InvalidResponse(_))
+                ),
+                "indexes {indexes:?} must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn trait_embed_batch_rejects_empty_batch_before_any_request() {
+        use tdw_embed::EmbeddingProvider;
+        let client = OpenAiEmbeddingHttpClient::new("sk-test", "text-embedding-3-small")
+            .unwrap_or_else(|error| panic!("client should build: {error}"));
+        // No server exists; the empty batch must fail in the builder, offline.
+        assert!(EmbeddingProvider::embed_batch(&client, &[]).await.is_err());
+    }
 
     #[test]
     fn authenticated_constructor_rejects_empty_key_and_model_and_redacts_debug() {
@@ -311,11 +460,13 @@ mod tests {
         let empty = EmbeddingsEnvelope {
             data: vec![EmbeddingData {
                 embedding: Vec::new(),
+                index: 0,
             }],
         };
         let non_finite = EmbeddingsEnvelope {
             data: vec![EmbeddingData {
                 embedding: vec![f32::NAN],
+                index: 0,
             }],
         };
 

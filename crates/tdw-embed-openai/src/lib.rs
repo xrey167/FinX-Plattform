@@ -63,6 +63,42 @@ pub fn build_embedding_request(
     })
 }
 
+/// Build one batched embeddings request — the native form of
+/// [`build_embedding_request`] (`input` is a JSON array; one round-trip embeds
+/// every text, knowledge-system B2). Offline: no network here.
+///
+/// # Errors
+///
+/// Returns an error variant if the key is missing, the model is empty, the
+/// batch is empty, or any input is empty.
+pub fn build_batch_embedding_request(
+    model: &str,
+    inputs: &[String],
+    api_key_present: bool,
+) -> Result<EmbeddingHttpRequest> {
+    if !api_key_present {
+        return Err(OpenAiEmbeddingAdapterError::MissingApiKey);
+    }
+    let model = normalize_component(model, OpenAiEmbeddingAdapterError::EmptyModel)?;
+    if inputs.is_empty() {
+        return Err(OpenAiEmbeddingAdapterError::EmptyInput);
+    }
+    let inputs = inputs
+        .iter()
+        .map(|input| normalize_component(input, OpenAiEmbeddingAdapterError::EmptyInput))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(EmbeddingHttpRequest {
+        provider: PROVIDER_ID,
+        base_url: DEFAULT_BASE_URL.to_string(),
+        path: EMBEDDINGS_PATH,
+        bearer_token_required: true,
+        body: json!({
+            "model": model,
+            "input": inputs
+        }),
+    })
+}
+
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
@@ -108,5 +144,22 @@ mod tests {
         assert!(build_embedding_request("model", "", true).is_err());
         assert!(decode_embedding("model", Vec::new()).is_err());
         assert!(decode_embedding("model", vec![f32::NAN]).is_err());
+    }
+
+    #[test]
+    fn builds_batch_request_with_array_input() {
+        let inputs = vec!["macro note".to_string(), "equity note".to_string()];
+        let request = build_batch_embedding_request("text-embedding-3-small", &inputs, true)
+            .unwrap_or_else(|error| panic!("batch request should build: {error}"));
+        assert_eq!(
+            request.body["input"],
+            serde_json::json!(["macro note", "equity note"])
+        );
+        assert!(build_batch_embedding_request("model", &[], true).is_err());
+        assert!(
+            build_batch_embedding_request("model", &["ok".to_string(), "  ".to_string()], true)
+                .is_err()
+        );
+        assert!(build_batch_embedding_request("model", &inputs, false).is_err());
     }
 }

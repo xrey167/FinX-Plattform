@@ -119,6 +119,36 @@ impl GoogleEmbeddingHttpClient {
         let envelope: EmbedContentEnvelope = response.json().await?;
         parse_response(&self.model_id, envelope)
     }
+
+    /// Post every input in ONE `:batchEmbedContents` round-trip (Gemini's
+    /// native batch endpoint; the response carries embeddings in request
+    /// order) and decode them (knowledge-system B2).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on an invalid batch, transport failure, non-success
+    /// status, or a response whose entry count differs from the input count.
+    pub async fn embed_batch(
+        &self,
+        inputs: &[String],
+    ) -> Result<Vec<Embedding>, GoogleEmbeddingHttpError> {
+        let request = crate::build_batch_embedding_request(&self.model_id, inputs, true)?;
+        let response = self
+            .client
+            .post(batch_embed_contents_url(&self.base_url, &self.model_id)?)
+            .header("x-goog-api-key", &self.api_key)
+            .header("content-type", "application/json")
+            .json(&request.body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(GoogleEmbeddingHttpError::Http { status, body });
+        }
+        let envelope: BatchEmbedContentsEnvelope = response.json().await?;
+        parse_batch_response(&self.model_id, envelope, inputs.len())
+    }
 }
 
 /// Bridge the real Gemini HTTP client onto the workspace
@@ -136,6 +166,16 @@ impl EmbeddingProvider for GoogleEmbeddingHttpClient {
         GoogleEmbeddingHttpClient::embed(self, text)
             .await
             .map_err(|error| EmbeddingError::Provider(error.to_string()))
+    }
+
+    /// Native batch override (B2): one HTTP round-trip instead of the default
+    /// per-text loop, then the shared batch-contract validation.
+    async fn embed_batch(&self, texts: &[String]) -> tdw_embed::Result<Vec<Embedding>> {
+        let embeddings = GoogleEmbeddingHttpClient::embed_batch(self, texts)
+            .await
+            .map_err(|error| EmbeddingError::Provider(error.to_string()))?;
+        tdw_embed::validate_batch(texts, &embeddings)?;
+        Ok(embeddings)
     }
 }
 
@@ -181,6 +221,15 @@ fn embed_content_url(base_url: &Url, model_id: &str) -> Result<Url, GoogleEmbedd
     let mut url = base_url.clone();
     let path = url.path().trim_end_matches('/');
     let path = if path.ends_with(":embedContent") {
+        // A base URL that pins a full endpoint also pins a MODEL. Reject a
+        // pinned model that differs from the client's `model_id`: requests
+        // would hit one model while returned embeddings get stamped with
+        // another, silently corrupting per-model collection routing downstream.
+        if !path.ends_with(&format!("/models/{model_id}:embedContent")) {
+            return Err(GoogleEmbeddingHttpError::InvalidBaseUrl(format!(
+                "base url pins endpoint {path:?}, which is not model {model_id:?}"
+            )));
+        }
         path.to_string()
     } else if path.ends_with("/v1beta") || path.ends_with("/v1") {
         format!("{path}/models/{model_id}:embedContent")
@@ -224,9 +273,101 @@ pub(crate) fn parse_response(
     decode_embedding(model_id, vector).map_err(GoogleEmbeddingHttpError::Adapter)
 }
 
+fn batch_embed_contents_url(
+    base_url: &Url,
+    model_id: &str,
+) -> Result<Url, GoogleEmbeddingHttpError> {
+    // Same normalization as the single-embed endpoint, targeting the native
+    // batch verb instead.
+    let url = embed_content_url(base_url, model_id)?;
+    let mut url = url;
+    let path = url
+        .path()
+        .strip_suffix(":embedContent")
+        .map(|prefix| format!("{prefix}:batchEmbedContents"))
+        .ok_or_else(|| {
+            GoogleEmbeddingHttpError::InvalidBaseUrl(
+                "could not derive batchEmbedContents endpoint".to_string(),
+            )
+        })?;
+    url.set_path(&path);
+    Ok(url)
+}
+
+#[derive(Deserialize)]
+pub(crate) struct BatchEmbedContentsEnvelope {
+    #[serde(default)]
+    embeddings: Vec<ContentEmbedding>,
+}
+
+/// Parse a batched envelope back into input-ordered embeddings (Gemini returns
+/// them in request order), enforcing the batch contract (entry count == input
+/// count) before any decode.
+pub(crate) fn parse_batch_response(
+    model_id: &str,
+    envelope: BatchEmbedContentsEnvelope,
+    expected: usize,
+) -> Result<Vec<Embedding>, GoogleEmbeddingHttpError> {
+    if envelope.embeddings.len() != expected {
+        return Err(GoogleEmbeddingHttpError::InvalidResponse(format!(
+            "google batch response had {} embeddings for {} inputs",
+            envelope.embeddings.len(),
+            expected
+        )));
+    }
+    envelope
+        .embeddings
+        .into_iter()
+        .map(|embedding| {
+            decode_embedding(model_id, embedding.values).map_err(GoogleEmbeddingHttpError::Adapter)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_url_targets_native_endpoint_and_response_enforces_count() {
+        let base = parse_base_url(crate::DEFAULT_BASE_URL)
+            .unwrap_or_else(|error| panic!("base should parse: {error}"));
+        let url = batch_embed_contents_url(&base, "gemini-embedding-001")
+            .unwrap_or_else(|error| panic!("batch url should derive: {error}"));
+        assert!(
+            url.path()
+                .ends_with("/models/gemini-embedding-001:batchEmbedContents")
+        );
+
+        let envelope = BatchEmbedContentsEnvelope {
+            embeddings: vec![
+                ContentEmbedding { values: vec![0.1] },
+                ContentEmbedding { values: vec![0.2] },
+            ],
+        };
+        let embeddings = parse_batch_response("gemini-embedding-001", envelope, 2)
+            .unwrap_or_else(|error| panic!("batch should parse: {error}"));
+        assert_eq!(embeddings.len(), 2);
+        assert_eq!(embeddings[1].vector, vec![0.2]);
+
+        // A short response is a contract violation, not a silent truncation.
+        let short = BatchEmbedContentsEnvelope {
+            embeddings: vec![ContentEmbedding { values: vec![0.1] }],
+        };
+        assert!(matches!(
+            parse_batch_response("gemini-embedding-001", short, 2),
+            Err(GoogleEmbeddingHttpError::InvalidResponse(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn trait_embed_batch_rejects_empty_batch_before_any_request() {
+        use tdw_embed::EmbeddingProvider;
+        let client = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+            .unwrap_or_else(|error| panic!("client should build: {error}"));
+        // No server exists; the empty batch must fail in the builder, offline.
+        assert!(EmbeddingProvider::embed_batch(&client, &[]).await.is_err());
+    }
 
     #[test]
     fn authenticated_constructor_rejects_empty_key_and_model_and_redacts_debug() {
@@ -257,12 +398,25 @@ mod tests {
             .unwrap_or_else(|error| panic!("client should build: {error}"))
             .with_base_url("https://generativelanguage.googleapis.com/v1beta")
             .unwrap_or_else(|error| panic!("base url should parse: {error}"));
-        let full_endpoint = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+        // A full pinned endpoint is accepted only when it pins THIS client's
+        // model — a different pinned model would silently stamp returned
+        // embeddings with the wrong identity.
+        let full_endpoint = GoogleEmbeddingHttpClient::new("AIza-test", "custom-embedding")
             .unwrap_or_else(|error| panic!("client should build: {error}"))
             .with_base_url(
                 "https://gateway.example.test/v1beta/models/custom-embedding:embedContent",
             )
             .unwrap_or_else(|error| panic!("base url should parse: {error}"));
+        let mismatched = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+            .unwrap_or_else(|error| panic!("client should build: {error}"))
+            .with_base_url(
+                "https://gateway.example.test/v1beta/models/custom-embedding:embedContent",
+            )
+            .unwrap_or_else(|error| panic!("base url should parse: {error}"));
+        assert!(matches!(
+            embed_content_url(&mismatched.base_url, mismatched.model_id()),
+            Err(GoogleEmbeddingHttpError::InvalidBaseUrl(_))
+        ));
 
         assert_eq!(
             embed_content_url(&api_root.base_url, api_root.model_id())
