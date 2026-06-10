@@ -641,11 +641,13 @@ fn embed_model(default: &str) -> String {
 #[cfg(feature = "openai")]
 fn build_openai_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
     let Some(api_key) = first_env(&["TDW_OPENAI_EMBEDDING_API_KEY", "OPENAI_API_KEY"]) else {
-        eprintln!(
-            "tdw-backend: TDW_EMBED_PROVIDER=openai but no API key \
-             (TDW_OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY); using the offline hash embedder"
-        );
-        return Ok(Arc::new(HashEmbeddingProvider::default()));
+        // No silent fallback (B6): a requested provider without its key is a
+        // boot error, not a quiet semantic switch to the hash embedder.
+        return Err(BackendError::Init(
+            "openai embedder requested but no API key is set \
+             (TDW_OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY)"
+                .to_string(),
+        ));
     };
     let mut client = tdw_embed_openai::OpenAiEmbeddingHttpClient::new(
         api_key,
@@ -667,12 +669,12 @@ fn build_google_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
     ]) else {
-        eprintln!(
-            "tdw-backend: TDW_EMBED_PROVIDER=google but no API key \
-             (TDW_GOOGLE_EMBEDDING_API_KEY / GOOGLE_API_KEY / GEMINI_API_KEY); \
-             using the offline hash embedder"
-        );
-        return Ok(Arc::new(HashEmbeddingProvider::default()));
+        // No silent fallback (B6) — same posture as the openai arm.
+        return Err(BackendError::Init(
+            "google embedder requested but no API key is set \
+             (TDW_GOOGLE_EMBEDDING_API_KEY / GOOGLE_API_KEY / GEMINI_API_KEY)"
+                .to_string(),
+        ));
     };
     let mut client = tdw_embed_google::GoogleEmbeddingHttpClient::new(
         api_key,
