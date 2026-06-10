@@ -5595,6 +5595,7 @@ name = "tdw-tag-rules"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-tags",
  "thiserror 2.0.18",
 ]

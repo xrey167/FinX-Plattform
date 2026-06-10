@@ -1404,7 +1404,12 @@ pub fn kg_tag_sample() -> Result<Value> {
         }])
         .map_err(|error| Error::Provider(error.to_string()))?;
     let rule_assignments = rules
-        .apply(&instrument.entity_id, "AAPL momentum", &mut tags)
+        .apply(
+            &instrument.entity_id,
+            "AAPL momentum",
+            "2026-05-21",
+            &mut tags,
+        )
         .map_err(|error| Error::Provider(error.to_string()))?;
 
     let mut features = BTreeMap::new();
@@ -1460,17 +1465,20 @@ pub fn llm_knowledge_sample() -> Result<Value> {
         .map_err(|error| Error::Provider(error.to_string()))?;
 
     let mut index = KnowledgeIndex::default();
-    block_on(index.index_document(KnowledgeDocument {
-        id: "doc-1".to_string(),
-        body: "AAPL equity momentum research".to_string(),
-        entity: Entity {
-            entity_id: "instrument:AAPL".to_string(),
-            kind: EntityKind::Instrument,
-            label: "Apple".to_string(),
-            aliases: vec!["AAPL".to_string()],
+    block_on(index.index_document_at(
+        KnowledgeDocument {
+            id: "doc-1".to_string(),
+            body: "AAPL equity momentum research".to_string(),
+            entity: Entity {
+                entity_id: "instrument:AAPL".to_string(),
+                kind: EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: vec!["AAPL".to_string()],
+            },
+            tags: vec!["asset:equity".to_string()],
         },
-        tags: vec!["asset:equity".to_string()],
-    }))
+        "2026-05-22",
+    ))
     .map_err(|error| Error::Provider(error.to_string()))?;
     let hits = block_on(index.search("AAPL momentum", 1))
         .map_err(|error| Error::Provider(error.to_string()))?;

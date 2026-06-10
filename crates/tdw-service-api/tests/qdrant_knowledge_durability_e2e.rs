@@ -64,7 +64,7 @@ async fn e2e_real_qdrant_knowledge_persists_across_index_instances() {
             state.vector.clone(),
         );
         index
-            .index_document(document)
+            .index_document_at(document, "2026-05-22")
             .await
             .unwrap_or_else(|error| panic!("index against live Qdrant must succeed: {error}"));
     } // index (and its Arc clone of the engine) dropped here.

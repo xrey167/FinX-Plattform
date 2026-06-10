@@ -457,9 +457,11 @@ impl Backend {
 
     // --- Knowledge index (async, behind a per-call mutex) ------------------
 
-    /// Index a [`KnowledgeDocument`] into the embedded knowledge index.
+    /// Index a [`KnowledgeDocument`] effective `now` (a `YYYY-MM-DD` date) into
+    /// the embedded knowledge index — the deterministic, injected-clock seam
+    /// (knowledge-system B3).
     ///
-    /// The index mutex is acquired, the single async `index_document` call is
+    /// The index mutex is acquired, the single async `index_document_at` call is
     /// awaited, and the guard is dropped — it is never held across unrelated
     /// awaits.
     ///
@@ -467,11 +469,24 @@ impl Backend {
     ///
     /// Returns [`BackendError::Knowledge`] if the document is invalid or an
     /// embedding/storage/tag step fails.
-    pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
+    pub async fn knowledge_index_at(&self, doc: KnowledgeDocument, now: &str) -> BackendResult<()> {
         let mut index = self.index.lock().await;
-        index.index_document(doc).await?;
+        index.index_document_at(doc, now).await?;
         drop(index);
         Ok(())
+    }
+
+    /// Wall-clock convenience over [`Backend::knowledge_index_at`]: stamps tag
+    /// assignments with today's UTC date. Only this live edge reads the clock,
+    /// mirroring the consolidation-scheduler precedent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the document is invalid or an
+    /// embedding/storage/tag step fails.
+    pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        self.knowledge_index_at(doc, &today).await
     }
 
     /// Search the embedded knowledge index for the `top_k` nearest hits to

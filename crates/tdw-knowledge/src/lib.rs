@@ -115,10 +115,19 @@ impl KnowledgeIndex {
         }
     }
 
+    /// Index a document, stamping its tag assignments effective `now` (a
+    /// `YYYY-MM-DD` date). `now` is injected — nothing here reads a clock — so
+    /// indexing is deterministic in tests and honest in production (the previous
+    /// implementation hardcoded a build-era date, knowledge-system B3).
+    ///
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
-    pub async fn index_document(&mut self, document: KnowledgeDocument) -> Result<()> {
+    pub async fn index_document_at(
+        &mut self,
+        document: KnowledgeDocument,
+        now: &str,
+    ) -> Result<()> {
         validate_document(&document)?;
         let embedding = self
             .embedder
@@ -144,7 +153,7 @@ impl KnowledgeIndex {
                 .assign(TagAssignment {
                     entity_id: document.entity.entity_id.clone(),
                     tag_id: tag.clone(),
-                    assigned_at: "2026-05-22".to_string(),
+                    assigned_at: now.to_string(),
                     expires_at: None,
                     provenance: "tdw-knowledge:index".to_string(),
                 })
@@ -316,17 +325,20 @@ mod tests {
     async fn indexes_and_searches_embedded_knowledge() {
         let mut index = KnowledgeIndex::default();
         index
-            .index_document(KnowledgeDocument {
-                id: "doc-1".to_string(),
-                body: "AAPL equity momentum research".to_string(),
-                entity: Entity {
-                    entity_id: "instrument:AAPL".to_string(),
-                    kind: EntityKind::Instrument,
-                    label: "Apple".to_string(),
-                    aliases: vec!["AAPL".to_string()],
+            .index_document_at(
+                KnowledgeDocument {
+                    id: "doc-1".to_string(),
+                    body: "AAPL equity momentum research".to_string(),
+                    entity: Entity {
+                        entity_id: "instrument:AAPL".to_string(),
+                        kind: EntityKind::Instrument,
+                        label: "Apple".to_string(),
+                        aliases: vec!["AAPL".to_string()],
+                    },
+                    tags: vec!["asset:equity".to_string()],
                 },
-                tags: vec!["asset:equity".to_string()],
-            })
+                "2026-05-22",
+            )
             .await
             .unwrap_or_else(|error| panic!("index succeeds: {error}"));
 
@@ -354,17 +366,20 @@ mod tests {
             Arc::new(InMemoryVectorEngine::default()),
         );
         index
-            .index_document(KnowledgeDocument {
-                id: "doc-inject".to_string(),
-                body: "AAPL equity momentum research".to_string(),
-                entity: Entity {
-                    entity_id: "instrument:AAPL".to_string(),
-                    kind: EntityKind::Instrument,
-                    label: "Apple".to_string(),
-                    aliases: vec!["AAPL".to_string()],
+            .index_document_at(
+                KnowledgeDocument {
+                    id: "doc-inject".to_string(),
+                    body: "AAPL equity momentum research".to_string(),
+                    entity: Entity {
+                        entity_id: "instrument:AAPL".to_string(),
+                        kind: EntityKind::Instrument,
+                        label: "Apple".to_string(),
+                        aliases: vec!["AAPL".to_string()],
+                    },
+                    tags: vec!["asset:equity".to_string()],
                 },
-                tags: vec!["asset:equity".to_string()],
-            })
+                "2026-05-22",
+            )
             .await
             .unwrap_or_else(|error| panic!("injected index should index: {error}"));
 
@@ -442,7 +457,7 @@ mod tests {
         };
 
         let error = index
-            .index_document(document)
+            .index_document_at(document, "2026-05-22")
             .await
             .expect_err("invalid document id should fail");
         assert!(matches!(error, KnowledgeError::InvalidDocumentField("id")));

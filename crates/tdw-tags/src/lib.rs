@@ -104,6 +104,47 @@ impl TagStore {
             .collect()
     }
 
+    /// All transitive descendants of `tag_id` (children, grandchildren, …),
+    /// sorted; empty for a leaf or unknown tag. Used for taxonomy subsumption:
+    /// a query for `asset:equity` also matches entities tagged with any
+    /// descendant (knowledge-system B3).
+    #[must_use]
+    pub fn descendants(&self, tag_id: &str) -> Vec<String> {
+        let mut found = BTreeSet::new();
+        let mut frontier = vec![tag_id.to_string()];
+        while let Some(current) = frontier.pop() {
+            for (child_id, definition) in &self.definitions {
+                if definition.parent.as_deref() == Some(current.as_str())
+                    && found.insert(child_id.clone())
+                {
+                    frontier.push(child_id.clone());
+                }
+            }
+        }
+        found.into_iter().collect()
+    }
+
+    /// Entities holding `tag_id` active at `as_of` (same `[assigned_at,
+    /// expires_at)` semantics as [`TagStore::active_tags`]), deduplicated and
+    /// sorted. The tag-channel source for hybrid retrieval (knowledge-system B3).
+    #[must_use]
+    pub fn entities_with_tag(&self, tag_id: &str, as_of: &str) -> Vec<String> {
+        self.assignments
+            .iter()
+            .filter(|assignment| assignment.tag_id == tag_id)
+            .filter(|assignment| assignment.assigned_at.as_str() <= as_of)
+            .filter(|assignment| {
+                assignment
+                    .expires_at
+                    .as_deref()
+                    .is_none_or(|expires| expires > as_of)
+            })
+            .map(|assignment| assignment.entity_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     #[must_use]
     pub fn taxonomy_stats(&self) -> BTreeMap<String, usize> {
         let mut stats = BTreeMap::new();
@@ -225,6 +266,72 @@ mod tests {
         );
         assert_eq!(store.taxonomy_stats().get("style:momentum"), Some(&1));
         assert_eq!(store.assignments()[0].provenance, "rule:price_momentum");
+    }
+
+    #[test]
+    fn descendants_walk_the_taxonomy_and_entities_with_tag_respects_windows() {
+        let mut store = TagStore::default();
+        for (tag, parent) in [
+            ("asset:any", None),
+            ("asset:equity", Some("asset:any")),
+            ("asset:crypto", Some("asset:any")),
+            ("asset:equity-us", Some("asset:equity")),
+        ] {
+            store
+                .define(TagDefinition {
+                    tag_id: tag.to_string(),
+                    parent: parent.map(ToString::to_string),
+                    ttl_days: None,
+                })
+                .unwrap_or_else(|error| panic!("{tag} should define: {error}"));
+        }
+
+        // Transitive, sorted, leaf/unknown-safe.
+        assert_eq!(
+            store.descendants("asset:any"),
+            vec![
+                "asset:crypto".to_string(),
+                "asset:equity".to_string(),
+                "asset:equity-us".to_string(),
+            ]
+        );
+        assert_eq!(
+            store.descendants("asset:equity"),
+            vec!["asset:equity-us".to_string()]
+        );
+        assert!(store.descendants("asset:equity-us").is_empty());
+        assert!(store.descendants("asset:unknown").is_empty());
+
+        // entities_with_tag: active-window filtering, dedup, sorted.
+        for (entity, assigned, expires) in [
+            ("instrument:AAPL", "2026-01-01", None),
+            ("instrument:MSFT", "2026-01-01", Some("2026-02-01")),
+            ("instrument:AAPL", "2026-03-01", None), // duplicate entity, second window
+        ] {
+            store
+                .assign(TagAssignment {
+                    entity_id: entity.to_string(),
+                    tag_id: "asset:equity".to_string(),
+                    assigned_at: assigned.to_string(),
+                    expires_at: expires.map(ToString::to_string),
+                    provenance: "fixture".to_string(),
+                })
+                .unwrap_or_else(|error| panic!("{entity} should assign: {error}"));
+        }
+        assert_eq!(
+            store.entities_with_tag("asset:equity", "2026-01-15"),
+            vec!["instrument:AAPL".to_string(), "instrument:MSFT".to_string()]
+        );
+        assert_eq!(
+            store.entities_with_tag("asset:equity", "2026-06-01"),
+            vec!["instrument:AAPL".to_string()],
+            "expired MSFT window must drop; duplicate AAPL must dedup"
+        );
+        assert!(
+            store
+                .entities_with_tag("asset:crypto", "2026-01-15")
+                .is_empty()
+        );
     }
 
     #[test]

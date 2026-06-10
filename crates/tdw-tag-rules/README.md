@@ -47,7 +47,7 @@ engine.hot_reload(vec![TagRule {
     predicate: RulePredicate::LabelContains { label: "AAPL".to_string() },
 }])?;
 
-let assigned = engine.apply("instrument:AAPL", "AAPL", &mut tags)?;
+let assigned = engine.apply("instrument:AAPL", "AAPL", "2026-06-10", &mut tags)?;
 assert_eq!(assigned[0].provenance, "rule:equity-symbol");
 assert_eq!(engine.version(), 1);
 # Ok::<(), Box<dyn std::error::Error>>(())
