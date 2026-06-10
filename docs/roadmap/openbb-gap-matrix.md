@@ -34,7 +34,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | fundamentals growth (balance/income/cash growth) | MISSING | fmp growth endpoints not wired | todo |
 | fundamentals extras (dividends, splits, eps history, employees, esg, mgmt, transcript, segments) | PARTIAL | sec/fmp raw; standardized cluster MISSING | todo |
 | estimates (price_target, consensus, forward_*) | PARTIAL | benzinga/seeking-alpha raw; standardized estimates cluster MISSING | todo |
-| calendar (dividend/earnings/ipo/splits/events) | PARTIAL | benzinga earnings raw; fmp/nasdaq calendars MISSING | todo |
+| calendar (dividend/earnings/ipo/splits/events) | PARTIAL | dividend/earnings/ipo standardized via nasdaq (keyless public calendar API, G004p2); benzinga earnings raw; splits/events MISSING | in-progress |
 | compare (peers/groups/company_facts) | MISSING | — | todo |
 | discovery (active/gainers/losers/...) | MISSING | no fmp/yahoo discovery endpoints | todo |
 | ownership (insider/institutional/13f/gov_trades/share_stats) | PARTIAL | sec facts raw; standardized ownership cluster MISSING | todo |

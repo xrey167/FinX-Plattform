@@ -627,6 +627,123 @@ fn insert_fred_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     );
 }
 
+/// Register the ECB catalog fetch binding (G004 part 2): the euro FX
+/// reference-rates snapshot, keyed by the fetcher's `ENDPOINT` const.
+#[cfg(feature = "provider-ecb")]
+fn insert_ecb_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::EcbHttpReferenceRatesFetcher;
+    table.insert(
+        ("ecb", EcbHttpReferenceRatesFetcher::ENDPOINT),
+        fetch_binding::<EcbHttpReferenceRatesFetcher, _, _>(),
+    );
+}
+
+/// Register the CBOE catalog fetch bindings (G004 part 2): the delayed index
+/// snapshot and the delayed options chain, each keyed by its fetcher's
+/// `ENDPOINT` const.
+#[cfg(feature = "provider-cboe")]
+fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    table.insert(
+        ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
+        fetch_binding::<CboeHttpIndexSnapshotFetcher, _, _>(),
+    );
+    table.insert(
+        ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
+        fetch_binding::<CboeHttpOptionsChainFetcher, _, _>(),
+    );
+}
+
+/// Build a [`FetchBinding`] for the EIA report fetcher that injects a fixed
+/// `report` discriminator into the caller's params before the shared fetcher
+/// runs, so one fetcher type serves both report routes while the dispatch key
+/// stays per-report. Mirrors [`fred_command_fetch_binding`].
+#[cfg(feature = "provider-eia")]
+fn eia_report_fetch_binding(report: &'static str) -> FetchBinding {
+    use crate::EiaHttpReportFetcher;
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("report".to_string(), Value::String(report.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&EiaHttpReportFetcher::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the EIA report fetch bindings (G004 part 2), keyed by each report
+/// route's catalog endpoint and bound to the matching `report` discriminator.
+#[cfg(feature = "provider-eia")]
+fn insert_eia_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::EiaReport;
+    table.insert(
+        ("eia", "commodity_petroleum_status_report"),
+        eia_report_fetch_binding(EiaReport::PetroleumStatusReport.id()),
+    );
+    table.insert(
+        ("eia", "commodity_short_term_energy_outlook"),
+        eia_report_fetch_binding(EiaReport::ShortTermEnergyOutlook.id()),
+    );
+}
+
+/// Build a [`FetchBinding`] for the NASDAQ calendar fetcher that injects a fixed
+/// `calendar` discriminator into the caller's params, so one fetcher type serves
+/// all three calendars while the dispatch key stays per-calendar.
+#[cfg(feature = "provider-nasdaq")]
+fn nasdaq_calendar_fetch_binding(calendar: &'static str) -> FetchBinding {
+    use crate::NasdaqHttpCalendarFetcher;
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("calendar".to_string(), Value::String(calendar.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&NasdaqHttpCalendarFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the NASDAQ calendar fetch bindings (G004 part 2), keyed by each
+/// calendar route's catalog endpoint and bound to the matching `calendar`
+/// discriminator.
+#[cfg(feature = "provider-nasdaq")]
+fn insert_nasdaq_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::NasdaqCalendarKind;
+    table.insert(
+        ("nasdaq", "equity_calendar_dividends"),
+        nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Dividends.as_query_str()),
+    );
+    table.insert(
+        ("nasdaq", "equity_calendar_earnings"),
+        nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Earnings.as_query_str()),
+    );
+    table.insert(
+        ("nasdaq", "equity_calendar_ipo"),
+        nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Ipo.as_query_str()),
+    );
+}
+
 /// Register the keyless Yahoo expansion fetch bindings (gap-matrix item L2.4),
 /// keyed by each fetcher's `ENDPOINT` const — the same key its catalog candidate
 /// declares. Mirrors [`insert_yahoo_ingest_bindings`] so the fetch and ingest
@@ -749,6 +866,15 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_government_us_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
+    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
+    #[cfg(feature = "provider-ecb")]
+    insert_ecb_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-cboe")]
+    insert_cboe_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-eia")]
+    insert_eia_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-nasdaq")]
+    insert_nasdaq_fetch_bindings(&mut table);
     table
 }
 
@@ -1551,6 +1677,140 @@ fn insert_fred_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Register the ECB catalog ingest binding (G004 part 2), keyed identically to
+/// [`insert_ecb_fetch_bindings`] and bound to the shared `raw.macro_series`
+/// bronze table (the reference rates normalize to `MacroSeries`).
+#[cfg(feature = "provider-ecb")]
+fn insert_ecb_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    use crate::EcbHttpReferenceRatesFetcher;
+    table.insert(
+        ("ecb", EcbHttpReferenceRatesFetcher::ENDPOINT),
+        binding::<EcbHttpReferenceRatesFetcher, _, _>("raw.macro_series"),
+    );
+}
+
+/// Register the CBOE catalog ingest bindings (G004 part 2), keyed identically to
+/// [`insert_cboe_fetch_bindings`]; the index snapshot lands in `raw.price_quote`
+/// and the options chain in `raw.option_contract`.
+#[cfg(feature = "provider-cboe")]
+fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    table.insert(
+        ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
+        binding::<CboeHttpIndexSnapshotFetcher, _, _>("raw.price_quote"),
+    );
+    table.insert(
+        ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
+        binding::<CboeHttpOptionsChainFetcher, _, _>("raw.option_contract"),
+    );
+}
+
+/// Build an [`IngestBinding`] for the EIA report fetcher that injects a fixed
+/// `report` discriminator before fetching one batch and persisting it into
+/// `table`. Mirrors [`fred_command_ingest_binding`].
+#[cfg(feature = "provider-eia")]
+fn eia_report_ingest_binding(report: &'static str, table: &'static str) -> IngestBinding {
+    use crate::EiaHttpReportFetcher;
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("report".to_string(), Value::String(report.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&EiaHttpReportFetcher::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the EIA report ingest bindings (G004 part 2), keyed identically to
+/// [`insert_eia_fetch_bindings`] and bound to the `raw.commodity_report_row`
+/// bronze table.
+#[cfg(feature = "provider-eia")]
+fn insert_eia_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    use crate::EiaReport;
+    table.insert(
+        ("eia", "commodity_petroleum_status_report"),
+        eia_report_ingest_binding(
+            EiaReport::PetroleumStatusReport.id(),
+            "raw.commodity_report_row",
+        ),
+    );
+    table.insert(
+        ("eia", "commodity_short_term_energy_outlook"),
+        eia_report_ingest_binding(
+            EiaReport::ShortTermEnergyOutlook.id(),
+            "raw.commodity_report_row",
+        ),
+    );
+}
+
+/// Build an [`IngestBinding`] for the NASDAQ calendar fetcher that injects a
+/// fixed `calendar` discriminator before fetching and persisting into `table`.
+#[cfg(feature = "provider-nasdaq")]
+fn nasdaq_calendar_ingest_binding(calendar: &'static str, table: &'static str) -> IngestBinding {
+    use crate::NasdaqHttpCalendarFetcher;
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("calendar".to_string(), Value::String(calendar.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&NasdaqHttpCalendarFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the NASDAQ calendar ingest bindings (G004 part 2), keyed identically
+/// to [`insert_nasdaq_fetch_bindings`] and bound to the `raw.calendar_event`
+/// bronze table.
+#[cfg(feature = "provider-nasdaq")]
+fn insert_nasdaq_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    use crate::NasdaqCalendarKind;
+    table.insert(
+        ("nasdaq", "equity_calendar_dividends"),
+        nasdaq_calendar_ingest_binding(
+            NasdaqCalendarKind::Dividends.as_query_str(),
+            "raw.calendar_event",
+        ),
+    );
+    table.insert(
+        ("nasdaq", "equity_calendar_earnings"),
+        nasdaq_calendar_ingest_binding(
+            NasdaqCalendarKind::Earnings.as_query_str(),
+            "raw.calendar_event",
+        ),
+    );
+    table.insert(
+        ("nasdaq", "equity_calendar_ipo"),
+        nasdaq_calendar_ingest_binding(
+            NasdaqCalendarKind::Ipo.as_query_str(),
+            "raw.calendar_event",
+        ),
+    );
+}
+
 /// Register the keyless Yahoo expansion ingest bindings (gap-matrix item L2.4),
 /// keyed identically to [`insert_yahoo_fetch_bindings`] and bound to each route's
 /// bronze landing table. The bronze table for each row shape matches the catalog
@@ -1685,6 +1945,15 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_government_us_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_ingest_bindings(&mut table);
+    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
+    #[cfg(feature = "provider-ecb")]
+    insert_ecb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cboe")]
+    insert_cboe_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-eia")]
+    insert_eia_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-nasdaq")]
+    insert_nasdaq_ingest_bindings(&mut table);
     table
 }
 
@@ -2267,11 +2536,15 @@ mod tests {
         feature = "provider-akshare",
         feature = "provider-alpaca",
         feature = "provider-alpha-vantage",
+        feature = "provider-cboe",
         feature = "provider-ccdata",
         feature = "provider-coingecko",
         feature = "provider-databento",
+        feature = "provider-ecb",
+        feature = "provider-eia",
         feature = "provider-finnhub",
         feature = "provider-fmp",
+        feature = "provider-nasdaq",
         feature = "provider-polygon",
         feature = "provider-sec",
         feature = "provider-tiingo",
@@ -2890,6 +3163,79 @@ mod tests {
             assert!(
                 covered.contains(endpoint),
                 "yahoo expansion endpoint {endpoint} is not referenced by any catalog route"
+            );
+        }
+    }
+
+    /// Catalog <-> ECB/CBOE/EIA/NASDAQ projection sync (G004 part 2): every
+    /// candidate these four providers contribute to a catalog route has a fetch
+    /// and an ingest dispatch binding under the all-providers build, and each
+    /// binding key matches the candidate's declared endpoint. Pins the new
+    /// catalog rows, the dispatch tables, and the registered fetchers to one set
+    /// of endpoint keys. The expected endpoint set is asserted to be fully
+    /// covered so a dropped route is caught.
+    #[cfg(all(
+        feature = "provider-ecb",
+        feature = "provider-cboe",
+        feature = "provider-eia",
+        feature = "provider-nasdaq",
+    ))]
+    #[test]
+    fn g004_part2_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        // The endpoints projected by G004 part 2, by provider.
+        const EXPECTED: &[(&str, &str)] = &[
+            ("ecb", "reference_rates"),
+            ("cboe", "index_snapshots"),
+            ("cboe", "options_chains"),
+            ("eia", "commodity_petroleum_status_report"),
+            ("eia", "commodity_short_term_energy_outlook"),
+            ("nasdaq", "equity_calendar_dividends"),
+            ("nasdaq", "equity_calendar_earnings"),
+            ("nasdaq", "equity_calendar_ipo"),
+        ];
+        const PROVIDERS: &[&str] = &["ecb", "cboe", "eia", "nasdaq"];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                if !PROVIDERS.contains(&candidate.provider) {
+                    continue;
+                }
+                let key = (candidate.provider, candidate.endpoint);
+                // Only the part-2 endpoints are asserted; skip pre-existing
+                // candidates these providers may contribute elsewhere.
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no fetch binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no ingest binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "G004 part 2 endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
             );
         }
     }

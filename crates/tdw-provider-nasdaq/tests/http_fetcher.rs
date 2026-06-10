@@ -11,7 +11,9 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
-use tdw_provider_nasdaq::{NasdaqDatasetQuery, NasdaqHttpDatasetFetcher};
+use tdw_provider_nasdaq::{
+    NasdaqCalendarQuery, NasdaqDatasetQuery, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+};
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 fn sample_query() -> NasdaqDatasetQuery {
@@ -149,6 +151,147 @@ fn transform_query_rejects_bad_dates() {
             "start_date": "20240101"
         }))
         .is_err()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing calendar fetcher -> CalendarEvent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn calendar_dividends_cassette_decodes_events() {
+    let fetcher = NasdaqHttpCalendarFetcher::default();
+    let query = NasdaqHttpCalendarFetcher::transform_query(json!({ "calendar": "dividends" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let raw = cassette_bytes!({
+        "data": {
+            "calendar": {
+                "rows": [
+                    {
+                        "symbol": "AAPL",
+                        "companyName": "Apple Inc.",
+                        "dividend_Ex_Date": "2026-05-12",
+                        "dividend_Rate": "0.25",
+                        "payment_Date": "2026-05-15",
+                        "record_Date": "2026-05-13"
+                    }
+                ]
+            }
+        }
+    });
+    let events = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(events.len(), 1, "events={events:#?}");
+    assert_eq!(events[0].kind, "dividend");
+    assert_eq!(events[0].symbol, "AAPL");
+    assert_eq!(events[0].name.as_deref(), Some("Apple Inc."));
+    assert_eq!(events[0].date.as_deref(), Some("2026-05-12"));
+    assert_eq!(events[0].dividend, Some(0.25));
+    assert_eq!(events[0].payment_date.as_deref(), Some("2026-05-15"));
+}
+
+#[test]
+fn calendar_earnings_cassette_decodes_eps_estimate() {
+    let fetcher = NasdaqHttpCalendarFetcher::default();
+    let query = NasdaqHttpCalendarFetcher::transform_query(json!({ "calendar": "earnings" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let raw = cassette_bytes!({
+        "data": {
+            "rows": [
+                {
+                    "symbol": "MSFT",
+                    "name": "Microsoft Corp.",
+                    "date": "2026-04-28",
+                    "epsForecast": "$2.93",
+                    "fiscalQuarterEnding": "Mar/2026"
+                }
+            ]
+        }
+    });
+    let events = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(events.len(), 1, "events={events:#?}");
+    assert_eq!(events[0].kind, "earnings");
+    assert_eq!(events[0].symbol, "MSFT");
+    assert_eq!(events[0].eps_estimate, Some(2.93));
+    assert_eq!(events[0].fiscal_period.as_deref(), Some("Mar/2026"));
+}
+
+#[test]
+fn calendar_ipo_cassette_decodes_offer_fields() {
+    let fetcher = NasdaqHttpCalendarFetcher::default();
+    let query = NasdaqHttpCalendarFetcher::transform_query(json!({ "calendar": "ipo" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let raw = cassette_bytes!({
+        "data": {
+            "upcoming": {
+                "upcomingTable": {
+                    "rows": [
+                        {
+                            "proposedTickerSymbol": "NEWCO",
+                            "companyName": "NewCo Holdings",
+                            "proposedSharePrice": "18.00",
+                            "sharesOffered": "10,000,000",
+                            "proposedExchange": "NASDAQ Global",
+                            "expectedPriceDate": "2026-06-15"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    let events = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(events.len(), 1, "events={events:#?}");
+    assert_eq!(events[0].kind, "ipo");
+    assert_eq!(events[0].symbol, "NEWCO");
+    assert_eq!(events[0].price, Some(18.0));
+    assert_eq!(events[0].shares, Some(10_000_000.0));
+    assert_eq!(events[0].exchange.as_deref(), Some("NASDAQ Global"));
+    assert_eq!(events[0].date.as_deref(), Some("2026-06-15"));
+}
+
+#[test]
+fn calendar_transform_query_validates_kind_and_date() {
+    assert!(
+        NasdaqHttpCalendarFetcher::transform_query(json!({ "calendar": "splits" })).is_err(),
+        "unknown calendar kind must be rejected"
+    );
+    assert!(
+        NasdaqHttpCalendarFetcher::transform_query(json!({
+            "calendar": "dividends",
+            "date": "2026/05/12"
+        }))
+        .is_err(),
+        "malformed date must be rejected"
+    );
+    let query = NasdaqHttpCalendarFetcher::transform_query(json!({
+        "calendar": "dividends",
+        "date": "2026-05-12"
+    }))
+    .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query.date.as_deref(), Some("2026-05-12"));
+}
+
+#[tokio::test]
+async fn live_nasdaq_calendar_returns_events_when_env_var_set() {
+    if std::env::var("TDW_NASDAQ_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_NASDAQ_LIVE != 1; skipping live NASDAQ calendar integration test");
+        return;
+    }
+    let fetcher = NasdaqHttpCalendarFetcher::default();
+    let query = NasdaqCalendarQuery::from_value(&json!({ "calendar": "dividends" }))
+        .unwrap_or_else(|e| panic!("query should build: {e}"));
+    let events = live_fetch_nonempty!(fetcher, query);
+    assert!(
+        !events.is_empty(),
+        "live response must include calendar events"
     );
 }
 

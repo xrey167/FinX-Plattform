@@ -14,8 +14,16 @@ use tdw_domain::{EquityHistoricalData, FuturesCurvePoint, OptionContract};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
-const DERIVATIVES_OPTIONS_CHAINS: &[ProviderCandidate] =
-    &[ProviderCandidate::new("yahoo", "options_chains")];
+// Multi-provider route: Yahoo (keyless, offline-first fixture) leads so an
+// unkeyed default build resolves network-free, exactly as the legacy resolver's
+// keyless-first convention dictates; CBOE follows as a second keyless source
+// (CBOE's public CDN also needs no key, but Yahoo already ships the recorded
+// fixture, so it stays first by reliability/coverage). Both endpoint keys match
+// each fetcher's `ENDPOINT` const.
+const DERIVATIVES_OPTIONS_CHAINS: &[ProviderCandidate] = &[
+    ProviderCandidate::new("yahoo", "options_chains"),
+    ProviderCandidate::new("cboe", "options_chains"),
+];
 const DERIVATIVES_FUTURES_HISTORICAL: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "futures_historical")];
 const DERIVATIVES_FUTURES_CURVE: &[ProviderCandidate] =

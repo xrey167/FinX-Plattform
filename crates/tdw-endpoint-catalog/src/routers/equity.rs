@@ -3,8 +3,8 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CompanyProfile, CorporateAction, EquityHistoricalData, Estimate, OwnershipRecord,
-    PricePerformance, QuoteSnapshot,
+    CalendarEvent, CompanyProfile, CorporateAction, EquityHistoricalData, Estimate,
+    OwnershipRecord, PricePerformance, QuoteSnapshot,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -49,6 +49,20 @@ const EQUITY_OWNERSHIP_SHARE_STATISTICS: &[ProviderCandidate] =
 const EQUITY_ESTIMATES_CONSENSUS: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "analyst_consensus")];
 
+// NASDAQ market calendars (gap-matrix item L2.10). The three calendars share one
+// NASDAQ `calendar` fetcher (the calendar discriminator is injected per dispatch
+// binding), so each route gets a distinct dispatch endpoint key — the route with
+// each `'/'` replaced by `'_'`, matching `endpoint_key_for_route` — to avoid a
+// dispatch-key collision. Served by the public, keyless NASDAQ calendar API.
+const EQUITY_CALENDAR_DIVIDENDS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "nasdaq",
+    "equity_calendar_dividends",
+)];
+const EQUITY_CALENDAR_EARNINGS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "equity_calendar_earnings")];
+const EQUITY_CALENDAR_IPO: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "equity_calendar_ipo")];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
 }
@@ -81,6 +95,31 @@ fn estimate() -> Schema {
     schema_for!(Estimate)
 }
 
+fn calendar_event() -> Schema {
+    schema_for!(CalendarEvent)
+}
+
+/// One non-chartable single-model `equity/*` Fetch entry (the common shape of
+/// every route in this router except `equity/price/historical`).
+fn flat_entry(
+    route: &'static str,
+    model: fn() -> Schema,
+    candidates: &'static [ProviderCandidate],
+    bronze_table: &'static str,
+    doc: &'static str,
+) -> CatalogEntry {
+    CatalogEntry {
+        route,
+        kind: EndpointKind::Fetch,
+        params_schema,
+        model,
+        candidates,
+        bronze_table: Some(bronze_table),
+        doc,
+        chartable: false,
+    }
+}
+
 /// The `equity` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
     vec![
@@ -94,85 +133,82 @@ pub fn entries() -> Vec<CatalogEntry> {
             doc: "Historical end-of-day OHLCV bars for an equity symbol.",
             chartable: true,
         },
-        CatalogEntry {
-            route: "equity/ownership/form_13f",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: ownership_record,
-            candidates: EQUITY_OWNERSHIP_FORM_13F,
-            bronze_table: Some("raw.ownership_record"),
-            doc: "SEC Form 13F-HR institutional-holdings filing index by CIK (keyless).",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/shorts/fails_to_deliver",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: ownership_record,
-            candidates: EQUITY_SHORTS_FAILS_TO_DELIVER,
-            bronze_table: Some("raw.ownership_record"),
-            doc: "SEC fails-to-deliver records for an equity symbol (keyless).",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/profile",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: company_profile,
-            candidates: EQUITY_PROFILE,
-            bronze_table: Some("raw.company_profile"),
-            doc: "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/price/quote",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: price_quote,
-            candidates: EQUITY_PRICE_QUOTE,
-            bronze_table: Some("raw.price_quote"),
-            doc: "Current last-price quote snapshot for an equity symbol, Yahoo-backed.",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/price/performance",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: price_performance,
-            candidates: EQUITY_PRICE_PERFORMANCE,
-            bronze_table: Some("raw.price_performance"),
-            doc: "Period total returns (one-day through one-year) for a symbol, Yahoo-backed.",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/fundamental/dividends",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: corporate_action,
-            candidates: EQUITY_FUNDAMENTAL_DIVIDENDS,
-            bronze_table: Some("raw.corporate_action"),
-            doc: "Historical cash dividends for an equity symbol, Yahoo-backed.",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/ownership/share_statistics",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: ownership_record,
-            candidates: EQUITY_OWNERSHIP_SHARE_STATISTICS,
-            bronze_table: Some("raw.ownership_record"),
-            doc: "Share statistics (float, shares outstanding, ownership), Yahoo-backed.",
-            chartable: false,
-        },
-        CatalogEntry {
-            route: "equity/estimates/consensus",
-            kind: EndpointKind::Fetch,
-            params_schema,
-            model: estimate,
-            candidates: EQUITY_ESTIMATES_CONSENSUS,
-            bronze_table: Some("raw.estimate"),
-            doc: "Analyst consensus and price targets for a symbol, Yahoo-backed.",
-            chartable: false,
-        },
+        flat_entry(
+            "equity/ownership/form_13f",
+            ownership_record,
+            EQUITY_OWNERSHIP_FORM_13F,
+            "raw.ownership_record",
+            "SEC Form 13F-HR institutional-holdings filing index by CIK (keyless).",
+        ),
+        flat_entry(
+            "equity/shorts/fails_to_deliver",
+            ownership_record,
+            EQUITY_SHORTS_FAILS_TO_DELIVER,
+            "raw.ownership_record",
+            "SEC fails-to-deliver records for an equity symbol (keyless).",
+        ),
+        flat_entry(
+            "equity/profile",
+            company_profile,
+            EQUITY_PROFILE,
+            "raw.company_profile",
+            "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/price/quote",
+            price_quote,
+            EQUITY_PRICE_QUOTE,
+            "raw.price_quote",
+            "Current last-price quote snapshot for an equity symbol, Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/price/performance",
+            price_performance,
+            EQUITY_PRICE_PERFORMANCE,
+            "raw.price_performance",
+            "Period total returns (one-day through one-year) for a symbol, Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/dividends",
+            corporate_action,
+            EQUITY_FUNDAMENTAL_DIVIDENDS,
+            "raw.corporate_action",
+            "Historical cash dividends for an equity symbol, Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/ownership/share_statistics",
+            ownership_record,
+            EQUITY_OWNERSHIP_SHARE_STATISTICS,
+            "raw.ownership_record",
+            "Share statistics (float, shares outstanding, ownership), Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/consensus",
+            estimate,
+            EQUITY_ESTIMATES_CONSENSUS,
+            "raw.estimate",
+            "Analyst consensus and price targets for a symbol, Yahoo-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/dividends",
+            calendar_event,
+            EQUITY_CALENDAR_DIVIDENDS,
+            "raw.calendar_event",
+            "Upcoming dividend calendar (ex-date, amount, pay date), NASDAQ-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/earnings",
+            calendar_event,
+            EQUITY_CALENDAR_EARNINGS,
+            "raw.calendar_event",
+            "Upcoming earnings calendar (date, EPS estimate), NASDAQ-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/ipo",
+            calendar_event,
+            EQUITY_CALENDAR_IPO,
+            "raw.calendar_event",
+            "Upcoming IPO calendar (price, shares, exchange), NASDAQ-backed.",
+        ),
     ]
 }
