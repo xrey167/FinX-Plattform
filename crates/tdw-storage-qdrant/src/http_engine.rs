@@ -322,11 +322,18 @@ impl VectorEngine for QdrantHttpEngine {
             ));
         }
         let path = format!("/collections/{collection}/points/search");
-        let body = json!({
+        let mut body = json!({
             "vector": query.vector,
             "limit": query.top_k,
             "with_payload": true,
         });
+        // Pre-B1 wire shape is preserved for unfiltered queries: the `filter`
+        // key is only present when conditions exist.
+        if !query.filter.is_empty()
+            && let Value::Object(map) = &mut body
+        {
+            map.insert("filter".to_string(), qdrant_filter(&query.filter));
+        }
         let response = self
             .request(reqwest::Method::POST, &path)?
             .json(&body)
@@ -356,10 +363,97 @@ impl VectorEngine for QdrantHttpEngine {
     }
 }
 
+/// Map the shared [`PayloadFilter`] onto Qdrant's filter DSL.
+///
+/// `MatchString`/`MatchAny` map to `match.value`/`match.any` (which on
+/// array-valued payload fields mean "contains" — the same semantics the
+/// in-memory engine's shared evaluator implements). `RangeString` maps to a
+/// `range` condition, which Qdrant evaluates as a datetime range when the
+/// payload field holds RFC 3339 strings — the only form the tdw-core contract
+/// permits for range keys.
+fn qdrant_filter(filter: &tdw_core::PayloadFilter) -> Value {
+    let must: Vec<Value> = filter
+        .must
+        .iter()
+        .filter_map(|condition| match condition {
+            tdw_core::PayloadCondition::MatchString { key, value } => Some(json!({
+                "key": key, "match": { "value": value },
+            })),
+            tdw_core::PayloadCondition::MatchAny { key, values } => Some(json!({
+                "key": key, "match": { "any": values },
+            })),
+            tdw_core::PayloadCondition::RangeString { key, gte, lte } => {
+                let mut range = serde_json::Map::new();
+                if let Some(bound) = gte {
+                    range.insert("gte".to_string(), Value::String(bound.clone()));
+                }
+                if let Some(bound) = lte {
+                    range.insert("lte".to_string(), Value::String(bound.clone()));
+                }
+                if range.is_empty() {
+                    // A boundless range matches everything; Qdrant rejects an
+                    // empty range object (HTTP 400), and the shared in-memory
+                    // evaluator treats it as match-all — omit the condition so
+                    // both backends agree.
+                    return None;
+                }
+                Some(json!({ "key": key, "range": Value::Object(range) }))
+            }
+        })
+        .collect();
+    json!({ "must": must })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{create_conflict_is_benign, existing_vector_size};
+    use super::{create_conflict_is_benign, existing_vector_size, qdrant_filter};
     use serde_json::json;
+
+    #[test]
+    fn qdrant_filter_omits_boundless_ranges_instead_of_emitting_empty_objects() {
+        use tdw_core::{PayloadCondition, PayloadFilter};
+        // Qdrant rejects {"range": {}} with HTTP 400; a boundless range is
+        // match-all, so the condition is dropped — agreeing with the shared
+        // in-memory evaluator, which also matches everything for it.
+        let mapped = qdrant_filter(&PayloadFilter {
+            must: vec![PayloadCondition::RangeString {
+                key: "as_of".to_string(),
+                gte: None,
+                lte: None,
+            }],
+        });
+        assert_eq!(mapped, json!({ "must": [] }));
+    }
+
+    #[test]
+    fn qdrant_filter_maps_every_condition_form() {
+        use tdw_core::{PayloadCondition, PayloadFilter};
+        let mapped = qdrant_filter(&PayloadFilter {
+            must: vec![
+                PayloadCondition::MatchString {
+                    key: "plane".to_string(),
+                    value: "platform".to_string(),
+                },
+                PayloadCondition::MatchAny {
+                    key: "tags".to_string(),
+                    values: vec!["asset:equity".to_string(), "asset:crypto".to_string()],
+                },
+                PayloadCondition::RangeString {
+                    key: "as_of".to_string(),
+                    gte: None,
+                    lte: Some("2026-01-01T00:00:00Z".to_string()),
+                },
+            ],
+        });
+        assert_eq!(
+            mapped,
+            json!({ "must": [
+                { "key": "plane", "match": { "value": "platform" } },
+                { "key": "tags", "match": { "any": ["asset:equity", "asset:crypto"] } },
+                { "key": "as_of", "range": { "lte": "2026-01-01T00:00:00Z" } },
+            ]})
+        );
+    }
 
     #[test]
     fn only_409_conflict_is_treated_as_benign_already_exists() {

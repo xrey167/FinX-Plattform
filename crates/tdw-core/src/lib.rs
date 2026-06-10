@@ -308,10 +308,116 @@ pub struct VectorPoint {
     pub payload: Value,
 }
 
+/// One payload/fields condition (knowledge-system B1).
+///
+/// `MatchString` against an array-valued field means "array contains value" —
+/// exactly Qdrant's `match` semantics on array fields, mirrored by the in-memory
+/// engines so backends cannot drift.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum PayloadCondition {
+    /// `payload[key] == value`, or `payload[key]` is an array containing `value`.
+    MatchString { key: String, value: String },
+    /// `MatchString` against any of `values`.
+    MatchAny { key: String, values: Vec<String> },
+    /// Inclusive string range over a string field. Used for `as_of` bounds; the
+    /// field must hold normalized RFC 3339 UTC strings so lexicographic order is
+    /// chronological (the Qdrant backend maps this to a datetime range filter).
+    ///
+    /// Lexical backends may reject this condition loudly: Meilisearch comparison
+    /// filters are numeric-only, so temporal range filtering belongs on the
+    /// vector channel (the in-memory lexical engine supports it for tests).
+    ///
+    /// # Temporal convention
+    ///
+    /// Both bounds are **inclusive** (`[gte, lte]`, a closed interval) — matching
+    /// Qdrant's range semantics. This DIFFERS from the graph layer's half-open
+    /// `[valid_from, valid_to)` windows: when deriving a `RangeString` from a
+    /// graph validity window, do NOT pass the exclusive `valid_to` directly as
+    /// `lte`, or documents stamped exactly at the boundary leak in.
+    RangeString {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gte: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lte: Option<String>,
+    },
+}
+
+/// Conjunctive payload filter applied at search time. Empty = match everything.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayloadFilter {
+    /// All conditions must hold.
+    #[serde(default)]
+    pub must: Vec<PayloadCondition>,
+}
+
+impl PayloadFilter {
+    /// Whether the filter has no conditions (matches everything).
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.must.is_empty()
+    }
+
+    /// Evaluate against a payload/fields object. This is the SHARED reference
+    /// evaluator used by every in-memory engine, so filtered search behaves
+    /// identically across modalities by construction.
+    #[must_use]
+    pub fn matches(&self, payload: &Value) -> bool {
+        self.must.iter().all(|condition| condition.matches(payload))
+    }
+}
+
+impl PayloadCondition {
+    /// Evaluate one condition against a payload/fields object.
+    #[must_use]
+    pub fn matches(&self, payload: &Value) -> bool {
+        match self {
+            Self::MatchString { key, value } => string_field_matches(payload, key, value),
+            Self::MatchAny { key, values } => values
+                .iter()
+                .any(|value| string_field_matches(payload, key, value)),
+            Self::RangeString { key, gte, lte } => {
+                payload.get(key).and_then(Value::as_str).is_some_and(|s| {
+                    gte.as_deref().is_none_or(|bound| s >= bound)
+                        && lte.as_deref().is_none_or(|bound| s <= bound)
+                })
+            }
+        }
+    }
+}
+
+fn string_field_matches(payload: &Value, key: &str, value: &str) -> bool {
+    match payload.get(key) {
+        Some(Value::String(field)) => field == value,
+        Some(Value::Array(items)) => items
+            .iter()
+            .any(|item| item.as_str().is_some_and(|field| field == value)),
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VectorQuery {
     pub vector: Vec<f32>,
     pub top_k: usize,
+    /// Payload filter applied before scoring; empty = unfiltered. The pre-B1 wire
+    /// shape is preserved in BOTH directions: old JSON deserializes (`default`)
+    /// and an unfiltered query serializes without the field (`skip_serializing_if`).
+    #[serde(default, skip_serializing_if = "PayloadFilter::is_empty")]
+    pub filter: PayloadFilter,
+}
+
+impl VectorQuery {
+    /// An unfiltered KNN query — the pre-B1 construction.
+    #[must_use]
+    pub fn knn(vector: Vec<f32>, top_k: usize) -> Self {
+        Self {
+            vector,
+            top_k,
+            filter: PayloadFilter::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -332,6 +438,23 @@ pub struct LexicalDoc {
 pub struct TextQuery {
     pub text: String,
     pub top_k: usize,
+    /// Fields filter applied before scoring; empty = unfiltered. The pre-B1 wire
+    /// shape is preserved in BOTH directions: old JSON deserializes (`default`)
+    /// and an unfiltered query serializes without the field (`skip_serializing_if`).
+    #[serde(default, skip_serializing_if = "PayloadFilter::is_empty")]
+    pub filter: PayloadFilter,
+}
+
+impl TextQuery {
+    /// An unfiltered text query — the pre-B1 construction.
+    #[must_use]
+    pub fn text(text: impl Into<String>, top_k: usize) -> Self {
+        Self {
+            text: text.into(),
+            top_k,
+            filter: PayloadFilter::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -641,6 +764,81 @@ mod tests {
     use std::task::{Context, Poll};
 
     use serde_json::json;
+
+    #[test]
+    fn payload_filter_matches_strings_arrays_ranges_and_conjunction() {
+        let payload = json!({
+            "entity_id": "instrument:AAPL",
+            "tags": ["asset:equity", "region:us"],
+            "as_of": "2026-03-01T00:00:00Z",
+            "rank": 3,
+        });
+
+        // Empty filter matches everything (the pre-B1 behavior).
+        assert!(PayloadFilter::default().matches(&payload));
+        assert!(PayloadFilter::default().is_empty());
+
+        let match_string = |key: &str, value: &str| PayloadCondition::MatchString {
+            key: key.to_string(),
+            value: value.to_string(),
+        };
+        // String equality, array-contains, and misses (incl. non-string fields).
+        assert!(match_string("entity_id", "instrument:AAPL").matches(&payload));
+        assert!(match_string("tags", "asset:equity").matches(&payload));
+        assert!(!match_string("tags", "asset:bond").matches(&payload));
+        assert!(!match_string("missing", "x").matches(&payload));
+        assert!(!match_string("rank", "3").matches(&payload));
+
+        // MatchAny is any-of over the same per-value rule.
+        assert!(
+            PayloadCondition::MatchAny {
+                key: "tags".to_string(),
+                values: vec!["asset:bond".to_string(), "region:us".to_string()],
+            }
+            .matches(&payload)
+        );
+
+        // Inclusive string range; open bounds pass; non-string fields never match.
+        let range = |gte: Option<&str>, lte: Option<&str>| PayloadCondition::RangeString {
+            key: "as_of".to_string(),
+            gte: gte.map(ToString::to_string),
+            lte: lte.map(ToString::to_string),
+        };
+        assert!(range(None, Some("2026-12-31T00:00:00Z")).matches(&payload));
+        assert!(range(Some("2026-03-01T00:00:00Z"), None).matches(&payload));
+        assert!(!range(Some("2026-06-01T00:00:00Z"), None).matches(&payload));
+
+        // Conjunction: all must hold.
+        let filter = PayloadFilter {
+            must: vec![
+                match_string("tags", "asset:equity"),
+                range(None, Some("2026-01-01T00:00:00Z")),
+            ],
+        };
+        assert!(!filter.matches(&payload));
+    }
+
+    #[test]
+    fn query_constructors_build_unfiltered_queries_and_serde_defaults_filter() {
+        let knn = VectorQuery::knn(vec![1.0], 5);
+        assert!(knn.filter.is_empty());
+        let text = TextQuery::text("volatility", 5);
+        assert!(text.filter.is_empty());
+        // The pre-B1 wire shape holds in the SERIALIZE direction too: an
+        // unfiltered query emits no `filter` key at all.
+        let encoded = serde_json::to_value(&knn).expect("vector query should serialize");
+        assert!(encoded.get("filter").is_none());
+        let encoded = serde_json::to_value(&text).expect("text query should serialize");
+        assert!(encoded.get("filter").is_none());
+        // Pre-B1 wire shapes still deserialize (filter defaults to empty).
+        let decoded: VectorQuery = serde_json::from_value(json!({ "vector": [1.0], "top_k": 5 }))
+            .expect("pre-B1 vector query should deserialize");
+        assert!(decoded.filter.is_empty());
+        let decoded: TextQuery =
+            serde_json::from_value(json!({ "text": "volatility", "top_k": 5 }))
+                .expect("pre-B1 text query should deserialize");
+        assert!(decoded.filter.is_empty());
+    }
 
     #[test]
     fn safe_sql_identifier_accepts_valid_names_and_rejects_injection() {
