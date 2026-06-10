@@ -26,6 +26,12 @@ functions-route = ["transport-http", "dep:hmac", "dep:sha2"]
 # RestApiHandler trait seam implemented by tdw-service-api). Requires
 # transport-http.
 rest-api-route = ["transport-http"]
+# Exposes the OpenBB Workspace bridge surface: GET /widgets.json, GET
+# /apps.json, and GET /widget-data/{route...}?<params>, with CORS + optional
+# X-TDW-API-KEY auth. widgets.json/apps.json are derived from the endpoint
+# catalog (via tdw-widgets); widget-data reuses the same policy-guarded fetch
+# seam (RestApiHandler) the REST family uses. Requires transport-http.
+workspace-route = ["transport-http", "rest-api-route", "dep:tdw-widgets", "dep:subtle"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -35,10 +41,12 @@ tdw-bus = { path = "../tdw-bus" }
 tdw-config = { workspace = true }
 tdw-outbox = { path = "../tdw-outbox" }
 tdw-protocol = { workspace = true }
+tdw-widgets = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "signal", "sync", "net", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+subtle = { workspace = true, optional = true }
 
 [dev-dependencies]
 tdw-event = { path = "../tdw-event" }

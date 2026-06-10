@@ -41,6 +41,11 @@ pub mod rest_route;
 #[cfg(all(feature = "rest-api-route", not(loom)))]
 pub use rest_route::{RestApiHandler, RestError, serve_rest_http};
 
+#[cfg(all(feature = "workspace-route", not(loom)))]
+pub mod workspace_route;
+#[cfg(all(feature = "workspace-route", not(loom)))]
+pub use workspace_route::{WorkspaceConfig, serve_workspace_http};
+
 // Shared service-operability surface (/health, /ready, /metrics). The pure
 // renderer and route classifier are always available; the async listener is
 // gated out under `--cfg loom` (it uses `tokio::net`).
