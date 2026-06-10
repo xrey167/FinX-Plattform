@@ -7,7 +7,7 @@
 //!   in props. Tag ids share the graph id namespace (the `:`-bearing tag
 //!   grammar is a subset of the graph id grammar).
 //! * Hierarchy is a `subtag_of` edge from child tag to parent tag;
-//!   re-parenting retracts the old edge via `GraphEngine::delete_edges`.
+//!   re-parenting swaps the edge atomically via `GraphEngine::replace_edges`.
 //!   Cycles are rejected BEFORE any write by walking the prospective parent
 //!   chain — no rollback needed, unlike the in-process store.
 //! * An assignment is a `tagged` edge from the entity node to the tag node,
