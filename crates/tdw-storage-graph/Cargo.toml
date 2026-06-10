@@ -1,0 +1,18 @@
+[package]
+name = "tdw-storage-graph"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+
+[dev-dependencies]
+tdw-taxonomy = { workspace = true }
+tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -15,12 +15,18 @@ use thiserror::Error;
 
 #[cfg(feature = "compaction")]
 pub mod compaction;
+pub mod graph;
 #[cfg(feature = "http")]
 pub mod http_support;
 pub mod turn;
 
 pub mod query_params;
 
+pub use graph::{
+    Direction, GraphEdge, GraphEngine, GraphNode, MAX_HOPS, MergeDecision, MergeReport, Provenance,
+    Subgraph, TraversalFilter, active_at, is_graph_id, validate_graph_edge, validate_graph_node,
+    validate_traversal_filter,
+};
 pub use query_params::{Date, Interval, MAX_LIMIT, Period, StandardParams};
 
 pub type Result<T> = std::result::Result<T, Error>;
