@@ -178,6 +178,91 @@ pub trait LanguageModel: Send + Sync {
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse>;
 }
 
+/// Token-level streaming extension over [`LanguageModel`] (story G016).
+///
+/// `complete_streaming` mirrors the synchronous [`LanguageModel::complete`]
+/// shape — it blocks until the full answer is produced and returns the same
+/// terminal [`ChatResponse`] (full text + [`Usage`]) — but additionally
+/// invokes `on_chunk` for each incremental text fragment as it arrives, so a
+/// downstream consumer (the `OpenBB` Workspace agent bridge, the TUI, or an MCP
+/// progress channel) can render output token-by-token.
+///
+/// # Object safety
+///
+/// The callback is taken as `&mut dyn FnMut(&str)` rather than a generic
+/// `impl FnMut(&str)`, and the method has no other type parameters, so the
+/// trait stays object-safe: a model can live behind `Box<dyn
+/// StreamingLanguageModel>` / `Arc<dyn StreamingLanguageModel>` exactly as it
+/// does behind `dyn LanguageModel`. The trait is **not** blanket-implemented,
+/// so a concrete adapter is free to provide a native streaming implementation
+/// (e.g. one consuming a provider SSE stream) while every other model inherits
+/// the protocol-conformant default below.
+///
+/// The default implementation calls [`LanguageModel::complete`] and emits the
+/// entire answer as a single `on_chunk` call. This is protocol-conformant: a
+/// well-behaved chunk handler that concatenates every fragment reconstructs
+/// the final [`ChatResponse::message`] content verbatim, whether the model
+/// streamed one chunk or many.
+pub trait StreamingLanguageModel: LanguageModel {
+    /// Complete `request`, invoking `on_chunk` for each incremental text
+    /// fragment, and return the terminal [`ChatResponse`] carrying the full
+    /// text and [`Usage`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    fn complete_streaming(
+        &self,
+        request: &ChatRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse> {
+        let response = self.complete(request.clone())?;
+        on_chunk(&response.message.content);
+        Ok(response)
+    }
+}
+
+/// Forwarding impl so a boxed [`LanguageModel`] also satisfies the streaming
+/// extension (via the default single-chunk fallback), keeping
+/// `Arc<dyn LanguageModel>` usable wherever streaming is offered.
+impl StreamingLanguageModel for std::sync::Arc<dyn LanguageModel> {}
+
+/// Split `text` into at most `max_chunks` contiguous, non-empty pieces whose
+/// concatenation is exactly `text`.
+///
+/// Used by the deterministic offline models to fabricate a multi-chunk stream
+/// without a network round-trip, so downstream chunk-handling logic is
+/// exercisable in offline tests. The split happens on UTF-8 character
+/// boundaries at roughly even offsets; an empty input yields no chunks and
+/// `max_chunks == 0` is treated as `1`. The invariant `chunks.concat() == text`
+/// always holds, matching the streaming protocol's reconstruction contract.
+#[must_use]
+pub fn split_into_chunks(text: &str, max_chunks: usize) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let max_chunks = max_chunks.max(1);
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    // Number of characters; boundaries has char_count + 1 entries.
+    let char_count = boundaries.len() - 1;
+    let chunk_count = max_chunks.min(char_count);
+    let mut chunks = Vec::with_capacity(chunk_count);
+    for chunk_index in 0..chunk_count {
+        let start_char = chunk_index * char_count / chunk_count;
+        let end_char = (chunk_index + 1) * char_count / chunk_count;
+        let start = boundaries[start_char];
+        let end = boundaries[end_char];
+        if start < end {
+            chunks.push(text[start..end].to_string());
+        }
+    }
+    chunks
+}
+
 /// Blanket forwarding impl so a boxed [`LanguageModel`] (e.g. an element of a
 /// `Vec<Arc<dyn LanguageModel>>` produced by [`router::ModelRouter::resolve_chain`])
 /// can itself be used wherever a `LanguageModel` is required, such as in a
@@ -299,6 +384,75 @@ mod tests {
                 },
             })
         }
+    }
+
+    impl StreamingLanguageModel for EchoModel {}
+
+    #[test]
+    fn default_streaming_emits_whole_answer_as_single_chunk() {
+        let model = EchoModel;
+        let request = ChatRequest {
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: "hello world".to_string(),
+            }],
+            max_output_tokens: 32,
+        };
+        let mut chunks = Vec::new();
+        let response = model
+            .complete_streaming(&request, &mut |chunk| chunks.push(chunk.to_string()))
+            .unwrap_or_else(|error| panic!("streaming completes: {error}"));
+
+        // Exactly one chunk, equal to the full answer (the protocol-conformant
+        // fallback), and the terminal response matches the non-streaming path.
+        assert_eq!(chunks, vec!["hello world".to_string()]);
+        assert_eq!(chunks.concat(), response.message.content);
+        assert_eq!(
+            response,
+            model
+                .complete(request)
+                .unwrap_or_else(|error| panic!("complete: {error}"))
+        );
+    }
+
+    #[test]
+    fn split_into_chunks_preserves_text_and_bounds_count() {
+        // Multi-chunk split: concatenation is verbatim, count is bounded.
+        let chunks = split_into_chunks("Hello, world!", 3);
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks.concat(), "Hello, world!");
+
+        // Requesting more chunks than characters caps at the character count;
+        // every chunk stays non-empty.
+        let many = split_into_chunks("abc", 10);
+        assert_eq!(many, vec!["a", "b", "c"]);
+        assert!(many.iter().all(|chunk| !chunk.is_empty()));
+
+        // Empty input yields no chunks; max_chunks == 0 is treated as 1.
+        assert!(split_into_chunks("", 4).is_empty());
+        assert_eq!(split_into_chunks("xyz", 0), vec!["xyz".to_string()]);
+
+        // UTF-8 boundaries are respected (no panic, verbatim reconstruction).
+        let unicode = split_into_chunks("café déjà", 4);
+        assert_eq!(unicode.concat(), "café déjà");
+    }
+
+    #[test]
+    fn default_streaming_works_behind_dyn_language_model() {
+        let model: std::sync::Arc<dyn LanguageModel> = std::sync::Arc::new(EchoModel);
+        let request = ChatRequest {
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: "boxed".to_string(),
+            }],
+            max_output_tokens: 8,
+        };
+        let mut chunks = Vec::new();
+        let response = model
+            .complete_streaming(&request, &mut |chunk| chunks.push(chunk.to_string()))
+            .unwrap_or_else(|error| panic!("streaming completes: {error}"));
+        assert_eq!(chunks, vec!["boxed".to_string()]);
+        assert_eq!(response.message.content, "boxed");
     }
 
     #[test]
