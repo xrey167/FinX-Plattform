@@ -290,6 +290,38 @@ async fn spawn_daemon_ops(
     }))
 }
 
+/// Bind and spawn the daemon's catalog-derived REST listener when
+/// `TDW_DAEMON_REST_BIND` is set (and the `rest-api-route` feature is compiled).
+///
+/// Serves `GET /api/v1/{route...}?<params>` (resolved through the same
+/// policy-guarded `Op::FetchData` path) and `GET /openapi.json`. Returns the
+/// listener task, or `None` when unset (the default) or on bind failure
+/// (logged), so the daemon still serves its primary transport. The REST surface
+/// is unauthenticated at the transport — the same posture as `POST /op` — so the
+/// loopback default is the safe one; a non-loopback bind warrants the same
+/// reverse-proxy/auth fronting as the TCP transport.
+#[cfg(feature = "rest-api-route")]
+async fn spawn_daemon_rest(
+    state: &AppState,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = std::env::var("TDW_DAEMON_REST_BIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-backend: REST listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    eprintln!("tdw-backend: REST listener on http://{bind} (/api/v1/<route> /openapi.json)");
+    let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
+    Some(tokio::spawn(async move {
+        tdw_app_server::serve_rest_http(listener, handler, cancel).await
+    }))
+}
+
 /// Emit the same startup policy diagnostics the original `tdw-service` binary
 /// did, reporting whether a policy is attached for the resolved profile.
 fn report_policy_state(state: &AppState, config: &TdwConfig) {
@@ -406,6 +438,12 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // so a graceful drain stops accepting ops requests too.
     let ops_task = spawn_daemon_ops(&state, metrics, cancel.clone()).await;
 
+    // Optional catalog-derived REST surface (GET /api/v1/<route>, /openapi.json),
+    // env-gated on TDW_DAEMON_REST_BIND and off by default. Shares the
+    // cancellation token so a graceful drain stops accepting REST requests too.
+    #[cfg(feature = "rest-api-route")]
+    let rest_task = spawn_daemon_rest(&state, cancel.clone()).await;
+
     // Phase B — a standalone daemon's only memory surface is the persisted file
     // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
     // `Backend` API — `upsert_memory` — which the binary does not expose, since
@@ -439,6 +477,12 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // The ops listener observes the same cancellation token; await its clean
     // exit so the drain is bounded.
     if let Some(task) = ops_task {
+        let _ = task.await;
+    }
+    // The REST listener observes the same cancellation token; await its clean
+    // exit so the drain is bounded.
+    #[cfg(feature = "rest-api-route")]
+    if let Some(task) = rest_task {
         let _ = task.await;
     }
     let _ = transport.join.await;

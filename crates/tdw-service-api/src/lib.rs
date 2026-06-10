@@ -27,11 +27,15 @@ pub mod fetch_policy;
 pub mod function_enqueue;
 mod policy;
 mod provider_resolve;
+#[cfg(feature = "rest-api-route")]
+mod rest_handler;
 mod stream_ingest;
 #[cfg(feature = "identity")]
 pub mod user_events;
 
 pub use app_state::{AppState, OidcPolicyError};
+#[cfg(feature = "rest-api-route")]
+pub use dispatcher::{RestFetchError, rest_fetch_data};
 pub use dispatcher::{dispatch_op, ingest_dispatch_pairs};
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
@@ -40,6 +44,8 @@ pub use policy::{
     secure_endpoint_response_with_backend, secure_udf_run, secure_udf_run_with_backend,
     service_hook_policy,
 };
+#[cfg(feature = "rest-api-route")]
+pub use rest_handler::RestApiState;
 pub use stream_ingest::{run_stream_ingest, run_ws_ingest};
 pub use tdw_hooks::HookExecutionPolicy;
 

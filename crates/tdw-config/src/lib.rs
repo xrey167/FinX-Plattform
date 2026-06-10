@@ -435,6 +435,90 @@ pub fn schema_bundle() -> BTreeMap<&'static str, Value> {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// Per-provider credential registry (gap-matrix item L5.7)
+// ---------------------------------------------------------------------------
+
+/// One per-provider credential entry: which env var (and optional config-file
+/// key) supplies the provider's API key/token.
+///
+/// This is the single documented source of truth for where each keyed provider
+/// reads its credential from, mirroring the `credentials` section convention in
+/// the `OpenBB` `user_settings.json` surface (per-provider key fields). The table
+/// is static and build-independent; resolving an actual value is the consumer's
+/// job via [`resolve_credential`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CredentialEntry {
+    /// Provider key, e.g. `"fred"`, `"eia"` (matches the catalog candidate key).
+    pub provider: &'static str,
+    /// Environment variable that supplies the credential, e.g. `"FRED_API_KEY"`.
+    pub env_var: &'static str,
+    /// Optional dotted config-file key (`credentials.<field>`) mirroring the
+    /// `OpenBB` `user_settings.json` field naming, e.g. `"fred_api_key"`.
+    pub config_key: Option<&'static str>,
+    /// One-line human-readable description of the credential.
+    pub doc: &'static str,
+}
+
+/// The documented per-provider credential registry.
+///
+/// Entries are in provider-key order so the table is deterministic for docs and
+/// snapshots. At least the FRED and EIA keyed providers are wired here; the
+/// remaining provider crates still read their own env vars directly (migrating
+/// every one is out of scope — this table is the single point new wiring should
+/// route through).
+const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
+    CredentialEntry {
+        provider: "eia",
+        env_var: "EIA_API_KEY",
+        config_key: Some("eia_api_key"),
+        doc: "U.S. Energy Information Administration API key (free registration).",
+    },
+    CredentialEntry {
+        provider: "fred",
+        env_var: "FRED_API_KEY",
+        config_key: Some("fred_api_key"),
+        doc: "FRED (St. Louis Fed) API key.",
+    },
+];
+
+/// The full per-provider credential registry, in deterministic provider order.
+#[must_use]
+pub const fn credential_registry() -> &'static [CredentialEntry] {
+    CREDENTIAL_REGISTRY
+}
+
+/// Look up the credential entry for `provider`, if one is registered.
+///
+/// Lookup is by exact provider-key equality (the same key used in the endpoint
+/// catalog's `ProviderCandidate::provider`). Returns `None` for keyless /
+/// unregistered providers.
+#[must_use]
+pub fn credential_for_provider(provider: &str) -> Option<&'static CredentialEntry> {
+    CREDENTIAL_REGISTRY
+        .iter()
+        .find(|entry| entry.provider == provider)
+}
+
+/// Resolve a provider's credential value from the process environment via the
+/// registry's `env_var`.
+///
+/// Returns `None` when the provider is not registered, when the env var is
+/// unset, or when it is set to an empty / whitespace-only value (treated as
+/// absent so a blank key never reaches a provider). Config-file resolution is
+/// the caller's responsibility — this helper covers only the env-var path, which
+/// is the one every provider crate already uses today.
+#[must_use]
+pub fn resolve_credential(provider: &str) -> Option<String> {
+    let entry = credential_for_provider(provider)?;
+    let value = std::env::var(entry.env_var).ok()?;
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 /// Fuzz shim: attempt to parse arbitrary bytes as a TOML config layer.
 ///
 /// Must never panic on adversarial input; parse failures are the expected
@@ -616,5 +700,29 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         let bundle = schema_bundle();
         assert!(bundle.contains_key("tdw_config"));
         assert!(bundle.contains_key("config_layer_descriptor"));
+    }
+
+    #[test]
+    fn credential_registry_wires_fred_and_eia() {
+        let fred = credential_for_provider("fred").expect("fred credential registered");
+        assert_eq!(fred.env_var, "FRED_API_KEY");
+        assert_eq!(fred.config_key, Some("fred_api_key"));
+
+        let eia = credential_for_provider("eia").expect("eia credential registered");
+        assert_eq!(eia.env_var, "EIA_API_KEY");
+        assert_eq!(eia.config_key, Some("eia_api_key"));
+
+        assert!(credential_for_provider("yahoo").is_none());
+    }
+
+    #[test]
+    fn credential_registry_is_in_deterministic_provider_order() {
+        let providers: Vec<&str> = credential_registry()
+            .iter()
+            .map(|entry| entry.provider)
+            .collect();
+        let mut sorted = providers.clone();
+        sorted.sort_unstable();
+        assert_eq!(providers, sorted, "registry must be in provider-key order");
     }
 }
