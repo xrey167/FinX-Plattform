@@ -85,12 +85,31 @@ impl Backend {
     /// Returns [`BackendError::Init`] if the daemon composition root cannot be
     /// constructed from `config`.
     pub async fn from_config(config: TdwConfig) -> BackendResult<Self> {
+        let embedding = config.knowledge.embedding.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
         let runner = CommandRunner::default();
+        let embedder = select_embedder(&embedding)?;
+        // Optional fail-fast dimension probe: one embed at startup proves the
+        // configured model produces vectors of the expected width before any
+        // document is written (a wrong model_dir fails HERE, not mid-index).
+        if let Some(expected) = embedding.expected_dims {
+            let probe = embedder
+                .embed("tdw embedder dimension probe")
+                .await
+                .map_err(|error| BackendError::Init(error.to_string()))?;
+            if probe.vector.len() != expected {
+                return Err(BackendError::Init(format!(
+                    "knowledge.embedding.expected_dims is {expected} but {} produces \
+                     {}-dimensional vectors",
+                    embedder.model_id(),
+                    probe.vector.len()
+                )));
+            }
+        }
         let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            select_embedder()?,
+            embedder,
             state.vector.clone(),
         )));
         Ok(Self {
@@ -542,41 +561,64 @@ impl Backend {
 /// the model (default `text-embedding-3-small`);
 /// `TDW_OPENAI_EMBEDDING_BASE_URL` optionally overrides the endpoint.
 ///
-/// Select the embedder for the shared knowledge index from `TDW_EMBED_PROVIDER`.
+/// Select the knowledge embedder from config (`knowledge.embedding`), with
+/// `TDW_EMBED_PROVIDER` as an environment override (knowledge-system B6).
 ///
-/// Default / unset / `hash` / `local` → the deterministic offline
-/// [`HashEmbeddingProvider`]. `openai` / `google` build the real HTTP embedder
-/// when the matching feature is compiled and an API key is present; otherwise a
-/// **warning is logged** and the hash embedder is used (the daemon still boots
-/// rather than silently degrading without a trace). The real arms are
-/// `#[cfg]`-gated so the default build never compiles reqwest.
+/// `hash` (the default) → the deterministic offline
+/// [`HashEmbeddingProvider`]. `local` → the on-disk model via
+/// `tdw-embed-local`'s `model` feature (`local-model` build feature here),
+/// reading `knowledge.embedding.model_dir` (env override
+/// `TDW_EMBED_MODEL_DIR`). `openai` / `google` build the real HTTP embedder.
+///
+/// There is NO silent fallback: a requested provider whose feature is not
+/// compiled, whose API key is missing, or whose model directory is unusable
+/// is a hard [`BackendError::Init`] — switching retrieval semantics behind
+/// the operator's back is worse than refusing to boot (plan B1a).
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::Init`] if a real provider is requested, its key is
-/// present, but the client cannot be constructed (e.g. an invalid base URL).
-// In the default (no-feature) build only the hash/unknown arms remain, all `Ok`,
-// so the `Result` looks unwrappable there — keep the allow.
-#[allow(clippy::unnecessary_wraps)]
-fn select_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
-    let provider = std::env::var("TDW_EMBED_PROVIDER")
+/// Returns [`BackendError::Init`] as described above.
+fn select_embedder(
+    embedding: &tdw_config::EmbeddingConfig,
+) -> BackendResult<Arc<dyn EmbeddingProvider>> {
+    let env_override = std::env::var("TDW_EMBED_PROVIDER")
         .ok()
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
-    match provider.as_deref() {
-        None | Some("hash" | "local") => Ok(Arc::new(HashEmbeddingProvider::default())),
+    let provider = env_override.unwrap_or_else(|| embedding.provider.trim().to_ascii_lowercase());
+    match provider.as_str() {
+        "" | "hash" => Ok(Arc::new(HashEmbeddingProvider::default())),
+        #[cfg(feature = "local-model")]
+        "local" => build_local_embedder(embedding),
         #[cfg(feature = "openai")]
-        Some("openai") => build_openai_embedder(),
+        "openai" => build_openai_embedder(),
         #[cfg(feature = "google")]
-        Some("google") => build_google_embedder(),
-        Some(other) => {
-            eprintln!(
-                "tdw-backend: TDW_EMBED_PROVIDER={other} is unavailable in this build \
-                 (is the matching feature compiled?); using the offline hash embedder"
-            );
-            Ok(Arc::new(HashEmbeddingProvider::default()))
-        }
+        "google" => build_google_embedder(),
+        other => Err(BackendError::Init(format!(
+            "knowledge embedder {other:?} is unavailable in this build (compile the matching \
+             feature: local-model / openai / google) — refusing to silently fall back to the \
+             hash embedder"
+        ))),
     }
+}
+
+#[cfg(feature = "local-model")]
+fn build_local_embedder(
+    embedding: &tdw_config::EmbeddingConfig,
+) -> BackendResult<Arc<dyn EmbeddingProvider>> {
+    let model_dir = first_env(&["TDW_EMBED_MODEL_DIR"])
+        .or_else(|| embedding.model_dir.clone())
+        .filter(|dir| !dir.trim().is_empty())
+        .ok_or_else(|| {
+            BackendError::Init(
+                "knowledge.embedding.provider = local requires knowledge.embedding.model_dir \
+                 (or TDW_EMBED_MODEL_DIR)"
+                    .to_string(),
+            )
+        })?;
+    let provider = tdw_embed_local::LocalModelEmbeddingProvider::from_dir(model_dir.trim())
+        .map_err(|error| BackendError::Init(error.to_string()))?;
+    Ok(Arc::new(provider))
 }
 
 /// First non-empty value among `names`, trimmed.
@@ -599,11 +641,13 @@ fn embed_model(default: &str) -> String {
 #[cfg(feature = "openai")]
 fn build_openai_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
     let Some(api_key) = first_env(&["TDW_OPENAI_EMBEDDING_API_KEY", "OPENAI_API_KEY"]) else {
-        eprintln!(
-            "tdw-backend: TDW_EMBED_PROVIDER=openai but no API key \
-             (TDW_OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY); using the offline hash embedder"
-        );
-        return Ok(Arc::new(HashEmbeddingProvider::default()));
+        // No silent fallback (B6): a requested provider without its key is a
+        // boot error, not a quiet semantic switch to the hash embedder.
+        return Err(BackendError::Init(
+            "openai embedder requested but no API key is set \
+             (TDW_OPENAI_EMBEDDING_API_KEY / OPENAI_API_KEY)"
+                .to_string(),
+        ));
     };
     let mut client = tdw_embed_openai::OpenAiEmbeddingHttpClient::new(
         api_key,
@@ -625,12 +669,12 @@ fn build_google_embedder() -> BackendResult<Arc<dyn EmbeddingProvider>> {
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
     ]) else {
-        eprintln!(
-            "tdw-backend: TDW_EMBED_PROVIDER=google but no API key \
-             (TDW_GOOGLE_EMBEDDING_API_KEY / GOOGLE_API_KEY / GEMINI_API_KEY); \
-             using the offline hash embedder"
-        );
-        return Ok(Arc::new(HashEmbeddingProvider::default()));
+        // No silent fallback (B6) — same posture as the openai arm.
+        return Err(BackendError::Init(
+            "google embedder requested but no API key is set \
+             (TDW_GOOGLE_EMBEDDING_API_KEY / GOOGLE_API_KEY / GEMINI_API_KEY)"
+                .to_string(),
+        ));
     };
     let mut client = tdw_embed_google::GoogleEmbeddingHttpClient::new(
         api_key,
@@ -839,6 +883,48 @@ mod tests {
             .stop_stream("binance:trades:NOPE")
             .unwrap_or_else(|error| panic!("stop should succeed: {error}"));
         assert!(!absent, "an unknown stream id must report not present");
+    }
+
+    fn embedding_config(provider: &str) -> tdw_config::EmbeddingConfig {
+        tdw_config::EmbeddingConfig {
+            provider: provider.to_string(),
+            model: None,
+            model_dir: None,
+            expected_dims: None,
+        }
+    }
+
+    #[test]
+    fn select_embedder_defaults_to_hash_and_never_falls_back_silently() {
+        // The default config selects the deterministic hash embedder.
+        let embedder = select_embedder(&tdw_config::EmbeddingConfig::default())
+            .unwrap_or_else(|error| panic!("hash default must construct: {error}"));
+        assert_eq!(embedder.model_id(), "local-hash-8");
+        // A provider whose feature is not compiled is a HARD error — never a
+        // silent hash fallback (plan B1a). The default test build compiles
+        // none of local-model/openai/google.
+        for requested in ["local", "openai", "google", "definitely-unknown"] {
+            #[cfg(feature = "local-model")]
+            if requested == "local" {
+                continue;
+            }
+            #[cfg(feature = "openai")]
+            if requested == "openai" {
+                continue;
+            }
+            #[cfg(feature = "google")]
+            if requested == "google" {
+                continue;
+            }
+            let error = select_embedder(&embedding_config(requested))
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(
+                error.contains("refusing to silently fall back"),
+                "{requested}: {error}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -40,6 +40,28 @@ impl LexicalEngine for InMemoryLexicalEngine {
         Ok(())
     }
 
+    async fn documents(&self, index: &str, offset: usize, limit: usize) -> Result<Vec<LexicalDoc>> {
+        validate_index(index)?;
+        if limit == 0 {
+            return Err(Error::Storage(
+                "documents limit must be greater than zero".to_string(),
+            ));
+        }
+        let indices = self
+            .indices
+            .lock()
+            .map_err(|error| Error::Storage(error.to_string()))?;
+        let docs = indices
+            .get(index)
+            .ok_or_else(|| Error::Storage(format!("unknown lexical index: {index}")))?;
+        // Stable id order regardless of insertion order, so pagination is
+        // deterministic and engines cannot drift.
+        let mut sorted: Vec<LexicalDoc> = docs.clone();
+        drop(indices);
+        sorted.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(sorted.into_iter().skip(offset).take(limit).collect())
+    }
+
     async fn search_text(&self, index: &str, query: TextQuery) -> Result<Vec<ScoredDoc>> {
         validate_index(index)?;
         validate_query(&query)?;

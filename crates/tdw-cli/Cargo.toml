@@ -7,9 +7,26 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+tdw-embed-google = { path = "../tdw-embed-google", optional = true }
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
+tdw-knowledge = { path = "../tdw-knowledge" }
 tdw-protocol = { workspace = true }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch", features = ["meilisearch"] }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant", features = ["qdrant"] }
 tdw-test-utils = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[features]
+default = []
+## `kg reindex --embedder local`: forwards the pure-Rust candle model stack.
+local-model = ["tdw-embed-local/model"]
+## `kg reindex --embedder openai` / `google`: the real HTTP embedders, same
+## env keys as the daemon's selector arms.
+openai = ["dep:tdw-embed-openai", "tdw-embed-openai/http"]
+google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
 
 [[example]]
 name = "tdw_cli_basic"

@@ -73,6 +73,10 @@ openai = ["dep:tdw-embed-openai", "tdw-embed-openai/http"]
 ## Compile the real Google/Gemini HTTP embedder selector arm. Forwards
 ## `tdw-embed-google/http` (reqwest). Off by default.
 google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
+## Compile the on-disk local-model embedder selector arm (`provider = local`).
+## Forwards `tdw-embed-local/model` (the pure-Rust candle BERT stack). Off by
+## default so the standard build stays dependency-light (knowledge-system B6).
+local-model = ["tdw-embed-local/model"]
 ## Forward the daemon transport features to `tdw-app-server`/`server::spawn_transport`
 ## so a `tdw-backend` build (lib or binary) can serve UDS/HTTP, exactly as the
 ## `tdw-service` binary's features did. `transport-tcp` is always on via the

@@ -157,6 +157,50 @@ pub struct ProtocolConfig {
     pub replay_enabled: bool,
 }
 
+/// Knowledge-system settings (knowledge-system B6).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct KnowledgeConfig {
+    #[serde(default)]
+    pub embedding: EmbeddingConfig,
+}
+
+/// Which embedder the knowledge index uses.
+///
+/// BOTH the local model and the API providers are first-class; this switch
+/// selects one — there is NO silent fallback (a requested-but-unavailable
+/// provider is a startup error). Collections are namespaced per embedder
+/// model id, so switching never mixes dimensions; re-embed existing
+/// documents with `tdw kg reindex`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EmbeddingConfig {
+    /// `hash` (deterministic offline default) | `local` (on-disk model via
+    /// the `local-model` build feature) | `openai` | `google`.
+    pub provider: String,
+    /// Provider-specific model id (API model name; informational for `local`,
+    /// whose id derives from the model directory).
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Directory holding `config.json` + `tokenizer.json` +
+    /// `model.safetensors` for the `local` provider.
+    #[serde(default)]
+    pub model_dir: Option<String>,
+    /// When set, the constructed embedder's dimension must match — a cheap
+    /// guard against pointing `model_dir` at the wrong model.
+    #[serde(default)]
+    pub expected_dims: Option<usize>,
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            provider: "hash".to_string(),
+            model: None,
+            model_dir: None,
+            expected_dims: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TdwConfig {
     pub profile: String,
@@ -167,6 +211,9 @@ pub struct TdwConfig {
     pub permissions: PermissionConfig,
     pub model: ModelConfig,
     pub protocol: ProtocolConfig,
+    /// Defaulted so pre-B6 config files keep deserializing unchanged.
+    #[serde(default)]
+    pub knowledge: KnowledgeConfig,
 }
 
 impl Default for TdwConfig {
@@ -205,6 +252,7 @@ impl Default for TdwConfig {
                 max_event_bytes: 1_048_576,
                 replay_enabled: true,
             },
+            knowledge: KnowledgeConfig::default(),
         }
     }
 }
@@ -286,6 +334,32 @@ impl TdwConfig {
                 return Err(ConfigError::Validation(format!(
                     "model.base_url must be an http(s) URL with no whitespace/control chars: \
                      {base_url:?}"
+                )));
+            }
+        }
+
+        // Knowledge embedder: a known provider token, and `local` must say
+        // where its model lives — there is no silent fallback at runtime, so
+        // an unusable selection should already fail at config load.
+        let embedding = &self.knowledge.embedding;
+        match embedding.provider.as_str() {
+            "hash" | "openai" | "google" => {}
+            "local" => {
+                if embedding
+                    .model_dir
+                    .as_deref()
+                    .is_none_or(|dir| dir.trim().is_empty())
+                {
+                    return Err(ConfigError::Validation(
+                        "knowledge.embedding.provider = local requires \
+                         knowledge.embedding.model_dir"
+                            .to_string(),
+                    ));
+                }
+            }
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.embedding.provider must be hash|local|openai|google, got {other:?}"
                 )));
             }
         }

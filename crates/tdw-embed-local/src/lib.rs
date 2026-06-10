@@ -2,6 +2,11 @@
 #![deny(clippy::pedantic, clippy::nursery)]
 use tdw_embed::{Embedding, EmbeddingError, EmbeddingProvider, Result};
 
+#[cfg(feature = "model")]
+mod model;
+#[cfg(feature = "model")]
+pub use model::LocalModelEmbeddingProvider;
+
 #[derive(Clone, Debug)]
 pub struct HashEmbeddingProvider {
     model_id: String,

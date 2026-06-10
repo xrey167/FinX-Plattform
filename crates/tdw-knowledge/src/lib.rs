@@ -2,6 +2,7 @@
 #![deny(clippy::pedantic, clippy::nursery)]
 
 pub mod indexer;
+pub mod reindex;
 
 use std::sync::Arc;
 
@@ -131,7 +132,8 @@ pub struct KnowledgeIndex {
 /// two models of *different* vector dimension sharing a collection, which the
 /// backing engine's dimension guard
 /// (`QdrantHttpEngine::ensure_collection`) rejects loudly rather than corrupting.
-fn collection_name(model_id: &str) -> String {
+#[must_use]
+pub fn collection_name(model_id: &str) -> String {
     let safe: String = model_id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })

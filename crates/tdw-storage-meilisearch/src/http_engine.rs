@@ -283,6 +283,11 @@ struct SearchEnvelope {
     hits: Vec<Value>,
 }
 
+#[derive(Deserialize)]
+struct DocumentsEnvelope {
+    results: Vec<Value>,
+}
+
 /// Validate a Meilisearch index UID before it is interpolated into a request
 /// path such as `/indexes/{index}/documents`.
 ///
@@ -356,6 +361,55 @@ impl LexicalEngine for MeilisearchHttpEngine {
             .await
             .map_err(|error| Error::Storage(format!("meilisearch index body: {error}")))?;
         self.wait_for_task(enqueued.task_uid).await
+    }
+
+    async fn documents(&self, index: &str, offset: usize, limit: usize) -> Result<Vec<LexicalDoc>> {
+        validate_index(index)?;
+        if limit == 0 {
+            return Err(Error::Storage(
+                "documents limit must be greater than zero".to_string(),
+            ));
+        }
+        // Meilisearch's GET /documents pagination is stable in its internal
+        // order while the index is unmodified — exactly the trait contract.
+        let path = format!("/indexes/{index}/documents?offset={offset}&limit={limit}");
+        let response = self
+            .request(reqwest::Method::GET, &path)?
+            .send()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch documents: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Storage(format!(
+                "meilisearch documents returned {status}: {body}"
+            )));
+        }
+        let envelope: DocumentsEnvelope = response
+            .json()
+            .await
+            .map_err(|error| Error::Storage(format!("meilisearch documents body: {error}")))?;
+        Ok(envelope
+            .results
+            .into_iter()
+            .map(|mut raw| {
+                let id = raw.get("id").map(hit_id_to_string).unwrap_or_default();
+                let body = raw
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if let Value::Object(map) = &mut raw {
+                    map.remove("id");
+                    map.remove("body");
+                }
+                LexicalDoc {
+                    id,
+                    body,
+                    fields: raw,
+                }
+            })
+            .collect())
     }
 
     async fn search_text(&self, index: &str, query: TextQuery) -> Result<Vec<ScoredDoc>> {

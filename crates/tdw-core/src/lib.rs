@@ -293,6 +293,13 @@ pub trait VectorEngine: Send + Sync {
 pub trait LexicalEngine: Send + Sync {
     async fn index(&self, index: &str, docs: Vec<LexicalDoc>) -> Result<()>;
     async fn search_text(&self, index: &str, query: TextQuery) -> Result<Vec<ScoredDoc>>;
+    /// Enumerate stored documents — the durable-document scan behind
+    /// `tdw kg reindex` (knowledge-system B6). Order is engine-defined but
+    /// STABLE across pages while the index is unmodified, so
+    /// `offset`/`limit` pagination covers every document exactly once.
+    /// `limit` must be greater than zero; an offset at/past the end returns
+    /// an empty page.
+    async fn documents(&self, index: &str, offset: usize, limit: usize) -> Result<Vec<LexicalDoc>>;
 }
 
 #[async_trait]
