@@ -359,8 +359,8 @@ async fn run_incremental_fires_only_rules_touching_the_change_set() {
 
     // A change set NOT mentioning the rule's inputs does not fire it.
     let unrelated = ChangeSet {
-        edge_types: ["unrelated_rel".to_string()].into_iter().collect(),
-        tags: Default::default(),
+        edge_types: std::iter::once("unrelated_rel".to_string()).collect(),
+        tags: std::collections::BTreeSet::new(),
     };
     let no_fire = engine
         .run_incremental(&graph, &tags, NOW, &unrelated)
@@ -371,8 +371,8 @@ async fn run_incremental_fires_only_rules_touching_the_change_set() {
 
     // One that DOES mention an input fires it.
     let related = ChangeSet {
-        edge_types: ["supplier_of".to_string()].into_iter().collect(),
-        tags: Default::default(),
+        edge_types: std::iter::once("supplier_of".to_string()).collect(),
+        tags: std::collections::BTreeSet::new(),
     };
     let fired = engine
         .run_incremental(&graph, &tags, NOW, &related)
