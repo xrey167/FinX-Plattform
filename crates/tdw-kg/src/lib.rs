@@ -550,6 +550,6 @@ mod tests {
             serde_json::Value::String("venue".to_string()),
             "kinds serialize to the registry's lowercase tokens"
         );
-        assert_eq!(EntityKind::ALL.len(), 50);
+        assert_eq!(EntityKind::ALL.len(), 51);
     }
 }

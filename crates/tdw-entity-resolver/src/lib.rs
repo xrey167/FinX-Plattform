@@ -112,6 +112,93 @@ pub fn try_resolve_by_identifier(
         .collect())
 }
 
+/// Project a crosswalk row onto the graph (knowledge-system A5).
+///
+/// Produces a `Symbol` node (`symbol:<scheme>:<value>`, both lowercased to
+/// the canonical key) plus an `identifies` edge to the instrument. The
+/// caller upserts the instrument node first (the graph engine enforces edge
+/// endpoints).
+///
+/// # Errors
+///
+/// Returns [`ResolveError::InvalidIdentifier`] for an invalid scheme/value.
+pub fn identifier_to_graph(
+    record: &IdentifierRecord,
+) -> Result<(tdw_core::GraphNode, tdw_core::GraphEdge), ResolveError> {
+    if !is_identifier_scheme(&record.scheme) || !is_identifier_value(&record.value) {
+        return Err(ResolveError::InvalidIdentifier);
+    }
+    let scheme = record.scheme.trim().to_ascii_lowercase();
+    // The value is lowercased too: the in-memory resolver matches values
+    // case-INSENSITIVELY, so the graph key must be canonical or the two
+    // resolve paths silently diverge on case-mismatched lookups.
+    let value = record.value.trim().to_ascii_lowercase();
+    let node_id = format!("symbol:{scheme}:{value}");
+    let node = tdw_core::GraphNode {
+        id: node_id.clone(),
+        kind: tdw_kg::EntityKind::Symbol,
+        label: value.clone(),
+        aliases: Vec::new(),
+        props: serde_json::json!({ "scheme": scheme, "value": value }),
+        valid_from: None,
+        valid_to: None,
+    };
+    let edge = tdw_core::GraphEdge {
+        from: node_id,
+        to: record.instrument_id.clone(),
+        rel: "identifies".to_string(),
+        props: serde_json::Value::Null,
+        provenance: tdw_core::Provenance::Ingest {
+            source: "tdw-entity-resolver:crosswalk".to_string(),
+        },
+        valid_from: None,
+        valid_to: None,
+    };
+    Ok((node, edge))
+}
+
+/// Resolve an instrument by standardized identifier against the GRAPH-backed
+/// crosswalk — the durable form of [`resolve_by_identifier`].
+///
+/// Uses [`tdw_core::Error`] so storage faults stay distinguishable from a
+/// clean no-match (which is an empty candidate list).
+///
+/// # Errors
+///
+/// Returns [`tdw_core::Error::InvalidQuery`] for an invalid scheme/value, or
+/// the graph engine's own error on storage failure.
+pub async fn resolve_by_identifier_graph(
+    graph: &dyn tdw_core::GraphEngine,
+    scheme: &str,
+    value: &str,
+) -> tdw_core::Result<Vec<ResolveCandidate>> {
+    if !is_identifier_scheme(scheme) || !is_identifier_value(value) {
+        return Err(tdw_core::Error::InvalidQuery(format!(
+            "invalid identifier scheme/value: {scheme:?}/{value:?}"
+        )));
+    }
+    let node_id = format!(
+        "symbol:{}:{}",
+        scheme.trim().to_ascii_lowercase(),
+        value.trim().to_ascii_lowercase()
+    );
+    let filter = tdw_core::TraversalFilter {
+        rels: Some(vec!["identifies".to_string()]),
+        direction: tdw_core::Direction::Out,
+        max_hops: 1,
+        ..tdw_core::TraversalFilter::default()
+    };
+    let reached = graph.neighbors(&node_id, &filter).await?;
+    Ok(reached
+        .into_iter()
+        .map(|(_, node)| ResolveCandidate {
+            entity_id: node.id,
+            score: 100,
+            reason: format!("exact {} identifier match", scheme.to_ascii_uppercase()),
+        })
+        .collect())
+}
+
 #[must_use]
 pub fn manual_merge_decision(source: &str, target: &str, approved: bool) -> MergeDecision {
     MergeDecision {
@@ -216,6 +303,61 @@ mod tests {
         assert_eq!(by_isin[0].entity_id, "INST-AAPL-XNAS");
 
         assert!(resolve_by_identifier("FIGI", "NOPE00000000", &records).is_empty());
+    }
+
+    #[tokio::test]
+    async fn graph_crosswalk_round_trips_identifier_resolution() {
+        use tdw_storage_graph::InMemoryGraphEngine;
+        let graph = InMemoryGraphEngine::default();
+        // The instrument node must exist before the identifies edge lands.
+        tdw_core::GraphEngine::upsert_nodes(
+            &graph,
+            vec![tdw_core::GraphNode {
+                id: "INST-AAPL-XNAS".to_string(),
+                kind: tdw_kg::EntityKind::Instrument,
+                label: "Apple".to_string(),
+                aliases: Vec::new(),
+                props: serde_json::Value::Null,
+                valid_from: None,
+                valid_to: None,
+            }],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("instrument should upsert: {error}"));
+        let (node, edge) = identifier_to_graph(&IdentifierRecord {
+            scheme: "FIGI".to_string(),
+            value: "BBG000B9XRY4".to_string(),
+            instrument_id: "INST-AAPL-XNAS".to_string(),
+        })
+        .unwrap_or_else(|error| panic!("crosswalk should convert: {error:?}"));
+        assert_eq!(
+            node.id, "symbol:figi:bbg000b9xry4",
+            "canonical lowercase key"
+        );
+        tdw_core::GraphEngine::upsert_nodes(&graph, vec![node])
+            .await
+            .unwrap_or_else(|error| panic!("symbol should upsert: {error}"));
+        tdw_core::GraphEngine::upsert_edges(&graph, vec![edge])
+            .await
+            .unwrap_or_else(|error| panic!("edge should upsert: {error}"));
+
+        // Case parity with the in-memory resolver: a lowercase query finds an
+        // uppercase-ingested value (and vice versa).
+        let candidates = resolve_by_identifier_graph(&graph, "FIGI", "bbg000b9xry4")
+            .await
+            .unwrap_or_else(|error| panic!("graph resolve should succeed: {error}"));
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].entity_id, "INST-AAPL-XNAS");
+        assert_eq!(candidates[0].score, 100);
+        // Unknown identifier: clean no-match, not an error.
+        assert!(
+            resolve_by_identifier_graph(&graph, "figi", "NOPE00000000")
+                .await
+                .unwrap_or_else(|error| panic!("resolve should succeed: {error}"))
+                .is_empty()
+        );
+        // Invalid input is a loud InvalidQuery.
+        assert!(resolve_by_identifier_graph(&graph, "", "X").await.is_err());
     }
 
     #[test]

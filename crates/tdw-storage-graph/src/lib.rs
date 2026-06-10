@@ -10,6 +10,10 @@
 #[cfg(feature = "bolt")]
 pub mod bolt_engine;
 
+pub mod tag_engine;
+
+pub use tag_engine::GraphTagEngine;
+
 #[cfg(feature = "bolt")]
 pub use bolt_engine::BoltGraphEngine;
 
@@ -290,6 +294,48 @@ impl GraphEngine for InMemoryGraphEngine {
         let path = Self::search_path(&state, from, to, filter);
         drop(state);
         Ok(path)
+    }
+
+    async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize> {
+        let mut state = self.lock()?;
+        let before = state.edges.len();
+        state.edges.retain(|edge| {
+            !(edge.from == from && edge.rel == rel && to.is_none_or(|to| edge.to == to))
+        });
+        let removed = before - state.edges.len();
+        drop(state);
+        Ok(removed)
+    }
+
+    async fn replace_edges(&self, from: &str, rel: &str, new_edges: Vec<GraphEdge>) -> Result<()> {
+        for edge in &new_edges {
+            validate_graph_edge(edge)?;
+            if edge.from != from || edge.rel != rel {
+                return Err(Error::Storage(format!(
+                    "replace_edges: edge {} -{}-> {} does not match ({from}, {rel})",
+                    edge.from, edge.rel, edge.to
+                )));
+            }
+        }
+        let mut state = self.lock()?;
+        for edge in &new_edges {
+            if !state.nodes.contains_key(&edge.to) {
+                return Err(Error::Storage(format!(
+                    "edge endpoint missing: {} -{}-> {}",
+                    edge.from, edge.rel, edge.to
+                )));
+            }
+        }
+        if !state.nodes.contains_key(from) {
+            return Err(Error::Storage(format!("edge endpoint missing: {from}")));
+        }
+        // Retract + add under ONE lock: no observable orphan window.
+        state
+            .edges
+            .retain(|edge| !(edge.from == from && edge.rel == rel));
+        state.edges.extend(new_edges);
+        drop(state);
+        Ok(())
     }
 
     async fn merge_entities(

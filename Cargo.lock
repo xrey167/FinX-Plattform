@@ -4596,7 +4596,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tdw-core",
  "tdw-kg",
+ "tdw-storage-graph",
+ "tokio",
 ]
 
 [[package]]
@@ -5721,6 +5724,7 @@ dependencies = [
  "neo4rs",
  "serde_json",
  "tdw-core",
+ "tdw-tags",
  "tdw-taxonomy",
  "tokio",
 ]
@@ -5819,8 +5823,10 @@ dependencies = [
 name = "tdw-tags"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

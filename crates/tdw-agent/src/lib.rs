@@ -1365,7 +1365,8 @@ fn spec_schema_for(kind: EntityKind) -> Option<Value> {
         | EntityKind::Dataset
         | EntityKind::Provider
         | EntityKind::Symbol
-        | EntityKind::Venue => return None,
+        | EntityKind::Venue
+        | EntityKind::Tag => return None,
         EntityKind::Agent => schema_json::<AgentCard>(),
         EntityKind::Skill => schema_json::<AgentSkill>(),
         EntityKind::Tool => schema_json::<Tool>(),

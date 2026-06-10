@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
+
+pub mod engine;
+
+pub use engine::{InMemoryTagEngine, TagEngine, date_to_timestamp};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +37,8 @@ pub enum TagError {
     InvalidTagId(String),
     #[error("invalid tag assignment")]
     InvalidAssignment,
+    #[error("tag engine error: {0}")]
+    Engine(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -46,15 +52,11 @@ impl TagStore {
     ///
     /// Returns an error variant if the underlying operation fails.
     pub fn define(&mut self, definition: TagDefinition) -> Result<(), TagError> {
-        validate_tag_id(&definition.tag_id)?;
-        if let Some(parent) = &definition.parent {
-            validate_tag_id(parent)?;
-            if !self.definitions.contains_key(parent) {
-                return Err(TagError::UnknownParent(parent.clone()));
-            }
-        }
-        if matches!(definition.ttl_days, Some(0)) {
-            return Err(TagError::InvalidTagId(definition.tag_id));
+        validate_definition_shape(&definition)?;
+        if let Some(parent) = &definition.parent
+            && !self.definitions.contains_key(parent)
+        {
+            return Err(TagError::UnknownParent(parent.clone()));
         }
         let previous = self
             .definitions
@@ -80,7 +82,7 @@ impl TagStore {
     ///
     /// Returns an error variant if the underlying operation fails.
     pub fn assign(&mut self, assignment: TagAssignment) -> Result<(), TagError> {
-        validate_assignment(&assignment)?;
+        validate_assignment_shape(&assignment)?;
         if !self.definitions.contains_key(&assignment.tag_id) {
             return Err(TagError::UnknownTag(assignment.tag_id));
         }
@@ -173,6 +175,35 @@ impl TagStore {
         }
         false
     }
+}
+
+/// Shape-level definition validation (id/parent grammar, non-zero TTL) shared
+/// by every [`TagEngine`] backend; parent existence and cycle checks are
+/// store-level and stay per-backend.
+///
+/// # Errors
+///
+/// Returns the first grammar/TTL violation.
+pub fn validate_definition_shape(definition: &TagDefinition) -> Result<(), TagError> {
+    validate_tag_id(&definition.tag_id)?;
+    if let Some(parent) = &definition.parent {
+        validate_tag_id(parent)?;
+    }
+    if matches!(definition.ttl_days, Some(0)) {
+        return Err(TagError::InvalidTagId(definition.tag_id.clone()));
+    }
+    Ok(())
+}
+
+/// Shape-level assignment validation (grammar, dates, half-open window,
+/// provenance) shared by every [`TagEngine`] backend; tag existence is a
+/// store-level check and stays per-backend.
+///
+/// # Errors
+///
+/// Returns the first shape violation.
+pub fn validate_assignment_shape(assignment: &TagAssignment) -> Result<(), TagError> {
+    validate_assignment(assignment)
 }
 
 fn validate_tag_id(value: &str) -> Result<(), TagError> {

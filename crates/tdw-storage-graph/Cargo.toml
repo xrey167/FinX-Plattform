@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 neo4rs = { workspace = true, optional = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
+tdw-tags = { path = "../tdw-tags" }
 tdw-taxonomy = { workspace = true }
 
 [dev-dependencies]
