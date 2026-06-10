@@ -19,12 +19,16 @@ tdw-core = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-kg = { path = "../tdw-kg" }
+tdw-news-compose = { path = "../tdw-news-compose" }
 tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+tdw-tag-rules = { path = "../tdw-tag-rules" }
 tdw-tags = { path = "../tdw-tags" }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
 tokio = { workspace = true }
 
 # Unique example binary name (the workspace builds examples into one shared

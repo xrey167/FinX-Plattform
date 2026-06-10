@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
+
+pub mod indexer;
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -31,12 +34,63 @@ pub enum KnowledgeError {
     InvalidQuery(&'static str),
 }
 
+/// Where a document came from — ingestion lineage for provenance and
+/// re-index sweeps (distinct from the taxonomy's `Origin`, which classifies
+/// entity kinds).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DocumentSource {
+    /// A composed news article.
+    News { source: String, url: String },
+    /// Provider/dataset metadata.
+    Provider { provider: String },
+    /// Manually authored.
+    Manual,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KnowledgeDocument {
     pub id: String,
     pub body: String,
     pub entity: Entity,
     pub tags: Vec<String>,
+    /// Ingestion lineage (knowledge-system B5).
+    #[serde(default)]
+    pub source: Option<DocumentSource>,
+    /// Knowledge plane (`agent` / `platform` / `shared`).
+    #[serde(default)]
+    pub plane: Option<String>,
+    /// Effective date, `YYYY-MM-DD`. Undated documents are structurally
+    /// invisible to temporal queries (B4 leakage-safety contract).
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// Entity ids this document mentions — written as `mentions` graph edges
+    /// at index time (stub nodes are created for unknown targets).
+    #[serde(default)]
+    pub mentions: Vec<String>,
+}
+
+impl KnowledgeDocument {
+    /// A document with the pre-B5 fields; lineage/plane/`as_of`/mentions
+    /// default to absent (set them directly when ingesting).
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        body: impl Into<String>,
+        entity: Entity,
+        tags: Vec<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            body: body.into(),
+            entity,
+            tags,
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,6 +192,60 @@ impl KnowledgeIndex {
             .embed(&document.body)
             .await
             .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
+        self.index_document_with_vector_at(document, embedding.vector, now)
+            .await
+    }
+
+    /// Batch indexing over [`EmbeddingProvider::embed_batch`] (knowledge-system
+    /// B5): one embedding round-trip for the whole batch, then per-document
+    /// indexing. Validation is all-or-nothing UP FRONT — a bad document fails
+    /// the batch before anything is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error variant if the underlying operation fails.
+    pub async fn index_documents_at(
+        &mut self,
+        documents: Vec<KnowledgeDocument>,
+        now: &str,
+    ) -> Result<()> {
+        if !is_date(now) {
+            return Err(KnowledgeError::InvalidDocumentField("now"));
+        }
+        for document in &documents {
+            validate_document(document)?;
+        }
+        if documents.is_empty() {
+            return Ok(());
+        }
+        let bodies: Vec<String> = documents
+            .iter()
+            .map(|document| document.body.clone())
+            .collect();
+        let embeddings = self
+            .embedder
+            .embed_batch(&bodies)
+            .await
+            .map_err(|error| KnowledgeError::Embedding(error.to_string()))?;
+        for (document, embedding) in documents.into_iter().zip(embeddings) {
+            self.index_document_with_vector_at(document, embedding.vector, now)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The shared write path behind single and batch indexing: in-process
+    /// graph + tags, then the vector point with the B4 retrieval payload
+    /// contract (`entity_id`, `tags`, `entity_kind`, `plane`, `as_of` as a
+    /// normalized timestamp, `content_hash`). `plane`/`as_of` keys are written
+    /// only when present — a missing `as_of` is what makes an undated document
+    /// invisible to temporal queries.
+    async fn index_document_with_vector_at(
+        &mut self,
+        document: KnowledgeDocument,
+        vector: Vec<f32>,
+        now: &str,
+    ) -> Result<()> {
         self.graph.upsert_entity(document.entity.clone());
         self.graph.add_relationship(Relationship {
             from: document.entity.entity_id.clone(),
@@ -145,14 +253,24 @@ impl KnowledgeIndex {
             rel_type: "described_by".to_string(),
             provenance: "tdw-knowledge".to_string(),
         });
+        let active = self.tags.active_tags(&document.entity.entity_id, now);
         for tag in &document.tags {
-            self.tags
-                .define(TagDefinition {
-                    tag_id: tag.clone(),
-                    parent: None,
-                    ttl_days: None,
-                })
-                .map_err(|error| KnowledgeError::Tag(error.to_string()))?;
+            // Define only when missing: re-defining an existing tag with
+            // `parent: None` would re-parent it to the taxonomy root.
+            if !self.tags.is_defined(tag) {
+                self.tags
+                    .define(TagDefinition {
+                        tag_id: tag.clone(),
+                        parent: None,
+                        ttl_days: None,
+                    })
+                    .map_err(|error| KnowledgeError::Tag(error.to_string()))?;
+            }
+            // Skip already-active assignments: the store is append-only, so a
+            // re-index would otherwise duplicate every assignment (R5).
+            if active.contains(tag) {
+                continue;
+            }
             self.tags
                 .assign(TagAssignment {
                     entity_id: document.entity.entity_id.clone(),
@@ -163,20 +281,24 @@ impl KnowledgeIndex {
                 })
                 .map_err(|error| KnowledgeError::Tag(error.to_string()))?;
         }
+        let payload = document_payload(&document);
         self.vectors
             .upsert(
                 &self.collection,
                 vec![VectorPoint {
                     id: document.id,
-                    vector: embedding.vector,
-                    payload: json!({
-                        "entity_id": document.entity.entity_id,
-                        "tags": document.tags,
-                    }),
+                    vector,
+                    payload,
                 }],
             )
             .await
             .map_err(|error| KnowledgeError::Storage(error.to_string()))
+    }
+
+    /// Crate-internal access for the [`indexer`]'s rule engine, whose
+    /// assignments write into the same store the index reads.
+    pub(crate) const fn tags_store_mut(&mut self) -> &mut TagStore {
+        &mut self.tags
     }
 
     /// Vector search, delegated to a single-channel [`tdw_retrieve::Retriever`]
@@ -256,7 +378,67 @@ pub fn validate_document(document: &KnowledgeDocument) -> Result<()> {
     if document.tags.iter().any(|tag| !is_tag_id(tag)) {
         return Err(KnowledgeError::InvalidDocumentField("tags"));
     }
+    if let Some(plane) = &document.plane
+        && !is_plane(plane)
+    {
+        return Err(KnowledgeError::InvalidDocumentField("plane"));
+    }
+    if let Some(as_of) = &document.as_of
+        && !is_date(as_of)
+    {
+        return Err(KnowledgeError::InvalidDocumentField("as_of"));
+    }
+    if document.mentions.iter().any(|id| !is_entity_ref(id)) {
+        return Err(KnowledgeError::InvalidDocumentField("mentions"));
+    }
     Ok(())
+}
+
+/// The B4 retrieval payload contract for one document.
+///
+/// `entity_id`, `tags`, `entity_kind`, `content_hash`, plus `plane`/`as_of`
+/// ONLY when present (`as_of` normalized to a timestamp). Shared by the
+/// vector point and the lexical co-index so the two channels can never drift.
+#[must_use]
+pub fn document_payload(document: &KnowledgeDocument) -> serde_json::Value {
+    let mut payload = json!({
+        "entity_id": document.entity.entity_id,
+        "tags": document.tags,
+        "entity_kind": kind_token(document.entity.kind),
+        "content_hash": indexer::content_hash(document),
+    });
+    if let Some(plane) = &document.plane {
+        payload["plane"] = json!(plane);
+    }
+    if let Some(as_of) = &document.as_of {
+        payload["as_of"] = json!(tdw_tags::date_to_timestamp(as_of));
+    }
+    payload
+}
+
+/// The taxonomy kind's lowercase serde token (e.g. `instrument`) — the
+/// `entity_kind` payload value the retrieval contract filters on.
+fn kind_token(kind: tdw_kg::EntityKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
+}
+
+/// Plane tokens are lowercase identifiers (`agent` / `platform` / `shared`).
+fn is_plane(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character == '_')
+}
+
+/// Mention targets use the graph id grammar (`instrument:AAPL`).
+fn is_entity_ref(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
 }
 
 /// # Errors
@@ -351,6 +533,10 @@ mod tests {
                         aliases: vec!["AAPL".to_string()],
                     },
                     tags: vec!["asset:equity".to_string()],
+                    source: None,
+                    plane: None,
+                    as_of: None,
+                    mentions: Vec::new(),
                 },
                 "2026-05-22",
             )
@@ -392,6 +578,10 @@ mod tests {
                         aliases: vec!["AAPL".to_string()],
                     },
                     tags: vec!["asset:equity".to_string()],
+                    source: None,
+                    plane: None,
+                    as_of: None,
+                    mentions: Vec::new(),
                 },
                 "2026-05-22",
             )
@@ -469,6 +659,10 @@ mod tests {
                 aliases: vec!["AAPL".to_string()],
             },
             tags: vec!["asset:equity".to_string()],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
         };
 
         let error = index
@@ -488,6 +682,10 @@ mod tests {
                 aliases: vec!["AAPL".to_string()],
             },
             tags: Vec::new(),
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
         };
         let error = index
             .index_document_at(tagless, "not-a-date")
@@ -534,6 +732,10 @@ fn build_context() {}
                 body: "  ".to_string(),
                 entity: ok_entity(),
                 tags: vec![],
+                source: None,
+                plane: None,
+                as_of: None,
+                mentions: Vec::new(),
             }),
             Err(KnowledgeError::InvalidDocumentField("body"))
         ));
@@ -548,6 +750,10 @@ fn build_context() {}
                     ..ok_entity()
                 },
                 tags: vec![],
+                source: None,
+                plane: None,
+                as_of: None,
+                mentions: Vec::new(),
             }),
             Err(KnowledgeError::InvalidDocumentField("entity"))
         ));
@@ -558,6 +764,10 @@ fn build_context() {}
                 body: "ok".to_string(),
                 entity: ok_entity(),
                 tags: vec!["notacolon".to_string()],
+                source: None,
+                plane: None,
+                as_of: None,
+                mentions: Vec::new(),
             }),
             Err(KnowledgeError::InvalidDocumentField("tags"))
         ));

@@ -158,6 +158,11 @@ impl RuleEngine {
     /// provenance is `rule:<rule_id>@v<version>` so derived facts are traceable
     /// to the exact rule-set version that fired.
     ///
+    /// A tag the entity ALREADY holds (per `ctx.active_tags`) is not
+    /// re-assigned: the store is append-only, so re-asserting on every
+    /// re-evaluation would duplicate the assignment without changing what is
+    /// active (knowledge-system B5 idempotency).
+    ///
     /// # Errors
     ///
     /// Returns [`RuleError::Tag`] when an assignment is rejected by the store
@@ -170,6 +175,9 @@ impl RuleEngine {
     ) -> Result<Vec<TagAssignment>, RuleError> {
         let mut assignments = Vec::new();
         for rule in &self.rules {
+            if ctx.active_tags.contains(&rule.tag_id) {
+                continue;
+            }
             if evaluate(&rule.predicate, ctx, store) {
                 let assignment = TagAssignment {
                     entity_id: ctx.entity_id.to_string(),
@@ -448,6 +456,36 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{tag} should define: {error}"));
         }
         store
+    }
+
+    #[test]
+    fn apply_at_skips_already_active_tags() {
+        let mut tags = store_with(&[("asset:equity", None)]);
+        let mut engine = RuleEngine::default();
+        engine
+            .hot_reload(vec![TagRule {
+                rule_id: "equity-symbol".to_string(),
+                tag_id: "asset:equity".to_string(),
+                predicate: Predicate::LabelContains {
+                    label: "AAPL".to_string(),
+                },
+            }])
+            .unwrap_or_else(|error| panic!("rule should reload: {error}"));
+        // The entity already actively holds the tag: re-evaluation must not
+        // append a duplicate to the append-only store.
+        let active = vec!["asset:equity".to_string()];
+        let ctx = EntityContext {
+            entity_id: "instrument:AAPL",
+            label: "AAPL",
+            fields: &Value::Null,
+            active_tags: &active,
+            neighbors: &[],
+        };
+        let assignments = engine
+            .apply_at(&ctx, NOW, &mut tags)
+            .unwrap_or_else(|error| panic!("rule should apply: {error}"));
+        assert!(assignments.is_empty(), "{assignments:?}");
+        assert!(tags.assignments().is_empty(), "no duplicate was appended");
     }
 
     #[test]

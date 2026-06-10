@@ -48,6 +48,8 @@ pub struct Relationship {
 pub enum KnowledgeGraphError {
     InvalidEntityId,
     EmptyLabel,
+    /// Label carries control characters (stored-injection surface).
+    InvalidLabel,
     InvalidAlias,
     InvalidRelationship,
     MissingEndpoint,
@@ -304,6 +306,11 @@ pub fn validate_entity(entity: &Entity) -> Result<(), KnowledgeGraphError> {
     }
     if entity.label.trim().is_empty() {
         return Err(KnowledgeGraphError::EmptyLabel);
+    }
+    // Mirror of the durable contract's label rule (`validate_graph_node`):
+    // control characters are stored-injection surface.
+    if entity.label.chars().any(char::is_control) {
+        return Err(KnowledgeGraphError::InvalidLabel);
     }
     if entity
         .aliases

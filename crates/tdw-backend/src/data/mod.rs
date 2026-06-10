@@ -489,6 +489,33 @@ impl Backend {
         self.knowledge_index_at(doc, &today).await
     }
 
+    /// Batch-index documents effective `now` (knowledge-system B5). One
+    /// `embed_batch` round-trip embeds the whole batch (native batch
+    /// endpoints on API embedders), then each document indexes through the
+    /// same write path as [`Backend::knowledge_index_at`] — the BARE index
+    /// path (vector + in-process graph/tags). Rules, lexical co-index,
+    /// durable-graph stamping, and manifest idempotency live on
+    /// `tdw_knowledge::indexer::KnowledgeIndexer`, which is not yet hosted by
+    /// the daemon (wiring planned with the B8 knowledge runtime). Validation
+    /// is all-or-nothing up front; the index mutex is held for the duration
+    /// of the batch, so [`Backend::knowledge_search`] never observes a
+    /// half-applied batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if any document is invalid or an
+    /// embedding/storage/tag step fails.
+    pub async fn knowledge_ingest_at(
+        &self,
+        docs: Vec<KnowledgeDocument>,
+        now: &str,
+    ) -> BackendResult<()> {
+        let mut index = self.index.lock().await;
+        index.index_documents_at(docs, now).await?;
+        drop(index);
+        Ok(())
+    }
+
     /// Search the embedded knowledge index for the `top_k` nearest hits to
     /// `query`.
     ///
@@ -815,6 +842,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn knowledge_ingest_batch_then_search_returns_hits() {
+        use tdw_kg::{Entity, EntityKind};
+
+        let backend = Backend::in_memory_for_tests().await;
+        let entity = |symbol: &str| Entity {
+            entity_id: format!("instrument:{symbol}"),
+            kind: EntityKind::Instrument,
+            label: symbol.to_string(),
+            aliases: vec![symbol.to_string()],
+        };
+        let mut dated = KnowledgeDocument::new(
+            "doc-batch-1",
+            "AAPL services revenue acceleration note",
+            entity("AAPL"),
+            vec!["asset:equity".to_string()],
+        );
+        dated.plane = Some("platform".to_string());
+        dated.as_of = Some("2026-06-01".to_string());
+        let undated = KnowledgeDocument::new(
+            "doc-batch-2",
+            "MSFT infrastructure capex comment",
+            entity("MSFT"),
+            Vec::new(),
+        );
+        backend
+            .knowledge_ingest_at(vec![dated, undated], "2026-06-02")
+            .await
+            .unwrap_or_else(|error| panic!("batch ingest should succeed: {error}"));
+        let hits = backend
+            .knowledge_search("AAPL services revenue acceleration note", 1)
+            .await
+            .unwrap_or_else(|error| panic!("search should succeed: {error}"));
+        assert_eq!(hits[0].id, "doc-batch-1");
+        // An invalid document fails the WHOLE batch up front.
+        let invalid = KnowledgeDocument::new("../bad", "x", entity("AAPL"), Vec::new());
+        let valid = KnowledgeDocument::new("doc-batch-3", "ok", entity("AAPL"), Vec::new());
+        backend
+            .knowledge_ingest_at(vec![valid, invalid], "2026-06-02")
+            .await
+            .expect_err("invalid batch member must fail the batch");
+        assert!(
+            backend
+                .knowledge_search("doc-batch-3 ok", 5)
+                .await
+                .unwrap_or_else(|error| panic!("search should succeed: {error}"))
+                .iter()
+                .all(|hit| hit.id != "doc-batch-3"),
+            "nothing from the failed batch may be written"
+        );
+    }
+
+    #[tokio::test]
     async fn knowledge_index_then_search_returns_hit() {
         use tdw_kg::{Entity, EntityKind};
 
@@ -832,6 +911,10 @@ mod tests {
                     aliases: vec!["AAPL".to_string()],
                 },
                 tags: vec!["asset:equity".to_string()],
+                source: None,
+                plane: None,
+                as_of: None,
+                mentions: Vec::new(),
             })
             .await
             .unwrap_or_else(|error| panic!("index should succeed: {error}"));

@@ -111,6 +111,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 aliases: vec!["AAPL".to_string()],
             },
             tags: vec!["asset:equity".to_string()],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: Vec::new(),
         })
         .await?;
     let hits = backend.knowledge_search("AAPL momentum", 1).await?;

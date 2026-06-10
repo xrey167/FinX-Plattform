@@ -25,6 +25,10 @@ async fn main() {
                     aliases: vec!["AAPL".to_string()],
                 },
                 tags: vec!["asset:equity".to_string()],
+                source: None,
+                plane: None,
+                as_of: None,
+                mentions: Vec::new(),
             },
             "2026-05-22",
         )

@@ -261,6 +261,15 @@ pub fn validate_graph_node(node: &GraphNode) -> Result<()> {
     if node.label.trim().is_empty() {
         return Err(Error::Storage(format!("empty label for node {}", node.id)));
     }
+    // Labels replay into logs, terminals, and agent context — control
+    // characters (ANSI escapes, newlines, NUL) are stored-injection surface,
+    // exactly like the alias and provenance grammars already reject.
+    if node.label.chars().any(char::is_control) {
+        return Err(Error::Storage(format!(
+            "control character in label for node {}",
+            node.id
+        )));
+    }
     if node
         .aliases
         .iter()
