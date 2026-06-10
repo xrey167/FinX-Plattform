@@ -145,12 +145,21 @@ pub async fn serve_workspace_http(
 }
 
 /// A parsed request head: method, path, query, and the headers we care about.
-struct RequestHead {
-    method: String,
-    path: String,
-    query: String,
-    origin: Option<String>,
-    api_key: Option<String>,
+///
+/// Shared with the [`super::agent_route`] family (under `agent-route`), which
+/// reuses the same parsing + CORS + auth helpers; hence the `pub(crate)`
+/// visibility on the fields and the helper functions below.
+pub(crate) struct RequestHead {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    #[cfg_attr(not(feature = "agent-route"), allow(dead_code))]
+    pub(crate) query: String,
+    pub(crate) origin: Option<String>,
+    pub(crate) api_key: Option<String>,
+    /// The parsed `Content-Length`, when present (used by the agent family's
+    /// `POST /v1/query`; the GET-only workspace family ignores it).
+    #[cfg_attr(not(feature = "agent-route"), allow(dead_code))]
+    pub(crate) content_length: Option<usize>,
 }
 
 /// Handle one Workspace-family connection.
@@ -251,7 +260,11 @@ async fn read_request_head(stream: &mut TcpStream) -> Option<RequestHead> {
 }
 
 /// Parse a request head string into a [`RequestHead`].
-fn parse_head(header_str: &str) -> Option<RequestHead> {
+///
+/// `pub(crate)` so the [`super::agent_route`] family (under `agent-route`) can
+/// reuse the same parser for its `POST /v1/query` head; the workspace family
+/// keeps using it via [`read_request_head`].
+pub(crate) fn parse_head(header_str: &str) -> Option<RequestHead> {
     let mut lines = header_str.lines();
     let request_line = lines.next()?;
     let mut parts = request_line.split_ascii_whitespace();
@@ -261,6 +274,7 @@ fn parse_head(header_str: &str) -> Option<RequestHead> {
 
     let mut origin = None;
     let mut api_key = None;
+    let mut content_length = None;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             let lower = name.trim().to_ascii_lowercase();
@@ -269,6 +283,8 @@ fn parse_head(header_str: &str) -> Option<RequestHead> {
                 origin = Some(value);
             } else if lower == API_KEY_HEADER {
                 api_key = Some(value);
+            } else if lower == "content-length" {
+                content_length = value.parse::<usize>().ok();
             }
         }
     }
@@ -278,7 +294,14 @@ fn parse_head(header_str: &str) -> Option<RequestHead> {
         query: query.to_string(),
         origin,
         api_key,
+        content_length,
     })
+}
+
+/// Alias for [`parse_head`] under a clearer name for cross-module callers.
+#[cfg(feature = "agent-route")]
+pub(crate) fn parse_request_head(header_str: &str) -> Option<RequestHead> {
+    parse_head(header_str)
 }
 
 /// Build the CORS response headers for a request from `origin`.
@@ -287,7 +310,10 @@ fn parse_head(header_str: &str) -> Option<RequestHead> {
 /// credentialed requests); otherwise the first configured origin is returned so
 /// the browser blocks a disallowed caller. Always advertises the methods and
 /// the `X-TDW-API-KEY` / `Authorization` request headers.
-fn cors_headers(config: &WorkspaceConfig, origin: Option<&str>) -> Vec<(String, String)> {
+pub(crate) fn cors_headers(
+    config: &WorkspaceConfig,
+    origin: Option<&str>,
+) -> Vec<(String, String)> {
     let allow_origin = match origin {
         Some(value) if config.origin_allowed(value) => value.to_string(),
         _ => config
@@ -311,7 +337,7 @@ fn cors_headers(config: &WorkspaceConfig, origin: Option<&str>) -> Vec<(String, 
 }
 
 /// Constant-time check that `candidate` equals the configured key.
-fn key_matches(expected: &str, candidate: Option<&str>) -> bool {
+pub(crate) fn key_matches(expected: &str, candidate: Option<&str>) -> bool {
     let Some(candidate) = candidate else {
         return false;
     };

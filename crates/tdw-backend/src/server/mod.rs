@@ -341,7 +341,7 @@ async fn spawn_daemon_rest(
 /// Decide whether the workspace listener must refuse to start: a non-loopback
 /// bind with no API key is the fail-closed case. Pure (no env / no I/O) so the
 /// fail-closed rule is unit-testable without mutating the process environment.
-#[cfg(feature = "workspace-route")]
+#[cfg(any(feature = "workspace-route", feature = "agent-route"))]
 #[must_use]
 fn workspace_bind_refused(bind: &str, has_api_key: bool) -> bool {
     !bind_is_loopback(bind) && !has_api_key
@@ -375,6 +375,49 @@ async fn spawn_daemon_workspace(
     let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
     Some(tokio::spawn(async move {
         tdw_app_server::serve_workspace_http(listener, handler, config, cancel).await
+    }))
+}
+
+/// Bind and spawn the daemon's OpenBB Workspace **agent protocol** bridge
+/// listener when `TDW_AGENT_BIND` is set (and the `agent-route` feature is
+/// compiled).
+///
+/// Serves `GET /agents.json` (one default copilot) and `POST /v1/query` (the
+/// `openbb-ai` SSE copilot protocol), driving the offline `StubLanguageModel`
+/// through the pure `tdw-openbb-agent` sequencer. CORS + the optional
+/// `X-TDW-API-KEY` check are shared with the workspace family.
+///
+/// **Fail-closed**, mirroring [`spawn_daemon_workspace`]: a non-loopback bind
+/// with no `TDW_WORKSPACE_API_KEY` set refuses to start (logs and returns
+/// `None`). Returns `None` when unset, on a fail-closed refusal, or on bind
+/// failure (logged), so the daemon still serves its primary transport.
+#[cfg(feature = "agent-route")]
+async fn spawn_daemon_agent(
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = std::env::var("TDW_AGENT_BIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let config = tdw_app_server::WorkspaceConfig::from_env();
+    if workspace_bind_refused(&bind, config.api_key.is_some()) {
+        eprintln!(
+            "tdw-backend: REFUSING to start agent listener on non-loopback bind '{bind}' without TDW_WORKSPACE_API_KEY set (fail-closed). Set the key or bind 127.0.0.1."
+        );
+        return None;
+    }
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-backend: agent listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    // The agents.json `endpoints.query` URL must point back at this listener.
+    let query_url = format!("http://{bind}/v1/query");
+    eprintln!("tdw-backend: agent listener on http://{bind} (/agents.json /v1/query)");
+    let handler = tdw_service_api::AgentBridgeState::new().into_handler();
+    Some(tokio::spawn(async move {
+        tdw_app_server::serve_agent_http(listener, handler, config, query_url, cancel).await
     }))
 }
 
@@ -507,6 +550,13 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     #[cfg(feature = "workspace-route")]
     let workspace_task = spawn_daemon_workspace(&state, cancel.clone()).await;
 
+    // Optional OpenBB Workspace agent-protocol bridge (GET /agents.json,
+    // POST /v1/query SSE), env-gated on TDW_AGENT_BIND and off by default.
+    // Fail-closed on a non-loopback bind without TDW_WORKSPACE_API_KEY. Shares
+    // the cancellation token so a graceful drain stops accepting requests too.
+    #[cfg(feature = "agent-route")]
+    let agent_task = spawn_daemon_agent(cancel.clone()).await;
+
     // Phase B — a standalone daemon's only memory surface is the persisted file
     // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
     // `Backend` API — `upsert_memory` — which the binary does not expose, since
@@ -552,6 +602,12 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // clean exit so the drain is bounded.
     #[cfg(feature = "workspace-route")]
     if let Some(task) = workspace_task {
+        let _ = task.await;
+    }
+    // The agent listener observes the same cancellation token; await its clean
+    // exit so the drain is bounded.
+    #[cfg(feature = "agent-route")]
+    if let Some(task) = agent_task {
         let _ = task.await;
     }
     let _ = transport.join.await;

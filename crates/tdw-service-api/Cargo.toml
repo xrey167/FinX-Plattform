@@ -27,6 +27,13 @@ rest-api-route = ["tdw-app-server/rest-api-route"]
 ## `tdw-app-server/workspace-route` and `rest-api-route`.
 workspace-route = ["rest-api-route", "tdw-app-server/workspace-route"]
 
+## Serve the OpenBB Workspace *agent protocol* bridge (`GET /agents.json`,
+## `POST /v1/query` SSE copilot). Implements `tdw_app_server::AgentBridgeHandler`
+## on a thin state wrapper that drives a `StreamingLanguageModel` (the offline
+## `StubLanguageModel` by default) through the pure `tdw-openbb-agent` sequencer.
+## Forwards `tdw-app-server/agent-route` (which implies `workspace-route`).
+agent-route = ["workspace-route", "tdw-app-server/agent-route", "dep:tdw-openbb-agent"]
+
 ## Swap the relational engine in `AppState` for the real `PgEngine`
 ## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.
@@ -279,6 +286,7 @@ tdw-identity = { path = "../tdw-identity", optional = true }
 tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
+tdw-openbb-agent = { workspace = true, optional = true }
 tdw-llm-anthropic = { workspace = true }
 tdw-llm-openai-compat = { workspace = true }
 tdw-mask = { path = "../tdw-mask" }

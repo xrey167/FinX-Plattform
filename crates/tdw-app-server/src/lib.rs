@@ -46,6 +46,11 @@ pub mod workspace_route;
 #[cfg(all(feature = "workspace-route", not(loom)))]
 pub use workspace_route::{WorkspaceConfig, serve_workspace_http};
 
+#[cfg(all(feature = "agent-route", not(loom)))]
+pub mod agent_route;
+#[cfg(all(feature = "agent-route", not(loom)))]
+pub use agent_route::{AgentBridgeHandler, serve_agent_http};
+
 // Shared service-operability surface (/health, /ready, /metrics). The pure
 // renderer and route classifier are always available; the async listener is
 // gated out under `--cfg loom` (it uses `tokio::net`).

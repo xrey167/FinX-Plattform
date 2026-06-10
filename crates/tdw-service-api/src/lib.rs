@@ -19,6 +19,8 @@
 //! profiles synthesize a deterministic local-default policy so offline daemon
 //! dispatches resolve; a fully-unset prod profile stays fail-closed by design.
 
+#[cfg(feature = "agent-route")]
+mod agent_bridge;
 mod app_state;
 mod dispatcher;
 mod event_sink;
@@ -34,6 +36,8 @@ mod technical_compute;
 #[cfg(feature = "identity")]
 pub mod user_events;
 
+#[cfg(feature = "agent-route")]
+pub use agent_bridge::AgentBridgeState;
 pub use app_state::{AppState, OidcPolicyError};
 #[cfg(feature = "rest-api-route")]
 pub use dispatcher::{RestFetchError, rest_fetch_data};
