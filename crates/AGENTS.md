@@ -145,6 +145,7 @@ See ADR-0001 and the clean-room rule.
 | `tdw-feature-store/` | Feature-store façade for ML signals. |
 | `tdw-ml-registry/` | Model registry. |
 | `tdw-graph/` | Generic graph primitives. |
+| `tdw-storage-graph/` | GraphEngine backends: in-memory reference + cross-backend conformance suite (Bolt backend lands in A4). |
 | `tdw-spatial/` | Spatial / geo primitives. |
 | `tdw-fn-string/` | Reusable string functions (UDF-shaped). |
 

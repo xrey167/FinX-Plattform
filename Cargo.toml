@@ -73,6 +73,7 @@ wasmi = "0.31"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "tokio1", "tokio1-rustls-tls", "builder"] }
 
 tdw-symbology = { path = "crates/tdw-symbology" }
+tdw-taxonomy = { path = "crates/tdw-taxonomy" }
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
 tdw-core = { path = "crates/tdw-core" }

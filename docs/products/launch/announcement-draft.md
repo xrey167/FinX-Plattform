@@ -44,6 +44,11 @@ Repo: https://github.com/xrey167/FinX-Plattform — quickstart, security policy,
 and the full release notes (v1.2.0) are in the repo. Feedback and provider
 requests welcome via Issues<!-- + Discussions if D6 enables it -->.
 
-<!-- PRICING PARAGRAPH — insert per D2 outcome. Recommended (memo): "tdw-mcp
-     is and stays open source. We're building a hosted tier (free + pro) for
-     teams who don't want to run it themselves — waitlist: <link>." -->
+tdw-mcp is and stays open source (MIT/Apache-2.0). For teams who don't want
+to run it themselves, a **hosted tier** is in the works — free for keyless
+providers, Pro for managed keys, higher limits, and an SLA. Watch the repo
+for the waitlist. **Commercial support** for self-hosted deployments is
+available today — see [SUPPORT.md](../../../SUPPORT.md).
+<!-- D2 APPROVED 2026-06-10 (as recommended, provisional): C announced as
+     waitlist + A live now; B deferred; D off. Swap in a real waitlist link
+     before publication if one exists by then. -->
