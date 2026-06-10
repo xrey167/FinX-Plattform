@@ -44,6 +44,12 @@ live market data end to end, verified by driving it as a real MCP client. See
 - **Nightly live-smoke job** (#275): provider live tests + MCP E2E live bars.
 - **Per-crate `pedantic`+`nursery` deny** in the 58 lint-clean crates (#257)
   and a **performance benchmark + regression ratchet** in `xtask` (#263).
+- **Provider data expansions** (L2.x): FRED macro/rates/spreads/fixed-income
+  cluster (#251), Yahoo profile/quote/discovery/options/futures (#254), FMP
+  fundamentals normalized to the L1.4 models (#252).
+- **Application function jobs** behind the off-by-default `functions` feature:
+  `RoutingJobHandler` (#246), worker-side execution (#248), and enqueue on
+  `user.created` via `FunctionEnqueuer` (#249).
 
 ### Fixed
 
@@ -55,6 +61,12 @@ live market data end to end, verified by driving it as a real MCP client. See
   "there is no reactor running" the moment a live reqwest fetcher ran, and a
   naive runtime rebuild panicked inside `#[tokio::main]` callers; the helper
   is now runtime-context-aware.
+- **Hermetic dispatcher tests + CI disk space** (#277): three dispatcher
+  tests silently depended on live Yahoo reachability under
+  `all-http-providers` (verified by running them with the network strangled);
+  and docker-heavy CI jobs now free ~30GB of runner disk before building the
+  release+`live` images, fixing the ENOSPC that masqueraded as a cargo-chef
+  panic.
 - **Container Image CI timeouts** (#270): buildx GHA layer cache (scoped per
   binary, shared by the scan and push builds) + a 120-minute cold-cache
   backstop; main-push image builds previously died at the 60-minute job
