@@ -5,9 +5,9 @@ services:
     image: postgres:17-alpine
     profiles: ["minimal", "full", "live"]
     environment:
-      POSTGRES_USER: tdw
-      POSTGRES_PASSWORD: tdw
-      POSTGRES_DB: tdw
+      POSTGRES_USER: ${POSTGRES_USER:-tdw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tdw}
+      POSTGRES_DB: ${POSTGRES_DB:-tdw}
     ports:
       - "5432:5432"
     volumes:
@@ -22,26 +22,40 @@ services:
     image: clickhouse/clickhouse-server:25.5
     profiles: ["minimal", "full", "live"]
     environment:
-      CLICKHOUSE_USER: tdw
-      CLICKHOUSE_PASSWORD: tdw
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-tdw}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-tdw}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
       - "8123:8123"
       - "9000:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      # HTTP ping endpoint available since ClickHouse 20.x; returns "Ok." on 200.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
+  # qdrant/qdrant:v1.14.1 — latest stable 1.x release as of 2025-06; the crate
+  # speaks the Qdrant REST API (collections + points) which is stable across 1.x.
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.14.1
     profiles: ["full", "live"]
     ports:
       - "6333:6333"
       - "6334:6334"
     volumes:
       - qdrant-data:/qdrant/storage
+    # No in-container healthcheck: the qdrant image is distroless (no shell,
+    # curl, or wget), so exec-based probes cannot run. Readiness is checked
+    # from outside (CI wait-step curls :6333/healthz from the host).
 
+  # getmeili/meilisearch:v1.15.2 — latest stable 1.x release as of 2025-06; the
+  # crate talks to the /indexes and /tasks REST API, stable across 1.x.
   meilisearch:
-    image: getmeili/meilisearch:latest
+    image: getmeili/meilisearch:v1.15.2
     profiles: ["full", "live"]
     environment:
       MEILI_ENV: development
@@ -50,32 +64,61 @@ services:
       - "7700:7700"
     volumes:
       - meili-data:/meili_data
+    healthcheck:
+      # /health is the canonical liveness endpoint; returns {"status":"available"}.
+      # CI uses the same endpoint (ci.yml "Wait for Meilisearch" step).
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:7700/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
+  # minio/minio:RELEASE.2025-05-24T17-08-30Z — latest stable release tag as of
+  # 2025-06; RELEASE.* tags are immutable and the S3-compatible API is stable.
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
     profiles: ["full", "live"]
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio123}
     ports:
       - "9001:9001"
       - "9002:9000"
     volumes:
       - minio-data:/data
+    healthcheck:
+      # /minio/health/live is MinIO's canonical liveness probe; CI uses the same
+      # endpoint (ci.yml "Wait for MinIO" step uses /minio/health/ready).
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     profiles: ["full"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      # redis-cli ping returns "PONG" when the server is ready.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # minio/mc:RELEASE.2025-05-21T01-59-54Z — pinned to match the minio/minio
+  # release above; mc and minio server are versioned in lockstep by MinIO.
+  # One-shot init container: no healthcheck (exits after bucket creation).
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
     profiles: ["live"]
     depends_on:
       minio:
-        condition: service_started
+        condition: service_healthy
     entrypoint:
       - sh
       - -c
@@ -83,7 +126,7 @@ services:
         set -eu
         attempt=1
         while [ "$$attempt" -le 30 ]; do
-          if mc alias set local http://minio:9000 minio minio123; then
+          if mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minio} ${MINIO_ROOT_PASSWORD:-minio123}; then
             break
           fi
           if [ "$$attempt" -eq 30 ]; then
@@ -108,17 +151,19 @@ services:
       minio-init:
         condition: service_completed_successfully
       clickhouse:
-        condition: service_started
+        condition: service_healthy
       qdrant:
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
         condition: service_started
       meilisearch:
-        condition: service_started
+        condition: service_healthy
     environment:
       TDW_POSTGRES_URL: postgres://tdw:tdw@postgres:5432/tdw
       TDW_S3_ENDPOINT: http://minio:9000
       TDW_S3_BUCKET: tdw-default
-      TDW_S3_ACCESS_KEY: minio
-      TDW_S3_SECRET_KEY: minio123
+      TDW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
+      TDW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
       TDW_S3_REGION: us-east-1
       TDW_CLICKHOUSE_URL: http://clickhouse:8123
       TDW_CLICKHOUSE_USER: tdw
@@ -211,8 +256,8 @@ services:
       TDW_MEILI_URL: http://meilisearch:7700
       TDW_S3_ENDPOINT: http://minio:9000
       TDW_S3_BUCKET: tdw-default
-      TDW_S3_ACCESS_KEY: minio
-      TDW_S3_SECRET_KEY: minio123
+      TDW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
+      TDW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
       TDW_S3_REGION: us-east-1
       # Production OIDC ingress auth. Read ONLY when TDW_PROFILE is prod|production
       # (this stack runs `docker`, so they are inert here and left commented).
@@ -287,15 +332,17 @@ services:
       postgres:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
       qdrant:
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
         condition: service_started
       meilisearch:
-        condition: service_started
+        condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     restart: "no"
 
   tdw-worker:
@@ -310,15 +357,17 @@ services:
       postgres:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
       qdrant:
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
         condition: service_started
       meilisearch:
-        condition: service_started
+        condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     restart: "no"
 
   tdw-mcp:
@@ -348,3 +397,4 @@ volumes:
   qdrant-data:
   meili-data:
   minio-data:
+  redis-data:
