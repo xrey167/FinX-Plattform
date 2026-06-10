@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }
+tdw-analytics-technical = { workspace = true }
 tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
 

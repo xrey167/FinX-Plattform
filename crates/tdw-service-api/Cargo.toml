@@ -259,6 +259,7 @@ tdw-app-server = { workspace = true }
 tdw-auth = { path = "../tdw-auth" }
 tdw-auth-oidc = { path = "../tdw-auth-oidc" }
 tdw-bus = { path = "../tdw-bus" }
+tdw-analytics-technical = { workspace = true }
 tdw-cdc = { path = "../tdw-cdc" }
 tdw-config = { workspace = true }
 tdw-core = { workspace = true }
