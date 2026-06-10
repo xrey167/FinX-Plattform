@@ -8,6 +8,7 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::{
     FredHttpMacroSeriesFetcher, FredHttpRateObservationFetcher, FredHttpSeriesObservationsFetcher,
+    FredHttpSeriesSearchFetcher, FredHttpYieldCurveFetcher,
 };
 
 pub use catalog::{ENDPOINTS, FredEndpoint, FredModel};
@@ -157,6 +158,82 @@ impl FredCatalogQuery {
             .expect("FredCatalogQuery::command is validated against the catalog at construction")
     }
 }
+
+/// Query for the FRED `series/search` metadata endpoint (standardizes
+/// `economy/fred_search`). Carries the free-text query plus the shared
+/// `limit` normalization; `series/search` has no date window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FredSearchQuery {
+    /// Free-text search query passed to FRED's `search_text` parameter.
+    pub search_text: String,
+    /// Shared limit normalization (maps to FRED's `limit`).
+    #[serde(default, flatten)]
+    pub params: StandardParams,
+}
+
+impl FredSearchQuery {
+    /// Build a search query from a raw caller payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tdw_core::Error::InvalidQuery`] when `search_text` is missing,
+    /// blank, or the shared parameters fail validation.
+    pub fn from_value(params: &serde_json::Value) -> std::result::Result<Self, tdw_core::Error> {
+        let search_text = params
+            .get("search_text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                tdw_core::Error::InvalidQuery(
+                    "fred search_text must be a non-empty string".to_string(),
+                )
+            })?
+            .to_string();
+        Ok(Self {
+            search_text,
+            params: StandardParams::from_value(params)?,
+        })
+    }
+}
+
+/// Query for the aggregate `fixedincome/government/yield_curve` route.
+///
+/// Carries only the shared date/limit normalization; the four constant-maturity
+/// series are fixed by the curve definition, not the caller.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FredYieldCurveQuery {
+    /// Shared date/limit normalization, applied to each leg fetch.
+    #[serde(default, flatten)]
+    pub params: StandardParams,
+}
+
+impl FredYieldCurveQuery {
+    /// Build a yield-curve query from a raw caller payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tdw_core::Error::InvalidQuery`] when the shared parameters fail
+    /// validation (e.g. an inverted date range).
+    pub fn from_value(params: &serde_json::Value) -> std::result::Result<Self, tdw_core::Error> {
+        Ok(Self {
+            params: StandardParams::from_value(params)?,
+        })
+    }
+}
+
+/// The four FRED Treasury constant-maturity legs of the yield curve.
+///
+/// Ordered short-to-long and used by the standardized
+/// `fixedincome/government/yield_curve`. Each tuple is `(catalog command,
+/// maturity tenor)`; the series id is resolved via the catalog so the curve and
+/// the per-tenor routes never drift.
+pub const YIELD_CURVE_LEGS: &[(&str, &str)] = &[
+    ("fixedincome/government/treasury_rates/3m", "3m"),
+    ("fixedincome/government/treasury_rates/2y", "2y"),
+    ("fixedincome/government/treasury_rates/10y", "10y"),
+    ("fixedincome/government/treasury_rates/30y", "30y"),
+];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FredObservation {

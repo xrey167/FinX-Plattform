@@ -545,6 +545,88 @@ where
     }
 }
 
+/// Build a [`FetchBinding`] for a FRED catalog-backed fetcher (macro or rate)
+/// that resolves a fixed `OpenBB` `command` to its series. The command is
+/// injected into the caller's params before the shared fetcher runs, so one
+/// fetcher type serves every command in its cluster while the dispatch key
+/// stays per-command.
+#[cfg(feature = "provider-fred")]
+fn fred_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_fred::FredCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Resolve a FRED `OpenBB` `command` to the `'static` `(provider, endpoint)`
+/// dispatch key declared for it in the endpoint catalog.
+///
+/// The catalog candidate's `endpoint` is the canonical `'static` key
+/// (`<route with '/'→'_'>`); resolving through the catalog (rather than leaking
+/// a freshly-derived string) keeps the dispatch key, the catalog candidate, and
+/// the conformance test pinned to one allocation-free source of truth. Returns
+/// `None` only if a FRED command is missing its catalog route — a bug the
+/// conformance test catches.
+#[cfg(feature = "provider-fred")]
+fn fred_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "fred")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
+/// Register every FRED-backed catalog fetch binding into `table`, keyed by the
+/// catalog candidate endpoint. Macro/rate commands share one fetcher each (the
+/// command is injected per binding); the aggregate yield-curve and the metadata
+/// search are their own fetchers.
+#[cfg(feature = "provider-fred")]
+fn insert_fred_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    for endpoint in tdw_provider_fred::ENDPOINTS {
+        let Some(key) = fred_catalog_key(endpoint.command) else {
+            continue;
+        };
+        let binding = match endpoint.model {
+            tdw_provider_fred::FredModel::Macro => fred_command_fetch_binding::<
+                tdw_provider_fred::FredHttpMacroSeriesFetcher,
+                tdw_domain::MacroSeries,
+            >(endpoint.command),
+            tdw_provider_fred::FredModel::Rate => fred_command_fetch_binding::<
+                tdw_provider_fred::FredHttpRateObservationFetcher,
+                tdw_domain::RateObservation,
+            >(endpoint.command),
+        };
+        table.insert(key, binding);
+    }
+    table.insert(
+        ("fred", "fixedincome_government_yield_curve"),
+        fetch_binding::<tdw_provider_fred::FredHttpYieldCurveFetcher, _, _>(),
+    );
+    table.insert(
+        ("fred", "fred_search"),
+        fetch_binding::<tdw_provider_fred::FredHttpSeriesSearchFetcher, _, _>(),
+    );
+}
+
 /// The no-persist fetch dispatch table for this build.
 ///
 /// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
@@ -606,6 +688,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
         ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
         fetch_binding::<crate::TiingoHttpHistoricalFetcher, _, _>(),
     );
+    #[cfg(feature = "provider-fred")]
+    insert_fred_fetch_bindings(&mut table);
     table
 }
 
@@ -1203,6 +1287,71 @@ where
     }
 }
 
+/// Build an [`IngestBinding`] for a FRED catalog-backed fetcher (macro or rate)
+/// that resolves a fixed `OpenBB` `command` to its series, injecting the command
+/// into the caller's params before the shared fetcher fetches one batch and
+/// persists it into `table`.
+#[cfg(feature = "provider-fred")]
+fn fred_command_ingest_binding<F, D>(command: &'static str, table: &'static str) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_fred::FredCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register every FRED-backed catalog ingest binding into `table`, keyed by the
+/// catalog candidate endpoint and bound to its bronze landing table. Mirrors
+/// [`insert_fred_fetch_bindings`] so the fetch and ingest paths stay in lockstep.
+#[cfg(feature = "provider-fred")]
+fn insert_fred_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    for endpoint in tdw_provider_fred::ENDPOINTS {
+        let Some(key) = fred_catalog_key(endpoint.command) else {
+            continue;
+        };
+        let binding = match endpoint.model {
+            tdw_provider_fred::FredModel::Macro => {
+                fred_command_ingest_binding::<
+                    tdw_provider_fred::FredHttpMacroSeriesFetcher,
+                    tdw_domain::MacroSeries,
+                >(endpoint.command, "raw.macro_series")
+            }
+            tdw_provider_fred::FredModel::Rate => {
+                fred_command_ingest_binding::<
+                    tdw_provider_fred::FredHttpRateObservationFetcher,
+                    tdw_domain::RateObservation,
+                >(endpoint.command, "raw.rate_observation")
+            }
+        };
+        table.insert(key, binding);
+    }
+    table.insert(
+        ("fred", "fixedincome_government_yield_curve"),
+        binding::<tdw_provider_fred::FredHttpYieldCurveFetcher, _, _>("raw.yield_curve_point"),
+    );
+    table.insert(
+        ("fred", "fred_search"),
+        binding::<tdw_provider_fred::FredHttpSeriesSearchFetcher, _, _>("raw.series_search_result"),
+    );
+}
+
 /// The registry-driven ingest dispatch table for this build.
 ///
 /// Each `(provider, endpoint)` key mirrors a feature-enabled `Fetcher`
@@ -1276,6 +1425,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
         ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
         binding::<crate::TiingoHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
     );
+    #[cfg(feature = "provider-fred")]
+    insert_fred_ingest_bindings(&mut table);
     table
 }
 
@@ -2099,6 +2250,63 @@ mod tests {
                     candidate.endpoint
                 );
             }
+        }
+    }
+
+    /// Catalog ↔ FRED `ENDPOINTS` sync (gap-matrix **L2.3**): every standardized
+    /// FRED command has a catalog route whose sole `fred` candidate endpoint is
+    /// the route's `'/'→'_'` form, and every FRED-backed catalog route maps back
+    /// to an `ENDPOINTS` command — except the two aggregate/discovery routes
+    /// (`yield_curve`, `fred_search`) that have no single backing series. Keeps
+    /// the hand-written catalog rows and the provider's series table from
+    /// drifting without `tdw-endpoint-catalog` depending on the provider.
+    #[cfg(feature = "provider-fred")]
+    #[test]
+    fn fred_catalog_routes_match_provider_endpoints() {
+        use std::collections::BTreeSet;
+
+        // The aggregate yield-curve and the metadata search route have no single
+        // backing series, so they are FRED-backed but absent from ENDPOINTS.
+        const EXTRA_FRED_ROUTES: &[&str] =
+            &["fixedincome/government/yield_curve", "economy/fred_search"];
+
+        // Forward: every ENDPOINTS command -> a catalog route with the derived
+        // fred candidate endpoint.
+        for endpoint in tdw_provider_fred::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("FRED command {} has no catalog route", endpoint.command)
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let fred = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "fred")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no fred candidate", endpoint.command)
+                });
+            assert_eq!(
+                fred.endpoint, expected,
+                "catalog route {} fred endpoint key drifted",
+                endpoint.command
+            );
+        }
+
+        // Reverse: every FRED-backed catalog route is an ENDPOINTS command,
+        // excluding the aggregate yield-curve and the metadata search route.
+        let commands: BTreeSet<&str> = tdw_provider_fred::ENDPOINTS
+            .iter()
+            .map(|e| e.command)
+            .collect();
+        for entry in tdw_endpoint_catalog::catalog() {
+            let is_fred = entry.candidates.iter().any(|c| c.provider == "fred");
+            if !is_fred || EXTRA_FRED_ROUTES.contains(&entry.route) {
+                continue;
+            }
+            assert!(
+                commands.contains(entry.route),
+                "FRED-backed catalog route {} has no ENDPOINTS command",
+                entry.route
+            );
         }
     }
 

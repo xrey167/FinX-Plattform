@@ -138,7 +138,10 @@ use tdw_provider_fmp::{
     FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
 };
 #[cfg(feature = "provider-fred")]
-use tdw_provider_fred::FredHttpSeriesObservationsFetcher;
+use tdw_provider_fred::{
+    FredHttpMacroSeriesFetcher, FredHttpRateObservationFetcher, FredHttpSeriesObservationsFetcher,
+    FredHttpSeriesSearchFetcher, FredHttpYieldCurveFetcher,
+};
 #[cfg(feature = "provider-geckoterminal")]
 use tdw_provider_geckoterminal::GeckoTerminalHttpFetcher;
 #[cfg(feature = "provider-glassnode")]
@@ -279,6 +282,14 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpQuoteSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fred")]
+    registry.register(FredHttpMacroSeriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fred")]
+    registry.register(FredHttpRateObservationFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fred")]
+    registry.register(FredHttpSeriesSearchFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fred")]
+    registry.register(FredHttpYieldCurveFetcher::registry_entry())?;
     register_extended_providers(&mut registry)?;
     Ok(registry)
 }

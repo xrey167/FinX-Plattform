@@ -6,7 +6,7 @@ pub mod models;
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
     Estimate, FinancialStatement, KeyMetrics, MacroSeries, NewsArticle, OptionContract,
-    OwnershipRecord, RateObservation, Ratios, StatementKind,
+    OwnershipRecord, RateObservation, Ratios, SeriesSearchResult, StatementKind, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;
