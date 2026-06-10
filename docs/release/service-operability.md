@@ -114,6 +114,24 @@ The `live` profile in `docker-compose.yaml` binds each ops listener and wires a
 The `tdw-mcp-serve` service waits on `tdw-service-daemon` being
 `service_healthy` before starting.
 
+## Endpoint aliases
+
+The ops listener also accepts the Kubernetes-conventional aliases
+`/healthz` (→ `/health`) and `/readyz` (→ `/ready`) on all three services.
+These are identical in behaviour to the canonical paths and are provided so
+Kubernetes liveness/readiness probes can use either convention without
+reconfiguration.
+
+Source: `crates/tdw-app-server/src/ops.rs` (`classify_route`).
+
+## Backup, restore, and upgrade cross-reference
+
+| Task | Runbook |
+|---|---|
+| Back up and restore named volumes | [`backup-restore-runbook.md`](backup-restore-runbook.md) |
+| Upgrade TDW images and apply schema migrations | [`upgrade-runbook.md`](upgrade-runbook.md) |
+| Manual post-upgrade acceptance smoke | [`live-stack-smoke.md`](live-stack-smoke.md) |
+
 ## See also
 
 - [`worker-deployment.md`](worker-deployment.md) — the worker's ops surface,
