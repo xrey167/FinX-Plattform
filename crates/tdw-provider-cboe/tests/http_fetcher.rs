@@ -12,7 +12,8 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_cboe::{
-    CboeHttpIndexFetcher, CboeHttpOptionsFetcher, CboeIndexQuery, CboeOptionsQuery,
+    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    CboeHttpOptionsFetcher, CboeIndexQuery, CboeOptionsQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -175,6 +176,53 @@ fn index_cassette_malformed_json_returns_error() {
         err.to_string().contains("cboe index parse_json"),
         "error={err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing fetchers -> tdw_domain models
+// ---------------------------------------------------------------------------
+
+#[test]
+fn index_snapshot_maps_to_quote_snapshot_with_derived_percent() {
+    let fetcher = CboeHttpIndexSnapshotFetcher::default();
+    let query = CboeHttpIndexSnapshotFetcher::transform_query(json!({ "index": "vix" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let snapshots = fetcher
+        .transform_data(&query, index_cassette_bytes())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(snapshots.len(), 1, "snapshots={snapshots:#?}");
+    assert_eq!(snapshots[0].symbol, "VIX");
+    assert_eq!(snapshots[0].current_price, 13.45);
+    assert_eq!(snapshots[0].change, -0.23);
+    // prev_close = 13.45 - (-0.23) = 13.68; change_percent = -0.23/13.68*100.
+    assert!((snapshots[0].prev_close - 13.68).abs() < 1e-9);
+    assert!((snapshots[0].change_percent - (-0.23 / 13.68 * 100.0)).abs() < 1e-9);
+}
+
+#[test]
+fn options_chain_maps_to_option_contract_and_decodes_occ_symbol() {
+    let fetcher = CboeHttpOptionsChainFetcher::default();
+    let query = CboeHttpOptionsChainFetcher::transform_query(json!({ "symbol": "aapl" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let contracts = fetcher
+        .transform_data(&query, options_cassette_bytes())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(contracts.len(), 2, "contracts={contracts:#?}");
+    // AAPL240119C00180000 -> call, 2024-01-19, strike 180.
+    assert_eq!(contracts[0].underlying_symbol, "AAPL");
+    assert_eq!(
+        contracts[0].contract_symbol.as_deref(),
+        Some("AAPL240119C00180000")
+    );
+    assert_eq!(contracts[0].expiration, "2024-01-19");
+    assert_eq!(contracts[0].option_type, "call");
+    assert!((contracts[0].strike - 180.0).abs() < 1e-9);
+    assert_eq!(contracts[0].bid, Some(5.10));
+    assert_eq!(contracts[0].open_interest, Some(12_500));
+    // The put leg decodes its type.
+    assert_eq!(contracts[1].option_type, "put");
 }
 
 // ---------------------------------------------------------------------------

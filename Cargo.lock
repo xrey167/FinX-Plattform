@@ -5002,12 +5002,14 @@ dependencies = [
 name = "tdw-provider-cboe"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -5084,12 +5086,14 @@ dependencies = [
 name = "tdw-provider-ecb"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -5100,12 +5104,14 @@ dependencies = [
 name = "tdw-provider-eia"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
@@ -5289,12 +5295,14 @@ dependencies = [
 name = "tdw-provider-nasdaq"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "reqwest",
  "schemars",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-domain",
  "tdw-provider-http",
  "tdw-provider-testkit",
  "thiserror 2.0.18",

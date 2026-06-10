@@ -275,6 +275,73 @@ pub struct OptionContract {
     pub rho: Option<f64>,
 }
 
+/// A single row from an energy / commodity statistical report.
+///
+/// Standardizes the EIA report cluster — `commodity/petroleum_status_report`
+/// (the Weekly Petroleum Status Report) and `commodity/short_term_energy_outlook`
+/// (STEO). One row = one (report, series, period) observation. EIA v2 returns a
+/// `period` (the observation date/label), a series identifier and human-readable
+/// description, the numeric value, and a units label; coverage of the optional
+/// descriptive fields varies by series, so they are [`Option`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CommodityReportRow {
+    /// Report identifier the row belongs to, e.g. `"petroleum_status_report"`,
+    /// `"short_term_energy_outlook"`.
+    #[validate(length(min = 1))]
+    pub report: String,
+    /// Series identifier within the report (EIA `series` / route id).
+    #[validate(length(min = 1))]
+    pub series_id: String,
+    /// Observation period (`YYYY-MM-DD`, `YYYY-MM`, or `YYYY` per frequency).
+    #[validate(length(min = 1))]
+    pub period: String,
+    /// Human-readable series description.
+    pub series_description: Option<String>,
+    /// Numeric value (optional: some periods report no value).
+    pub value: Option<f64>,
+    /// Unit of measure, e.g. `"thousand barrels"`, `"dollars per barrel"`.
+    pub units: Option<String>,
+}
+
+/// A scheduled corporate-calendar event (dividend, earnings, or IPO).
+///
+/// Standardizes the NASDAQ calendar cluster — `equity/calendar/dividends`,
+/// `equity/calendar/earnings`, and `equity/calendar/ipo`. The `kind` field
+/// discriminates the event variant; one shape serves all three because the
+/// public NASDAQ calendar feeds share a row grain (a symbol, an event date, and
+/// a handful of variant-specific numeric/textual fields). Most fields are
+/// [`Option`] since each calendar reports a different subset.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CalendarEvent {
+    /// Event variant: `"dividend"`, `"earnings"`, or `"ipo"`.
+    #[validate(length(min = 1))]
+    pub kind: String,
+    /// Ticker symbol the event concerns.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Company / security name where the feed reports it.
+    pub name: Option<String>,
+    /// Primary event date (ex-dividend date, earnings date, or expected IPO
+    /// date), in `YYYY-MM-DD` form.
+    pub date: Option<String>,
+    /// Dividend amount per share (dividends only).
+    pub dividend: Option<f64>,
+    /// Payment date (dividends only), in `YYYY-MM-DD` form.
+    pub payment_date: Option<String>,
+    /// Record date (dividends only), in `YYYY-MM-DD` form.
+    pub record_date: Option<String>,
+    /// Consensus / reported EPS estimate (earnings only).
+    pub eps_estimate: Option<f64>,
+    /// Fiscal period the earnings row covers, e.g. `"2026Q1"` (earnings only).
+    pub fiscal_period: Option<String>,
+    /// IPO offer price (IPO only).
+    pub price: Option<f64>,
+    /// Number of shares offered (IPO only).
+    pub shares: Option<f64>,
+    /// Exchange the security lists on (IPO only).
+    pub exchange: Option<String>,
+}
+
 /// A news article (company-specific or world).
 ///
 /// Standardizes `news/company` and `news/world` (benzinga/biztoc/fmp/intrinio/
@@ -477,6 +544,51 @@ pub struct FomcDocument {
     pub url: Option<String>,
 }
 
+/// Period price-performance row (1-day / 1-week / 1-month / 3-month / YTD / 1-year).
+///
+/// Standardizes `equity/price/performance`: the period total-return figures for a
+/// single symbol. Each value is a fractional return (e.g. `0.012` is `+1.2%`);
+/// fields are [`Option`] because provider coverage of each period varies.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct PricePerformance {
+    /// Underlying symbol.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Most-recent price used to anchor the period returns.
+    pub price: Option<f64>,
+    /// One-day return (fraction).
+    pub one_day: Option<f64>,
+    /// One-week (five-day) return (fraction).
+    pub one_week: Option<f64>,
+    /// One-month return (fraction).
+    pub one_month: Option<f64>,
+    /// Three-month return (fraction).
+    pub three_month: Option<f64>,
+    /// Year-to-date return (fraction).
+    pub ytd: Option<f64>,
+    /// One-year (fifty-two-week) return (fraction).
+    pub one_year: Option<f64>,
+}
+
+/// One point on a futures forward curve: a contract and its last price.
+///
+/// Standardizes `derivatives/futures/curve`: one row per expiry along a root's
+/// forward curve. `price`/`expiration` are [`Option`] because providers do not
+/// always report a last price or a normalized expiry for every contract.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FuturesCurvePoint {
+    /// Root / underlying futures symbol the curve belongs to.
+    #[validate(length(min = 1))]
+    pub underlying: String,
+    /// Contract symbol for this expiry.
+    #[validate(length(min = 1))]
+    pub contract_symbol: String,
+    /// Last traded price for the contract.
+    pub price: Option<f64>,
+    /// Contract expiry date in `YYYY-MM-DD` form when the provider reports it.
+    pub expiration: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,6 +695,46 @@ mod tests {
         let bad = Estimate {
             kind: String::new(),
             ..est
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn price_performance_round_trips_and_validates() {
+        let perf = PricePerformance {
+            symbol: "AAPL".to_string(),
+            price: Some(202.0),
+            one_day: Some(0.012),
+            one_week: None,
+            one_month: Some(0.034),
+            three_month: Some(0.08),
+            ytd: Some(0.15),
+            one_year: Some(0.27),
+        };
+        assert!(perf.validate().is_ok());
+        round_trip(&perf);
+
+        let bad = PricePerformance {
+            symbol: String::new(),
+            ..perf
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn futures_curve_point_round_trips_and_validates() {
+        let point = FuturesCurvePoint {
+            underlying: "ES=F".to_string(),
+            contract_symbol: "ESM26.CME".to_string(),
+            price: Some(5300.0),
+            expiration: Some("2026-06-19".to_string()),
+        };
+        assert!(point.validate().is_ok());
+        round_trip(&point);
+
+        let bad = FuturesCurvePoint {
+            contract_symbol: String::new(),
+            ..point
         };
         assert!(bad.validate().is_err());
     }
@@ -706,6 +858,59 @@ mod tests {
         let bad = OptionContract {
             option_type: String::new(),
             ..contract
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn commodity_report_row_round_trips_and_validates() {
+        let row = CommodityReportRow {
+            report: "petroleum_status_report".to_string(),
+            series_id: "WCRSTUS1".to_string(),
+            period: "2026-05-30".to_string(),
+            series_description: Some("Weekly U.S. Ending Stocks of Crude Oil".to_string()),
+            value: Some(440_123.0),
+            units: Some("thousand barrels".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let missing = CommodityReportRow {
+            value: None,
+            ..row.clone()
+        };
+        assert!(missing.validate().is_ok());
+        round_trip(&missing);
+
+        let bad = CommodityReportRow {
+            series_id: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn calendar_event_round_trips_and_validates() {
+        let dividend = CalendarEvent {
+            kind: "dividend".to_string(),
+            symbol: "AAPL".to_string(),
+            name: Some("Apple Inc.".to_string()),
+            date: Some("2026-05-12".to_string()),
+            dividend: Some(0.25),
+            payment_date: Some("2026-05-15".to_string()),
+            record_date: Some("2026-05-13".to_string()),
+            eps_estimate: None,
+            fiscal_period: None,
+            price: None,
+            shares: None,
+            exchange: None,
+        };
+        assert!(dividend.validate().is_ok());
+        round_trip(&dividend);
+
+        let bad = CalendarEvent {
+            symbol: String::new(),
+            ..dividend
         };
         assert!(bad.validate().is_err());
     }

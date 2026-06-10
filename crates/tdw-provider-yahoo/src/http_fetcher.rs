@@ -13,12 +13,11 @@
 //! helper handles the conversion without pulling chrono / time / jiff
 //! as workspace dependencies just for this one call site.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
-    CompanyProfile, CorporateAction, EquityHistoricalData, Estimate, OptionContract,
-    OwnershipRecord, QuoteSnapshot,
+    CompanyProfile, CorporateAction, EquityHistoricalData, Estimate, FuturesCurvePoint,
+    OptionContract, OwnershipRecord, PricePerformance, QuoteSnapshot,
 };
 use tdw_provider_fileset::EquityHistoricalQuery;
 
@@ -300,47 +299,6 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
 // crate-local row type for the two shapes (price performance, futures curve)
 // that have no L1.4 equivalent yet.
 // ===========================================================================
-
-/// Period price-performance row (e.g. 1-day / 1-month / YTD / 1-year returns).
-///
-/// No L1.4 model covers period returns, so this small typed row carries the
-/// standard OpenBB `equity/price/performance` periods. Each value is a
-/// fractional return (e.g. `0.012` = +1.2%); `None` when Yahoo omits a period.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct PricePerformance {
-    /// Underlying symbol.
-    pub symbol: String,
-    /// Most-recent close used to anchor the period returns.
-    pub price: Option<f64>,
-    /// Fifty-two-week-low percent change (fraction).
-    pub one_day: Option<f64>,
-    /// Five-day return (fraction).
-    pub one_week: Option<f64>,
-    /// One-month return (fraction).
-    pub one_month: Option<f64>,
-    /// Three-month return (fraction).
-    pub three_month: Option<f64>,
-    /// Year-to-date return (fraction).
-    pub ytd: Option<f64>,
-    /// Fifty-two-week (one-year) return (fraction).
-    pub one_year: Option<f64>,
-}
-
-/// One point on a futures forward curve: a contract symbol and its last price.
-///
-/// No L1.4 model covers a futures curve, so this small typed row carries the
-/// per-expiry contract and price that `derivatives/futures/curve` exposes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct FuturesCurvePoint {
-    /// Root / underlying futures symbol the curve belongs to.
-    pub underlying: String,
-    /// Contract symbol for this expiry (e.g. `ESM26.CME`).
-    pub contract_symbol: String,
-    /// Last traded price for the contract.
-    pub price: Option<f64>,
-    /// Contract expiry date (`YYYY-MM-DD`) when Yahoo reports it.
-    pub expiration: Option<String>,
-}
 
 // ---------------------------------------------------------------------------
 // v10 quoteSummary envelope (shared by profile / share_statistics / consensus

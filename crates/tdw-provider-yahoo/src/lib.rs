@@ -5,9 +5,8 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FuturesCurvePoint, PricePerformance, YahooHttpConsensusFetcher, YahooHttpDividendsFetcher,
-    YahooHttpEquityHistoricalFetcher, YahooHttpFuturesCurveFetcher,
-    YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpEquityHistoricalFetcher,
+    YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
     YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
     YahooHttpShareStatisticsFetcher,
 };

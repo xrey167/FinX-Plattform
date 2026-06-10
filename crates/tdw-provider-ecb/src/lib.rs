@@ -4,7 +4,7 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::EcbHttpDataFetcher;
+pub use http_fetcher::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher, EcbReferenceRatesQuery};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -194,23 +194,9 @@ pub fn parse_ecb_json(raw: &[u8], flow: &str, key: &str) -> Result<Vec<EcbObserv
 }
 
 fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Vec<EcbObservation> {
-    // Extract the time-period values array from the structure block.
-    let dates: Vec<String> = v
-        .pointer("/structure/dimensions/observation")
-        .and_then(|obs| obs.as_array())
-        .and_then(|dims| {
-            dims.iter()
-                .find(|dim| dim.get("id").and_then(|id| id.as_str()) == Some("TIME_PERIOD"))
-        })
-        .and_then(|tp| tp.get("values"))
-        .and_then(|vals| vals.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+    // Extract the time-period values array from the structure block (shared with
+    // the reference-rates parser).
+    let dates = observation_dates(v);
 
     let mut rows = Vec::new();
 
@@ -254,6 +240,143 @@ fn parse_ecb_value(v: &serde_json::Value, flow: &str, key: &str) -> Vec<EcbObser
     // Sort by date for deterministic output.
     rows.sort_by(|a, b| a.date.cmp(&b.date));
     rows
+}
+
+/// A reference-rate observation tagged with its resolved currency code.
+///
+/// Distinct from [`EcbObservation`] (which carries the request's `flow`/`key`):
+/// a single wildcard EXR request returns one series per currency, so each row
+/// must carry the currency that the SDMX series-dimension resolves to rather
+/// than the wildcard key.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EcbReferenceRate {
+    /// ISO 4217 currency code the rate quotes (e.g. `"USD"`), resolved from the
+    /// SDMX `CURRENCY` series dimension. Falls back to the colon-joined series
+    /// key when the dimension cannot be resolved.
+    pub currency: String,
+    /// Observation date in `YYYY-MM-DD` (daily) format.
+    pub date: String,
+    /// Euro reference rate (units of `currency` per euro).
+    pub value: f64,
+}
+
+/// Parse raw ECB `jsondata` bytes into per-currency reference rates.
+///
+/// Unlike [`parse_ecb_json`], which tags every row with the request key, this
+/// resolves each series' `CURRENCY` dimension value so a single wildcard EXR
+/// request (`D..EUR.SP00.A`) yields one labelled row per published pair. The
+/// observation-axis date decoding is shared with [`parse_ecb_value`]; only the
+/// per-series currency attribution is added.
+///
+/// # Errors
+///
+/// Returns [`EcbProviderError::EmptyFlow`] if the JSON cannot be parsed.
+pub fn parse_ecb_reference_rates(raw: &[u8]) -> Result<Vec<EcbReferenceRate>> {
+    let v: serde_json::Value =
+        serde_json::from_slice(raw).map_err(|_| EcbProviderError::EmptyFlow)?;
+    Ok(parse_ecb_reference_rates_value(&v))
+}
+
+fn parse_ecb_reference_rates_value(v: &serde_json::Value) -> Vec<EcbReferenceRate> {
+    let dates = observation_dates(v);
+    // The CURRENCY series-dimension values, in declaration order, plus the
+    // position of that dimension within the series key.
+    let (currency_position, currency_values) = currency_dimension(v);
+
+    let mut rows = Vec::new();
+    let Some(datasets) = v.get("dataSets").and_then(|ds| ds.as_array()) else {
+        return rows;
+    };
+    for dataset in datasets {
+        let Some(series_map) = dataset.get("series").and_then(|s| s.as_object()) else {
+            continue;
+        };
+        for (series_key, series_val) in series_map {
+            let currency = resolve_currency(series_key, currency_position, &currency_values);
+            let Some(observations) = series_val
+                .get("observations")
+                .and_then(|obs| obs.as_object())
+            else {
+                continue;
+            };
+            for (idx_str, obs_array) in observations {
+                let idx: usize = idx_str.parse().unwrap_or(usize::MAX);
+                let date = dates.get(idx).cloned().unwrap_or_default();
+                if date.is_empty() {
+                    continue;
+                }
+                let value = obs_array
+                    .as_array()
+                    .and_then(|arr| arr.first())
+                    .and_then(serde_json::Value::as_f64);
+                if let Some(value) = value {
+                    rows.push(EcbReferenceRate {
+                        currency: currency.clone(),
+                        date,
+                        value,
+                    });
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| (&a.currency, &a.date).cmp(&(&b.currency, &b.date)));
+    rows
+}
+
+/// The observation-axis `TIME_PERIOD` values, in index order.
+fn observation_dates(v: &serde_json::Value) -> Vec<String> {
+    v.pointer("/structure/dimensions/observation")
+        .and_then(|obs| obs.as_array())
+        .and_then(|dims| {
+            dims.iter()
+                .find(|dim| dim.get("id").and_then(|id| id.as_str()) == Some("TIME_PERIOD"))
+        })
+        .and_then(|tp| tp.get("values"))
+        .and_then(|vals| vals.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Locate the `CURRENCY` series dimension: its position within the colon-joined
+/// series key and its ordered `id` values.
+fn currency_dimension(v: &serde_json::Value) -> (Option<usize>, Vec<String>) {
+    let Some(dims) = v
+        .pointer("/structure/dimensions/series")
+        .and_then(|series| series.as_array())
+    else {
+        return (None, Vec::new());
+    };
+    for (position, dim) in dims.iter().enumerate() {
+        if dim.get("id").and_then(|id| id.as_str()) == Some("CURRENCY") {
+            let values = dim
+                .get("values")
+                .and_then(|vals| vals.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
+                        .map(ToString::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            return (Some(position), values);
+        }
+    }
+    (None, Vec::new())
+}
+
+/// Resolve a series key (e.g. `"0:1:0:0:0"`) to its currency code via the
+/// `CURRENCY` dimension index, falling back to the raw key on any miss.
+fn resolve_currency(series_key: &str, position: Option<usize>, values: &[String]) -> String {
+    let resolved = position
+        .and_then(|position| series_key.split(':').nth(position))
+        .and_then(|index_str| index_str.parse::<usize>().ok())
+        .and_then(|index| values.get(index));
+    resolved.map_or_else(|| series_key.to_string(), Clone::clone)
 }
 
 #[cfg(test)]
@@ -404,6 +527,68 @@ mod tests {
             .unwrap_or_else(|error| panic!("parse should succeed: {error}"));
 
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn reference_rates_resolve_currency_per_series() {
+        let raw = serde_json::json!({
+            "dataSets": [{
+                "series": {
+                    "0:0:0:0:0": { "observations": { "0": [1.0934, 0, null] } },
+                    "0:1:0:0:0": { "observations": { "0": [0.8534, 0, null] } }
+                }
+            }],
+            "structure": {
+                "dimensions": {
+                    "series": [
+                        { "id": "FREQ", "values": [{ "id": "D" }] },
+                        { "id": "CURRENCY", "values": [{ "id": "USD" }, { "id": "GBP" }] },
+                        { "id": "CURRENCY_DENOM", "values": [{ "id": "EUR" }] },
+                        { "id": "EXR_TYPE", "values": [{ "id": "SP00" }] },
+                        { "id": "EXR_SUFFIX", "values": [{ "id": "A" }] }
+                    ],
+                    "observation": [{
+                        "id": "TIME_PERIOD",
+                        "values": [{ "id": "2024-01-02" }]
+                    }]
+                }
+            }
+        })
+        .to_string()
+        .into_bytes();
+
+        let rows = parse_ecb_reference_rates(&raw)
+            .unwrap_or_else(|error| panic!("parse should succeed: {error}"));
+        assert_eq!(rows.len(), 2, "rows={rows:#?}");
+        // Sorted by (currency, date): GBP then USD.
+        assert_eq!(rows[0].currency, "GBP");
+        assert_eq!(rows[0].value, 0.8534);
+        assert_eq!(rows[1].currency, "USD");
+        assert_eq!(rows[1].value, 1.0934);
+    }
+
+    #[test]
+    fn reference_rates_falls_back_to_series_key_without_currency_dimension() {
+        let raw = serde_json::json!({
+            "dataSets": [{
+                "series": { "0:0": { "observations": { "0": [1.1, 0, null] } } }
+            }],
+            "structure": {
+                "dimensions": {
+                    "observation": [{
+                        "id": "TIME_PERIOD",
+                        "values": [{ "id": "2024-01-02" }]
+                    }]
+                }
+            }
+        })
+        .to_string()
+        .into_bytes();
+
+        let rows = parse_ecb_reference_rates(&raw)
+            .unwrap_or_else(|error| panic!("parse should succeed: {error}"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].currency, "0:0");
     }
 
     #[test]

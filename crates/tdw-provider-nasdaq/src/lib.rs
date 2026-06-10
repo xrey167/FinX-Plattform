@@ -4,7 +4,9 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::NasdaqHttpDatasetFetcher;
+pub use http_fetcher::{
+    NasdaqCalendarKind, NasdaqCalendarQuery, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,11 @@ use thiserror::Error;
 pub const PROVIDER_ID: &str = "nasdaq";
 pub const BASE_URL: &str = "https://data.nasdaq.com/api/v3";
 pub const API_KEY_PARAM: &str = "api_key";
+
+/// Base URL for the public, keyless NASDAQ market-calendar API
+/// (`/api/calendar/{dividends,earnings,ipo}`). Distinct from [`BASE_URL`] (the
+/// keyed NASDAQ Data Link dataset API).
+pub const CALENDAR_BASE_URL: &str = "https://api.nasdaq.com/api";
 
 pub type Result<T> = std::result::Result<T, NasdaqProviderError>;
 
@@ -140,7 +147,7 @@ fn normalize_identifier(identifier: &str) -> Result<String> {
     Ok(identifier.to_ascii_uppercase())
 }
 
-fn normalize_date(date: &str) -> Result<String> {
+pub(crate) fn normalize_date(date: &str) -> Result<String> {
     let date = date.trim();
     let bytes = date.as_bytes();
     let valid = bytes.len() == 10

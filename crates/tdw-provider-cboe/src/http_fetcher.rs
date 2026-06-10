@@ -191,11 +191,195 @@ impl ProviderSpec for CboeIndexSpec {
 pub type CboeHttpIndexFetcher = HttpFetcher<CboeIndexSpec>;
 
 // ---------------------------------------------------------------------------
+// Catalog-facing fetchers -> tdw_domain models
+//
+// The bespoke `CboeHttpIndexFetcher`/`CboeHttpOptionsFetcher` above emit the
+// crate-local `CboeIndexQuote`/`CboeOptionContract`. The namespaced endpoint
+// catalog routes (`index/snapshots`, `derivatives/options/chains`) need
+// fetchers that emit `tdw_domain` models. These thin wrappers reuse the
+// existing `ProviderSpec` request builders and JSON parsers verbatim (no
+// parsing logic is duplicated), then map onto the standardized shapes.
+//
+// CBOE delayed US-index quotes:
+// <https://cdn.cboe.com/api/global/us_indices/quotes/{index}.json>.
+// CBOE delayed options chains:
+// <https://cdn.cboe.com/api/global/delayed_quotes/options/{symbol}.json>.
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use tdw_core::{Credentials, Fetcher};
+use tdw_domain::{OptionContract, QuoteSnapshot};
+
+/// Send a request built by `P` and return the response bytes, reusing the
+/// shared bounded client. Mirrors the blanket `HttpFetcher` extract path so the
+/// catalog wrappers issue byte-identical requests without re-inlining I/O.
+async fn cboe_fetch<P: ProviderSpec>(base_url: &str, query: &P::Query) -> Result<Bytes> {
+    let client = tdw_core::http_support::build_client(P::USER_AGENT, P::CLIENT_ERR)?;
+    let request = P::build_request(base_url, query, &client)?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| Error::Provider(format!("{}: {e}", P::SEND_ERR)))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "{} {status}: {body}",
+            P::RETURNED_ERR
+        )));
+    }
+    response
+        .bytes()
+        .await
+        .map_err(|e| Error::Provider(format!("{}: {e}", P::READ_BODY_ERR)))
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production CBOE delayed US-index quote fetcher (catalog-facing).
+    ///
+    /// Standardizes `index/snapshots`: the delayed US-index quote, normalized to
+    /// [`tdw_domain::QuoteSnapshot`]. Reuses [`CboeIndexSpec`]'s request builder
+    /// and parser; `change_percent` is derived from the quote's absolute change
+    /// and the implied previous close.
+    pub CboeHttpIndexSnapshotFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<CboeIndexQuery, QuoteSnapshot> for CboeHttpIndexSnapshotFetcher {
+    const PROVIDER: &'static str = "cboe";
+    const ENDPOINT: &'static str = "index_snapshots";
+
+    fn transform_query(params: Value) -> Result<CboeIndexQuery> {
+        <CboeIndexSpec as ProviderSpec>::transform_query(params)
+    }
+
+    async fn extract_data(&self, query: &CboeIndexQuery, _creds: &Credentials) -> Result<Bytes> {
+        cboe_fetch::<CboeIndexSpec>(self.base_url(), query).await
+    }
+
+    fn transform_data(&self, query: &CboeIndexQuery, raw: Bytes) -> Result<Vec<QuoteSnapshot>> {
+        let quotes = <CboeIndexSpec as ProviderSpec>::transform_data(query, raw)?;
+        Ok(quotes
+            .into_iter()
+            .map(|quote| {
+                let prev_close = quote.price - quote.change;
+                let change_percent = if prev_close == 0.0 {
+                    0.0
+                } else {
+                    quote.change / prev_close * 100.0
+                };
+                QuoteSnapshot {
+                    symbol: quote.symbol,
+                    current_price: quote.price,
+                    change: quote.change,
+                    change_percent,
+                    prev_close,
+                    // The delayed index feed carries no quote timestamp; 0 marks
+                    // "unknown epoch" (the price-alert read path treats ts_ms as
+                    // advisory).
+                    ts_ms: 0,
+                }
+            })
+            .collect())
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production CBOE delayed options-chain fetcher (catalog-facing).
+    ///
+    /// Standardizes `derivatives/options/chains`: the delayed options chain,
+    /// normalized to [`tdw_domain::OptionContract`]. Reuses [`CboeOptionsSpec`]'s
+    /// request builder and parser; the option type and expiry are decoded from
+    /// the CBOE OCC-style contract symbol (`{ROOT}{YYMMDD}{C|P}{STRIKE*1000}`).
+    pub CboeHttpOptionsChainFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<CboeOptionsQuery, OptionContract> for CboeHttpOptionsChainFetcher {
+    const PROVIDER: &'static str = "cboe";
+    const ENDPOINT: &'static str = "options_chains";
+
+    fn transform_query(params: Value) -> Result<CboeOptionsQuery> {
+        <CboeOptionsSpec as ProviderSpec>::transform_query(params)
+    }
+
+    async fn extract_data(&self, query: &CboeOptionsQuery, _creds: &Credentials) -> Result<Bytes> {
+        cboe_fetch::<CboeOptionsSpec>(self.base_url(), query).await
+    }
+
+    fn transform_data(&self, query: &CboeOptionsQuery, raw: Bytes) -> Result<Vec<OptionContract>> {
+        let contracts = <CboeOptionsSpec as ProviderSpec>::transform_data(query, raw)?;
+        Ok(contracts
+            .into_iter()
+            .map(|contract| {
+                let (expiration, option_type, strike) = decode_occ_symbol(&contract.option);
+                OptionContract {
+                    underlying_symbol: query.symbol.clone(),
+                    contract_symbol: Some(contract.option),
+                    expiration,
+                    strike,
+                    option_type,
+                    bid: Some(contract.bid),
+                    ask: Some(contract.ask),
+                    last_price: None,
+                    volume: None,
+                    open_interest: Some(contract.open_interest),
+                    implied_volatility: Some(contract.iv),
+                    delta: Some(contract.delta),
+                    gamma: Some(contract.gamma),
+                    theta: Some(contract.theta),
+                    vega: None,
+                    rho: None,
+                }
+            })
+            .collect())
+    }
+}
+
+/// Decode an OCC-style CBOE contract symbol into `(expiration, option_type,
+/// strike)`.
+///
+/// The CBOE delayed-chain `option` field is the OCC identifier
+/// `{ROOT}{YYMMDD}{C|P}{STRIKE × 1000, 8 digits}` (e.g.
+/// `AAPL240119C00180000`). The root may contain digits, so the date/type/strike
+/// tail is parsed from the right (a fixed 15-character suffix). On any shape the
+/// parser does not recognise it returns conservative fallbacks so a malformed
+/// row never aborts the whole chain.
+fn decode_occ_symbol(symbol: &str) -> (String, String, f64) {
+    const TAIL_LEN: usize = 15; // 6 date + 1 type + 8 strike
+    let bytes = symbol.as_bytes();
+    if bytes.len() < TAIL_LEN {
+        return (String::new(), "call".to_string(), 0.0);
+    }
+    let tail = &symbol[symbol.len() - TAIL_LEN..];
+    let date = &tail[0..6];
+    let type_char = &tail[6..7];
+    let strike_raw = &tail[7..15];
+
+    let expiration = if date.bytes().all(|b| b.is_ascii_digit()) {
+        format!("20{}-{}-{}", &date[0..2], &date[2..4], &date[4..6])
+    } else {
+        String::new()
+    };
+    let option_type = if type_char.eq_ignore_ascii_case("P") {
+        "put".to_string()
+    } else {
+        "call".to_string()
+    };
+    let strike = strike_raw
+        .parse::<f64>()
+        .map_or(0.0, |thousandths| thousandths / 1000.0);
+    (expiration, option_type, strike)
+}
+
+// ---------------------------------------------------------------------------
 // Error mapping helper (unused directly but kept for completeness)
 // ---------------------------------------------------------------------------
 
 impl From<CboeProviderError> for Error {
     fn from(e: CboeProviderError) -> Self {
-        Error::Provider(e.to_string())
+        Self::Provider(e.to_string())
     }
 }
