@@ -153,7 +153,9 @@ services:
       clickhouse:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
+        condition: service_started
       meilisearch:
         condition: service_healthy
     environment:
@@ -332,7 +334,9 @@ services:
       clickhouse:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
+        condition: service_started
       meilisearch:
         condition: service_healthy
       minio:
@@ -355,7 +359,9 @@ services:
       clickhouse:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
+        # service_started, not service_healthy: the distroless qdrant image
+        # cannot run exec healthchecks (see the qdrant service definition).
+        condition: service_started
       meilisearch:
         condition: service_healthy
       minio:
