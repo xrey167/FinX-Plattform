@@ -322,6 +322,62 @@ async fn spawn_daemon_rest(
     }))
 }
 
+/// Bind and spawn the daemon's OpenBB Workspace bridge listener when
+/// `TDW_WORKSPACE_BIND` is set (and the `workspace-route` feature is compiled).
+///
+/// Serves `GET /widgets.json`, `GET /apps.json` (both derived from the endpoint
+/// catalog), and `GET /widget-data/{route...}?<params>` (resolved through the
+/// same policy-guarded `Op::FetchData` path the REST surface uses), with CORS
+/// and an optional `X-TDW-API-KEY` check.
+///
+/// **Fail-closed**, mirroring `TDW_MCP_HTTP_TOKEN` semantics: a non-loopback
+/// bind with no `TDW_WORKSPACE_API_KEY` set refuses to start the listener (logs
+/// and returns `None`), since any browser/host reaching the port could otherwise
+/// drive the daemon's fetch path unauthenticated. A loopback bind needs no key.
+///
+/// Returns `None` when unset (the default), on a fail-closed refusal, or on bind
+/// failure (logged), so the daemon still serves its primary transport.
+///
+/// Decide whether the workspace listener must refuse to start: a non-loopback
+/// bind with no API key is the fail-closed case. Pure (no env / no I/O) so the
+/// fail-closed rule is unit-testable without mutating the process environment.
+#[cfg(feature = "workspace-route")]
+#[must_use]
+fn workspace_bind_refused(bind: &str, has_api_key: bool) -> bool {
+    !bind_is_loopback(bind) && !has_api_key
+}
+
+#[cfg(feature = "workspace-route")]
+async fn spawn_daemon_workspace(
+    state: &AppState,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
+    let bind = std::env::var("TDW_WORKSPACE_BIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let config = tdw_app_server::WorkspaceConfig::from_env();
+    if workspace_bind_refused(&bind, config.api_key.is_some()) {
+        eprintln!(
+            "tdw-backend: REFUSING to start workspace listener on non-loopback bind '{bind}' without TDW_WORKSPACE_API_KEY set (fail-closed). Set the key or bind 127.0.0.1."
+        );
+        return None;
+    }
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-backend: workspace listener bind failed on {bind}: {error}");
+            return None;
+        }
+    };
+    eprintln!(
+        "tdw-backend: workspace listener on http://{bind} (/widgets.json /apps.json /widget-data/<route>)"
+    );
+    let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
+    Some(tokio::spawn(async move {
+        tdw_app_server::serve_workspace_http(listener, handler, config, cancel).await
+    }))
+}
+
 /// Emit the same startup policy diagnostics the original `tdw-service` binary
 /// did, reporting whether a policy is attached for the resolved profile.
 fn report_policy_state(state: &AppState, config: &TdwConfig) {
@@ -444,6 +500,13 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     #[cfg(feature = "rest-api-route")]
     let rest_task = spawn_daemon_rest(&state, cancel.clone()).await;
 
+    // Optional OpenBB Workspace bridge surface (GET /widgets.json, /apps.json,
+    // /widget-data/<route>), env-gated on TDW_WORKSPACE_BIND and off by default.
+    // Fail-closed on a non-loopback bind without TDW_WORKSPACE_API_KEY. Shares
+    // the cancellation token so a graceful drain stops accepting requests too.
+    #[cfg(feature = "workspace-route")]
+    let workspace_task = spawn_daemon_workspace(&state, cancel.clone()).await;
+
     // Phase B — a standalone daemon's only memory surface is the persisted file
     // set named by `TDW_MEMORY_DIR` (runtime memory ingest is via the library
     // `Backend` API — `upsert_memory` — which the binary does not expose, since
@@ -483,6 +546,12 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // exit so the drain is bounded.
     #[cfg(feature = "rest-api-route")]
     if let Some(task) = rest_task {
+        let _ = task.await;
+    }
+    // The workspace listener observes the same cancellation token; await its
+    // clean exit so the drain is bounded.
+    #[cfg(feature = "workspace-route")]
+    if let Some(task) = workspace_task {
         let _ = task.await;
     }
     let _ = transport.join.await;
@@ -819,6 +888,18 @@ mod tests {
         assert!(!bind_is_loopback("[::]:7878"));
         // A host-only / unparseable spec errs on the side of caution.
         assert!(!bind_is_loopback("example.com:7878"));
+    }
+
+    #[cfg(feature = "workspace-route")]
+    #[test]
+    fn workspace_bind_refused_only_on_nonloopback_without_key() {
+        // Non-loopback + no key -> fail-closed refusal.
+        assert!(workspace_bind_refused("0.0.0.0:7900", false));
+        // Non-loopback + key set -> allowed.
+        assert!(!workspace_bind_refused("0.0.0.0:7900", true));
+        // Loopback never refuses, key or not.
+        assert!(!workspace_bind_refused("127.0.0.1:7900", false));
+        assert!(!workspace_bind_refused("localhost:7900", false));
     }
 
     // -- Round 18: daemon serving-path behavioral suite ---------------------

@@ -21,6 +21,12 @@ udf-wasm = ["tdw-sandbox/udf-wasm"]
 ## `tdw-app-server/rest-api-route` (which implies `transport-http`).
 rest-api-route = ["tdw-app-server/rest-api-route"]
 
+## Serve the OpenBB Workspace bridge surface (`GET /widgets.json`,
+## `GET /apps.json`, `GET /widget-data/{route...}`). The data endpoint reuses
+## the same `RestApiState` fetch seam as `rest-api-route`, so this forwards both
+## `tdw-app-server/workspace-route` and `rest-api-route`.
+workspace-route = ["rest-api-route", "tdw-app-server/workspace-route"]
+
 ## Swap the relational engine in `AppState` for the real `PgEngine`
 ## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
 ## Used exclusively in integration tests gated by `TDW_POSTGRES_TEST_URL`.

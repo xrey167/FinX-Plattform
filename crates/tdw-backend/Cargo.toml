@@ -87,6 +87,15 @@ transport-uds = ["tdw-app-server/transport-uds"]
 ## `GET /openapi.json`) on an env-gated listener (`TDW_DAEMON_REST_BIND`).
 ## Forwards `tdw-service-api/rest-api-route` (which implies `transport-http`).
 rest-api-route = ["tdw-service-api/rest-api-route", "tdw-app-server/rest-api-route"]
+## Serve the OpenBB Workspace bridge surface (`GET /widgets.json`,
+## `GET /apps.json`, `GET /widget-data/{route...}`) on an env-gated listener
+## (`TDW_WORKSPACE_BIND`). Forwards `tdw-app-server/workspace-route` (which
+## implies `rest-api-route` + `transport-http`) and reuses the same
+## `RestApiState` fetch seam as the REST surface.
+workspace-route = [
+    "tdw-service-api/rest-api-route",
+    "tdw-app-server/workspace-route",
+]
 
 [[bin]]
 name = "tdw-backend"

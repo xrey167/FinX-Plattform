@@ -17,7 +17,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tdw_agent::{AgentCard, ContentRef, EvalCase, EvalMetric, EvalRunRequest};
 use tdw_agent_store::{AgentStore, StoredEvalRun};
-use tdw_llm::{ChatMessage, ChatRequest, LanguageModel, MessageRole};
+use tdw_llm::{
+    ChatMessage, ChatRequest, LanguageModel, MessageRole, StreamingLanguageModel, split_into_chunks,
+};
 
 /// Output-token budget requested per case. Generous enough that the deterministic stub
 /// (and real clients) never truncate the canned/echoed answer used for scoring.
@@ -300,6 +302,27 @@ impl LanguageModel for StubLanguageModel {
     }
 }
 
+/// Number of deterministic chunks the stub splits its echoed answer into when
+/// streamed, so downstream chunk-handling is exercisable fully offline.
+const STUB_STREAM_CHUNKS: usize = 3;
+
+/// Offline streaming for the deterministic stub: echo the same content as
+/// [`LanguageModel::complete`], replayed as a few deterministic chunks. The
+/// concatenation of the emitted chunks reproduces the final answer verbatim.
+impl StreamingLanguageModel for StubLanguageModel {
+    fn complete_streaming(
+        &self,
+        request: &ChatRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> tdw_llm::Result<tdw_llm::ChatResponse> {
+        let response = self.complete(request.clone())?;
+        for chunk in split_into_chunks(&response.message.content, STUB_STREAM_CHUNKS) {
+            on_chunk(&chunk);
+        }
+        Ok(response)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +340,37 @@ mod tests {
             checksum: None,
             tags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn stub_streaming_emits_multiple_chunks_reconstructing_the_answer() {
+        let model = StubLanguageModel;
+        let request = ChatRequest {
+            messages: vec![
+                ChatMessage {
+                    role: MessageRole::System,
+                    content: "grounding context".to_string(),
+                },
+                ChatMessage {
+                    role: MessageRole::User,
+                    content: "summarize the filing".to_string(),
+                },
+            ],
+            max_output_tokens: 256,
+        };
+        let mut chunks = Vec::new();
+        let response = model
+            .complete_streaming(&request, &mut |chunk| chunks.push(chunk.to_string()))
+            .unwrap_or_else(|error| panic!("streaming completes: {error}"));
+
+        assert!(chunks.len() > 1, "stub stream should emit multiple chunks");
+        assert_eq!(chunks.concat(), response.message.content);
+        assert_eq!(
+            response,
+            model
+                .complete(request)
+                .unwrap_or_else(|error| panic!("complete: {error}"))
+        );
     }
 
     #[test]
