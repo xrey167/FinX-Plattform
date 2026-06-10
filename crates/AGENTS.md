@@ -142,6 +142,7 @@ See ADR-0001 and the clean-room rule.
 | `tdw-kg/` | Knowledge-graph primitives. |
 | `tdw-tags/` | Tag taxonomy. |
 | `tdw-tag-rules/` | Tag-rule engine. |
+| `tdw-infer/` | Rule-based forward-chaining inference: stratified `DeriveEdge` chains + `PropagateTag` flows over the GraphEngine/TagEngine, with support-set provenance, hot-reload, incremental + retract (B7). |
 | `tdw-entity-resolver/` | Entity resolution over `tdw-kg`. |
 | `tdw-feature-store/` | Feature-store façade for ML signals. |
 | `tdw-ml-registry/` | Model registry. |

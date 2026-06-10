@@ -5325,6 +5325,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-infer"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-storage-graph",
+ "tdw-tags",
+ "tdw-taxonomy",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-kg"
 version = "0.1.0"
 dependencies = [

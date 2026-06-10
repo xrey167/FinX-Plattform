@@ -217,6 +217,14 @@ pub trait GraphEngine: Send + Sync {
         filter: &TraversalFilter,
     ) -> Result<Option<Vec<GraphEdge>>>;
 
+    /// Enumerate stored edges, optionally restricted to one relationship
+    /// type — the pattern-match scan behind rule inference (knowledge-system
+    /// B7). Order is engine-defined but STABLE across pages while the graph
+    /// is unmodified, so `offset`/`limit` pagination covers every edge
+    /// exactly once; `limit` must be greater than zero.
+    async fn edges(&self, rel: Option<&str>, offset: usize, limit: usize)
+    -> Result<Vec<GraphEdge>>;
+
     /// Delete every edge leaving `from` with relationship `rel` (optionally
     /// restricted to a single `to` endpoint), returning how many were removed.
     /// The retraction primitive tag re-parenting (A5) and rule re-derivation

@@ -351,6 +351,53 @@ impl GraphEngine for BoltGraphEngine {
         Ok(None)
     }
 
+    async fn edges(
+        &self,
+        rel: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<GraphEdge>> {
+        if limit == 0 {
+            return Err(Error::Storage(
+                "edges limit must be greater than zero".to_string(),
+            ));
+        }
+        let offset = i64::try_from(offset)
+            .map_err(|_| Error::Storage(format!("edges offset {offset} exceeds i64")))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| Error::Storage(format!("edges limit {limit} exceeds i64")))?;
+        // Same explicit ORDER BY as every other read (BOLT-A4); the
+        // (from, rel, to, valid_from) order matches the in-memory engine's
+        // edge_sort_key so the conformance suite can assert one order.
+        let q = query(
+            "MATCH (a:E)-[r:R]->(b:E) \
+             WHERE $rel_all OR r.rel = $rel \
+             RETURN r.rel AS rel, r.props AS rprops, r.provenance AS rprov, \
+                    r.vf AS rvf, r.vt AS rvt, \
+                    startNode(r).id AS efrom, endNode(r).id AS eto \
+             ORDER BY efrom, rel, eto, rvf \
+             SKIP $offset LIMIT $limit",
+        )
+        .param("rel_all", rel.is_none())
+        .param("rel", rel.unwrap_or_default())
+        .param("offset", offset)
+        .param("limit", limit);
+        let mut stream = self
+            .graph
+            .execute(q)
+            .await
+            .map_err(|error| Error::Storage(format!("bolt edges: {error}")))?;
+        let mut edges = Vec::new();
+        while let Some(row) = stream
+            .next()
+            .await
+            .map_err(|error| Error::Storage(format!("bolt edges row: {error}")))?
+        {
+            edges.push(row_to_edge(&row)?);
+        }
+        Ok(edges)
+    }
+
     async fn delete_edges(&self, from: &str, rel: &str, to: Option<&str>) -> Result<usize> {
         let count_q = query(
             "MATCH (a:E {id:$from})-[r:R {rel:$rel}]->(b:E) \
