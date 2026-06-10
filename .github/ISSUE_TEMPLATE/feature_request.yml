@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a new capability or improvement
+title: "feat: <short summary>"
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, or what is harder than it should be?
+      placeholder: >-
+        e.g. "tdw.provider.fetch can dispatch polygon, but there is no way to
+        pass a custom date range for aggregate bars."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like to happen? Sketch the API/CLI/tool surface if you can.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - MCP server (tdw-mcp)
+        - Providers / live transports
+        - Warehouse stack (service, worker, storage)
+        - Embeddable library (tdw-backend)
+        - CLI / TUI
+        - CI / release / packaging
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or why existing surfaces don't fit.
+    validations:
+      required: false
