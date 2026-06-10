@@ -12,6 +12,9 @@ license = "MIT OR Apache-2.0"
 # until you delete this line. Crates with real doc-tests keep doctests enabled.
 doctest = false
 
+[dev-dependencies]
+tokio = { workspace = true }
+
 [features]
 default = []
 # Enables the real Postgres-backed outbox built on top of
