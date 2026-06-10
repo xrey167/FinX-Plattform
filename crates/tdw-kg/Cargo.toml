@@ -14,6 +14,9 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-taxonomy = { workspace = true }
 
 # Unique example binary name (the workspace builds examples into one shared
 # target dir, where a bare `basic` would collide across crates).
