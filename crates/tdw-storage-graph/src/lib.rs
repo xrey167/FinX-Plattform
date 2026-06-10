@@ -79,8 +79,12 @@ fn node_passes(node: &GraphNode, filter: &TraversalFilter) -> bool {
 }
 
 /// The neighbor an edge reaches from `anchor` under `direction`, if the edge leaves the
-/// anchor in an allowed direction.
+/// anchor in an allowed direction. A self-loop reaches no *neighbor* — without this
+/// guard, `Direction::Both` on a self-loop would return the anchor as its own neighbor.
 fn reached_id<'e>(edge: &'e GraphEdge, anchor: &str, direction: Direction) -> Option<&'e str> {
+    if edge.from == edge.to {
+        return None;
+    }
     let outgoing = edge.from == anchor;
     let incoming = edge.to == anchor;
     match direction {
@@ -289,6 +293,13 @@ impl GraphEngine for InMemoryGraphEngine {
             .get(source)
             .cloned()
             .ok_or_else(|| Error::Storage(format!("merge source missing: {source}")))?;
+        // A repeated merge would silently duplicate the audit edge and report a
+        // meaningless no-op — reject merging an already-tombstoned source instead.
+        if source_node.props.get("merged_into").is_some() {
+            return Err(Error::Storage(format!(
+                "merge source already merged: {source}"
+            )));
+        }
         let mut target_node = state
             .nodes
             .get(target)

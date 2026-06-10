@@ -347,8 +347,19 @@ pub fn is_graph_id(value: &str) -> bool {
         })
 }
 
+/// Require the normalized UTC form (`YYYY-MM-DDTHH:MM:SSZ`, optional fractional
+/// seconds) so lexicographic comparison equals chronological comparison. Accepting
+/// looser forms (date-only, offset zones) would make `active_at` silently wrong when
+/// formats mix — the same instant in two forms must never filter differently.
 fn is_timestampish(value: &str) -> bool {
-    !value.trim().is_empty() && value.chars().all(|character| !character.is_control())
+    value.len() >= 20
+        && value.ends_with('Z')
+        && value.as_bytes().get(4) == Some(&b'-')
+        && value.as_bytes().get(7) == Some(&b'-')
+        && value.as_bytes().get(10) == Some(&b'T')
+        && value.as_bytes().get(13) == Some(&b':')
+        && value.as_bytes().get(16) == Some(&b':')
+        && value.chars().all(|character| !character.is_control())
 }
 
 #[cfg(test)]
@@ -423,6 +434,38 @@ mod tests {
                 ..TraversalFilter::default()
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn timestamps_must_be_normalized_utc() {
+        // Mixed forms would silently corrupt lexicographic active_at comparisons,
+        // so anything but YYYY-MM-DDTHH:MM:SS[.fff]Z is rejected loudly.
+        let ok = |as_of: &str| {
+            validate_traversal_filter(&TraversalFilter {
+                as_of: Some(as_of.to_string()),
+                ..TraversalFilter::default()
+            })
+        };
+        assert!(ok("2024-01-01T00:00:00Z").is_ok());
+        assert!(ok("2024-01-01T00:00:00.123Z").is_ok());
+        assert!(ok("2024-01-01").is_err(), "date-only must be rejected");
+        assert!(
+            ok("2024-01-01 00:00:00Z").is_err(),
+            "space separator rejected"
+        );
+        assert!(
+            ok("2024-01-01T00:00:00+05:30").is_err(),
+            "offset zones must be rejected"
+        );
+        assert!(ok("banana").is_err());
+        assert!(
+            validate_graph_node(&GraphNode {
+                valid_from: Some("2024-01-01".to_string()),
+                ..node("instrument:AAPL")
+            })
+            .is_err(),
+            "node validity bounds use the same normalized form"
         );
     }
 

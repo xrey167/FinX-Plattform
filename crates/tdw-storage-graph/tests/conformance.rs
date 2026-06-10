@@ -119,6 +119,10 @@ async fn conformance_suite(any: &AnyGraph) {
         .unwrap_or_else(|error| panic!("edge replacement must succeed: {error}"));
 
     // 3. Directional neighborhoods, deterministic order.
+    // BOLT-A4: the (rel, neighbor id, valid_from) order asserted below is part of
+    // the GraphEngine contract — every MATCH feeding neighbors() MUST carry an
+    // explicit ORDER BY; omitting it yields planner-dependent order that fails
+    // these assertions non-deterministically.
     let out = g
         .neighbors("instrument:AAPL", &filter(Direction::Out, 1))
         .await
@@ -357,7 +361,68 @@ async fn conformance_suite(any: &AnyGraph) {
         vec!["instrument:AAPL"]
     );
 
-    // 9. Contract violations are loud.
+    // 9. A merge is one-shot: repeating it on a tombstoned source must error
+    //    rather than silently duplicate the audit edge.
+    assert!(
+        g.merge_entities(
+            "instrument:APPLE-DUP",
+            "instrument:AAPL",
+            &MergeDecision {
+                approved_by: "architect".to_string(),
+            },
+        )
+        .await
+        .is_err(),
+        "merging an already-merged source must be rejected"
+    );
+
+    // 10. A self-loop is storable but reaches no *neighbor* in any direction —
+    //     the anchor must never appear as its own neighbor.
+    g.upsert_edges(vec![edge("instrument:AAPL", "tracks", "instrument:AAPL")])
+        .await
+        .unwrap_or_else(|error| panic!("self-loop edge must upsert: {error}"));
+    let self_view = g
+        .neighbors(
+            "instrument:AAPL",
+            &TraversalFilter {
+                rels: Some(vec!["tracks".to_string()]),
+                ..filter(Direction::Both, 1)
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("self-loop read must succeed: {error}"));
+    assert!(
+        self_view.is_empty(),
+        "a self-loop must not surface the anchor as its own neighbor"
+    );
+    let self_expand = g
+        .expand(
+            &["instrument:AAPL".to_string()],
+            &filter(Direction::Both, 1),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("self-loop expand must succeed: {error}"));
+    assert!(
+        self_expand.edges.iter().all(|e| e.rel != "tracks"),
+        "expand must not traverse a self-loop"
+    );
+
+    // 11. Timestamps must be normalized UTC (lexicographic == chronological);
+    //     looser forms are rejected loudly instead of mis-filtering silently.
+    assert!(
+        g.neighbors(
+            "instrument:AAPL",
+            &TraversalFilter {
+                as_of: Some("2024-01-01".to_string()),
+                ..filter(Direction::Out, 1)
+            },
+        )
+        .await
+        .is_err(),
+        "date-only as_of must be rejected"
+    );
+
+    // 12. Contract violations are loud.
     assert!(g.upsert_nodes(Vec::new()).await.is_err());
     assert!(g.upsert_edges(Vec::new()).await.is_err());
     assert!(
