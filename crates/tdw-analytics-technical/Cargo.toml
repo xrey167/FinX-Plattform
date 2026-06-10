@@ -1,0 +1,22 @@
+# tdw-analytics-technical: pure-Rust, offline technical-analysis indicators.
+#
+# Lib-only, no async, no I/O. Hand-rolled implementations over OHLCV slices with
+# typed serde+schemars param/output structs. Indicator formulas are textbook
+# math (Wilder 1978 and the standard definitions); see each module's docs for
+# the cited definition. No new third-party numeric dependency is pulled in.
+[package]
+name = "tdw-analytics-technical"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-domain = { workspace = true }
+
+[lints]
+workspace = true

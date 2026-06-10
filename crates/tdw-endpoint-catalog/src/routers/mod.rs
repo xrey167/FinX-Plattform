@@ -18,3 +18,4 @@ pub mod fixedincome;
 pub mod index;
 pub mod news;
 pub mod regulators;
+pub mod technical;
