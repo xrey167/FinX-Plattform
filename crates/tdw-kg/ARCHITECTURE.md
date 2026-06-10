@@ -6,7 +6,7 @@ Single-file crate (`src/lib.rs`), `#![forbid(unsafe_code)]`:
 
 | Item | Role |
 | --- | --- |
-| `EntityKind` | The closed set of entity kinds. |
+| `EntityKind` | The platform-wide 50-kind taxonomy (re-exported from `tdw-taxonomy`, A3). |
 | `Entity` / `Relationship` | The graph node + edge DTOs. |
 | `KnowledgeGraphError` | The validation error enum. |
 | `KnowledgeGraph` | The in-memory store. |
@@ -43,10 +43,15 @@ Two tiers per mutation:
 - `entity(id)` — borrow by id.
 - `neighbors(id)` — the de-duplicated (`BTreeSet`) set of entities reachable by an
   outgoing edge from `id`, returned in id order.
-- `manual_merge(source, target, approved_by)` — records a `source->target
-  approved_by=…` audit entry; returns `false` (no-op) if either endpoint is
-  missing or `approved_by` is empty/control-bearing. Approval is mandatory and
-  audited, never silent.
+- `manual_merge(source, target, approved_by)` — a REAL merge (A3): unions the
+  source's aliases and label onto the target, re-points every source edge at the
+  target (duplicates and would-be self-loops drop), tombstones the source
+  (`merged_into` reports its target), and records a `source->target
+  approved_by=…` audit entry. Returns `false` (no-op) for a self-merge, a
+  missing endpoint, an already-merged source, or an empty/control-bearing
+  approver. Approval is mandatory and audited, never silent. Semantics match
+  `GraphEngine::merge_entities` so the durable engine swap (A5) is
+  behavior-preserving; `try_manual_merge` returns the `MergeOutcome` report.
 - `merge_audit()` — the audit slice.
 
 ## Offline test design

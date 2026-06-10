@@ -4512,6 +4512,9 @@ name = "tdw-kg"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-taxonomy",
 ]
 
 [[package]]

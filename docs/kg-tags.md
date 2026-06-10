@@ -2,8 +2,10 @@
 
 G008 uses separate contracts for each responsibility:
 
-- `tdw-kg`: entity catalog, relationships, neighbor queries, and manual merge
-  audit. v0.1 does not auto-merge entities.
+- `tdw-kg`: entity catalog over the unified 50-kind taxonomy, relationships,
+  neighbor queries, and real audited manual merges (alias union, edge rewiring,
+  tombstones — knowledge-system A3). Merges remain explicitly approved; nothing
+  auto-merges.
 - `tdw-entity-resolver`: deterministic resolver candidates and explicit manual
   merge decisions.
 - `tdw-tags`: tag definitions, parent DAG validation, assignments, TTL checks,

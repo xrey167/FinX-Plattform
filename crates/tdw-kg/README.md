@@ -1,7 +1,7 @@
 # tdw-kg
 
-In-memory knowledge graph: entities, relationships, neighbor queries, and an
-audited manual-merge trail.
+In-memory knowledge graph: entities, relationships, neighbor queries, and real,
+audited manual merges over the unified platform taxonomy.
 
 ## Purpose
 
@@ -12,8 +12,10 @@ mutation paths that reject malformed ids and dangling edges.
 
 Core surface:
 
-- [`Entity`] — `{ entity_id, kind, label, aliases }` with [`EntityKind`]
-  (`Instrument` / `Account` / `Strategy` / `Agent` / `Dataset`).
+- [`Entity`] — `{ entity_id, kind, label, aliases }` with [`EntityKind`] being
+  the platform-wide 50-kind taxonomy re-exported from `tdw-taxonomy` (A3); the
+  former local kinds (`Instrument` / `Account` / `Strategy` / `Agent` /
+  `Dataset`) are members of it.
 - [`Relationship`] — `{ from, to, rel_type, provenance }`.
 - [`KnowledgeGraph`] — `upsert_entity`, `try_upsert_entity`, `add_relationship`,
   `try_add_relationship`, `entity`, `neighbors`, `manual_merge`, `merge_audit`.
@@ -65,4 +67,4 @@ cargo run --example tdw_kg_basic -p tdw-kg
 ```
 
 `examples/basic.rs` builds an in-memory graph, queries neighbors, records an
-audited manual merge, and shows the checked-path rejections — all in-process.
+audited real merge, and shows the checked-path rejections — all in-process.
