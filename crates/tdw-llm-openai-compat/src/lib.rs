@@ -1,9 +1,15 @@
 #![forbid(unsafe_code)]
 
 use tdw_llm::{
-    ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result, Usage,
-    last_user_message, validate_base_url, validate_model_id,
+    ChatMessage, ChatRequest, ChatResponse, LanguageModel, MessageRole, Result,
+    StreamingLanguageModel, Usage, last_user_message, split_into_chunks, validate_base_url,
+    validate_model_id,
 };
+
+/// Number of deterministic chunks the offline stub splits its canned answer
+/// into when streamed. Chosen small so chunk-handling tests stay readable while
+/// still exercising the multi-chunk path.
+const STUB_STREAM_CHUNKS: usize = 3;
 
 #[cfg(feature = "http")]
 pub mod http_client;
@@ -56,9 +62,55 @@ impl LanguageModel for OpenAiCompatibleModel {
     }
 }
 
+/// Offline streaming for the deterministic stub: produce the same canned
+/// answer as [`LanguageModel::complete`], then replay it as a few
+/// deterministic chunks so downstream chunk-handling is exercisable without a
+/// network round-trip. The native SSE-consuming path lives on
+/// [`crate::http_client::OpenAiCompatibleHttpClient::complete_streaming`]
+/// (gated by the `http` feature).
+impl StreamingLanguageModel for OpenAiCompatibleModel {
+    fn complete_streaming(
+        &self,
+        request: &ChatRequest,
+        on_chunk: &mut dyn FnMut(&str),
+    ) -> Result<ChatResponse> {
+        let response = self.complete(request.clone())?;
+        for chunk in split_into_chunks(&response.message.content, STUB_STREAM_CHUNKS) {
+            on_chunk(&chunk);
+        }
+        Ok(response)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_compatible_stub_streaming_splits_into_multiple_chunks() {
+        let model = OpenAiCompatibleModel::new("gpt-compatible", None)
+            .unwrap_or_else(|error| panic!("model config should be valid: {error}"));
+        let request = ChatRequest {
+            messages: vec![ChatMessage {
+                role: MessageRole::User,
+                content: "draft a market note".to_string(),
+            }],
+            max_output_tokens: 64,
+        };
+        let mut chunks = Vec::new();
+        let response = model
+            .complete_streaming(&request, &mut |chunk| chunks.push(chunk.to_string()))
+            .unwrap_or_else(|error| panic!("streaming completes: {error}"));
+
+        assert!(chunks.len() > 1, "stub stream should emit multiple chunks");
+        assert_eq!(chunks.concat(), response.message.content);
+        assert_eq!(
+            response,
+            model
+                .complete(request)
+                .unwrap_or_else(|error| panic!("complete: {error}"))
+        );
+    }
 
     #[test]
     fn openai_compatible_adapter_preserves_base_url() {
