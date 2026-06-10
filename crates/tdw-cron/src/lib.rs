@@ -441,7 +441,7 @@ mod tests {
 
     use super::*;
     use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
-    use tdw_worker::{EnqueueOutcome, InMemoryWorkerQueue, WorkerJobStatus, WorkerQueueError};
+    use tdw_worker::{EnqueueOutcome, InMemoryWorkerQueue, WorkerJobStatus};
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -784,7 +784,9 @@ mod tests {
 
         // Second enqueue of the same job_id is acknowledged idempotently —
         // the cross-backend contract pinned by tdw-worker's conformance suite.
-        let outcome2 = queue.enqueue(job2).expect("duplicate enqueue is not an error");
+        let outcome2 = queue
+            .enqueue(job2)
+            .expect("duplicate enqueue is not an error");
         assert!(!outcome2.inserted, "duplicate slot must not insert");
 
         // Only one job was actually captured.
