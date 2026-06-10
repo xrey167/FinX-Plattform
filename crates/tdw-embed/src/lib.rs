@@ -47,9 +47,14 @@ pub trait EmbeddingProvider: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns an error variant if any input is empty, any underlying embed
-    /// fails, or the batch contract is violated.
+    /// Returns [`EmbeddingError::EmptyInput`] for an empty batch (every
+    /// implementation must reject it — the native provider endpoints do, and
+    /// the contract is uniform), or an error if any input is empty, any
+    /// underlying embed fails, or the batch contract is violated.
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Embedding>> {
+        if texts.is_empty() {
+            return Err(EmbeddingError::EmptyInput);
+        }
         let mut embeddings = Vec::with_capacity(texts.len());
         for text in texts {
             embeddings.push(self.embed(text).await?);
@@ -129,6 +134,12 @@ mod tests {
         assert_eq!(embeddings.len(), 2);
         assert!(embeddings.iter().all(|e| e.model_id == "constant"));
 
+        // An empty BATCH is rejected up front — uniform with the native
+        // provider endpoints, which also reject it.
+        assert!(matches!(
+            provider.embed_batch(&[]).await,
+            Err(EmbeddingError::EmptyInput)
+        ));
         // An empty input inside the batch fails through the per-text path.
         assert!(
             provider

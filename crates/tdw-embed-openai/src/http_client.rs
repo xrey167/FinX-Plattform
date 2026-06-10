@@ -260,6 +260,20 @@ pub(crate) fn parse_batch_response(
     }
     let mut data = envelope.data;
     data.sort_by_key(|entry| entry.index);
+    // The sorted indexes must be exactly 0..n: a missing, duplicate, or sparse
+    // index set would otherwise decode into the WRONG caller slots silently —
+    // mis-pairing is corruption, so it is a loud contract violation instead.
+    if let Some(position) = data
+        .iter()
+        .enumerate()
+        .find(|(position, entry)| *position != entry.index)
+    {
+        return Err(OpenAiEmbeddingHttpError::InvalidResponse(format!(
+            "openai batch response indexes are not the permutation 0..{expected}: \
+             found index {} at position {}",
+            position.1.index, position.0
+        )));
+    }
     data.into_iter()
         .map(|entry| {
             decode_embedding(model_id, entry.embedding).map_err(OpenAiEmbeddingHttpError::Adapter)
@@ -322,6 +336,40 @@ mod tests {
             parse_batch_response("text-embedding-3-small", short, 2),
             Err(OpenAiEmbeddingHttpError::InvalidResponse(_))
         ));
+    }
+
+    #[test]
+    fn batch_response_rejects_duplicate_and_sparse_indexes() {
+        // Duplicate ([0,0]) and sparse ([0,2]) index sets pass a bare count
+        // check but would decode into the WRONG caller slots — both must be
+        // loud contract violations, never silent mis-pairing.
+        for indexes in [[0_usize, 0], [0, 2]] {
+            let envelope = EmbeddingsEnvelope {
+                data: indexes
+                    .iter()
+                    .map(|&index| EmbeddingData {
+                        embedding: vec![0.1],
+                        index,
+                    })
+                    .collect(),
+            };
+            assert!(
+                matches!(
+                    parse_batch_response("text-embedding-3-small", envelope, 2),
+                    Err(OpenAiEmbeddingHttpError::InvalidResponse(_))
+                ),
+                "indexes {indexes:?} must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn trait_embed_batch_rejects_empty_batch_before_any_request() {
+        use tdw_embed::EmbeddingProvider;
+        let client = OpenAiEmbeddingHttpClient::new("sk-test", "text-embedding-3-small")
+            .unwrap_or_else(|error| panic!("client should build: {error}"));
+        // No server exists; the empty batch must fail in the builder, offline.
+        assert!(EmbeddingProvider::embed_batch(&client, &[]).await.is_err());
     }
 
     #[test]

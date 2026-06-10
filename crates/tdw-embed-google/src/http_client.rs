@@ -221,6 +221,15 @@ fn embed_content_url(base_url: &Url, model_id: &str) -> Result<Url, GoogleEmbedd
     let mut url = base_url.clone();
     let path = url.path().trim_end_matches('/');
     let path = if path.ends_with(":embedContent") {
+        // A base URL that pins a full endpoint also pins a MODEL. Reject a
+        // pinned model that differs from the client's `model_id`: requests
+        // would hit one model while returned embeddings get stamped with
+        // another, silently corrupting per-model collection routing downstream.
+        if !path.ends_with(&format!("/models/{model_id}:embedContent")) {
+            return Err(GoogleEmbeddingHttpError::InvalidBaseUrl(format!(
+                "base url pins endpoint {path:?}, which is not model {model_id:?}"
+            )));
+        }
         path.to_string()
     } else if path.ends_with("/v1beta") || path.ends_with("/v1") {
         format!("{path}/models/{model_id}:embedContent")
@@ -351,6 +360,15 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn trait_embed_batch_rejects_empty_batch_before_any_request() {
+        use tdw_embed::EmbeddingProvider;
+        let client = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+            .unwrap_or_else(|error| panic!("client should build: {error}"));
+        // No server exists; the empty batch must fail in the builder, offline.
+        assert!(EmbeddingProvider::embed_batch(&client, &[]).await.is_err());
+    }
+
     #[test]
     fn authenticated_constructor_rejects_empty_key_and_model_and_redacts_debug() {
         assert!(matches!(
@@ -380,12 +398,25 @@ mod tests {
             .unwrap_or_else(|error| panic!("client should build: {error}"))
             .with_base_url("https://generativelanguage.googleapis.com/v1beta")
             .unwrap_or_else(|error| panic!("base url should parse: {error}"));
-        let full_endpoint = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+        // A full pinned endpoint is accepted only when it pins THIS client's
+        // model — a different pinned model would silently stamp returned
+        // embeddings with the wrong identity.
+        let full_endpoint = GoogleEmbeddingHttpClient::new("AIza-test", "custom-embedding")
             .unwrap_or_else(|error| panic!("client should build: {error}"))
             .with_base_url(
                 "https://gateway.example.test/v1beta/models/custom-embedding:embedContent",
             )
             .unwrap_or_else(|error| panic!("base url should parse: {error}"));
+        let mismatched = GoogleEmbeddingHttpClient::new("AIza-test", "gemini-embedding-001")
+            .unwrap_or_else(|error| panic!("client should build: {error}"))
+            .with_base_url(
+                "https://gateway.example.test/v1beta/models/custom-embedding:embedContent",
+            )
+            .unwrap_or_else(|error| panic!("base url should parse: {error}"));
+        assert!(matches!(
+            embed_content_url(&mismatched.base_url, mismatched.model_id()),
+            Err(GoogleEmbeddingHttpError::InvalidBaseUrl(_))
+        ));
 
         assert_eq!(
             embed_content_url(&api_root.base_url, api_root.model_id())
