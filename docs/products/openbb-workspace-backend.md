@@ -86,6 +86,61 @@ every response. Configure the allow-list with `TDW_WORKSPACE_CORS_ORIGINS`; the
 default permits `https://pro.openbb.co` plus `http://localhost:1420` /
 `http://127.0.0.1:1420` (the documented Workspace dev origins).
 
+## Registering tdw-mcp as an app `mcp_server`
+
+OpenBB Workspace apps can list an MCP server under `apps.json`'s `mcp_servers`
+so the in-app Copilot can call the same tools that back the widgets. The curated
+default app already emits one entry pointing at the loopback `tdw-mcp`:
+
+```json
+"mcp_servers": [ { "name": "tdw-mcp", "url": "http://127.0.0.1:7878" } ]
+```
+
+To register `tdw-mcp` for a Workspace running at `https://pro.openbb.co`:
+
+- **URL.** Point Workspace at the `tdw-mcp` Streamable-HTTP transport
+  (`POST /mcp`). Bind it with `tdw-mcp --http <host:port>` (default
+  `127.0.0.1:8788`). For loopback access use the bound address directly; for a
+  network-reachable bind, terminate TLS in front and expose `https://…/mcp`.
+- **Token.** A non-loopback bind **refuses to start** unless `TDW_MCP_HTTP_TOKEN`
+  is set; when set, every request must carry `Authorization: Bearer <token>`
+  (constant-time compared). A loopback bind needs no token. This mirrors the
+  workspace-backend fail-closed rule above and is unchanged by this story.
+- **Origins.** The Streamable-HTTP transport accepts only loopback `Origin`
+  headers by default. Browser requests from `https://pro.openbb.co` are
+  cross-origin, so add that exact origin to the allow-list with
+  `TDW_MCP_ALLOWED_ORIGINS` (comma-separated exact origins, added on top of the
+  always-allowed loopback hosts):
+
+  ```sh
+  TDW_MCP_ALLOWED_ORIGINS=https://pro.openbb.co
+  ```
+
+  Entries are matched exactly after normalization (scheme + host lowercased,
+  trailing `/`/path dropped); blank or scheme-less entries are silently ignored.
+  `https://pro.openbb.co` is **not** allow-listed by default — you must opt in.
+
+### tdw-mcp environment variables
+
+| Variable                  | Default                      | Purpose                                                                                  |
+|---------------------------|------------------------------|------------------------------------------------------------------------------------------|
+| `TDW_MCP_HTTP_TOKEN`      | unset                        | Bearer token; mandatory on a non-loopback bind, required on every request when set.       |
+| `TDW_MCP_ALLOWED_ORIGINS` | unset (loopback origins only)| Comma-separated exact extra `Origin`s to accept, e.g. `https://pro.openbb.co`. Loopback always allowed. |
+
+### Read-only widget-catalog MCP tools
+
+`tdw-mcp` exposes three read-only tools backed by `tdw-widgets` so a Workspace
+agent can introspect the same catalog the widgets are derived from:
+
+| Tool                  | Returns                                                         |
+|-----------------------|----------------------------------------------------------------|
+| `tdw.widgets.list`    | `id`, `name`, `category`, `endpoint` per derived widget.       |
+| `tdw.widgets.describe`| The full `WidgetConfig` JSON for one widget `id`.              |
+| `tdw.apps.list`       | `name` + `description` for each curated Workspace app.         |
+
+The widget-citation contract (every widget's `mcp_tool.tool_id` resolves to a
+real tool in the `tdw-mcp` catalog) is enforced by a unit test in `tdw-mcp`.
+
 ## Manual interop checklist (Workspace frontend)
 
 The OpenBB Workspace frontend at `pro.openbb.co` is **proprietary**, so automated

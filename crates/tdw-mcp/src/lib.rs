@@ -1565,20 +1565,77 @@ fn bind_is_loopback(bind: &str) -> bool {
     matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
-fn origin_is_allowed(origin: &str) -> bool {
+/// Env var holding extra exact origins (comma-separated) the Streamable-HTTP
+/// transport accepts in addition to the built-in loopback hosts.
+///
+/// Each entry is normalized like an incoming `Origin` header (scheme + host
+/// lowercased, any trailing `/` and path dropped) before comparison; an entry
+/// that is blank or carries no `http://`/`https://` scheme is silently ignored.
+/// Unset/empty leaves the loopback-only default unchanged. The bearer-token rule
+/// is independent: a non-loopback bind still requires `TDW_MCP_HTTP_TOKEN`.
+const ALLOWED_ORIGINS_ENV: &str = "TDW_MCP_ALLOWED_ORIGINS";
+
+/// Normalize an `Origin` value to a comparable `scheme://host[:port]` form, or
+/// `None` when it carries no `http`/`https` scheme.
+///
+/// The scheme and host are ASCII-lowercased (origins are case-insensitive in
+/// both) and any path/trailing `/` is dropped so `https://Pro.OpenBB.co/` and
+/// `https://pro.openbb.co` compare equal.
+fn normalize_origin(origin: &str) -> Option<String> {
     let origin = origin.trim().to_ascii_lowercase();
-    let Some(rest) = origin
+    let rest = origin
         .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-    else {
-        return false;
-    };
+        .map(|rest| ("http://", rest))
+        .or_else(|| {
+            origin
+                .strip_prefix("https://")
+                .map(|rest| ("https://", rest))
+        })?;
+    let (scheme, rest) = rest;
     let authority = rest.split('/').next().unwrap_or("");
-    let host = authority.strip_prefix('[').map_or_else(
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}{authority}"))
+}
+
+/// Extract just the host from a normalized authority (`scheme://host[:port]`),
+/// IPv6 brackets stripped.
+fn origin_host(normalized: &str) -> &str {
+    let authority = normalized
+        .strip_prefix("http://")
+        .or_else(|| normalized.strip_prefix("https://"))
+        .unwrap_or(normalized);
+    authority.strip_prefix('[').map_or_else(
         || authority.split(':').next().unwrap_or(""),
         |rest| rest.split(']').next().unwrap_or(""),
-    );
-    matches!(host, "localhost" | "127.0.0.1" | "::1")
+    )
+}
+
+fn origin_is_allowed(origin: &str) -> bool {
+    origin_is_allowed_with(origin, std::env::var(ALLOWED_ORIGINS_ENV).ok().as_deref())
+}
+
+/// Pure core of [`origin_is_allowed`], parameterized on the allow-list string so
+/// it is testable without mutating the process environment.
+///
+/// Loopback hosts are always accepted. When `allowed` is `Some`, its
+/// comma-separated entries are normalized like the incoming origin and matched
+/// exactly; blank/scheme-less entries are skipped. `None` (env unset) leaves the
+/// loopback-only default unchanged.
+fn origin_is_allowed_with(origin: &str, allowed: Option<&str>) -> bool {
+    let Some(normalized) = normalize_origin(origin) else {
+        return false;
+    };
+    if matches!(origin_host(&normalized), "localhost" | "127.0.0.1" | "::1") {
+        return true;
+    }
+    allowed.is_some_and(|allowed| {
+        allowed
+            .split(',')
+            .filter_map(normalize_origin)
+            .any(|entry| entry == normalized)
+    })
 }
 
 fn content_type_is_json(content_type: &str) -> bool {
@@ -1814,7 +1871,42 @@ fn sample_tools_enabled() -> bool {
 fn tool_descriptors() -> Vec<ToolDescriptor> {
     let mut descriptors = tool_descriptors_evidence();
     descriptors.extend(tool_descriptors_client_and_daemon());
+    descriptors.extend(tool_descriptors_widgets());
     descriptors
+}
+
+/// Read-only widget-catalog tools, backed by the `tdw-widgets` projection of the
+/// `OpenBB` Workspace `widgets.json` / `apps.json` contract. They let an agent
+/// inside a Workspace app enumerate the derived widgets and apps without leaving
+/// MCP, and they share the catalog every widget citation points back to.
+fn tool_descriptors_widgets() -> Vec<ToolDescriptor> {
+    vec![
+        tool(
+            "tdw.widgets.list",
+            "List Workspace Widgets",
+            "List the OpenBB Workspace widgets derived from the TDW endpoint catalog (id, name, category, and backend endpoint per widget).",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+        tool(
+            "tdw.widgets.describe",
+            "Describe Workspace Widget",
+            "Return the full OpenBB Workspace WidgetConfig JSON for one widget id (call tdw.widgets.list for the available ids).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Widget id, for example equity_price_historical." }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+        ),
+        tool(
+            "tdw.apps.list",
+            "List Workspace Apps",
+            "List the curated OpenBB Workspace apps (name and description per app) derived from apps.json.",
+            json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        ),
+    ]
 }
 
 /// First group of built-in MCP tool descriptors (providers through KG/tag evidence).
@@ -2174,12 +2266,59 @@ fn execute_tool(
             .map_err(|error| ToolFailure::Execution(error.to_string())),
         "tdw.daemon.triage" => execute_daemon_triage(daemon, arguments_object),
         "tdw.daemon.query.submit" => execute_daemon_query_submit(daemon, arguments_object),
+        "tdw.widgets.list" => Ok(structured(json!({ "widgets": widget_summaries() }))),
+        "tdw.widgets.describe" => execute_widget_describe(arguments_object),
+        "tdw.apps.list" => Ok(structured(json!({ "apps": app_summaries() }))),
         _ => Err(ToolFailure::Protocol(JsonRpcProblem::new(
             Value::Null,
             -32602,
             format!("unknown tool: {name}"),
         ))),
     }
+}
+
+/// `[{ id, name, category, endpoint }]` for every derived widget, in catalog order.
+fn widget_summaries() -> Vec<Value> {
+    tdw_widgets::catalog_widgets()
+        .into_iter()
+        .map(|widget| {
+            json!({
+                "id": widget.id,
+                "name": widget.name,
+                "category": widget.category,
+                "endpoint": widget.endpoint,
+            })
+        })
+        .collect()
+}
+
+/// `[{ name, description }]` for every curated Workspace app in `apps.json`.
+fn app_summaries() -> Vec<Value> {
+    tdw_widgets::apps_json()
+        .as_object()
+        .map(|apps| {
+            apps.values()
+                .filter_map(|app| {
+                    let name = app.get("name")?.as_str()?;
+                    let description = app.get("description").and_then(Value::as_str).unwrap_or("");
+                    Some(json!({ "name": name, "description": description }))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn execute_widget_describe(arguments: &Map<String, Value>) -> Result<ToolExecution, ToolFailure> {
+    let id = required_argument(arguments, "id")?;
+    tdw_widgets::catalog_widgets()
+        .into_iter()
+        .find(|widget| widget.id == id)
+        .ok_or_else(|| ToolFailure::Execution(format!("unknown widget id: {id}")))
+        .and_then(|widget| {
+            serde_json::to_value(&widget)
+                .map(structured)
+                .map_err(|error| ToolFailure::Execution(error.to_string()))
+        })
 }
 
 fn execute_daemon_triage(
@@ -4172,5 +4311,189 @@ mod tests {
         } else {
             // The var is set in this process; the unset invariant is not testable here.
         }
+    }
+
+    // ---- Configurable origin allow-list (G009) ----
+
+    #[test]
+    fn origin_allow_list_default_is_loopback_only() {
+        // env unset -> only loopback hosts pass; a remote origin is rejected.
+        assert!(origin_is_allowed_with("http://localhost:3000", None));
+        assert!(origin_is_allowed_with("http://127.0.0.1:8788", None));
+        assert!(origin_is_allowed_with("https://[::1]:8788", None));
+        assert!(!origin_is_allowed_with("https://pro.openbb.co", None));
+        // A scheme-less / malformed origin is never allowed.
+        assert!(!origin_is_allowed_with("pro.openbb.co", None));
+    }
+
+    #[test]
+    fn origin_allow_list_env_adds_an_exact_origin() {
+        let allowed = Some("https://pro.openbb.co");
+        assert!(origin_is_allowed_with("https://pro.openbb.co", allowed));
+        // Loopback still works alongside the configured origin.
+        assert!(origin_is_allowed_with("http://localhost", allowed));
+        // A different host is still rejected even with the env set.
+        assert!(!origin_is_allowed_with("https://evil.example.com", allowed));
+        // Scheme is significant: http:// does not match the configured https:// entry.
+        assert!(!origin_is_allowed_with("http://pro.openbb.co", allowed));
+    }
+
+    #[test]
+    fn origin_allow_list_ignores_malformed_entries() {
+        // Blank entries and scheme-less entries are skipped; the one valid entry still works.
+        let allowed = Some(" , not-a-url , https://pro.openbb.co , ");
+        assert!(origin_is_allowed_with("https://pro.openbb.co", allowed));
+        assert!(!origin_is_allowed_with("http://not-a-url", allowed));
+        // An allow-list with only malformed entries grants nothing beyond loopback.
+        assert!(!origin_is_allowed_with(
+            "https://pro.openbb.co",
+            Some("garbage,,foo")
+        ));
+    }
+
+    #[test]
+    fn origin_allow_list_is_case_insensitive_on_scheme_and_host() {
+        let allowed = Some("HTTPS://Pro.OpenBB.co");
+        // Mixed-case incoming origin and trailing slash both normalize to a match.
+        assert!(origin_is_allowed_with("https://PRO.openbb.CO/", allowed));
+        assert!(origin_is_allowed_with("HTTPS://pro.openbb.co", allowed));
+    }
+
+    // ---- Read-only widget-catalog tools (G009) ----
+
+    #[test]
+    fn widget_tools_are_listed_and_read_only() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        let response = decode(
+            &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+        );
+        let tools = response["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools should be an array"));
+        for name in ["tdw.widgets.list", "tdw.widgets.describe", "tdw.apps.list"] {
+            let descriptor = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("{name} should be listed"));
+            assert_eq!(
+                descriptor["annotations"]["readOnlyHint"], true,
+                "{name} must be annotated read-only"
+            );
+        }
+    }
+
+    #[test]
+    fn widgets_describe_returns_the_equity_historical_widget() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.widgets.describe","arguments":{"id":"equity_price_historical"}}}"#,
+            )[0],
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let widget = &response["result"]["structuredContent"];
+        assert_eq!(widget["id"], "equity_price_historical");
+        assert_eq!(widget["type"], "chart");
+        assert_eq!(widget["endpoint"], "/widget-data/equity/price/historical");
+    }
+
+    #[test]
+    fn widgets_list_includes_the_equity_historical_summary() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.widgets.list","arguments":{}}}"#,
+            )[0],
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let widgets = response["result"]["structuredContent"]["widgets"]
+            .as_array()
+            .unwrap_or_else(|| panic!("widgets should be an array"));
+        let equity = widgets
+            .iter()
+            .find(|widget| widget["id"] == "equity_price_historical")
+            .unwrap_or_else(|| panic!("equity historical widget should be listed"));
+        assert_eq!(equity["category"], "equity");
+        assert!(equity["name"].is_string(), "summary carries a name");
+        assert!(
+            equity["endpoint"].is_string(),
+            "summary carries an endpoint"
+        );
+    }
+
+    #[test]
+    fn apps_list_returns_the_curated_app() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.apps.list","arguments":{}}}"#,
+            )[0],
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let apps = response["result"]["structuredContent"]["apps"]
+            .as_array()
+            .unwrap_or_else(|| panic!("apps should be an array"));
+        assert!(
+            !apps.is_empty(),
+            "at least the curated default app is listed"
+        );
+        assert!(
+            apps.iter()
+                .all(|app| app["name"].is_string() && app["description"].is_string()),
+            "every app summary carries a name and description"
+        );
+    }
+
+    #[test]
+    fn widgets_describe_unknown_id_is_a_tool_error() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tdw.widgets.describe","arguments":{"id":"no_such_widget"}}}"#,
+            )[0],
+        );
+        // A bad id is a tool-level error (isError), not a protocol error.
+        assert!(
+            response["error"].is_null(),
+            "no protocol error for a bad id"
+        );
+        assert_eq!(response["result"]["isError"], true);
+    }
+
+    // ---- Widget-citation contract (G009) ----
+
+    /// Every `mcp_tool.tool_id` a tdw-widgets widget cites MUST resolve to a real
+    /// tool in this server's catalog, so a Workspace widget can never reference a
+    /// nonexistent MCP tool. Both crates are visible here (tdw-mcp dev/normal-dep
+    /// on tdw-widgets), which is why the contract is asserted in tdw-mcp.
+    #[test]
+    fn every_widget_mcp_tool_id_exists_in_the_mcp_catalog() {
+        let catalog: std::collections::BTreeSet<String> = mcp_tool_catalog().into_iter().collect();
+        let mut checked = 0_usize;
+        for widget in tdw_widgets::catalog_widgets() {
+            if let Some(binding) = widget.mcp_tool.as_ref() {
+                checked += 1;
+                assert_eq!(
+                    binding.mcp_server, "tdw-mcp",
+                    "widget {} cites a non-tdw-mcp server: {}",
+                    widget.id, binding.mcp_server
+                );
+                assert!(
+                    catalog.contains(&binding.tool_id),
+                    "widget {} cites MCP tool '{}' which is absent from the tdw-mcp catalog",
+                    widget.id,
+                    binding.tool_id
+                );
+            }
+        }
+        assert!(
+            checked > 0,
+            "at least one widget should carry an mcp_tool citation to exercise the contract"
+        );
     }
 }
