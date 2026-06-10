@@ -1,7 +1,8 @@
-//! The durable-tags seam (knowledge-system A5): one async [`TagEngine`]
-//! contract over the in-process [`TagStore`] and the graph-backed store, held
-//! identical by a cross-backend conformance suite (in `tdw-storage-graph`,
-//! which hosts the graph implementation).
+//! The durable-tags seam (knowledge-system A5).
+//!
+//! One async [`TagEngine`] contract over the in-process [`TagStore`] and the
+//! graph-backed store, held identical by a cross-backend conformance suite
+//! (in `tdw-storage-graph`, which hosts the graph implementation).
 //!
 //! Temporal semantics are exactly [`TagStore`]'s: assignments are half-open
 //! `[assigned_at, expires_at)` windows over `YYYY-MM-DD` dates. The graph
@@ -17,6 +18,7 @@ use async_trait::async_trait;
 use crate::{TagAssignment, TagDefinition, TagError, TagStore};
 
 /// Map a `YYYY-MM-DD` tag date onto the graph layer's normalized UTC form.
+///
 /// Half-open window semantics are preserved exactly: `assigned_at <= as_of`
 /// over dates equals `vf <= as_ofT00:00:00Z` over timestamps, and
 /// `expires_at > as_of` equals `vt > as_ofT00:00:00Z`.

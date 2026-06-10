@@ -112,10 +112,12 @@ pub fn try_resolve_by_identifier(
         .collect())
 }
 
-/// Project a crosswalk row onto the graph (knowledge-system A5): a `Symbol`
-/// node (`symbol:<scheme>:<value>`, scheme lowercased) plus an `identifies`
-/// edge to the instrument. The caller upserts the instrument node first (the
-/// graph engine enforces edge endpoints).
+/// Project a crosswalk row onto the graph (knowledge-system A5).
+///
+/// Produces a `Symbol` node (`symbol:<scheme>:<value>`, both lowercased to
+/// the canonical key) plus an `identifies` edge to the instrument. The
+/// caller upserts the instrument node first (the graph engine enforces edge
+/// endpoints).
 ///
 /// # Errors
 ///
@@ -156,9 +158,10 @@ pub fn identifier_to_graph(
 }
 
 /// Resolve an instrument by standardized identifier against the GRAPH-backed
-/// crosswalk — the durable form of [`resolve_by_identifier`]. Uses
-/// [`tdw_core::Error`] so storage faults stay distinguishable from a clean
-/// no-match (which is an empty candidate list).
+/// crosswalk — the durable form of [`resolve_by_identifier`].
+///
+/// Uses [`tdw_core::Error`] so storage faults stay distinguishable from a
+/// clean no-match (which is an empty candidate list).
 ///
 /// # Errors
 ///
