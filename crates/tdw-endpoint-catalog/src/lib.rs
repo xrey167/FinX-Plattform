@@ -254,6 +254,32 @@ mod tests {
     }
 
     #[test]
+    fn chartable_flag_set_on_known_charting_routes() {
+        // G014 sanity: the OHLCV equity price route and the fixed-income
+        // single-series routes are chartable; every technical/* Compute route is
+        // chartable (set at construction in the technical router).
+        assert!(
+            lookup("equity/price/historical")
+                .expect("equity route")
+                .chartable
+        );
+        assert!(
+            lookup("fixedincome/government/yield_curve")
+                .expect("yield curve route")
+                .chartable
+        );
+        for entry in catalog() {
+            if entry.kind == EndpointKind::Compute {
+                assert!(
+                    entry.chartable,
+                    "Compute route {:?} should be chartable",
+                    entry.route
+                );
+            }
+        }
+    }
+
+    #[test]
     fn equity_candidate_order_matches_legacy_resolver() {
         // The equity route's candidate order is load-bearing: the offline
         // fixtures (`fileset`, then `yahoo`) must lead so an unkeyed default

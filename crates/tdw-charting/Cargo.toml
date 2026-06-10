@@ -1,0 +1,23 @@
+# tdw-charting: pure-Rust server-side chart-spec builders (gap-matrix L5.5).
+#
+# Lib-only, no async, no I/O. Emits Plotly figure JSON ({ data: [...traces],
+# layout: {...} }) built with plain serde_json so a plotly.js client renders the
+# figure with ZERO new native dependency. Builders are deterministic (sorted /
+# BTreeMap key order) so the golden spec snapshots are reproducible. The Plotly
+# figure shape is the public plotly.js schema (see plotly.com/javascript docs):
+# candlestick / scatter (lines) / bar traces over an x/y(+OHLC) data model.
+[package]
+name = "tdw-charting"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-domain = { workspace = true }
+
+[lints]
+workspace = true

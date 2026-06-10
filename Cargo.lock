@@ -5043,6 +5043,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-charting"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-domain",
+]
+
+[[package]]
 name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
@@ -6250,6 +6260,7 @@ dependencies = [
  "tdw-auth-oidc",
  "tdw-bus",
  "tdw-cdc",
+ "tdw-charting",
  "tdw-config",
  "tdw-core",
  "tdw-define",

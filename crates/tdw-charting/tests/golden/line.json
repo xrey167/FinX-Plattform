@@ -1,0 +1,38 @@
+{
+  "data": [
+    {
+      "mode": "lines",
+      "name": "value",
+      "type": "scatter",
+      "x": [
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03"
+      ],
+      "y": [
+        3.1,
+        null,
+        3.4
+      ]
+    }
+  ],
+  "layout": {
+    "dragmode": "zoom",
+    "showlegend": true,
+    "template": "plotly_dark",
+    "title": "Line",
+    "xaxis": {
+      "rangeslider": {
+        "visible": true
+      },
+      "type": "date"
+    },
+    "yaxis": {
+      "domain": [
+        0.3,
+        1.0
+      ],
+      "title": "Price"
+    }
+  }
+}

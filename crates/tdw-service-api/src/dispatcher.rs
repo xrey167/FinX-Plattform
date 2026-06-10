@@ -356,12 +356,82 @@ async fn dispatch_fetch_data(
         .with_provider(outcome.provider)
         .with_extra(extra);
     envelope.warnings = outcome.warnings;
+    attach_fetch_chart(&mut envelope, &entry, params);
     let body = serde_json::to_value(&envelope)
         .map_err(|e| Error::Provider(format!("result envelope serialize: {e}")))?;
     Ok(mask_json_response(
         json!({ "evidence": evidence, "result": body }),
         &policy.mask_rules,
     ))
+}
+
+/// Whether the caller asked for a chart spec (`"chart": true` in `params`).
+fn chart_requested(params: &Value) -> bool {
+    params.get("chart").and_then(Value::as_bool) == Some(true)
+}
+
+/// Attach a chart spec to a `Fetch`-route envelope when the caller requested one
+/// and the route is chartable.
+///
+/// Shape detection reuses the warehouse's single tolerant OHLCV row parser
+/// (`technical_compute::parse_bars`): if the records parse as OHLCV bars, a
+/// candlestick is emitted; otherwise a `date` + single-numeric `value` series is
+/// detected for a line; otherwise a `chart_unsupported` warning is recorded and
+/// no spec is attached.
+fn attach_fetch_chart(
+    envelope: &mut ResultEnvelope<Value>,
+    entry: &tdw_endpoint_catalog::CatalogEntry,
+    params: &Value,
+) {
+    if !chart_requested(params) || !entry.chartable {
+        return;
+    }
+    match fetch_chart_spec(&envelope.results) {
+        Some(spec) => envelope.chart = Some(spec),
+        None => envelope.warnings.push(Warning::new(
+            "chart_unsupported",
+            format!(
+                "route {} is chartable but its rows are neither OHLCV nor a \
+                 date+value series; no chart spec attached",
+                entry.route
+            ),
+        )),
+    }
+}
+
+/// Build a chart spec for a `Fetch` route's `records`: a candlestick when the
+/// rows are OHLCV-shaped, else a line when they are a `date` + single-numeric
+/// series, else `None` (shape not chartable).
+fn fetch_chart_spec(records: &[Value]) -> Option<Value> {
+    if records.is_empty() {
+        return None;
+    }
+    let array = Value::Array(records.to_vec());
+    if let Ok(bars) = technical_compute::parse_bars(&array)
+        && !bars.is_empty()
+    {
+        return Some(tdw_charting::candlestick(&bars));
+    }
+    line_points(records).map(|points| tdw_charting::line(&points))
+}
+
+/// Detect a single-value time series (`date` + one numeric field) and project it
+/// to chart line points. Returns `None` unless *every* row carries a `date`
+/// string and a numeric (or null) `value` field — the shape `MacroSeries`,
+/// `RateObservation`, and `YieldCurvePoint` rows share.
+fn line_points(records: &[Value]) -> Option<Vec<tdw_charting::LinePoint>> {
+    let mut points = Vec::with_capacity(records.len());
+    for record in records {
+        let object = record.as_object()?;
+        let date = object.get("date").and_then(Value::as_str)?;
+        let value = match object.get("value") {
+            Some(Value::Number(number)) => Some(number.as_f64()?),
+            Some(Value::Null) | None => None,
+            Some(_) => return None,
+        };
+        points.push(tdw_charting::LinePoint::new(date, value));
+    }
+    Some(points)
 }
 
 /// Classified failure of [`rest_fetch_data`], so the REST transport can map it
@@ -457,6 +527,7 @@ pub async fn rest_fetch_data(
         .with_provider(outcome.provider)
         .with_extra(extra);
     envelope.warnings = outcome.warnings;
+    attach_fetch_chart(&mut envelope, &entry, &params);
     serde_json::to_value(&envelope)
         .map_err(|e| RestFetchError::Provider(format!("result envelope serialize: {e}")))
 }
@@ -545,18 +616,101 @@ async fn dispatch_compute(
 
     let rows = technical_compute::run_compute(route, &bars, params)?;
 
+    let chart = if chart_requested(params) {
+        Some(compute_chart_spec(&bars, &rows, source_provider.is_some()))
+    } else {
+        None
+    };
+
     let mut extra = ResultExtra::default().with_route(route);
     if let Some(provider) = source_provider {
         extra = extra.with_argument("source_provider", provider);
     }
     let mut envelope = ResultEnvelope::new(route, rows).with_extra(extra);
     envelope.warnings = warnings;
+    envelope.chart = chart;
     let body = serde_json::to_value(&envelope)
         .map_err(|e| Error::Provider(format!("compute envelope serialize: {e}")))?;
     Ok(mask_json_response(
         json!({ "evidence": evidence, "result": body }),
         &policy.mask_rules,
     ))
+}
+
+/// Build a chart spec for a `Compute` (`technical/*`) route.
+///
+/// When the source bars came from a nested fetch (`overlay` is true) the
+/// indicator value series are drawn as line trace(s) on top of a candlestick of
+/// the source bars; otherwise (inline `data`) only the indicator value line(s)
+/// are drawn. The indicator output is projected to one or more named numeric
+/// series via [`indicator_series`].
+fn compute_chart_spec(bars: &[tdw_domain::MarketDataBar], rows: &[Value], overlay: bool) -> Value {
+    let series = indicator_series(rows);
+    if overlay {
+        let overlays: Vec<tdw_charting::OverlaySeries> = series
+            .into_iter()
+            .map(|(name, values)| tdw_charting::OverlaySeries::new(name, values))
+            .collect();
+        tdw_charting::indicator_overlay(bars, &overlays)
+    } else {
+        // No bar context: draw the indicator value series as lines over the bar
+        // timestamps. A single series renders as one line; multi-field rows
+        // collapse to the first (sorted) series for the simple line view.
+        let points: Vec<tdw_charting::LinePoint> = bars
+            .iter()
+            .enumerate()
+            .map(|(index, bar)| {
+                let value = series
+                    .first()
+                    .and_then(|(_, values)| values.get(index).copied().flatten());
+                tdw_charting::LinePoint::new(bar.ts.clone(), value)
+            })
+            .collect();
+        tdw_charting::line(&points)
+    }
+}
+
+/// Project the indicator output `rows` to named numeric series.
+///
+/// Scalar rows (`Option<f64>` serialized as a number or `null`) become a single
+/// `"value"` series. Object rows (multi-field indicators like MACD or Bollinger
+/// bands) become one series per numeric field, keyed by field name in sorted
+/// order so the trace order is deterministic.
+fn indicator_series(rows: &[Value]) -> Vec<(String, Vec<Option<f64>>)> {
+    let mut field_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut all_scalar = true;
+    for row in rows {
+        if let Value::Object(map) = row {
+            all_scalar = false;
+            for (key, value) in map {
+                if value.is_number() || value.is_null() {
+                    field_names.insert(key.clone());
+                }
+            }
+        }
+    }
+
+    if all_scalar {
+        let values = rows.iter().map(scalar_value).collect();
+        return vec![("value".to_string(), values)];
+    }
+
+    field_names
+        .into_iter()
+        .map(|name| {
+            let values = rows
+                .iter()
+                .map(|row| row.get(&name).and_then(scalar_value))
+                .collect();
+            (name, values)
+        })
+        .collect()
+}
+
+/// Read a single optional finite `f64` from a scalar JSON value (a number, or
+/// `null`/non-numeric → `None`).
+fn scalar_value(value: &Value) -> Option<f64> {
+    value.as_f64().filter(|v| v.is_finite())
 }
 
 /// Successful outcome of [`resolve_and_fetch`]: which provider served the
@@ -4746,6 +4900,136 @@ mod tests {
                 "expected Completed without enqueuer, got {:?}",
                 events[1]
             );
+        }
+    }
+
+    /// Shape-detection + chart-attach unit tests for the G014 charting wiring.
+    mod chart {
+        use super::super::{
+            attach_fetch_chart, chart_requested, compute_chart_spec, fetch_chart_spec,
+            indicator_series,
+        };
+        use serde_json::{Value, json};
+        use tdw_domain::{MarketDataBar, ResultEnvelope, TimeGranularity};
+
+        fn ohlcv_rows() -> Vec<Value> {
+            vec![
+                json!({ "symbol": "AAPL", "date": "2026-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.0, "volume": 1000 }),
+                json!({ "symbol": "AAPL", "date": "2026-01-02", "open": 10.0, "high": 11.2, "low": 9.9, "close": 11.0, "volume": 1100 }),
+            ]
+        }
+
+        fn series_rows() -> Vec<Value> {
+            vec![
+                json!({ "series_id": "CPIAUCSL", "date": "2026-01-01", "value": 3.1 }),
+                json!({ "series_id": "CPIAUCSL", "date": "2026-02-01", "value": null }),
+            ]
+        }
+
+        fn bar(ts: &str, volume: f64) -> MarketDataBar {
+            MarketDataBar {
+                symbol: "AAPL".to_string(),
+                venue: "XNAS".to_string(),
+                granularity: TimeGranularity::Day,
+                ts: ts.to_string(),
+                open: 10.0,
+                high: 11.0,
+                low: 9.0,
+                close: 10.5,
+                volume,
+                source: "fixture".to_string(),
+            }
+        }
+
+        #[test]
+        fn chart_requested_only_on_bool_true() {
+            assert!(chart_requested(&json!({ "chart": true })));
+            assert!(!chart_requested(&json!({ "chart": false })));
+            assert!(!chart_requested(&json!({ "chart": "true" })));
+            assert!(!chart_requested(&json!({})));
+        }
+
+        #[test]
+        fn ohlcv_rows_detect_candlestick() {
+            let spec = fetch_chart_spec(&ohlcv_rows()).expect("candlestick spec");
+            let traces = spec["data"].as_array().expect("data");
+            assert_eq!(traces[0]["type"], "candlestick");
+        }
+
+        #[test]
+        fn date_value_rows_detect_line() {
+            let spec = fetch_chart_spec(&series_rows()).expect("line spec");
+            let traces = spec["data"].as_array().expect("data");
+            assert_eq!(traces[0]["type"], "scatter");
+            assert_eq!(traces[0]["mode"], "lines");
+            // The null observation renders as a gap.
+            assert_eq!(traces[0]["y"][1], Value::Null);
+        }
+
+        #[test]
+        fn unchartable_rows_yield_no_spec() {
+            let rows = vec![json!({ "headline": "news", "url": "x" })];
+            assert!(fetch_chart_spec(&rows).is_none());
+            assert!(fetch_chart_spec(&[]).is_none());
+        }
+
+        #[test]
+        fn attach_records_chart_unsupported_warning_for_bad_shape() {
+            let entry = tdw_endpoint_catalog::lookup("equity/price/historical")
+                .expect("equity route present");
+            let mut env: ResultEnvelope<Value> =
+                ResultEnvelope::new("id", vec![json!({ "headline": "no ohlcv, no value" })]);
+            attach_fetch_chart(&mut env, &entry, &json!({ "chart": true }));
+            assert!(env.chart.is_none());
+            assert!(
+                env.warnings
+                    .iter()
+                    .any(|w| w.category == "chart_unsupported"),
+                "expected chart_unsupported warning"
+            );
+        }
+
+        #[test]
+        fn attach_noop_when_not_requested_or_not_chartable() {
+            let entry = tdw_endpoint_catalog::lookup("equity/price/historical")
+                .expect("equity route present");
+            let mut env: ResultEnvelope<Value> = ResultEnvelope::new("id", ohlcv_rows());
+            // Not requested.
+            attach_fetch_chart(&mut env, &entry, &json!({}));
+            assert!(env.chart.is_none());
+            assert!(env.warnings.is_empty());
+        }
+
+        #[test]
+        fn indicator_series_scalar_rows_make_one_value_series() {
+            let rows = vec![Value::Null, json!(10.5), json!(11.5)];
+            let series = indicator_series(&rows);
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].0, "value");
+            assert_eq!(series[0].1, vec![None, Some(10.5), Some(11.5)]);
+        }
+
+        #[test]
+        fn indicator_series_struct_rows_make_sorted_field_series() {
+            let rows = vec![json!({ "macd": 1.0, "signal": 0.5, "histogram": 0.5 })];
+            let series = indicator_series(&rows);
+            let names: Vec<&str> = series.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(names, vec!["histogram", "macd", "signal"]);
+        }
+
+        #[test]
+        fn compute_overlay_vs_line() {
+            let bars = vec![bar("2026-01-01", 1000.0), bar("2026-01-02", 1100.0)];
+            let rows = vec![Value::Null, json!(10.5)];
+            let overlay = compute_chart_spec(&bars, &rows, true);
+            let traces = overlay["data"].as_array().expect("data");
+            assert!(traces.iter().any(|t| t["type"] == "candlestick"));
+            assert!(traces.iter().any(|t| t["name"] == "value"));
+
+            let line = compute_chart_spec(&bars, &rows, false);
+            let line_traces = line["data"].as_array().expect("data");
+            assert_eq!(line_traces.len(), 1);
+            assert_eq!(line_traces[0]["type"], "scatter");
         }
     }
 }

@@ -1,0 +1,47 @@
+{
+  "data": [
+    {
+      "close": [
+        10.0,
+        11.0
+      ],
+      "high": [
+        10.5,
+        11.2
+      ],
+      "low": [
+        9.8,
+        9.9
+      ],
+      "name": "OHLC",
+      "open": [
+        10.0,
+        10.0
+      ],
+      "type": "candlestick",
+      "x": [
+        "2026-01-01",
+        "2026-01-02"
+      ]
+    }
+  ],
+  "layout": {
+    "dragmode": "zoom",
+    "showlegend": true,
+    "template": "plotly_dark",
+    "title": "Candlestick",
+    "xaxis": {
+      "rangeslider": {
+        "visible": true
+      },
+      "type": "date"
+    },
+    "yaxis": {
+      "domain": [
+        0.3,
+        1.0
+      ],
+      "title": "Price"
+    }
+  }
+}

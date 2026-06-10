@@ -88,6 +88,52 @@ async fn happy_path_fileset_equity_historical_returns_envelope() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chart_true_attaches_candlestick_spec_offline() {
+    with_server(|addr| async move {
+        let resp = raw_get(
+            addr,
+            "/api/v1/equity/price/historical?symbol=AAPL&provider=fileset&chart=true",
+        )
+        .await;
+        assert_eq!(
+            response_status(&resp),
+            200,
+            "response: {}",
+            String::from_utf8_lossy(&resp)
+        );
+        let body = response_body_json(&resp);
+        // The envelope carries a Plotly figure under `chart` with a candlestick
+        // trace built from the OHLCV rows the fileset fixture returns.
+        let chart = &body["chart"];
+        assert!(chart.is_object(), "chart spec present: {body}");
+        let traces = chart["data"].as_array().expect("figure data array");
+        assert!(
+            traces.iter().any(|t| t["type"] == "candlestick"),
+            "candlestick trace present: {chart}"
+        );
+        assert!(chart["layout"].is_object(), "figure layout present");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chart_omitted_leaves_envelope_chartless() {
+    with_server(|addr| async move {
+        let resp = raw_get(
+            addr,
+            "/api/v1/equity/price/historical?symbol=AAPL&provider=fileset",
+        )
+        .await;
+        assert_eq!(response_status(&resp), 200);
+        let body = response_body_json(&resp);
+        // No `chart=true` => the slot is skipped entirely (byte-identical to the
+        // pre-chart envelope shape).
+        assert!(body.get("chart").is_none(), "no chart slot: {body}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unknown_route_returns_400_with_known_routes() {
     with_server(|addr| async move {
         let resp = raw_get(addr, "/api/v1/does/not/exist?symbol=AAPL").await;

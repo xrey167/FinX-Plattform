@@ -1,0 +1,89 @@
+{
+  "data": [
+    {
+      "close": [
+        10.0,
+        11.0,
+        12.0
+      ],
+      "high": [
+        10.5,
+        11.2,
+        12.4
+      ],
+      "low": [
+        9.8,
+        9.9,
+        10.8
+      ],
+      "name": "OHLC",
+      "open": [
+        10.0,
+        10.0,
+        11.0
+      ],
+      "type": "candlestick",
+      "x": [
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03"
+      ]
+    },
+    {
+      "name": "Volume",
+      "type": "bar",
+      "x": [
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03"
+      ],
+      "y": [
+        1000.0,
+        1100.0,
+        1200.0
+      ],
+      "yaxis": "y2"
+    },
+    {
+      "mode": "lines",
+      "name": "sma",
+      "type": "scatter",
+      "x": [
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03"
+      ],
+      "y": [
+        null,
+        10.5,
+        11.5
+      ]
+    }
+  ],
+  "layout": {
+    "dragmode": "zoom",
+    "showlegend": true,
+    "template": "plotly_dark",
+    "title": "Indicator overlay",
+    "xaxis": {
+      "rangeslider": {
+        "visible": true
+      },
+      "type": "date"
+    },
+    "yaxis": {
+      "domain": [
+        0.3,
+        1.0
+      ],
+      "title": "Price"
+    },
+    "yaxis2": {
+      "domain": [
+        0.0,
+        0.2
+      ],
+      "title": "Volume"
+    }
+  }
+}
