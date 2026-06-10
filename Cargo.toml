@@ -77,6 +77,7 @@ tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-taxonomy = { path = "crates/tdw-taxonomy" }
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
+tdw-analytics-technical = { path = "crates/tdw-analytics-technical" }
 tdw-core = { path = "crates/tdw-core" }
 tdw-domain = { path = "crates/tdw-domain" }
 tdw-endpoint-catalog = { path = "crates/tdw-endpoint-catalog" }

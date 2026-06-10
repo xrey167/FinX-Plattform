@@ -51,9 +51,11 @@ use tdw_tools::{RegisteredTool, ToolDefinition, ToolRegistry, ToolRouter};
 use uuid::Uuid;
 
 use crate::provider_resolve::{is_logical_endpoint, resolve_logical_endpoint};
+use crate::technical_compute;
 use crate::{
-    AppState, PolicyEnforcementConfig, SelectedYahooEquityHistoricalFetcher, ServiceEndpoint,
-    enforce_request_path_with_backend, mask_json_response,
+    AppState, PolicyEnforcementConfig, PolicyEnforcementEvidence,
+    SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
+    mask_json_response,
 };
 
 #[async_trait]
@@ -109,7 +111,7 @@ async fn run_dispatch(state: &AppState, env: &OpEnvelope) -> Result<Value> {
             tool_name,
             arguments,
             ..
-        } => dispatch_tool(policy, tool_name, arguments),
+        } => dispatch_tool(state, policy, tool_name, arguments).await,
         Op::GetQuoteSnapshot { provider, symbol } => {
             dispatch_get_quote_snapshot(state, policy, provider, symbol).await
         }
@@ -329,10 +331,11 @@ async fn dispatch_fetch_data(
             known_catalog_routes()
         )));
     };
-    if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
-        return Err(Error::Provider(format!(
-            "catalog route {route} is not a fetch route"
-        )));
+    // Compute routes (e.g. `technical/*`) derive their result from a caller-
+    // supplied OHLCV series rather than a provider fetch; they share the
+    // `Op::FetchData` op but take a parallel execution path.
+    if entry.kind == tdw_endpoint_catalog::EndpointKind::Compute {
+        return dispatch_compute(state, policy, route, params, &evidence).await;
     }
 
     let requested_provider = params
@@ -456,6 +459,104 @@ pub async fn rest_fetch_data(
     envelope.warnings = outcome.warnings;
     serde_json::to_value(&envelope)
         .map_err(|e| RestFetchError::Provider(format!("result envelope serialize: {e}")))
+}
+
+/// Execute a `Compute` catalog route (the `technical/*` indicators).
+///
+/// The OHLCV series the indicator runs over comes from one of two mutually
+/// exclusive sources in `params`:
+///
+/// 1. **Inline** — a `data` array of OHLCV records, computed directly.
+/// 2. **Nested fetch** — a `source` object `{ "route": …, "params": … }` whose
+///    `route` is a `Fetch` catalog route. The nested fetch runs through the
+///    *same* policy-guarded fetch path (`resolve_and_fetch`), so the price
+///    series is sourced under the normal provider-fallback policy, then piped
+///    into the indicator. This enables e.g. `equity/price/historical` →
+///    `technical/rsi` in one call.
+///
+/// The policy guard has already run in [`dispatch_fetch_data`]; `evidence` is
+/// threaded through so the compute response carries the same evidence block as a
+/// fetch response. Nothing is persisted (read path).
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidQuery`] when neither `data` nor `source` is supplied,
+/// when the bar records are malformed, or when the indicator params are invalid;
+/// returns [`Error::Provider`] when a nested `source` route is unknown or not a
+/// `Fetch` route, or when the indicator has no registered compute implementation.
+async fn dispatch_compute(
+    state: &AppState,
+    policy: &PolicyEnforcementConfig,
+    route: &str,
+    params: &Value,
+    evidence: &PolicyEnforcementEvidence,
+) -> Result<Value> {
+    let mut source_provider: Option<&'static str> = None;
+    let mut warnings: Vec<Warning> = Vec::new();
+
+    let bars = if let Some(source) = params.get("source").filter(|v| !v.is_null()) {
+        let source_route = source.get("route").and_then(Value::as_str).ok_or_else(|| {
+            Error::InvalidQuery(
+                "technical compute: `source.route` must be a catalog route string".to_string(),
+            )
+        })?;
+        let source_params = source.get("params").cloned().unwrap_or_else(|| json!({}));
+
+        let Some(source_entry) = tdw_endpoint_catalog::lookup(source_route) else {
+            return Err(Error::Provider(format!(
+                "technical compute: unknown source route {source_route}"
+            )));
+        };
+        if source_entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+            return Err(Error::Provider(format!(
+                "technical compute: source route {source_route} is not a fetch route"
+            )));
+        }
+
+        let requested_provider = source_params
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let runner = CommandRunner::new((*state.registry).clone());
+        let table = fetch_dispatch_table();
+        let outcome = resolve_and_fetch(
+            &source_entry,
+            &requested_provider,
+            &source_params,
+            &table,
+            &runner,
+        )
+        .await?;
+        source_provider = Some(outcome.provider);
+        warnings = outcome.warnings;
+        let records = Value::Array(outcome.records);
+        technical_compute::parse_bars(&records)?
+    } else if let Some(data) = params.get("data").filter(|v| !v.is_null()) {
+        technical_compute::parse_bars(data)?
+    } else {
+        return Err(Error::InvalidQuery(
+            "technical compute: provide either an inline `data` OHLCV array or a nested `source` \
+             { route, params } object"
+                .to_string(),
+        ));
+    };
+
+    let rows = technical_compute::run_compute(route, &bars, params)?;
+
+    let mut extra = ResultExtra::default().with_route(route);
+    if let Some(provider) = source_provider {
+        extra = extra.with_argument("source_provider", provider);
+    }
+    let mut envelope = ResultEnvelope::new(route, rows).with_extra(extra);
+    envelope.warnings = warnings;
+    let body = serde_json::to_value(&envelope)
+        .map_err(|e| Error::Provider(format!("compute envelope serialize: {e}")))?;
+    Ok(mask_json_response(
+        json!({ "evidence": evidence, "result": body }),
+        &policy.mask_rules,
+    ))
 }
 
 /// Successful outcome of [`resolve_and_fetch`]: which provider served the
@@ -2230,7 +2331,8 @@ async fn persist_batch<T: tdw_core::DataModel>(
     Ok(object.rows.len())
 }
 
-fn dispatch_tool(
+async fn dispatch_tool(
+    state: &AppState,
     policy: &PolicyEnforcementConfig,
     tool_name: &str,
     arguments: &Value,
@@ -2250,6 +2352,15 @@ fn dispatch_tool(
             "unsupported tool: {tool_name}; available: {}",
             available_tool_names(&registry)
         )));
+    }
+
+    // The `technical.*` tools are the catalog's `technical/*` Compute routes
+    // exposed as tools: the tool name maps to the route by swapping `.` for `/`,
+    // and execution reuses the same compute path as `Op::FetchData`. Policy
+    // enforcement already ran above; thread its evidence through unchanged.
+    if let Some(indicator) = tool_name.strip_prefix("technical.") {
+        let route = format!("technical/{indicator}");
+        return dispatch_compute(state, policy, &route, arguments, &evidence).await;
     }
 
     match tool_name {
@@ -2289,7 +2400,53 @@ fn service_tool_registry() -> ToolRegistry {
     registry
         .register(udf_run_tool())
         .expect("udf.run tool definition is valid and registered exactly once");
+    register_technical_tools(&mut registry);
     registry
+}
+
+/// Register one [`RegisteredTool`] per `technical/*` catalog Compute route.
+///
+/// The tool name is the route with `/` swapped for `.` (`technical/sma` →
+/// `technical.sma`), so `Op::ToolCall` and the MCP tool list expose every
+/// indicator for free with the route's own param/model JSON schemas attached.
+/// Driving this from `tdw_endpoint_catalog::catalog()` keeps the tool set in
+/// lockstep with the catalog (a conformance test pins the two together).
+fn register_technical_tools(registry: &mut ToolRegistry) {
+    for entry in tdw_endpoint_catalog::catalog() {
+        if entry.kind != tdw_endpoint_catalog::EndpointKind::Compute {
+            continue;
+        }
+        let Some(indicator) = entry.route.strip_prefix("technical/") else {
+            continue;
+        };
+        let name = format!("technical.{indicator}");
+        let input_schema = serde_json::to_value((entry.params_schema)())
+            .unwrap_or_else(|_| json!({ "type": "object" }));
+        let output_schema =
+            serde_json::to_value((entry.model)()).unwrap_or_else(|_| json!({ "type": "object" }));
+        let definition = ToolDefinition {
+            name: name.clone(),
+            description: entry.doc.to_string(),
+            input_schema,
+            output_schema,
+            permission_pattern: name,
+        };
+        registry
+            .register(RegisteredTool::new(
+                definition,
+                technical_tool_placeholder_handler,
+            ))
+            .expect("technical tool definitions are valid and registered exactly once");
+    }
+}
+
+/// Placeholder handler for a `technical.*` registry entry. Never invoked:
+/// [`dispatch_tool`] executes technical tools via [`dispatch_compute`] (which
+/// needs `AppState` for the nested-fetch path). The registry only needs a
+/// handler to construct a [`RegisteredTool`]; the echo behaviour is inert.
+#[allow(clippy::unnecessary_wraps)]
+const fn technical_tool_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
+    Ok(input)
 }
 
 /// Definition for the `udf.run` tool. The handler is unused on the hot path
@@ -2903,6 +3060,181 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // L4.1 technical compute: inline-data and nested-fetch conformance
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_data_compute_inline_rsi_is_date_aligned() {
+        // A `technical/rsi` Compute route over an inline OHLCV `data` array runs
+        // the indicator network-free and returns one row per input bar.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let mut data = Vec::new();
+        // Strictly rising closes ⇒ RSI saturates at 100 once defined.
+        for i in 0..10 {
+            let close = 10.0 + f64::from(i);
+            data.push(json!({
+                "date": format!("2026-01-{:02}", i + 1),
+                "open": close, "high": close + 0.5, "low": close - 0.5,
+                "close": close, "volume": 1000
+            }));
+        }
+        let env = make_envelope(Op::FetchData {
+            route: "technical/rsi".to_string(),
+            params: json!({ "data": data, "length": 3 }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["result"]["extra"]["route"], "technical/rsi");
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert_eq!(rows.len(), 10, "one row per input bar, got {value}");
+                assert!(rows[0].is_null(), "leading None before the window fills");
+                let last = rows[9].as_f64().expect("rsi value");
+                assert!(
+                    (last - 100.0).abs() < 1e-6,
+                    "all-gains RSI is 100, got {last}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_data_compute_nested_fetch_fileset_to_sma_offline() {
+        // A nested `source` first fetches `equity/price/historical` through the
+        // offline fileset fixture, then pipes the bars into `technical/sma`. The
+        // whole chain stays network-free and the response names the source
+        // provider.
+        let state = offline_fixture_ingest_state().await;
+        let env = make_envelope(Op::FetchData {
+            route: "technical/sma".to_string(),
+            params: json!({
+                "length": 3,
+                "source": {
+                    "route": "equity/price/historical",
+                    "params": { "symbol": "AAPL" }
+                }
+            }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["result"]["extra"]["route"], "technical/sma");
+                assert_eq!(
+                    value["result"]["extra"]["arguments"]["source_provider"], "fileset",
+                    "nested fetch resolved through the offline fileset fixture, got {value}"
+                );
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert!(
+                    !rows.is_empty(),
+                    "fixture-sourced SMA returns rows, got {value}"
+                );
+                // The first two positions are leading-None for an SMA(3).
+                assert!(rows[0].is_null());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_data_compute_without_data_or_source_is_invalid() {
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "technical/sma".to_string(),
+            params: json!({ "length": 3 }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Failed { error, .. } => {
+                assert!(error.contains("inline `data`"), "got: {error}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_call_technical_sma_inline_data_runs_compute() {
+        // The `technical.sma` ToolCall maps to the `technical/sma` Compute route
+        // and runs the same inline-data path as `Op::FetchData`. The `ToolCall`
+        // endpoint requires the `udf_runner` role.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(udf_runner_policy());
+        let data = json!([
+            { "date": "2026-01-01", "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.0, "volume": 1000 },
+            { "date": "2026-01-02", "open": 10.0, "high": 11.2, "low": 9.9, "close": 11.0, "volume": 1100 },
+            { "date": "2026-01-03", "open": 11.0, "high": 12.4, "low": 10.8, "close": 12.0, "volume": 1200 }
+        ]);
+        let env = make_envelope(Op::ToolCall {
+            call_id: tdw_protocol::ToolCallId::new("tc-tech-1").expect("tool call id"),
+            tool_name: "technical.sma".to_string(),
+            arguments: json!({ "data": data, "length": 2 }),
+            permission_id: None,
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert_eq!(rows.len(), 3);
+                assert!((rows[1].as_f64().expect("sma") - 10.5).abs() < 1e-9);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Every `technical/*` catalog Compute route is registered both as a compute
+    /// implementation and as a `technical.*` tool, and vice versa — no orphan on
+    /// either side.
+    #[test]
+    fn technical_compute_routes_tools_and_catalog_agree() {
+        use std::collections::BTreeSet;
+
+        let catalog_routes: BTreeSet<String> = tdw_endpoint_catalog::catalog()
+            .iter()
+            .filter(|e| e.kind == tdw_endpoint_catalog::EndpointKind::Compute)
+            .map(|e| e.route.to_string())
+            .collect();
+
+        let registry = service_tool_registry();
+        let tool_routes: BTreeSet<String> = registry
+            .definitions()
+            .into_iter()
+            .filter_map(|d| {
+                d.name
+                    .strip_prefix("technical.")
+                    .map(|ind| format!("technical/{ind}"))
+            })
+            .collect();
+        assert_eq!(
+            catalog_routes, tool_routes,
+            "technical tool set must equal the catalog Compute route set"
+        );
+
+        // And each route has a runnable compute implementation.
+        let bars: Vec<tdw_domain::MarketDataBar> = Vec::new();
+        for route in &catalog_routes {
+            let result = technical_compute::run_compute(route, &bars, &json!({}));
+            assert!(
+                result.is_ok(),
+                "compute route {route} has no registered implementation"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn fetch_data_unknown_route_fails_with_known_list() {
         let state = AppState::in_memory_for_tests()
@@ -3413,12 +3745,17 @@ mod tests {
     fn tool_registry_routes_known_and_rejects_unknown() {
         let registry = service_tool_registry();
         let router = ToolRouter::new(registry.clone());
-        // Known tool routes.
+        // Known tool routes: the always-on `udf.run` and the catalog-driven
+        // `technical.*` Compute tools.
         assert!(router.route("udf.run").is_ok());
+        assert!(router.route("technical.rsi").is_ok());
         // Unknown tool is rejected by the router.
         assert!(router.route("does.not.exist").is_err());
-        // The available-names helper lists the build's tools for the error.
-        assert_eq!(available_tool_names(&registry), "udf.run");
+        // The available-names helper lists the build's tools (sorted) for the
+        // error; `udf.run` and every `technical.*` tool appear.
+        let names = available_tool_names(&registry);
+        assert!(names.contains("udf.run"), "got: {names}");
+        assert!(names.contains("technical.sma"), "got: {names}");
     }
 
     #[tokio::test]
@@ -3440,7 +3777,7 @@ mod tests {
                     error.contains("unsupported tool: bogus.tool"),
                     "got: {error}"
                 );
-                assert!(error.contains("available: udf.run"), "got: {error}");
+                assert!(error.contains("udf.run"), "got: {error}");
             }
             other => panic!("expected Failed, got {other:?}"),
         }
@@ -3631,13 +3968,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_tool_unsupported_tool_returns_provider_error() {
+    #[tokio::test]
+    async fn dispatch_tool_unsupported_tool_returns_provider_error() {
         // The unsupported-tool branch runs only after the line-282 enforcement
         // precondition succeeds, so the reused analyst_policy() (which passes
         // enforcement) is required for the match to be reached at all.
         let policy = udf_runner_policy();
-        let error = dispatch_tool(&policy, "does.not.exist", &json!({}))
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(policy.clone());
+        let error = dispatch_tool(&state, &policy, "does.not.exist", &json!({}))
+            .await
             .expect_err("an unknown tool name must be rejected");
 
         match error {
@@ -3651,13 +3992,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_tool_udf_run_invalid_arguments_returns_provider_error() {
+    #[tokio::test]
+    async fn dispatch_tool_udf_run_invalid_arguments_returns_provider_error() {
         // The udf.run arm is entered (enforcement passes via analyst_policy),
         // then serde_json::from_value fails on a payload missing UdfRequest's
         // required fields, hitting the documented invalid-arguments contract.
         let policy = udf_runner_policy();
-        let error = dispatch_tool(&policy, "udf.run", &json!({}))
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(policy.clone());
+        let error = dispatch_tool(&state, &policy, "udf.run", &json!({}))
+            .await
             .expect_err("a malformed udf.run payload must be rejected");
 
         match error {
@@ -3671,8 +4016,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dispatch_tool_udf_run_happy_path_returns_runtime_and_output_envelope() {
+    #[tokio::test]
+    async fn dispatch_tool_udf_run_happy_path_returns_runtime_and_output_envelope() {
         // A minimal request the LocalUdfSandbox accepts under default features:
         // the `upper` builtin uppercases its input. This drives the full udf.run
         // arm body — UdfRequest deserialization, sandbox.run, and the masked
@@ -3687,7 +4032,11 @@ mod tests {
             "allow_filesystem": false,
         });
 
-        let value = dispatch_tool(&policy, "udf.run", &arguments)
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(policy.clone());
+        let value = dispatch_tool(&state, &policy, "udf.run", &arguments)
+            .await
             .unwrap_or_else(|error| panic!("udf.run happy path should succeed: {error}"));
 
         // The masked envelope carries the principal-scoped evidence plus the

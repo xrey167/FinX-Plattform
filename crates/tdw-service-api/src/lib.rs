@@ -30,6 +30,7 @@ mod provider_resolve;
 #[cfg(feature = "rest-api-route")]
 mod rest_handler;
 mod stream_ingest;
+mod technical_compute;
 #[cfg(feature = "identity")]
 pub mod user_events;
 

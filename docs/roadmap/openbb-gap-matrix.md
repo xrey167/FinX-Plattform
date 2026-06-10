@@ -128,7 +128,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| technical/* (sma, ema, rsi, macd, bbands, atr, ...) | MISSING | no native crate (UDF workaround only) → see L4 | todo |
+| technical/* (sma, ema, rsi, macd, bbands, atr, ...) | NATIVE | tdw-analytics-technical: ~18 core indicators as `technical/*` Compute routes + `technical.*` MCP tools (L4.1 done; long-tail Ichimoku/cones/Clenow/Demark/fib/RRG deferred) | done |
 | quantitative/* (sharpe, sortino, capm, rolling stats) | MISSING | no native crate → see L4 | todo |
 | econometrics/* (ols, panel, cointegration, causality) | MISSING | no native crate → see L4 | todo |
 | famafrench/* (factors, portfolio returns) | MISSING | needs French Data Library provider | todo |
@@ -220,7 +220,7 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 
 | # | New crate · scope · gates · done-when | Size | Status |
 |---|---|---|---|
-| L4.1 | **tdw-analytics-technical** · 28 indicators (sma/ema/wma/hma/zlma, macd, rsi, stoch, cci, adx, aroon, bbands, kc, donchian, atr, obv, ad, adosc, vwap, fisher, cg, cones, clenow, demark, ichimoku, fib, relative_rotation). Gates: fmt+clippy+unit (golden vectors vs known values). Done-when: all 28 with numeric tests; callable as daemon op + UDF. | L | todo |
+| L4.1 | **tdw-analytics-technical** · ~18 core indicators delivered (sma/ema/wma/hma, macd, rsi, stoch, cci, adx[+di/-di], aroon, bbands, kc, donchian, atr, obv, ad, vwap, fisher, roc, momentum) as `technical/*` Compute catalog routes + `technical.*` MCP/ToolCall tools, wired in tdw-service-api (inline-data OR nested source fetch). Gates: fmt+clippy(pedantic/nursery zero)+unit (golden vectors). Done-when: core set with numeric tests; callable as daemon op + MCP tool. Long-tail (zlma, adosc, cg, cones, clenow, demark, ichimoku, fib, relative_rotation) deferred. | L | done (core) |
 | L4.2 | **tdw-analytics-quant** · summary, normality, capm, unitroot, perf ratios (sharpe/sortino/omega), stats + rolling stats (mean/stdev/var/skew/kurtosis/quantile). Gates: unit (golden). Done-when: 19 functions with tests. | M | todo |
 | L4.3 | **tdw-analytics-econometrics** · correlation_matrix, ols(+summary), autocorrelation, residual_autocorr, cointegration, causality, unit_root, vif, panel models (random/fixed/between/pooled/first_diff/fmac). Gates: unit (golden vs statsmodels reference values, hardcoded). Done-when: 15 functions. | L | todo |
 | L4.4 | **tdw-analytics-portfolio** (beyond OpenBB parity) · returns, drawdown, allocation, attribution — uses L4.2. Gates: unit. Done-when: core portfolio metrics. | M | todo |
@@ -249,7 +249,7 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 | 2 | **L2.3** fred macro/rate/fixedincome expansion | One no-cost-ish crate unlocks ~40 OpenBB cmds (entire fixedincome + economy core) | todo |
 | 3 | **L2.1** fmp fundamentals cluster | One key unlocks ~25 equity-fundamental cmds (the headline OpenBB use case) | todo |
 | 4 | **L1.1** result envelope (OBBject-equiv) | Cross-client consistency + LLM/df interop; prereq for charting/export/MCP | todo |
-| 5 | **L4.1** tdw-analytics-technical | 28 indicators users expect; replaces fragile UDF workaround; pure compute (no keys) | todo |
+| 5 | **L4.1** tdw-analytics-technical | ~18 core indicators users expect; replaces fragile UDF workaround; pure compute (no keys). Core set delivered as `technical/*` ops + `technical.*` tools | done (core) |
 | 6 | **L5.1** HTTP+SSE service (#161) | Turns the daemon into a usable REST surface; gates L5.2/L5.6 | in-progress |
 | 7 | **L2.4** yahoo expansion | No-key provider → ~15 cmds (profile/quote/discovery/options/futures) free to users | todo |
 | 8 | **L1.2** tdw-symbology (#173) | Symbol/exchange/FX/crypto normalization needed by nearly every endpoint | in-progress |
