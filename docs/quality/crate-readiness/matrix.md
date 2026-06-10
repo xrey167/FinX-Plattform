@@ -118,6 +118,7 @@ Refreshed during G001-crate-by-crate-release-blocker-inven on 2026-06-07 from `c
 | [tdw-table-format](tdw-table-format.md) | crate-by-crate release audit | example, lib | none | tdw-service-api | none | 2 | README, ARCHITECTURE, examples, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-tag-rules](tdw-tag-rules.md) | crate-by-crate release audit | lib | tdw-tags | tdw-service-api | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-tags](tdw-tags.md) | crate-by-crate release audit | lib | none | tdw-backend, tdw-feature-store, tdw-knowledge, tdw-service-api, tdw-tag-rules | none | 2 | worksheet | Current worksheet. | Ready with follow-ups |
+| [tdw-taxonomy](tdw-taxonomy.md) | knowledge-system overhaul A1 | lib | none | tdw-agent | none | 10 | README, worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-test-utils](tdw-test-utils.md) | crate-by-crate release audit | lib, test | tdw-core, tdw-domain, tdw-service-api, tdw-storage-fs | tdw-cli, tdw-service | default; e2e; integration; property | 5 | worksheet | Current worksheet. | Ready with follow-ups |
 | [tdw-tool-exec](tdw-tool-exec.md) | crate-by-crate release audit | lib | tdw-agent, tdw-tools | tdw-backend, tdw-mcp | none | 12 | worksheet | Open PR #172 docs/examples. | Ready with follow-ups |
 | [tdw-tools](tdw-tools.md) | crate-by-crate release audit | lib | tdw-hooks, tdw-protocol | tdw-service-api, tdw-tool-exec | none | 4 | worksheet | Current worksheet. | Ready with follow-ups |
