@@ -12,7 +12,7 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_binance::{BinanceHttpTickerPriceFetcher, BinanceTickerPriceQuery};
-use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
+use tdw_provider_testkit::cassette_bytes;
 
 fn sample_query() -> BinanceTickerPriceQuery {
     BinanceHttpTickerPriceFetcher::transform_query(json!({ "symbol": "btcusdt" }))
@@ -75,7 +75,23 @@ async fn live_binance_returns_ticker_price_when_env_var_set() {
 
     let fetcher = BinanceHttpTickerPriceFetcher::default();
     let query = sample_query();
-    let rows = live_fetch_nonempty!(fetcher, query);
+    // Binance geo-blocks some regions (e.g. GitHub's US runners) with
+    // HTTP 451 — an environment limitation, not a regression. Skip like the
+    // env gate does; the assertion still runs where the API is reachable.
+    let raw = match fetcher
+        .extract_data(&query, &tdw_core::Credentials::default())
+        .await
+    {
+        Ok(raw) => raw,
+        Err(error) if error.to_string().contains("451") => {
+            eprintln!("Binance returned 451 (geo-restricted); skipping live assertion");
+            return;
+        }
+        Err(error) => panic!("live extract_data must succeed: {error}"),
+    };
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("live transform_data must succeed: {error}"));
 
     assert!(!rows.is_empty(), "live response must include one price row");
     assert_eq!(rows[0].symbol, "BTCUSDT");
