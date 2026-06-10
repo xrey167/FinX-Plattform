@@ -333,6 +333,150 @@ pub struct OwnershipRecord {
     pub percentage: Option<f64>,
 }
 
+/// A ticker-symbol ↔ CIK mapping row.
+///
+/// Standardizes `regulators/sec/cik_map` / `regulators/sec/symbol_map` (SEC
+/// `company_tickers.json`). One row = one (ticker, CIK) pair, optionally with
+/// the issuer's reported company name. The CIK is carried as a string so leading
+/// zeros and the canonical zero-padded form survive a round trip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SymbolMapping {
+    /// Exchange ticker symbol (upper-cased by the provider fetcher).
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Central Index Key (CIK) as reported by SEC, unpadded.
+    #[validate(length(min = 1))]
+    pub cik: String,
+    /// Issuer / company name where the source supplies it.
+    pub name: Option<String>,
+}
+
+/// A single ETF / fund portfolio holding.
+///
+/// Standardizes `etf/holdings` (SEC N-PORT `NPORT-P` portfolio disclosure). One
+/// row = one constituent the fund reports holding on a given report date. Most
+/// fields are optional because N-PORT filers populate a variable subset
+/// (identifiers, valuation, weight). Identity anchors are the fund handle and
+/// the holding's name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EtfHolding {
+    /// Fund handle: the ETF ticker when known, else the filer CIK.
+    #[validate(length(min = 1))]
+    pub fund_symbol: String,
+    /// Filer Central Index Key (CIK), unpadded.
+    pub cik: Option<String>,
+    /// Portfolio report (period-of-report) date.
+    pub report_date: Option<String>,
+    /// Holding / security name as reported.
+    #[validate(length(min = 1))]
+    pub holding_name: String,
+    /// CUSIP identifier where reported.
+    pub cusip: Option<String>,
+    /// ISIN identifier where reported.
+    pub isin: Option<String>,
+    /// Balance (units / shares / par) held.
+    pub balance: Option<f64>,
+    /// Market value of the holding in USD.
+    pub value_usd: Option<f64>,
+    /// Percentage weight of the holding in the portfolio.
+    pub weight_pct: Option<f64>,
+}
+
+/// A single sector / asset-class weight for an ETF or fund.
+///
+/// Standardizes `etf/sectors` (derived from SEC N-PORT). One row = one
+/// (fund, sector) allocation. `weight_pct` is optional because some N-PORT
+/// filings omit a usable per-sector breakdown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EtfSectorWeight {
+    /// Fund handle: the ETF ticker when known, else the filer CIK.
+    #[validate(length(min = 1))]
+    pub fund_symbol: String,
+    /// Portfolio report (period-of-report) date.
+    pub report_date: Option<String>,
+    /// Sector / asset-class label.
+    #[validate(length(min = 1))]
+    pub sector: String,
+    /// Percentage weight of the sector in the portfolio.
+    pub weight_pct: Option<f64>,
+}
+
+/// A US Treasury security auction result.
+///
+/// Standardizes `fixedincome/government/treasury_auctions` (US Treasury
+/// `FiscalData` `securities/auctioned`). One row = one auctioned security. Most
+/// rate / yield / amount fields are optional because the `FiscalData` record set
+/// reports a different subset per security type (Bill / Note / Bond / TIPS /
+/// FRN). Identity anchors are the CUSIP and the auction date.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct TreasuryAuction {
+    /// CUSIP identifier of the auctioned security.
+    #[validate(length(min = 1))]
+    pub cusip: String,
+    /// Security type, e.g. `"Bill"`, `"Note"`, `"Bond"`, `"TIPS"`, `"FRN"`.
+    pub security_type: Option<String>,
+    /// Security term as reported, e.g. `"10-Year"`, `"4-Week"`.
+    pub security_term: Option<String>,
+    /// Auction date.
+    #[validate(length(min = 1))]
+    pub auction_date: String,
+    /// Issue (settlement) date.
+    pub issue_date: Option<String>,
+    /// Maturity date.
+    pub maturity_date: Option<String>,
+    /// High yield awarded at auction (percent), where applicable.
+    pub high_yield: Option<f64>,
+    /// Interest / coupon rate (percent), where applicable.
+    pub interest_rate: Option<f64>,
+    /// Total amount offered (USD).
+    pub offering_amount: Option<f64>,
+    /// Bid-to-cover ratio.
+    pub bid_to_cover_ratio: Option<f64>,
+}
+
+/// A US Treasury security daily reference price.
+///
+/// Standardizes `fixedincome/government/treasury_prices` (US Treasury
+/// `FiscalData` `accounting/od/avg_interest_rates` adjacent price datasets). One
+/// row = one security's reference price on a given date. `price` is optional
+/// for rows that report only reference metadata.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct TreasuryPrice {
+    /// CUSIP identifier of the security.
+    #[validate(length(min = 1))]
+    pub cusip: String,
+    /// Security type, e.g. `"Bill"`, `"Note"`, `"Bond"`, `"TIPS"`.
+    pub security_type: Option<String>,
+    /// Pricing / observation date.
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Reference (end-of-day) price.
+    pub price: Option<f64>,
+    /// Coupon rate (percent) where reported.
+    pub coupon_rate: Option<f64>,
+    /// Maturity date.
+    pub maturity_date: Option<String>,
+}
+
+/// An FOMC document index entry.
+///
+/// Standardizes `regulators/fed/fomc_documents` (Federal Reserve FOMC document
+/// listing). One row = one published FOMC document (statement, minutes,
+/// projection, transcript). `url` and `date` are optional because the listing
+/// surfaces a variable subset per document type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FomcDocument {
+    /// Document type, e.g. `"statement"`, `"minutes"`, `"projection"`.
+    #[validate(length(min = 1))]
+    pub doc_type: String,
+    /// Meeting / publication date.
+    pub date: Option<String>,
+    /// Document title.
+    pub title: Option<String>,
+    /// Source URL of the document.
+    pub url: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

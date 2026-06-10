@@ -5,11 +5,18 @@
 //! when the `http` feature is enabled. Everything in this module works
 //! without any network access.
 
+pub mod catalog;
+
 #[cfg(feature = "http")]
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{SecFilingsHttpFetcher, SecXbrlHttpFetcher};
+pub use http_fetcher::{
+    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
+    SecFilingsHttpFetcher, SecForm13FHttpFetcher, SecXbrlHttpFetcher,
+};
+
+pub use catalog::{ENDPOINTS, SecEndpoint, SecModel};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -77,6 +84,22 @@ impl SecFilingsQuery {
     #[must_use]
     pub fn padded_cik(&self) -> String {
         format!("{:0>10}", self.cik)
+    }
+}
+
+/// Parameter-free query for the SEC `company_tickers.json` map.
+///
+/// `regulators/sec/cik_map` fetches the full ticker↔CIK directory, so the query
+/// carries no fields. It exists as a distinct type so the fetcher satisfies the
+/// `Fetcher<Q, D>` contract with a `JsonSchema`-bearing query.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecCikMapQuery {}
+
+impl SecCikMapQuery {
+    /// Build the parameter-free query (always succeeds).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {}
     }
 }
 

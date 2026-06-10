@@ -5,8 +5,10 @@ pub mod models;
 
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
-    Estimate, FinancialStatement, KeyMetrics, MacroSeries, NewsArticle, OptionContract,
-    OwnershipRecord, RateObservation, Ratios, SeriesSearchResult, StatementKind, YieldCurvePoint,
+    Estimate, EtfHolding, EtfSectorWeight, FinancialStatement, FomcDocument, KeyMetrics,
+    MacroSeries, NewsArticle, OptionContract, OwnershipRecord, RateObservation, Ratios,
+    SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice,
+    YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

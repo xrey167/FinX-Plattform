@@ -128,6 +128,8 @@ use tdw_provider_deribit::{
 use tdw_provider_ecb::EcbHttpDataFetcher;
 #[cfg(feature = "provider-eia")]
 use tdw_provider_eia::{EiaHttpNaturalGasFetcher, EiaHttpSpotPriceFetcher};
+#[cfg(feature = "provider-federal-reserve")]
+use tdw_provider_federal_reserve::{FedFomcDocumentsHttpFetcher, FedMacroSeriesHttpFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 #[cfg(feature = "provider-finnhub")]
 use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFetcher};
@@ -146,6 +148,10 @@ use tdw_provider_fred::{
 use tdw_provider_geckoterminal::GeckoTerminalHttpFetcher;
 #[cfg(feature = "provider-glassnode")]
 use tdw_provider_glassnode::GlassnodeHttpFetcher;
+#[cfg(feature = "provider-government-us")]
+use tdw_provider_government_us::{
+    GovUsTreasuryAuctionsHttpFetcher, GovUsTreasuryPricesHttpFetcher,
+};
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-nasdaq")]
@@ -155,7 +161,10 @@ use tdw_provider_oecd::OecdHttpDataFetcher;
 #[cfg(feature = "provider-polygon")]
 use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
-use tdw_provider_sec::{SecFilingsHttpFetcher, SecXbrlHttpFetcher};
+use tdw_provider_sec::{
+    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
+    SecFilingsHttpFetcher, SecForm13FHttpFetcher, SecXbrlHttpFetcher,
+};
 #[cfg(feature = "provider-seeking-alpha")]
 use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
 #[cfg(feature = "provider-tiingo")]
@@ -290,6 +299,14 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FredHttpSeriesSearchFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpYieldCurveFetcher::registry_entry())?;
+    #[cfg(feature = "provider-federal-reserve")]
+    registry.register(FedMacroSeriesHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-federal-reserve")]
+    registry.register(FedFomcDocumentsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-government-us")]
+    registry.register(GovUsTreasuryAuctionsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-government-us")]
+    registry.register(GovUsTreasuryPricesHttpFetcher::registry_entry())?;
     register_extended_providers(&mut registry)?;
     Ok(registry)
 }
@@ -339,6 +356,14 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(SecFilingsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecXbrlHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecCikMapHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecForm13FHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecFailsToDeliverHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecEtfHoldingsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
@@ -558,6 +583,36 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // SecXbrlHttpFetcher
         #[cfg(feature = "provider-sec")]
         ("sec", "xbrl_revenue") => dispatch!(SecXbrlHttpFetcher::default()),
+        // SecCikMapHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "cik_map") => dispatch!(SecCikMapHttpFetcher::default()),
+        // SecForm13FHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "form_13f") => dispatch!(SecForm13FHttpFetcher::default()),
+        // SecFailsToDeliverHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "fails_to_deliver") => dispatch!(SecFailsToDeliverHttpFetcher::default()),
+        // SecEtfHoldingsHttpFetcher
+        #[cfg(feature = "provider-sec")]
+        ("sec", "etf_holdings") => dispatch!(SecEtfHoldingsHttpFetcher::default()),
+        // FedMacroSeriesHttpFetcher
+        #[cfg(feature = "provider-federal-reserve")]
+        ("federal_reserve", "macro_series") => dispatch!(FedMacroSeriesHttpFetcher::default()),
+        // FedFomcDocumentsHttpFetcher
+        #[cfg(feature = "provider-federal-reserve")]
+        ("federal_reserve", "fomc_documents") => {
+            dispatch!(FedFomcDocumentsHttpFetcher::default())
+        }
+        // GovUsTreasuryAuctionsHttpFetcher
+        #[cfg(feature = "provider-government-us")]
+        ("government_us", "treasury_auctions") => {
+            dispatch!(GovUsTreasuryAuctionsHttpFetcher::default())
+        }
+        // GovUsTreasuryPricesHttpFetcher
+        #[cfg(feature = "provider-government-us")]
+        ("government_us", "treasury_prices") => {
+            dispatch!(GovUsTreasuryPricesHttpFetcher::default())
+        }
         // SeekingAlphaArticlesHttpFetcher (PROVIDER_ID = "seeking-alpha")
         #[cfg(feature = "provider-seeking-alpha")]
         ("seeking-alpha", "articles") => dispatch!(SeekingAlphaArticlesHttpFetcher::default()),
@@ -714,6 +769,20 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
     {
         target!("sec", "filings");
         target!("sec", "xbrl_revenue");
+        target!("sec", "cik_map");
+        target!("sec", "form_13f");
+        target!("sec", "fails_to_deliver");
+        target!("sec", "etf_holdings");
+    }
+    #[cfg(feature = "provider-federal-reserve")]
+    {
+        target!("federal_reserve", "macro_series");
+        target!("federal_reserve", "fomc_documents");
+    }
+    #[cfg(feature = "provider-government-us")]
+    {
+        target!("government_us", "treasury_auctions");
+        target!("government_us", "treasury_prices");
     }
     #[cfg(feature = "provider-seeking-alpha")]
     {
@@ -1795,10 +1864,12 @@ mod tests {
         feature = "provider-deribit",
         feature = "provider-ecb",
         feature = "provider-eia",
+        feature = "provider-federal-reserve",
         feature = "provider-finra",
         feature = "provider-finnhub",
         feature = "provider-fmp",
         feature = "provider-fred",
+        feature = "provider-government-us",
         feature = "provider-geckoterminal",
         feature = "provider-glassnode",
         feature = "provider-huggingface",

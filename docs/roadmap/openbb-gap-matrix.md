@@ -182,7 +182,7 @@ Clean-room: add endpoints from each vendor's *own* public API docs, normalize to
 | L2.3 | **tdw-provider-fred** · macro + rate + spread + fixedincome cluster (cpi/pce/gdp/unemployment via series IDs, sofr/effr/estr/ecb/sonia, tcm spreads, yield_curve, bond/mortgage indices, fred_search/release/regional). fred serves ~40 OpenBB cmds. Gates: live-gated. Done-when: ≥15 fred-backed endpoints standardized. | L | todo |
 | L2.4 | **tdw-provider-yahoo** · profile, quote, discovery, dividends, share_statistics, consensus, futures/historical+curve, options/chains. yahoo (no key) serves ~15 cmds. Gates: live-gated. Done-when: ≥8 endpoints standardized. | M | todo |
 | L2.5 | **tdw-provider-polygon** · fundamentals (balance/income/cash), market_snapshots, FX + crypto historical, index historical. Gates: live-gated. Done-when: ≥5 endpoints. | M | todo |
-| L2.6 | **tdw-provider-sec** · cik_map/symbol_map, filings index, form_13f, company_facts, fails_to_deliver, N-PORT, MD&A, latest_financial_reports. Gates: unit (public). Done-when: cik/symbol map + 13f + FTD standardized. | M | todo |
+| L2.6 | **tdw-provider-sec** · cik_map/symbol_map, filings index, form_13f, company_facts, fails_to_deliver, N-PORT, MD&A, latest_financial_reports. Gates: unit (public). Done-when: cik/symbol map + 13f + FTD standardized. | M | done |
 | L2.7 | **tdw-provider-cboe** · index (price/constituents/available/search/snapshots), options/chains normalize, futures/curve. Gates: live-gated. Done-when: index cluster standardized. | M | todo |
 | L2.8 | **tdw-provider-eia** · petroleum_status_report, short_term_energy_outlook, psd_data/psd_report. Gates: live-gated. Done-when: 3 report endpoints. | S | todo |
 | L2.9 | **tdw-provider-ecb** · currency/reference_rates + rate/ecb + balance_of_payments shape. Gates: live-gated. Done-when: reference_rates standardized. | S | todo |
@@ -199,8 +199,8 @@ the vendor's public API docs.
 
 | # | New crate · source · auth model | Serves | Size | Status |
 |---|---|---|---|---|
-| L3.1 | **tdw-provider-federal-reserve** · U.S. Fed data portal · no key | money_measures, central_bank_holdings, primary_dealer_*, fomc_documents, treasury_rates, overnight rates | M | todo |
-| L3.2 | **tdw-provider-government-us** · US Treasury Fiscal/Direct · no key | treasury_prices, treasury_auctions, treasury yield data | S | todo |
+| L3.1 | **tdw-provider-federal-reserve** · U.S. Fed data portal · no key | money_measures, central_bank_holdings, primary_dealer_*, fomc_documents, treasury_rates, overnight rates | M | done |
+| L3.2 | **tdw-provider-government-us** · US Treasury Fiscal/Direct · no key | treasury_prices, treasury_auctions, treasury yield data | S | done |
 | L3.3 | **tdw-provider-imf** · IMF SDMX · no key | indicators, direction_of_trade, balance_of_payments, shipping/*, imf_utils dataflow discovery | M | todo |
 | L3.4 | **tdw-provider-econdb** · EconDB · optional key | gdp/real+nominal, indicators, country_profile, export_destinations | M | todo |
 | L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | todo |
@@ -253,7 +253,7 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 | 7 | **L2.4** yahoo expansion | No-key provider → ~15 cmds (profile/quote/discovery/options/futures) free to users | todo |
 | 8 | **L1.2** tdw-symbology (#173) | Symbol/exchange/FX/crypto normalization needed by nearly every endpoint | in-progress |
 | 9 | **L4.2** tdw-analytics-quant | sharpe/sortino/capm/rolling stats; high demand, pure compute, golden-testable | todo |
-| 10 | **L2.6** sec utils (cik/symbol map, 13f, FTD) | No-key; completes ownership + shorts + regulators clusters cheaply | todo |
+| 10 | **L2.6** sec utils (cik/symbol map, 13f, FTD) | No-key; completes ownership + shorts + regulators clusters cheaply | done |
 
 **Top-3 (act first):** L1.4 standard models → L2.3 fred expansion → L2.1 fmp fundamentals.
 

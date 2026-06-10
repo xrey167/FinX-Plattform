@@ -43,6 +43,13 @@ const ECONOMY_INFLATION_EXPECTATIONS: &[ProviderCandidate] = &[ProviderCandidate
     "economy_survey_inflation_expectations",
 )];
 const ECONOMY_FRED_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fred", "fred_search")];
+/// Keyless Federal Reserve candidate for the full H.6 money-measures table
+/// (gap-matrix item **L3.1**) — distinct from the FRED-backed single-series
+/// `economy/money_measures/{m1,m2}` routes above.
+const ECONOMY_MONEY_MEASURES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "economy_money_measures",
+)];
 
 fn standard_params() -> Schema {
     schema_for!(StandardParams)
@@ -111,6 +118,11 @@ pub fn entries() -> Vec<CatalogEntry> {
             "economy/money_measures/m2",
             ECONOMY_M2,
             "M2 money stock, FRED-backed macro series.",
+        ),
+        macro_entry(
+            "economy/money_measures",
+            ECONOMY_MONEY_MEASURES,
+            "Full H.6 money stock measures table (Federal Reserve, keyless).",
         ),
         macro_entry(
             "economy/survey/nonfarm_payrolls",
