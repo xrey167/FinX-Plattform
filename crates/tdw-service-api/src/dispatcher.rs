@@ -690,7 +690,153 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     );
     #[cfg(feature = "provider-fred")]
     insert_fred_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-sec")]
+    insert_sec_government_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-government-us")]
+    insert_government_us_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-federal-reserve")]
+    insert_federal_reserve_fetch_bindings(&mut table);
     table
+}
+
+/// Register the keyless-government-wave SEC catalog fetch bindings (cik_map,
+/// form_13f, fails_to_deliver, etf_holdings) into `table`. Each is its own
+/// endpoint keyed by the fetcher's `ENDPOINT` const, mirroring the SEC
+/// candidates declared in the endpoint catalog.
+#[cfg(feature = "provider-sec")]
+fn insert_sec_government_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("sec", crate::SecCikMapHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecCikMapHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecForm13FHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecForm13FHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecFailsToDeliverHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecFailsToDeliverHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecEtfHoldingsHttpFetcher, _, _>(),
+    );
+}
+
+/// Build a [`FetchBinding`] for a US Treasury FiscalData catalog-backed fetcher
+/// that resolves a fixed `OpenBB` `command` to its dataset. The command is
+/// injected into the caller's params before the shared fetcher runs. Mirrors
+/// [`fred_command_fetch_binding`].
+#[cfg(feature = "provider-government-us")]
+fn gov_us_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_government_us::GovUsCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the US Treasury FiscalData catalog fetch bindings into `table`,
+/// keyed by the fetcher's short `ENDPOINT` (which equals the catalog candidate
+/// endpoint). Each binding injects its route's `command`.
+#[cfg(feature = "provider-government-us")]
+fn insert_government_us_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("government_us", "treasury_auctions"),
+        gov_us_command_fetch_binding::<
+            crate::GovUsTreasuryAuctionsHttpFetcher,
+            tdw_domain::TreasuryAuction,
+        >("fixedincome/government/treasury_auctions"),
+    );
+    table.insert(
+        ("government_us", "treasury_prices"),
+        gov_us_command_fetch_binding::<
+            crate::GovUsTreasuryPricesHttpFetcher,
+            tdw_domain::TreasuryPrice,
+        >("fixedincome/government/treasury_prices"),
+    );
+}
+
+/// Build a [`FetchBinding`] for a Federal Reserve catalog-backed fetcher that
+/// resolves a fixed `OpenBB` `command` to its series/document set. The command
+/// is injected into the caller's params before the shared fetcher runs, so one
+/// fetcher type serves every command in its cluster (e.g. the macro fetcher
+/// serves both `economy/money_measures` and `dealer_stats`) while the dispatch
+/// key stays per-route. Mirrors [`fred_command_fetch_binding`].
+#[cfg(feature = "provider-federal-reserve")]
+fn fed_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_federal_reserve::FedCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the Federal Reserve catalog fetch bindings into `table`, keyed by
+/// the route-derived endpoint key (`<route with '/'→'_'>`), matching the
+/// catalog candidates. The macro-series fetcher serves both
+/// `economy/money_measures` and `fixedincome/government/dealer_stats` (each
+/// binding injects its own `command`); the FOMC fetcher is its own command.
+#[cfg(feature = "provider-federal-reserve")]
+fn insert_federal_reserve_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("federal_reserve", "economy_money_measures"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/money_measures",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "fixedincome_government_dealer_stats"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "fixedincome/government/dealer_stats",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "regulators_fed_fomc_documents"),
+        fed_command_fetch_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "regulators/fed/fomc_documents",
+        ),
+    );
 }
 
 /// Start a live streaming-ingest task and report its `stream_id`.
@@ -1427,7 +1573,149 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     );
     #[cfg(feature = "provider-fred")]
     insert_fred_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-sec")]
+    insert_sec_government_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-government-us")]
+    insert_government_us_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-federal-reserve")]
+    insert_federal_reserve_ingest_bindings(&mut table);
     table
+}
+
+/// Register the keyless-government-wave SEC catalog ingest bindings, mirroring
+/// [`insert_sec_government_fetch_bindings`] so the fetch and ingest paths stay in
+/// lockstep. Each binds the fetcher to its bronze landing table.
+#[cfg(feature = "provider-sec")]
+fn insert_sec_government_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("sec", crate::SecCikMapHttpFetcher::ENDPOINT),
+        binding::<crate::SecCikMapHttpFetcher, _, _>("raw.symbol_mapping"),
+    );
+    table.insert(
+        ("sec", crate::SecForm13FHttpFetcher::ENDPOINT),
+        binding::<crate::SecForm13FHttpFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("sec", crate::SecFailsToDeliverHttpFetcher::ENDPOINT),
+        binding::<crate::SecFailsToDeliverHttpFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
+        binding::<crate::SecEtfHoldingsHttpFetcher, _, _>("raw.etf_holding"),
+    );
+}
+
+/// Build an [`IngestBinding`] for a US Treasury catalog-backed fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it.
+#[cfg(feature = "provider-government-us")]
+fn gov_us_command_ingest_binding<F, D>(command: &'static str, table: &'static str) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_government_us::GovUsCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the US Treasury ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-government-us")]
+fn insert_government_us_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("government_us", "treasury_auctions"),
+        gov_us_command_ingest_binding::<
+            crate::GovUsTreasuryAuctionsHttpFetcher,
+            tdw_domain::TreasuryAuction,
+        >(
+            "fixedincome/government/treasury_auctions",
+            "raw.treasury_auction",
+        ),
+    );
+    table.insert(
+        ("government_us", "treasury_prices"),
+        gov_us_command_ingest_binding::<
+            crate::GovUsTreasuryPricesHttpFetcher,
+            tdw_domain::TreasuryPrice,
+        >(
+            "fixedincome/government/treasury_prices",
+            "raw.treasury_price",
+        ),
+    );
+}
+
+/// Build an [`IngestBinding`] for a Federal Reserve catalog-backed fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it.
+#[cfg(feature = "provider-federal-reserve")]
+fn fed_command_ingest_binding<F, D>(command: &'static str, table: &'static str) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_federal_reserve::FedCatalogQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the Federal Reserve ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-federal-reserve")]
+fn insert_federal_reserve_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("federal_reserve", "economy_money_measures"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/money_measures",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "fixedincome_government_dealer_stats"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "fixedincome/government/dealer_stats",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "regulators_fed_fomc_documents"),
+        fed_command_ingest_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "regulators/fed/fomc_documents",
+            "raw.fomc_document",
+        ),
+    );
 }
 
 /// The `(provider, endpoint)` keys registered in this build's ingest dispatch
@@ -2306,6 +2594,134 @@ mod tests {
                 commands.contains(entry.route),
                 "FRED-backed catalog route {} has no ENDPOINTS command",
                 entry.route
+            );
+        }
+    }
+
+    /// Catalog ↔ SEC `ENDPOINTS` sync (gap-matrix **L2.6**): every standardized
+    /// SEC command (the keyless government wave) has a catalog route whose `sec`
+    /// candidate endpoint is registered in both the fetch and ingest dispatch
+    /// tables under `provider-sec`. Mirrors `fred_catalog_routes_match_provider_endpoints`.
+    #[cfg(feature = "provider-sec")]
+    #[test]
+    fn sec_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_sec::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command)
+                .unwrap_or_else(|| panic!("SEC command {} has no catalog route", endpoint.command));
+            let sec = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "sec")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no sec candidate", endpoint.command)
+                });
+            assert!(
+                fetch_table.contains_key(&(sec.provider, sec.endpoint)),
+                "SEC candidate {}/{} for route {} is not in the fetch dispatch table",
+                sec.provider,
+                sec.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(sec.provider, sec.endpoint)),
+                "SEC candidate {}/{} for route {} is not in the ingest dispatch table",
+                sec.provider,
+                sec.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ US-Treasury `ENDPOINTS` sync (gap-matrix **L3.2**): every
+    /// standardized FiscalData command has a catalog route whose `government_us`
+    /// candidate endpoint is dispatchable in both tables under
+    /// `provider-government-us`.
+    #[cfg(feature = "provider-government-us")]
+    #[test]
+    fn government_us_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_government_us::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!(
+                    "government_us command {} has no catalog route",
+                    endpoint.command
+                )
+            });
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "government_us")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no government_us candidate",
+                        endpoint.command
+                    )
+                });
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "government_us candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "government_us candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ Federal-Reserve `ENDPOINTS` sync (gap-matrix **L3.1**): every
+    /// standardized Fed command has a catalog route whose `federal_reserve`
+    /// candidate endpoint is the route's `'/'→'_'` form (the FRED-style derived
+    /// key) and is dispatchable in both tables under `provider-federal-reserve`.
+    #[cfg(feature = "provider-federal-reserve")]
+    #[test]
+    fn federal_reserve_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_federal_reserve::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!(
+                    "federal_reserve command {} has no catalog route",
+                    endpoint.command
+                )
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "federal_reserve")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no federal_reserve candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} federal_reserve endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "federal_reserve candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "federal_reserve candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
             );
         }
     }

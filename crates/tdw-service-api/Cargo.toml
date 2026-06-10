@@ -104,10 +104,18 @@ provider-databento = ["dep:tdw-provider-databento", "tdw-provider-databento/http
 provider-deribit = ["dep:tdw-provider-deribit", "tdw-provider-deribit/http"]
 provider-ecb = ["dep:tdw-provider-ecb", "tdw-provider-ecb/http"]
 provider-eia = ["dep:tdw-provider-eia", "tdw-provider-eia/http"]
+provider-federal-reserve = [
+    "dep:tdw-provider-federal-reserve",
+    "tdw-provider-federal-reserve/http",
+]
 provider-finra = ["dep:tdw-provider-finra", "tdw-provider-finra/http"]
 provider-finnhub = ["dep:tdw-provider-finnhub", "tdw-provider-finnhub/http"]
 provider-fmp = ["dep:tdw-provider-fmp", "tdw-provider-fmp/http"]
 provider-fred = ["dep:tdw-provider-fred", "tdw-provider-fred/http"]
+provider-government-us = [
+    "dep:tdw-provider-government-us",
+    "tdw-provider-government-us/http",
+]
 provider-geckoterminal = [
     "dep:tdw-provider-geckoterminal",
     "tdw-provider-geckoterminal/http",
@@ -198,10 +206,12 @@ all-http-providers = [
     "provider-deribit",
     "provider-ecb",
     "provider-eia",
+    "provider-federal-reserve",
     "provider-finra",
     "provider-finnhub",
     "provider-fmp",
     "provider-fred",
+    "provider-government-us",
     "provider-geckoterminal",
     "provider-glassnode",
     "provider-huggingface",
@@ -275,11 +285,13 @@ tdw-provider-databento = { path = "../tdw-provider-databento", optional = true }
 tdw-provider-deribit = { path = "../tdw-provider-deribit", optional = true }
 tdw-provider-ecb = { path = "../tdw-provider-ecb", optional = true }
 tdw-provider-eia = { path = "../tdw-provider-eia", optional = true }
+tdw-provider-federal-reserve = { path = "../tdw-provider-federal-reserve", optional = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-finra = { path = "../tdw-provider-finra", optional = true }
 tdw-provider-finnhub = { path = "../tdw-provider-finnhub", optional = true }
 tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
+tdw-provider-government-us = { path = "../tdw-provider-government-us", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
 tdw-provider-glassnode = { path = "../tdw-provider-glassnode", optional = true }
 tdw-provider-huggingface = { path = "../tdw-provider-huggingface", optional = true }

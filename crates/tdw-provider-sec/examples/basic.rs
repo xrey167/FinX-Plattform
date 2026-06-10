@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let xbrl_fixture = Bytes::from(
         serde_json::json!({
-            "cik": 320193,
+            "cik": 320_193,
             "entityName": "Apple Inc.",
             "facts": {
                 "us-gaap": {

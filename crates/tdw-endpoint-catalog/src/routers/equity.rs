@@ -2,7 +2,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::EquityHistoricalData;
+use tdw_domain::{EquityHistoricalData, OwnershipRecord};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -23,6 +23,15 @@ const EQUITY_PRICE_HISTORICAL: &[ProviderCandidate] = &[
     ProviderCandidate::new("akshare", "hist"),
 ];
 
+/// Keyless SEC candidate for the Form 13F-HR institutional-holdings index
+/// (gap-matrix item **L2.6**).
+const EQUITY_OWNERSHIP_FORM_13F: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "form_13f")];
+
+/// Keyless SEC candidate for fails-to-deliver records (gap-matrix item **L2.6**).
+const EQUITY_SHORTS_FAILS_TO_DELIVER: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "fails_to_deliver")];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
 }
@@ -31,16 +40,42 @@ fn model_schema() -> Schema {
     schema_for!(EquityHistoricalData)
 }
 
+fn ownership_record() -> Schema {
+    schema_for!(OwnershipRecord)
+}
+
 /// The `equity` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
-    vec![CatalogEntry {
-        route: "equity/price/historical",
-        kind: EndpointKind::Fetch,
-        params_schema,
-        model: model_schema,
-        candidates: EQUITY_PRICE_HISTORICAL,
-        bronze_table: Some("raw.equity_historical"),
-        doc: "Historical end-of-day OHLCV bars for an equity symbol.",
-        chartable: true,
-    }]
+    vec![
+        CatalogEntry {
+            route: "equity/price/historical",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: model_schema,
+            candidates: EQUITY_PRICE_HISTORICAL,
+            bronze_table: Some("raw.equity_historical"),
+            doc: "Historical end-of-day OHLCV bars for an equity symbol.",
+            chartable: true,
+        },
+        CatalogEntry {
+            route: "equity/ownership/form_13f",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: ownership_record,
+            candidates: EQUITY_OWNERSHIP_FORM_13F,
+            bronze_table: Some("raw.ownership_record"),
+            doc: "SEC Form 13F-HR institutional-holdings filing index by CIK (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "equity/shorts/fails_to_deliver",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: ownership_record,
+            candidates: EQUITY_SHORTS_FAILS_TO_DELIVER,
+            bronze_table: Some("raw.ownership_record"),
+            doc: "SEC fails-to-deliver records for an equity symbol (keyless).",
+            chartable: false,
+        },
+    ]
 }

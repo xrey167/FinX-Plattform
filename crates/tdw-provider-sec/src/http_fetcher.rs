@@ -13,10 +13,18 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tdw_core::http_support::prelude::*;
-use tdw_domain::{MarketDataBar, TimeGranularity};
+use tdw_domain::{EtfHolding, MarketDataBar, OwnershipRecord, SymbolMapping, TimeGranularity};
 use tokio::time::sleep;
 
-use crate::{BASE_URL, SecFilingsQuery, SecHistoricalQuery};
+use crate::{BASE_URL, SecCikMapQuery, SecFilingsQuery, SecHistoricalQuery};
+
+/// Public host for the keyless `company_tickers.json` ticker↔CIK directory.
+///
+/// The fails-to-deliver datasets also live here. The XBRL/submissions data lives
+/// under [`crate::BASE_URL`] (`data.sec.gov`); the directory + static data files
+/// live under `www.sec.gov`. Documented at
+/// <https://www.sec.gov/search-filings/edgar-application-programming-interfaces>.
+pub const WWW_BASE_URL: &str = "https://www.sec.gov";
 
 const USER_AGENT: &str = "tdw-provider-sec/0.1 (contact@finx.example)";
 /// SEC EDGAR enforces a soft 10 req/sec ceiling; we sleep 100 ms after each
@@ -123,17 +131,17 @@ impl Fetcher<SecFilingsQuery, SecFiling> for SecFilingsHttpFetcher {
         // Live EDGAR returns the CIK zero-padded to 10 digits; cassettes and
         // queries use the canonical unpadded form. Normalize so rows always
         // carry the unpadded CIK regardless of source.
-        let cik = envelope
-            .cik
-            .map(|c| {
+        let cik = envelope.cik.map_or_else(
+            || query.cik.clone(),
+            |c| {
                 let trimmed = c.trim_start_matches('0');
                 if trimmed.is_empty() {
                     "0".to_string()
                 } else {
                     trimmed.to_string()
                 }
-            })
-            .unwrap_or_else(|| query.cik.clone());
+            },
+        );
         let entity_name = envelope.name.unwrap_or_default();
 
         let recent = envelope
@@ -283,13 +291,6 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
     }
 
     fn transform_data(&self, query: &SecHistoricalQuery, raw: Bytes) -> Result<Vec<MarketDataBar>> {
-        let envelope: SecXbrlEnvelope = serde_json::from_slice(&raw)
-            .map_err(|e| Error::Provider(format!("sec xbrl parse_json: {e}")))?;
-
-        let entity_name = envelope.entity_name.unwrap_or_else(|| query.symbol.clone());
-
-        let us_gaap = envelope.facts.and_then(|f| f.us_gaap).unwrap_or_default();
-
         // Filers tag top-line revenue under different us-gaap concepts: modern
         // ASC-606 filers (e.g. Apple) use RevenueFromContractWithCustomer...,
         // older filings use Revenues/SalesRevenueNet, and some cassettes use
@@ -300,6 +301,14 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
             "SalesRevenueNet",
             "Revenue",
         ];
+
+        let envelope: SecXbrlEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec xbrl parse_json: {e}")))?;
+
+        let entity_name = envelope.entity_name.unwrap_or_else(|| query.symbol.clone());
+
+        let us_gaap = envelope.facts.and_then(|f| f.us_gaap).unwrap_or_default();
+
         let revenue_value = REVENUE_CONCEPTS
             .iter()
             .find_map(|concept| us_gaap.get(*concept).cloned());
@@ -319,19 +328,12 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
             let is_annual = fact
                 .form
                 .as_deref()
-                .map(|f| f.eq_ignore_ascii_case("10-K"))
-                .unwrap_or(false);
+                .is_some_and(|f| f.eq_ignore_ascii_case("10-K"));
             if !is_annual {
                 continue;
             }
-            let end_date = match fact.end {
-                Some(d) => d,
-                None => continue,
-            };
-            let val = match fact.val {
-                Some(v) => v,
-                None => continue,
-            };
+            let Some(end_date) = fact.end else { continue };
+            let Some(val) = fact.val else { continue };
 
             rows.push(MarketDataBar {
                 symbol: entity_name.clone(),
@@ -348,6 +350,504 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
         }
 
         Ok(rows)
+    }
+}
+
+// ── CIK ↔ ticker symbol map fetcher (regulators/sec/cik_map) ──────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC `company_tickers.json` ticker↔CIK map fetcher.
+    ///
+    /// Calls `GET https://www.sec.gov/files/company_tickers.json` (keyless,
+    /// requires a User-Agent header). Standardizes `regulators/sec/cik_map` to
+    /// [`tdw_domain::SymbolMapping`] rows.
+    pub SecCikMapHttpFetcher,
+    WWW_BASE_URL
+);
+
+/// Wire shape of one `company_tickers.json` entry. SEC keys the object by an
+/// integer index; each value carries the CIK (as an integer), ticker, and title.
+#[derive(Deserialize)]
+struct SecCompanyTicker {
+    #[serde(default)]
+    cik_str: Option<u64>,
+    #[serde(default)]
+    ticker: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<SecCikMapQuery, SymbolMapping> for SecCikMapHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "cik_map";
+
+    fn transform_query(_params: Value) -> Result<SecCikMapQuery> {
+        Ok(SecCikMapQuery::new())
+    }
+
+    async fn extract_data(&self, _query: &SecCikMapQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/files/company_tickers.json",
+            self.base_url().trim_end_matches('/'),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec cik_map extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec cik_map returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec cik_map read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, _query: &SecCikMapQuery, raw: Bytes) -> Result<Vec<SymbolMapping>> {
+        // company_tickers.json is a JSON object keyed by string indices.
+        let map: std::collections::BTreeMap<String, SecCompanyTicker> =
+            serde_json::from_slice(&raw)
+                .map_err(|e| Error::Provider(format!("sec cik_map parse_json: {e}")))?;
+        let mut rows = Vec::with_capacity(map.len());
+        for entry in map.into_values() {
+            let (Some(cik), Some(symbol)) = (entry.cik_str, entry.ticker) else {
+                continue;
+            };
+            if symbol.trim().is_empty() {
+                continue;
+            }
+            rows.push(SymbolMapping {
+                symbol: symbol.trim().to_ascii_uppercase(),
+                cik: cik.to_string(),
+                name: entry.title,
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ── Form 13F institutional-holdings fetcher (equity/ownership/form_13f) ────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC Form 13F-HR institutional-holdings filing-index fetcher.
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` and selects the
+    /// `13F-HR` filings, emitting one [`tdw_domain::OwnershipRecord`] per filing
+    /// (`kind = "form_13f"`). A full position breakdown requires fetching each
+    /// filing's information-table XML; this index path standardizes the filing
+    /// list, which is the OpenBB-equivalent `equity/ownership/form_13f` shape.
+    pub SecForm13FHttpFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, OwnershipRecord> for SecForm13FHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "form_13f";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec form_13f extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec form_13f returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec form_13f read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec form_13f parse_json: {e}")))?;
+        let entity_name = envelope.name.unwrap_or_default();
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .unwrap_or(SecRecentFilings {
+                accession_number: Vec::new(),
+                form: Vec::new(),
+                filing_date: Vec::new(),
+            });
+        let len = recent.accession_number.len();
+        let mut rows = Vec::new();
+        for i in 0..len {
+            let form = recent.form.get(i).cloned().unwrap_or_default();
+            // Match 13F-HR and its amendments (13F-HR/A).
+            if !form.to_ascii_uppercase().starts_with("13F-HR") {
+                continue;
+            }
+            rows.push(OwnershipRecord {
+                symbol: query.cik.clone(),
+                kind: "form_13f".to_string(),
+                holder: if entity_name.is_empty() {
+                    None
+                } else {
+                    Some(entity_name.clone())
+                },
+                relationship: Some(form),
+                date: recent.filing_date.get(i).cloned(),
+                transaction_type: recent.accession_number.get(i).cloned(),
+                shares: None,
+                value: None,
+                percentage: None,
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ── Fails-to-deliver fetcher (equity/shorts/fails_to_deliver) ─────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC fails-to-deliver fetcher.
+    ///
+    /// SEC publishes fails-to-deliver as semimonthly pipe-delimited data files
+    /// (`https://www.sec.gov/data/foiadocs/failsdata.txt` style endpoints). The
+    /// file set is large and the per-file URL is date-versioned; this fetcher
+    /// parses a recorded pipe-delimited FTD extract into
+    /// [`tdw_domain::OwnershipRecord`] rows (`kind = "fails_to_deliver"`) filtered
+    /// to the queried symbol. Live retrieval of the date-versioned ZIP archive is
+    /// out of scope for the keyless wave (documented limitation); the offline
+    /// parse path is the standardized contract.
+    pub SecFailsToDeliverHttpFetcher,
+    WWW_BASE_URL
+);
+
+impl SecFailsToDeliverHttpFetcher {
+    /// Parse SEC's pipe-delimited FTD format into ownership rows for `symbol`.
+    ///
+    /// The SEC FTD file header is
+    /// `SETTLEMENT DATE|CUSIP|SYMBOL|QUANTITY (FAILS)|DESCRIPTION|PRICE`.
+    /// Rows whose symbol does not match (case-insensitive) are skipped.
+    fn parse_pipe_delimited(symbol: &str, text: &str) -> Vec<OwnershipRecord> {
+        let want = symbol.trim().to_ascii_uppercase();
+        let mut rows = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let fields: Vec<&str> = line.split('|').collect();
+            if fields.len() < 4 {
+                continue;
+            }
+            // Skip the header row (non-numeric settlement date).
+            let settlement = fields[0].trim();
+            if settlement.eq_ignore_ascii_case("SETTLEMENT DATE") {
+                continue;
+            }
+            let row_symbol = fields[2].trim().to_ascii_uppercase();
+            if row_symbol != want {
+                continue;
+            }
+            let shares = fields[3].trim().parse::<f64>().ok();
+            let price = fields.get(5).and_then(|p| p.trim().parse::<f64>().ok());
+            // SEC FTD settlement dates are YYYYMMDD; normalize to YYYY-MM-DD.
+            let date = if settlement.len() == 8 && settlement.chars().all(|c| c.is_ascii_digit()) {
+                Some(format!(
+                    "{}-{}-{}",
+                    &settlement[0..4],
+                    &settlement[4..6],
+                    &settlement[6..8]
+                ))
+            } else {
+                Some(settlement.to_string())
+            };
+            rows.push(OwnershipRecord {
+                symbol: want.clone(),
+                kind: "fails_to_deliver".to_string(),
+                holder: fields.get(4).map(|d| (*d).trim().to_string()),
+                relationship: Some(fields[1].trim().to_string()),
+                date,
+                transaction_type: None,
+                shares,
+                value: price,
+                percentage: None,
+            });
+        }
+        rows
+    }
+}
+
+#[async_trait]
+impl Fetcher<SecHistoricalQuery, OwnershipRecord> for SecFailsToDeliverHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "fails_to_deliver";
+
+    fn transform_query(params: Value) -> Result<SecHistoricalQuery> {
+        let symbol = params
+            .get("symbol")
+            .or_else(|| params.get("ticker"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec symbol must be a string".to_string()))?;
+        SecHistoricalQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &SecHistoricalQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        // The live FTD archive is a date-versioned ZIP of pipe-delimited files.
+        // Resolving the exact archive URL is out of scope for the keyless wave;
+        // surface a descriptive provider error so the offline parse path
+        // (`transform_data` over a recorded extract) remains the standardized
+        // contract and a live attempt fails clearly rather than silently.
+        Err(Error::Provider(
+            "sec fails_to_deliver live archive retrieval is not implemented; \
+             supply a recorded pipe-delimited FTD extract via transform_data"
+                .to_string(),
+        ))
+    }
+
+    fn transform_data(
+        &self,
+        query: &SecHistoricalQuery,
+        raw: Bytes,
+    ) -> Result<Vec<OwnershipRecord>> {
+        let text = String::from_utf8_lossy(&raw);
+        Ok(Self::parse_pipe_delimited(&query.symbol, &text))
+    }
+}
+
+// ── ETF holdings fetcher via N-PORT (etf/holdings) ────────────────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC ETF-holdings fetcher backed by N-PORT (`NPORT-P`).
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` to locate the most
+    /// recent `NPORT-P` filing, then parses that filing's primary document XML
+    /// for the `invstOrSec` holding entries, emitting one
+    /// [`tdw_domain::EtfHolding`] per constituent. The XML is parsed with a small
+    /// dependency-free tag extractor (matching the crate's no-extra-deps stance),
+    /// scoped to the handful of fields N-PORT reports per holding.
+    pub SecEtfHoldingsHttpFetcher,
+    BASE_URL
+);
+
+/// One parsed `invstOrSec` N-PORT holding entry.
+struct NportHolding {
+    name: String,
+    cusip: Option<String>,
+    isin: Option<String>,
+    balance: Option<f64>,
+    value_usd: Option<f64>,
+    weight_pct: Option<f64>,
+}
+
+impl SecEtfHoldingsHttpFetcher {
+    /// Extract the text of the first `<tag>…</tag>` inside `xml`, trimmed.
+    /// Returns `None` when the tag is absent or empty. Dependency-free: a linear
+    /// scan over the slice, sufficient for the flat N-PORT holding fields.
+    fn tag_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+        let start = xml.find(&open)? + open.len();
+        let end = xml[start..].find(&close)? + start;
+        let text = xml[start..end].trim();
+        if text.is_empty() { None } else { Some(text) }
+    }
+
+    /// Extract the value of a self-closing `<tag .. value="X" ..>` attribute (the
+    /// N-PORT `identifiers` block uses `<isin value="…"/>` / `<cusip value="…"/>`).
+    fn attr_value(fragment: &str, tag: &str) -> Option<String> {
+        let open = format!("<{tag}");
+        let tag_start = fragment.find(&open)?;
+        let rest = &fragment[tag_start..];
+        let tag_end = rest.find('>')?;
+        let attrs = &rest[..tag_end];
+        let key = "value=\"";
+        let v_start = attrs.find(key)? + key.len();
+        let v_end = attrs[v_start..].find('"')? + v_start;
+        let value = attrs[v_start..v_end].trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    }
+
+    /// Parse the `invstOrSec` holding blocks out of an N-PORT primary-document
+    /// XML body. Each block is bounded by `<invstOrSec>`…`</invstOrSec>`.
+    fn parse_nport_holdings(xml: &str) -> Vec<NportHolding> {
+        let open = "<invstOrSec>";
+        let close = "</invstOrSec>";
+        let mut holdings = Vec::new();
+        let mut cursor = 0usize;
+        while let Some(rel_start) = xml[cursor..].find(open) {
+            let start = cursor + rel_start + open.len();
+            let Some(rel_end) = xml[start..].find(close) else {
+                break;
+            };
+            let block = &xml[start..start + rel_end];
+            cursor = start + rel_end + close.len();
+
+            let name = Self::tag_text(block, "name").unwrap_or("").to_string();
+            if name.is_empty() {
+                continue;
+            }
+            // CUSIP is usually a plain element; ISIN lives in <identifiers>.
+            let cusip = Self::tag_text(block, "cusip")
+                .map(str::to_string)
+                .or_else(|| Self::attr_value(block, "cusip"));
+            let isin = Self::attr_value(block, "isin");
+            let balance = Self::tag_text(block, "balance").and_then(|v| v.parse().ok());
+            let value_usd = Self::tag_text(block, "valUSD").and_then(|v| v.parse().ok());
+            let weight_pct = Self::tag_text(block, "pctVal").and_then(|v| v.parse().ok());
+            holdings.push(NportHolding {
+                name,
+                cusip,
+                isin,
+                balance,
+                value_usd,
+                weight_pct,
+            });
+        }
+        holdings
+    }
+}
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, EtfHolding> for SecEtfHoldingsHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "etf_holdings";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        // Step 1: locate the most recent NPORT-P filing from the submissions
+        // index. Step 2: fetch that filing's primary-document XML. The two-step
+        // EDGAR navigation matches the documented submissions → filing-document
+        // flow.
+        let submissions_url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&submissions_url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec etf_holdings submissions: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec etf_holdings submissions returned {status}: {body}"
+            )));
+        }
+        let submissions = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec etf_holdings read submissions: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&submissions)
+            .map_err(|e| Error::Provider(format!("sec etf_holdings parse submissions: {e}")))?;
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .ok_or_else(|| Error::Provider("sec etf_holdings: no recent filings".to_string()))?;
+        let nport_index = recent
+            .form
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case("NPORT-P"))
+            .ok_or_else(|| {
+                Error::Provider("sec etf_holdings: no NPORT-P filing found".to_string())
+            })?;
+        let accession = recent.accession_number.get(nport_index).ok_or_else(|| {
+            Error::Provider("sec etf_holdings: NPORT-P accession missing".to_string())
+        })?;
+        // The primary document for an N-PORT filing is `primary_doc.xml`. The
+        // EDGAR archives path drops the dashes from the accession number.
+        let accession_nodash = accession.replace('-', "");
+        let cik_unpadded = query.cik.trim_start_matches('0');
+        let cik_unpadded = if cik_unpadded.is_empty() {
+            "0"
+        } else {
+            cik_unpadded
+        };
+        let doc_url = format!(
+            "{WWW_BASE_URL}/Archives/edgar/data/{cik_unpadded}/{accession_nodash}/primary_doc.xml",
+        );
+        let doc_response = client
+            .get(&doc_url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec etf_holdings primary_doc: {e}")))?;
+        if !doc_response.status().is_success() {
+            let status = doc_response.status();
+            let body = doc_response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec etf_holdings primary_doc returned {status}: {body}"
+            )));
+        }
+        let xml = doc_response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec etf_holdings read primary_doc: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(xml)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<EtfHolding>> {
+        let xml = String::from_utf8_lossy(&raw);
+        let report_date = Self::tag_text(&xml, "repPdDate").map(str::to_string);
+        let holdings = Self::parse_nport_holdings(&xml);
+        Ok(holdings
+            .into_iter()
+            .map(|h| EtfHolding {
+                fund_symbol: query.cik.clone(),
+                cik: Some(query.cik.clone()),
+                report_date: report_date.clone(),
+                holding_name: h.name,
+                cusip: h.cusip,
+                isin: h.isin,
+                balance: h.balance,
+                value_usd: h.value_usd,
+                weight_pct: h.weight_pct,
+            })
+            .collect())
     }
 }
 
@@ -413,7 +913,7 @@ mod tests {
         let query = historical_query();
         let raw = Bytes::from(
             serde_json::json!({
-                "cik": 320193,
+                "cik": 320_193,
                 "entityName": "Apple Inc.",
                 "facts": {
                     "us-gaap": {
@@ -421,9 +921,9 @@ mod tests {
                             "label": "Revenue",
                             "units": {
                                 "USD": [
-                                    {"end": "2024-09-28", "val": 391035000000.0_f64, "form": "10-K"},
-                                    {"end": "2023-09-30", "val": 383285000000.0_f64, "form": "10-K"},
-                                    {"end": "2024-03-30", "val": 90753000000.0_f64, "form": "10-Q"}
+                                    {"end": "2024-09-28", "val": 391_035_000_000.0_f64, "form": "10-K"},
+                                    {"end": "2023-09-30", "val": 383_285_000_000.0_f64, "form": "10-K"},
+                                    {"end": "2024-03-30", "val": 90_753_000_000.0_f64, "form": "10-Q"}
                                 ]
                             }
                         }
@@ -439,7 +939,7 @@ mod tests {
         // Only the two 10-K rows should appear; 10-Q is excluded.
         assert_eq!(rows.len(), 2, "rows={rows:#?}");
         assert_eq!(rows[0].ts, "2024-09-28T00:00:00Z");
-        assert_eq!(rows[0].close, 391_035_000_000.0);
+        assert!((rows[0].close - 391_035_000_000.0_f64).abs() < 1.0);
         assert_eq!(rows[0].source, "sec-xbrl");
         assert_eq!(rows[1].ts, "2023-09-30T00:00:00Z");
     }
@@ -450,7 +950,7 @@ mod tests {
         let query = historical_query();
         let raw = Bytes::from(
             serde_json::json!({
-                "cik": 320193,
+                "cik": 320_193,
                 "entityName": "Apple Inc.",
                 "facts": {
                     "us-gaap": {}

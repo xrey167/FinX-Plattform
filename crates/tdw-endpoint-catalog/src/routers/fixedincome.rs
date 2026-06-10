@@ -12,7 +12,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{RateObservation, YieldCurvePoint};
+use tdw_domain::{MacroSeries, RateObservation, TreasuryAuction, TreasuryPrice, YieldCurvePoint};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -84,6 +84,17 @@ const GOV_YIELD_CURVE: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fixedincome_government_yield_curve",
 )];
 
+/// Keyless US-Treasury `FiscalData` candidates (gap-matrix item **L3.2**) and the
+/// keyless Federal Reserve primary-dealer candidate (gap-matrix item **L3.1**).
+const GOV_TREASURY_AUCTIONS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("government_us", "treasury_auctions")];
+const GOV_TREASURY_PRICES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("government_us", "treasury_prices")];
+const GOV_DEALER_STATS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "fixedincome_government_dealer_stats",
+)];
+
 fn standard_params() -> Schema {
     schema_for!(StandardParams)
 }
@@ -94,6 +105,18 @@ fn rate_observation() -> Schema {
 
 fn yield_curve_point() -> Schema {
     schema_for!(YieldCurvePoint)
+}
+
+fn treasury_auction() -> Schema {
+    schema_for!(TreasuryAuction)
+}
+
+fn treasury_price() -> Schema {
+    schema_for!(TreasuryPrice)
+}
+
+fn macro_series() -> Schema {
+    schema_for!(MacroSeries)
 }
 
 /// One FRED rate-observation catalog entry (`fixedincome/*` → [`RateObservation`]).
@@ -238,6 +261,38 @@ pub fn entries() -> Vec<CatalogEntry> {
         bronze_table: Some("raw.yield_curve_point"),
         doc: "US Treasury yield curve (3m/2y/10y/30y), aggregated from FRED \
               constant-maturity series.",
+        chartable: true,
+    });
+    // Keyless government wave (L3.1 / L3.2): Treasury auctions + prices from US
+    // Treasury FiscalData, and primary-dealer stats from the Federal Reserve.
+    entries.push(CatalogEntry {
+        route: "fixedincome/government/treasury_auctions",
+        kind: EndpointKind::Fetch,
+        params_schema: standard_params,
+        model: treasury_auction,
+        candidates: GOV_TREASURY_AUCTIONS,
+        bronze_table: Some("raw.treasury_auction"),
+        doc: "US Treasury security auction results (US Treasury FiscalData, keyless).",
+        chartable: false,
+    });
+    entries.push(CatalogEntry {
+        route: "fixedincome/government/treasury_prices",
+        kind: EndpointKind::Fetch,
+        params_schema: standard_params,
+        model: treasury_price,
+        candidates: GOV_TREASURY_PRICES,
+        bronze_table: Some("raw.treasury_price"),
+        doc: "US Treasury security reference prices (US Treasury FiscalData, keyless).",
+        chartable: true,
+    });
+    entries.push(CatalogEntry {
+        route: "fixedincome/government/dealer_stats",
+        kind: EndpointKind::Fetch,
+        params_schema: standard_params,
+        model: macro_series,
+        candidates: GOV_DEALER_STATS,
+        bronze_table: Some("raw.macro_series"),
+        doc: "Primary dealer net positioning statistics (Federal Reserve, keyless).",
         chartable: true,
     });
     entries

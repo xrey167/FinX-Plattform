@@ -5113,6 +5113,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-federal-reserve"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "tdw-provider-testkit",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-fileset"
 version = "0.1.0"
 dependencies = [
@@ -5219,6 +5236,23 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-provider-http",
+ "tdw-provider-testkit",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-government-us"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -5616,6 +5650,7 @@ dependencies = [
  "tdw-provider-deribit",
  "tdw-provider-ecb",
  "tdw-provider-eia",
+ "tdw-provider-federal-reserve",
  "tdw-provider-fileset",
  "tdw-provider-finnhub",
  "tdw-provider-finra",
@@ -5623,6 +5658,7 @@ dependencies = [
  "tdw-provider-fred",
  "tdw-provider-geckoterminal",
  "tdw-provider-glassnode",
+ "tdw-provider-government-us",
  "tdw-provider-huggingface",
  "tdw-provider-nasdaq",
  "tdw-provider-oecd",
