@@ -114,7 +114,7 @@ The OpenAPI document:
 ```bash
 curl 'http://127.0.0.1:7879/openapi.json' | jq '.openapi, (.paths | length)'
 # "3.1.0"
-# 44
+# 60
 ```
 
 ## OpenAPI generation (no drift)

@@ -10,6 +10,21 @@ the provider integration framework, the REST API server, the CLI, charting, sett
 credentials, the extension/plugin architecture, the standardized data model (`OBBject`),
 caching/export, SDK ergonomics, the MCP server, and AI/copilot features.
 
+> **FinX status (2026-06-11).** This file is a pure OpenBB-side capability survey
+> (no FinX status columns); the **scoreboard** lives in
+> [`openbb-gap-matrix.md`](./openbb-gap-matrix.md). After P1, the infra areas
+> mapped below are **implemented** in FinX as: the REST API server (§3) →
+> catalog-derived `GET /api/v1` + generated OpenAPI 3.1 (L5.1/L5.2 **done**);
+> the data model (§8, `OBBject`) → `ResultEnvelope`; the provider framework (§2)
+> → `tdw-endpoint-catalog` (80 routes / 71 candidates) with runtime fallback; the
+> MCP server (§11) → `tdw-mcp` incl. `technical.*` + widget-catalog tools (L5.10
+> **done**); and the Workspace AI/copilot surface (§12) → the `widgets.json` data
+> backend (L5.8 **done**) + the `agents.json` / `POST /v1/query` copilot (L5.9
+> **done**). Still open after P1: the CLI (§4, L5.3), charting (§5, L5.5), the
+> Python SDK (§10), and full credential-registry migration (§6, L5.7). See
+> [`../products/openbb-parity.md`](../products/openbb-parity.md) for the
+> consolidated surface.
+
 ---
 
 ## 1. Architecture Overview (the platform spine)
