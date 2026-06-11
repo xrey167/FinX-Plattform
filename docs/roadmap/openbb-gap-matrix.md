@@ -312,3 +312,43 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 - [ ] L4 analytics golden-tested against hardcoded reference values (clean-room, no OpenBB).
 - [ ] L5 REST/CLI/charting layered on the envelope, not bypassing it.
 - [ ] Clean-room rule honored: every PR cites vendor/textbook docs, never OpenBB source.
+
+---
+
+## P2 roll-up — 2026-06-11 (OpenBB-parity phase 2: data-breadth + warehouse)
+
+> **Scoreboard snapshot.** The endpoint catalog now exposes **119 routes / 91
+> provider candidates** (`xtask catalog-check` green), up from the P1 baseline of
+> 103/79. P2 added 8 waves, all clean-room + 3-lens reviewed:
+> - **W2 FMP completion** — equity/fundamental/{splits,dividends+fmp}, estimates/historical_eps, compare/peers, discovery/{gainers,losers,active}, screener (new `ScreenerRow`).
+> - **W5 CFTC** — `tdw-provider-cftc` Commitments of Traders (`CommitmentOfTraders`) → regulators/cftc/{cot,cot_search}.
+> - **W7 News** — benzinga company + world news normalized to `NewsArticle` → news/{company,world}.
+> - **W8 technical long-tail** — ichimoku, zlma, adosc, vortex, supertrend (Compute).
+> - **W9 MCP dynamic route tools** — every Fetch route exposed as `tdw.route.*`, read from the catalog at call time.
+> - **W10 warehouse** — bronze landing tables (raw.instrument, raw.screener_row, raw.commitment_of_traders; migrations 0026/0027) matching the ingest bindings.
+> - **W1/W3/W4 verified already-delivered by P1** (symbology, FRED 32-route breadth, Yahoo breadth).
+>
+> P1 foundations reused throughout: `tdw-domain` standard models + `ResultEnvelope`,
+> the `(provider,endpoint)` dispatch + ingest registries, OpenAPI 3.1 + Python SDK
+> + tdw-widgets derivation (all drift-gated). Deferred items tracked below (D1–D8).
+
+---
+
+## Deferred P2 tasks (descoped 2026-06-11, tracked for a future wave)
+
+P2 delivered 8 waves (catalog 103→119: FMP completion, CFTC COT, MCP dynamic
+route tools, warehouse landing tables, news cluster, technical long-tail). The
+following were **explicitly descoped** at the P2 cutover (user decision) and are
+tracked here as todos — they are NOT done. Each is a clean, well-scoped future
+slice; none blocks the delivered surface.
+
+| # | Deferred task | Why deferred | Status |
+|---|---|---|---|
+| D1 | `tdw-provider-famafrench` (Ken French factors + portfolio returns) | Data ships as zipped CSV → needs a new `zip`/CSV dep; the codebase is deliberately zero-native-dep | todo (deferred) |
+| D2 | `tdw-provider-{stockgrid,wsj,biztoc}` (short_volume / etf-discovery / news-world) | Niche providers whose exact public API shapes cannot be verified clean-room without vendor-doc access — building blind risks invented endpoints | todo (deferred) |
+| D3 | `tdw-provider-intrinio` (options unusual/snapshots/surface, reported_financials) | Paid key; lower priority than the keyless surface | todo (deferred) |
+| D4 | `tdw-provider-{imf,econdb,finviz}` (W5 remainder: SDMX macro / gdp+indicators / screener+price_target) | Net-new niche crates; macro breadth already broad via FRED (32 routes) | todo (deferred) |
+| D5 | Parquet + XLSX export from any `ResultEnvelope` (L5.4) | Needs a heavy native dep (`arrow`/`parquet` + an xlsx writer); the platform has avoided native deps everywhere (charting/analytics used zero). CSV + JSON export already shipped (G013) | todo (deferred — needs a dep decision) |
+| D6 | `tdw-analytics-portfolio` (returns/drawdown/allocation/attribution, L4.4) | Beyond OpenBB parity; pure-compute, can be added on the L4.2 quant base any time | todo (deferred) |
+| D7 | Estimates breadth: `equity/estimates/price_target` + forward estimates (W7) | consensus + historical_eps shipped; price_target/forward need a keyed estimates provider | todo (deferred) |
+| D8 | Full per-provider credential registry migration (L5.7) | The `tdw-config` registry + `resolve_credential` exist; FRED+EIA wired; migrating the remaining ~15 provider crates off direct `env::var` is mechanical follow-up | todo (deferred) |
