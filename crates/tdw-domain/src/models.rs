@@ -303,6 +303,43 @@ pub struct CommodityReportRow {
     pub units: Option<String>,
 }
 
+/// A single CFTC Commitments of Traders (COT) report row.
+///
+/// Standardizes `regulators/cftc/cot` (CFTC legacy futures-only COT report). One
+/// row = one (market, report date) observation. The CFTC Socrata dataset reports
+/// open interest plus the long/short breakdown across the trader categories
+/// (noncommercial, commercial, total reportable, nonreportable). Every position
+/// count is [`Option`] since the dataset occasionally omits a column for a given
+/// market/week; only the market identity and report date are required anchors.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CommitmentOfTraders {
+    /// Market and exchange name, e.g.
+    /// `"WHEAT-SRW - CHICAGO BOARD OF TRADE"`.
+    #[validate(length(min = 1))]
+    pub market: String,
+    /// Report date in `YYYY-MM-DD` form (the as-of Tuesday of the report week).
+    #[validate(length(min = 1))]
+    pub report_date: String,
+    /// Total open interest across all traders.
+    pub open_interest: Option<f64>,
+    /// Noncommercial (speculative) long positions.
+    pub noncommercial_long: Option<f64>,
+    /// Noncommercial (speculative) short positions.
+    pub noncommercial_short: Option<f64>,
+    /// Commercial (hedger) long positions.
+    pub commercial_long: Option<f64>,
+    /// Commercial (hedger) short positions.
+    pub commercial_short: Option<f64>,
+    /// Total reportable long positions.
+    pub total_reportable_long: Option<f64>,
+    /// Total reportable short positions.
+    pub total_reportable_short: Option<f64>,
+    /// Nonreportable long positions.
+    pub nonreportable_long: Option<f64>,
+    /// Nonreportable short positions.
+    pub nonreportable_short: Option<f64>,
+}
+
 /// A scheduled corporate-calendar event (dividend, earnings, or IPO).
 ///
 /// Standardizes the NASDAQ calendar cluster — `equity/calendar/dividends`,
@@ -895,6 +932,31 @@ mod tests {
         let bad = SeriesSearchResult {
             series_id: String::new(),
             ..result
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn commitment_of_traders_round_trips_and_validates() {
+        let cot = CommitmentOfTraders {
+            market: "WHEAT-SRW - CHICAGO BOARD OF TRADE".to_string(),
+            report_date: "2024-06-04".to_string(),
+            open_interest: Some(420_000.0),
+            noncommercial_long: Some(95_000.0),
+            noncommercial_short: Some(120_000.0),
+            commercial_long: Some(200_000.0),
+            commercial_short: Some(180_000.0),
+            total_reportable_long: Some(360_000.0),
+            total_reportable_short: Some(340_000.0),
+            nonreportable_long: Some(60_000.0),
+            nonreportable_short: Some(80_000.0),
+        };
+        assert!(cot.validate().is_ok());
+        round_trip(&cot);
+
+        let bad = CommitmentOfTraders {
+            market: String::new(),
+            ..cot
         };
         assert!(bad.validate().is_err());
     }

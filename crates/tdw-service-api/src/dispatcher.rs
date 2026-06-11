@@ -1466,6 +1466,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_sec_government_fetch_bindings(&mut table);
     #[cfg(feature = "provider-government-us")]
     insert_government_us_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-cftc")]
+    insert_cftc_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -1584,6 +1586,56 @@ fn insert_government_us_fetch_bindings(
             crate::GovUsTreasuryPricesHttpFetcher,
             tdw_domain::TreasuryPrice,
         >("fixedincome/government/treasury_prices"),
+    );
+}
+
+/// Build a [`FetchBinding`] for a CFTC catalog-backed fetcher that resolves a
+/// fixed `OpenBB` `command` to its Socrata dataset. The command is injected into
+/// the caller's params before the shared fetcher runs. Mirrors
+/// [`gov_us_command_fetch_binding`].
+#[cfg(feature = "provider-cftc")]
+fn cftc_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_cftc::CftcCotQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the CFTC catalog fetch bindings into `table`, keyed by the
+/// route-derived endpoint key (`<route with '/'→'_'>`), matching the catalog
+/// candidates. Each binding injects its route's `command`.
+#[cfg(feature = "provider-cftc")]
+fn insert_cftc_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("cftc", "regulators_cftc_cot"),
+        cftc_command_fetch_binding::<crate::CftcHttpCotFetcher, tdw_domain::CommitmentOfTraders>(
+            "regulators/cftc/cot",
+        ),
+    );
+    table.insert(
+        ("cftc", "regulators_cftc_cot_search"),
+        cftc_command_fetch_binding::<
+            crate::CftcHttpCotSearchFetcher,
+            tdw_domain::SeriesSearchResult,
+        >("regulators/cftc/cot_search"),
     );
 }
 
@@ -2573,6 +2625,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_sec_government_ingest_bindings(&mut table);
     #[cfg(feature = "provider-government-us")]
     insert_government_us_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cftc")]
+    insert_cftc_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_ingest_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -2832,6 +2886,54 @@ fn insert_government_us_ingest_bindings(
             "fixedincome/government/treasury_prices",
             "raw.treasury_price",
         ),
+    );
+}
+
+/// Build an [`IngestBinding`] for a CFTC catalog-backed fetcher that injects a
+/// fixed `command` before fetching one batch and persisting it. Mirrors
+/// [`gov_us_command_ingest_binding`].
+#[cfg(feature = "provider-cftc")]
+fn cftc_command_ingest_binding<F, D>(command: &'static str, table: &'static str) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_cftc::CftcCotQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the CFTC ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-cftc")]
+fn insert_cftc_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    table.insert(
+        ("cftc", "regulators_cftc_cot"),
+        cftc_command_ingest_binding::<crate::CftcHttpCotFetcher, tdw_domain::CommitmentOfTraders>(
+            "regulators/cftc/cot",
+            "raw.commitment_of_traders",
+        ),
+    );
+    table.insert(
+        ("cftc", "regulators_cftc_cot_search"),
+        cftc_command_ingest_binding::<
+            crate::CftcHttpCotSearchFetcher,
+            tdw_domain::SeriesSearchResult,
+        >("regulators/cftc/cot_search", "raw.series_search_result"),
     );
 }
 
@@ -4208,6 +4310,42 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "government_us candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ CFTC `ENDPOINTS` sync (OpenBB-parity **P2W5**): every
+    /// standardized CFTC command has a catalog route whose `cftc` candidate
+    /// endpoint is dispatchable in both tables under `provider-cftc`.
+    #[cfg(feature = "provider-cftc")]
+    #[test]
+    fn cftc_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_cftc::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("cftc command {} has no catalog route", endpoint.command)
+            });
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "cftc")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no cftc candidate", endpoint.command)
+                });
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "cftc candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "cftc candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command
