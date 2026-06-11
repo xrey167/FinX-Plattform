@@ -21,6 +21,10 @@ default = []
 live = ["tdw-service-api/all-http-providers"]
 
 [dependencies]
+# The knowledge write tools (B9) stamp proposals with today's UTC date
+# (`%Y-%m-%d`), mirroring `tdw-backend`'s knowledge_index convention — tool args
+# are attacker-controlled, so the date is taken from the clock, never an arg.
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }

@@ -81,20 +81,9 @@ pub enum ToolEffect {
     Destructive,
 }
 
-/// Ordinal degree to which an entity changes itself over time.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-pub enum Adaptivity {
-    /// Static.
-    None,
-    /// Parameterized but not self-changing.
-    Configured,
-    /// Learns/updates from feedback or data.
-    Learning,
-    /// Rewrites its own structure (e.g. memory consolidation).
-    SelfModifying,
-}
+/// Re-export: [`Adaptivity`] moved to `tdw-taxonomy` (B9) so the writeback
+/// gate can consume it without the agent crate's dependency weight.
+pub use tdw_taxonomy::Adaptivity;
 
 /// The feedback gate's minimum adaptivity for eval-driven mutations.
 ///

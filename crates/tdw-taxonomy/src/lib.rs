@@ -18,7 +18,8 @@ pub mod kind;
 pub mod origin;
 
 pub use facets::{
-    DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState, ValidationStatus,
+    Adaptivity, DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState,
+    ValidationStatus,
 };
 pub use kind::{EntityKind, Group};
 pub use origin::{Origin, Source, Tier};

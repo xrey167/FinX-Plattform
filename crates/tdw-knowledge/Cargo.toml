@@ -24,9 +24,15 @@ tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 tdw-tag-rules = { path = "../tdw-tag-rules" }
 tdw-tags = { path = "../tdw-tags" }
+tdw-taxonomy = { workspace = true }
 thiserror = { workspace = true }
+# B9 writeback gate: the runtime holds the proposal queue behind a
+# `tokio::sync::Mutex` so the async MCP write tools (submit/materialize) can lock
+# it across awaits; only the `sync` feature is needed (no runtime here).
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
 tokio = { workspace = true }
