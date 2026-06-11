@@ -77,11 +77,8 @@ impl ProviderSpec for CoinGeckoOhlcSpec {
 
         let mut request_builder = client.get(&endpoint);
 
-        if let Ok(api_key) = std::env::var(API_KEY_ENV) {
-            let api_key = api_key.trim().to_string();
-            if !api_key.is_empty() {
-                request_builder = request_builder.header(API_KEY_HEADER, api_key);
-            }
+        if let Some(api_key) = tdw_core::http_support::read_optional_key(API_KEY_ENV) {
+            request_builder = request_builder.header(API_KEY_HEADER, api_key);
         }
 
         Ok(request_builder)

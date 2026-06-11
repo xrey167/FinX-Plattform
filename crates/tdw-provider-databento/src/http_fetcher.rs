@@ -82,12 +82,7 @@ impl Fetcher<DatabentoTimeseriesQuery, MarketDataBar> for DatabentoHttpTimeserie
         query: &DatabentoTimeseriesQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = std::env::var(API_KEY_ENV)
-            .map_err(|_| Error::Provider(format!("{API_KEY_ENV} not set")))?;
-        let api_key = api_key.trim().to_string();
-        if api_key.is_empty() {
-            return Err(Error::Provider(format!("{API_KEY_ENV} must not be empty")));
-        }
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "databento")?;
 
         let url = format!(
             "{}/timeseries.get_range",
@@ -212,12 +207,7 @@ impl Fetcher<DatabentoMetadataQuery, DatabentoDataset> for DatabentoMetadataFetc
         _query: &DatabentoMetadataQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = std::env::var(API_KEY_ENV)
-            .map_err(|_| Error::Provider(format!("{API_KEY_ENV} not set")))?;
-        let api_key = api_key.trim().to_string();
-        if api_key.is_empty() {
-            return Err(Error::Provider(format!("{API_KEY_ENV} must not be empty")));
-        }
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "databento")?;
 
         let url = format!(
             "{}/metadata.list_datasets",

@@ -109,14 +109,8 @@ impl ProviderSpec for AlpacaStockBarsSpec {
     ) -> Result<reqwest::RequestBuilder> {
         stock_bars_request(&query.symbol, true)
             .map_err(|error| Error::Provider(error.to_string()))?;
-        let api_key = env_secret(API_KEY_ENV).ok_or_else(|| {
-            Error::Provider(format!("alpaca api key env {API_KEY_ENV} must be set"))
-        })?;
-        let api_secret = env_secret(API_SECRET_ENV).ok_or_else(|| {
-            Error::Provider(format!(
-                "alpaca api secret env {API_SECRET_ENV} must be set"
-            ))
-        })?;
+        let api_key = tdw_core::http_support::read_required_key(API_KEY_ENV, "alpaca")?;
+        let api_secret = tdw_core::http_support::read_required_key(API_SECRET_ENV, "alpaca-secret")?;
         let endpoint = format!("{}/v2/stocks/bars", base_url.trim_end_matches('/'));
         let mut query_params = vec![
             ("symbols", query.symbol.clone()),
@@ -172,9 +166,3 @@ impl ProviderSpec for AlpacaStockBarsSpec {
 /// Production Alpaca stock-bars fetcher.
 pub type AlpacaHttpStockBarsFetcher = HttpFetcher<AlpacaStockBarsSpec>;
 
-fn env_secret(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}

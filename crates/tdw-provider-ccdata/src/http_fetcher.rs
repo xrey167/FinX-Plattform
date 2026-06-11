@@ -9,7 +9,7 @@ use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
-use crate::{API_KEY_ENV, BASE_URL, CCDataAssetQuery, CCDataError, CCDataOhlcvQuery};
+use crate::{API_KEY_ENV, BASE_URL, CCDataAssetQuery, CCDataOhlcvQuery};
 
 const USER_AGENT: &str = "tdw-provider-ccdata/0.1";
 
@@ -45,11 +45,7 @@ impl CCDataHttpFetcher {
     }
 
     fn read_api_key() -> Result<String> {
-        std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| Error::Provider(CCDataError::MissingApiKey.to_string()))
+        tdw_core::http_support::read_required_key(API_KEY_ENV, "ccdata")
     }
 }
 
@@ -237,11 +233,7 @@ impl CCDataAssetHttpFetcher {
     }
 
     fn read_api_key() -> Result<String> {
-        std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| Error::Provider(CCDataError::MissingApiKey.to_string()))
+        tdw_core::http_support::read_required_key(API_KEY_ENV, "ccdata")
     }
 }
 
