@@ -13,10 +13,11 @@ use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
 use tdw_domain::StatementKind;
 use tdw_provider_fmp::{
-    FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpSplitsFetcher,
-    FmpHttpStatementFetcher, FmpStatement,
+    FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
+    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
+    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpProfileFetcher,
+    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpStatement,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -537,6 +538,108 @@ fn cassette_earnings_normalises_to_estimates() {
     assert_eq!(rows[0].date.as_deref(), Some("2024-08-01"));
     assert_eq!(rows[0].value, Some(1.40));
     assert_eq!(rows[0].mean, Some(1.35));
+}
+
+#[test]
+fn cassette_discovery_normalises_to_quote_snapshots() {
+    let fetcher = FmpHttpDiscoveryFetcher::default();
+    let query = FmpHttpDiscoveryFetcher::transform_query(json!({"direction": "gainers"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+
+    let raw = cassette_bytes!([
+        {"symbol": "AAPL", "name": "Apple Inc.", "change": 5.10, "price": 202.0, "changesPercentage": 2.59},
+        {"symbol": "MSFT", "name": "Microsoft", "change": 3.20, "price": 415.0, "changesPercentage": 0.78}
+    ]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].current_price, 202.0);
+    assert_eq!(rows[0].change, 5.10);
+    assert_eq!(rows[0].change_percent, 2.59);
+    // The movers feed carries no previous close or timestamp.
+    assert_eq!(rows[0].prev_close, 0.0);
+    assert_eq!(rows[0].ts_ms, 0);
+    assert_eq!(rows[1].symbol, "MSFT");
+}
+
+#[test]
+fn discovery_transform_query_maps_direction_param() {
+    use tdw_provider_fmp::FmpDiscoveryDirection;
+    let gainers = FmpHttpDiscoveryFetcher::transform_query(json!({"direction": "gainers"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    assert_eq!(gainers.direction, FmpDiscoveryDirection::Gainers);
+    let losers = FmpHttpDiscoveryFetcher::transform_query(json!({"direction": "losers"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    assert_eq!(losers.direction, FmpDiscoveryDirection::Losers);
+    let actives = FmpHttpDiscoveryFetcher::transform_query(json!({"direction": "actives"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    assert_eq!(actives.direction, FmpDiscoveryDirection::Actives);
+    // Missing/unknown direction defaults to gainers.
+    let default = FmpHttpDiscoveryFetcher::transform_query(json!({}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    assert_eq!(default.direction, FmpDiscoveryDirection::Gainers);
+}
+
+#[test]
+fn cassette_screener_normalises_to_screener_rows() {
+    let fetcher = FmpHttpScreenerFetcher::default();
+    let query = FmpHttpScreenerFetcher::transform_query(json!({
+        "sector": "Technology", "market_cap_more_than": 1000000000.0, "limit": 10
+    }))
+    .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    assert_eq!(query.sector.as_deref(), Some("Technology"));
+    assert_eq!(query.market_cap_more_than, Some(1_000_000_000.0));
+    assert_eq!(query.limit, Some(10));
+
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "companyName": "Apple Inc.",
+            "marketCap": 3450000000000_i64,
+            "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "beta": 1.24,
+            "price": 202.0,
+            "lastAnnualDividend": 0.99,
+            "volume": 55000000_i64,
+            "exchange": "NASDAQ Global Select",
+            "exchangeShortName": "NASDAQ",
+            "country": "US",
+            "isEtf": false,
+            "isActivelyTrading": true
+        }
+    ]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+
+    assert_eq!(rows.len(), 1);
+    let r = &rows[0];
+    assert_eq!(r.symbol, "AAPL");
+    assert_eq!(r.company_name.as_deref(), Some("Apple Inc."));
+    assert_eq!(r.market_cap, Some(3_450_000_000_000.0));
+    assert_eq!(r.sector.as_deref(), Some("Technology"));
+    assert_eq!(r.beta, Some(1.24));
+    assert_eq!(r.last_annual_dividend, Some(0.99));
+    assert_eq!(r.exchange_short_name.as_deref(), Some("NASDAQ"));
+    assert_eq!(r.is_etf, Some(false));
+    assert_eq!(r.is_actively_trading, Some(true));
+}
+
+#[test]
+fn screener_malformed_json_produces_provider_error() {
+    let fetcher = FmpHttpScreenerFetcher::default();
+    let query =
+        FmpHttpScreenerFetcher::transform_query(json!({})).unwrap_or_else(|e| panic!("query: {e}"));
+    let err = fetcher
+        .transform_data(&query, Bytes::from(b"not json".to_vec()))
+        .expect_err("malformed JSON must error");
+    assert!(err.to_string().contains("fmp screener parse_json"));
 }
 
 #[test]

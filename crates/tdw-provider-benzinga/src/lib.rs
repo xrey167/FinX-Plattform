@@ -10,7 +10,10 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher};
+pub use http_fetcher::{
+    BenzingaCompanyNewsHttpFetcher, BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher,
+    BenzingaWorldNewsHttpFetcher,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -63,6 +66,30 @@ impl BenzingaNewsQuery {
     pub fn new(symbol: &str, page_size: u32) -> Result<Self> {
         Ok(Self {
             symbol: normalize_symbol(symbol)?,
+            page_size: validate_page_size(page_size)?,
+        })
+    }
+}
+
+/// Query parameters for the Benzinga `/news` endpoint with no symbol filter
+/// (general market / "world" news).
+///
+/// Benzinga's `/news` endpoint returns the latest general-market stream when the
+/// `tickers` parameter is omitted, so world news reuses the same HTTP path as
+/// company news minus the ticker filter.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BenzingaWorldNewsQuery {
+    pub page_size: u32,
+}
+
+impl BenzingaWorldNewsQuery {
+    /// Construct and validate a world-news query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BenzingaProviderError`] when `page_size` is outside `1..=100`.
+    pub fn new(page_size: u32) -> Result<Self> {
+        Ok(Self {
             page_size: validate_page_size(page_size)?,
         })
     }

@@ -50,7 +50,7 @@ pub struct WasmUdfModule {
 }
 
 /// Errors that can arise during module validation or execution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WasmUdfError {
     EmptyModuleName,
     InvalidExportedFunction,
@@ -58,6 +58,28 @@ pub enum WasmUdfError {
     ModuleTooLarge,
     InvalidMagic,
     UnknownExport,
+    /// The hardened `wasmi` runtime is not compiled (the `wasmi` cargo feature is
+    /// off) and fixture execution has not been explicitly opted into.
+    ///
+    /// # G008 theme 10 — UW2: fixture-execution gate
+    ///
+    /// Without `wasmi`, `execute` previously silently dispatched to a name-keyed
+    /// Rust fixture that **ignores the supplied module bytes entirely**.  A
+    /// misconfigured production build would then accept any WASM module, discard
+    /// its code, and return a canned result — presenting a fixture as a real
+    /// execution.
+    ///
+    /// `execute` now returns this error by default when the `wasmi` feature is
+    /// absent.  To restore the fixture path for offline tests set
+    /// `TDW_ALLOW_FIXTURE_EXECUTION=1` in the environment.  A warning is printed
+    /// to stderr so the bypass is never invisible in logs.
+    HardenedRuntimeNotCompiled,
+    /// The hardened `wasmi` backend rejected or failed to execute the module.
+    /// Carries the backend error message for diagnostics.
+    ///
+    /// Only reachable when `wasmi` is compiled in and `execute` routes to the
+    /// real backend.
+    ExecutionFailed(String),
 }
 
 impl std::fmt::Display for WasmUdfError {
@@ -69,6 +91,13 @@ impl std::fmt::Display for WasmUdfError {
             Self::ModuleTooLarge => f.write_str("module too large"),
             Self::InvalidMagic => f.write_str("invalid WASM magic bytes"),
             Self::UnknownExport => f.write_str("unknown exported function"),
+            Self::HardenedRuntimeNotCompiled => f.write_str(
+                "hardened WASM runtime not compiled (wasmi feature is off); \
+                 real module bytes cannot be executed — enable the `wasmi` \
+                 cargo feature for production, or set \
+                 TDW_ALLOW_FIXTURE_EXECUTION=1 for offline testing only",
+            ),
+            Self::ExecutionFailed(msg) => write!(f, "wasm execution failed: {msg}"),
         }
     }
 }
@@ -106,9 +135,15 @@ fn is_export_name(value: &str) -> bool {
 
 /// The WASM UDF runtime.
 ///
-/// `execute` validates the module bytes (magic check + size guard), then
-/// dispatches to the fixture interpreter. The fixture interpreter is
-/// byte-deterministic: identical inputs always produce identical outputs.
+/// `execute` validates the module bytes (magic check + size guard).  When the
+/// `wasmi` feature is compiled in, the module is executed by the hardened
+/// backend.  When `wasmi` is absent, `execute` returns
+/// [`WasmUdfError::HardenedRuntimeNotCompiled`] unless
+/// `TDW_ALLOW_FIXTURE_EXECUTION=1` is set, in which case the deterministic
+/// fixture interpreter is used (see module doc).
+///
+/// The `execute_wasm_i64` / `execute_wasm_string` methods are only available
+/// with the `wasmi` feature and always use the hardened backend.
 #[derive(Clone, Debug, Default)]
 pub struct WasmUdfRuntime;
 
@@ -120,13 +155,28 @@ impl WasmUdfRuntime {
 
     /// Execute a named export from a WASM module with the given string argument.
     ///
-    /// Currently implemented as a deterministic fixture interpreter (see module
-    /// doc). The public signature is stable — a real wasmi backend replaces the
-    /// body of `fixture_dispatch` without changing callers.
+    /// # G008 theme 10 — UW2: fixture-execution gate (cfg-independent)
+    ///
+    /// The fixture path (name-keyed dispatch that ignores actual module bytes)
+    /// always requires an explicit opt-in, regardless of whether the `wasmi`
+    /// cargo feature is compiled in.  This ensures a production build that
+    /// enables `wasmi` cannot silently fixture-dispatch due to a path that was
+    /// only guarded by `#[cfg(not(feature = "wasmi"))]`.
+    ///
+    /// The gate fires whenever `execute` would fall through to `fixture_dispatch`
+    /// — i.e. when `wasmi` is absent (every build) or when `wasmi` is present
+    /// but the module cannot be executed by the real backend (future).  In all
+    /// cases the caller must set `TDW_ALLOW_FIXTURE_EXECUTION=1` (or the
+    /// test-only thread-local) to reach the fixture path.
+    ///
+    /// When `wasmi` **is** compiled in, `execute` delegates to the hardened
+    /// backend and never reaches `fixture_dispatch` at all.
     ///
     /// # Errors
     ///
-    /// Returns an error variant if the underlying operation fails.
+    /// Returns [`WasmUdfError::HardenedRuntimeNotCompiled`] when `wasmi` is
+    /// absent and `TDW_ALLOW_FIXTURE_EXECUTION` is not `"1"`.
+    /// Returns other [`WasmUdfError`] variants for malformed input.
     pub fn execute(
         &self,
         wasm_bytes: &[u8],
@@ -147,7 +197,59 @@ impl WasmUdfRuntime {
             return Err(WasmUdfError::InvalidExportedFunction);
         }
 
-        fixture_dispatch(func, arg)
+        // G008/UW2 (cfg-independent gate): the fixture path always requires
+        // explicit opt-in. When `wasmi` is compiled in we never reach this
+        // path (the real backend is called below), but the gate lives here
+        // unconditionally so a future code path change cannot silently bypass it.
+        let env_allow = std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1");
+        #[cfg(test)]
+        #[allow(clippy::redundant_closure_for_method_calls)]
+        let test_allow = ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.get());
+        #[cfg(not(test))]
+        let test_allow = false;
+        let fixture_allowed = env_allow || test_allow;
+
+        // When the hardened wasmi backend is available, use it — the fixture
+        // gate above is not needed for this path, but having it unconditional
+        // means a renamed/refactored entry point will also be protected.
+        #[cfg(feature = "wasmi")]
+        #[allow(clippy::needless_return)]
+        {
+            // The real wasmi execute path. fixture_dispatch is never reached
+            // from this branch.
+            let _ = fixture_allowed; // acknowledged: wasmi path does not need the flag
+            return self
+                .execute_wasm_string(wasm_bytes, func, arg, WasmLimits::default())
+                .map_err(|e| {
+                    // Map wasmi runtime errors to the public WasmUdfError surface.
+                    // UnknownExport is the closest analog for MissingExport.
+                    use wasm_backend::WasmRuntimeError;
+                    match e {
+                        WasmRuntimeError::InvalidExportedFunction => {
+                            WasmUdfError::InvalidExportedFunction
+                        }
+                        WasmRuntimeError::EmptyModuleBytes => WasmUdfError::EmptyModuleBytes,
+                        WasmRuntimeError::ModuleTooLarge => WasmUdfError::ModuleTooLarge,
+                        WasmRuntimeError::InvalidMagic => WasmUdfError::InvalidMagic,
+                        WasmRuntimeError::MissingExport(_) => WasmUdfError::UnknownExport,
+                        other => WasmUdfError::ExecutionFailed(other.to_string()),
+                    }
+                });
+        }
+
+        // No wasmi feature: enforce the gate then fall through to fixture_dispatch.
+        #[cfg(not(feature = "wasmi"))]
+        {
+            if !fixture_allowed {
+                return Err(WasmUdfError::HardenedRuntimeNotCompiled);
+            }
+            eprintln!(
+                "tdw-udf-wasm: TDW_ALLOW_FIXTURE_EXECUTION=1 — executing {func:?} via \
+                 name-keyed fixture (module bytes ignored). Enable the `wasmi` \
+                 cargo feature for real execution."
+            );
+            fixture_dispatch(func, arg)
+        }
     }
 }
 
@@ -155,8 +257,16 @@ impl WasmUdfRuntime {
 ///
 /// Maps export names to pure-Rust transforms. This proves the runtime is
 /// callable and produces reproducible output — the requirement for Fact 21.
-/// Replace with real wasmi instantiation in the follow-up PR.
-fn fixture_dispatch(func: &str, arg: &str) -> Result<String, WasmUdfError> {
+///
+/// Public so callers that explicitly want fixture dispatch (e.g. `tdw-sandbox`
+/// when the source is not a real wasm module) can call it directly, bypassing
+/// the `execute` gate that guards the fixture path from implicit use.
+///
+/// # Errors
+///
+/// Returns [`WasmUdfError::UnknownExport`] if `func` does not match any
+/// registered fixture name.
+pub fn fixture_dispatch(func: &str, arg: &str) -> Result<String, WasmUdfError> {
     match func {
         "upper" => Ok(arg.to_ascii_uppercase()),
         "lower" => Ok(arg.to_ascii_lowercase()),
@@ -465,6 +575,21 @@ mod wasm_backend {
     }
 }
 
+// Thread-local flag used only in unit tests (G008/UW2) to enable fixture
+// execution without `unsafe` env-var manipulation.  The flag is checked by
+// `execute` alongside `TDW_ALLOW_FIXTURE_EXECUTION` only when `cfg(test)` is
+// active, so it has zero runtime cost in production builds.
+#[cfg(test)]
+thread_local! {
+    static ALLOW_FIXTURE_EXECUTION_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(all(test, not(feature = "wasmi")))]
+fn set_allow_fixture_execution_for_test(allow: bool) {
+    ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.set(allow));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,22 +625,23 @@ mod tests {
         );
     }
 
+    // G008/UW2: without opt-in, execute must refuse with HardenedRuntimeNotCompiled.
+    // This test only asserts the gate fires when the env var is absent.
+    // The opt-in path and deterministic execution tests live in tests/uw2_gate.rs
+    // (integration tests, not subject to #![forbid(unsafe_code)]).
     #[test]
-    fn runtime_executes_upper_deterministically() {
+    #[cfg(not(feature = "wasmi"))]
+    fn execute_refuses_when_env_var_absent() {
+        // Only runs when TDW_ALLOW_FIXTURE_EXECUTION is not set.
+        if std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1") {
+            return;
+        }
         let rt = WasmUdfRuntime::new();
-        // Minimal valid WASM header (version field + magic).
         let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-
-        let result = rt
-            .execute(&wasm, "upper", "aapl")
-            .unwrap_or_else(|e| panic!("runtime should execute: {e}"));
-        assert_eq!(result, "AAPL");
-
-        // Idempotent — same input always gives same output.
-        let result2 = rt
-            .execute(&wasm, "upper", "aapl")
-            .unwrap_or_else(|e| panic!("runtime should execute again: {e}"));
-        assert_eq!(result, result2);
+        assert_eq!(
+            rt.execute(&wasm, "upper", "aapl"),
+            Err(WasmUdfError::HardenedRuntimeNotCompiled),
+        );
     }
 
     #[test]
@@ -541,17 +667,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_rejects_unknown_export() {
-        let rt = WasmUdfRuntime::new();
-        let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-        assert_eq!(
-            rt.execute(&wasm, "nonexistent", "x"),
-            Err(WasmUdfError::UnknownExport)
-        );
-    }
-
-    #[test]
+    #[cfg(not(feature = "wasmi"))]
     fn fixture_dispatch_covers_lower_identity_and_len() {
+        // G008/UW2: opt in via thread-local (no unsafe env ops needed).
+        set_allow_fixture_execution_for_test(true);
         let rt = WasmUdfRuntime::new();
         let wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
         assert_eq!(
@@ -569,6 +688,7 @@ mod tests {
                 .unwrap_or_else(|e| panic!("len: {e}")),
             "4"
         );
+        set_allow_fixture_execution_for_test(false);
     }
 
     #[test]

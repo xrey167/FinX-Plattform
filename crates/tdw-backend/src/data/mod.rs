@@ -170,7 +170,10 @@ impl Backend {
     /// Build a backend backed by deterministic in-memory engines, for tests.
     pub async fn in_memory_for_tests() -> Self {
         let state = AppState::in_memory_for_tests().await;
-        let runner = CommandRunner::default();
+        // G008/RT1b: opt in to the fake-streaming path for tests — the test
+        // constructor is the correct place to acknowledge that `run_streaming`
+        // materialises the full result before emitting synthetic progress events.
+        let runner = CommandRunner::default().allow_fake_streaming();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
         let index = Arc::new(Mutex::new(KnowledgeIndex::new(
             Arc::clone(&embedder),

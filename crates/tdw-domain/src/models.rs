@@ -570,6 +570,45 @@ pub struct PricePerformance {
     pub one_year: Option<f64>,
 }
 
+/// A single equity-screener result row.
+///
+/// Standardizes `equity/screener` (FMP `stock-screener`): one row = one company
+/// matched by the screener's filters. `symbol` is the identity anchor; the
+/// descriptive and numeric attributes are [`Option`] because the screener
+/// reports a different subset per company (e.g. ETFs omit fundamentals).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ScreenerRow {
+    /// Ticker symbol (upper-cased by the provider fetcher).
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Company name as reported by the screener.
+    pub company_name: Option<String>,
+    /// Market capitalisation in the listing currency.
+    pub market_cap: Option<f64>,
+    /// Sector classification, e.g. `"Technology"`.
+    pub sector: Option<String>,
+    /// Industry classification, e.g. `"Consumer Electronics"`.
+    pub industry: Option<String>,
+    /// Beta versus the market.
+    pub beta: Option<f64>,
+    /// Most-recent share price.
+    pub price: Option<f64>,
+    /// Last annual dividend per share.
+    pub last_annual_dividend: Option<f64>,
+    /// Most-recent trading volume.
+    pub volume: Option<f64>,
+    /// Full exchange name, e.g. `"NASDAQ Global Select"`.
+    pub exchange: Option<String>,
+    /// Short exchange code, e.g. `"NASDAQ"`.
+    pub exchange_short_name: Option<String>,
+    /// ISO 3166-1 alpha-2 country code where the issuer is domiciled.
+    pub country: Option<String>,
+    /// Whether the security is an ETF.
+    pub is_etf: Option<bool>,
+    /// Whether the security is actively trading.
+    pub is_actively_trading: Option<bool>,
+}
+
 /// One point on a futures forward curve: a contract and its last price.
 ///
 /// Standardizes `derivatives/futures/curve`: one row per expiry along a root's
@@ -717,6 +756,34 @@ mod tests {
         let bad = PricePerformance {
             symbol: String::new(),
             ..perf
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn screener_row_round_trips_and_validates() {
+        let row = ScreenerRow {
+            symbol: "AAPL".to_string(),
+            company_name: Some("Apple Inc.".to_string()),
+            market_cap: Some(3.45e12),
+            sector: Some("Technology".to_string()),
+            industry: Some("Consumer Electronics".to_string()),
+            beta: Some(1.24),
+            price: Some(202.0),
+            last_annual_dividend: Some(0.99),
+            volume: Some(55_000_000.0),
+            exchange: Some("NASDAQ Global Select".to_string()),
+            exchange_short_name: Some("NASDAQ".to_string()),
+            country: Some("US".to_string()),
+            is_etf: Some(false),
+            is_actively_trading: Some(true),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = ScreenerRow {
+            symbol: String::new(),
+            ..row
         };
         assert!(bad.validate().is_err());
     }

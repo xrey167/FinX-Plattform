@@ -2263,6 +2263,7 @@ fn tool_descriptors() -> Vec<ToolDescriptor> {
     let mut descriptors = tool_descriptors_evidence();
     descriptors.extend(tool_descriptors_client_and_daemon());
     descriptors.extend(tool_descriptors_widgets());
+    descriptors.extend(tool_descriptors_routes());
     descriptors
 }
 
@@ -2298,6 +2299,144 @@ fn tool_descriptors_widgets() -> Vec<ToolDescriptor> {
             json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         ),
     ]
+}
+
+/// Dotted-namespace prefix for the dynamically-generated per-route Fetch tools.
+///
+/// Every `tdw-endpoint-catalog` `Fetch` route is exposed as one MCP tool whose
+/// id is `tdw.route.` followed by the slash-route with each `'/'` rewritten to
+/// `'.'` — e.g. route `equity/fundamental/income` →
+/// `tdw.route.equity.fundamental.income`. The prefix is distinct from every
+/// hand-wired static tool (which live under `tdw.<area>.<noun>` and never under
+/// `tdw.route.`), so the families cannot collide.
+const ROUTE_TOOL_PREFIX: &str = "tdw.route.";
+
+/// Environment variable that disables the dynamic per-route tool family.
+///
+/// Set `TDW_MCP_ROUTE_TOOLS=off` (case-insensitive) to drop every `tdw.route.*`
+/// tool from `tools/list` and reject their dispatch as unknown, so operators can
+/// fall back to the fixed hand-wired surface. Any other value (or unset) keeps
+/// the family enabled.
+const ROUTE_TOOLS_ENV: &str = "TDW_MCP_ROUTE_TOOLS";
+
+/// Whether the dynamic per-route tool family is enabled (default on).
+///
+/// Disabled only when [`ROUTE_TOOLS_ENV`] is set to `off` (case-insensitive,
+/// trimmed); every other value keeps it on so the default surface advertises
+/// every Fetch route.
+fn route_tools_enabled() -> bool {
+    route_tools_enabled_from(non_empty_env(ROUTE_TOOLS_ENV).as_deref())
+}
+
+/// Pure gate decision over the raw [`ROUTE_TOOLS_ENV`] value, split out so it is
+/// testable without mutating process-global environment. `None` (unset/empty) is
+/// enabled; `Some("off")` (case-insensitive) is the only disable.
+fn route_tools_enabled_from(value: Option<&str>) -> bool {
+    value.is_none_or(|value| !value.eq_ignore_ascii_case("off"))
+}
+
+/// Derive the MCP tool id for a catalog `route` by prefixing [`ROUTE_TOOL_PREFIX`]
+/// and rewriting each route separator (`'/'`) to a dot.
+fn route_tool_name(route: &str) -> String {
+    format!(
+        "{ROUTE_TOOL_PREFIX}{}",
+        route.replace(tdw_endpoint_catalog::ROUTE_SEP, ".")
+    )
+}
+
+/// Recover the slash-namespaced catalog route from a `tdw.route.*` tool id.
+///
+/// Returns `None` when `name` does not carry the [`ROUTE_TOOL_PREFIX`]. The
+/// inverse of [`route_tool_name`]: strips the prefix and rewrites each `'.'`
+/// back to a route separator. Catalog segments are `[a-z0-9_]` only, so no
+/// segment contains a literal `'.'` and the round-trip is unambiguous.
+fn route_from_tool_name(name: &str) -> Option<String> {
+    name.strip_prefix(ROUTE_TOOL_PREFIX)
+        .map(|tail| tail.replace('.', &tdw_endpoint_catalog::ROUTE_SEP.to_string()))
+}
+
+/// One dynamically-generated read-only Fetch tool per catalog `Fetch` route.
+///
+/// Reads [`tdw_endpoint_catalog::catalog`] at call time (never a hardcoded list)
+/// and emits exactly one [`ToolDescriptor`] per `EndpointKind::Fetch` route, in
+/// catalog order. `Compute` routes are intentionally skipped: they derive their
+/// result from caller-supplied series data rather than a provider fetch, so they
+/// need a different argument contract and are deferred to a later story. Returns
+/// an empty vector when the family is disabled via [`ROUTE_TOOLS_ENV`].
+fn tool_descriptors_routes() -> Vec<ToolDescriptor> {
+    if !route_tools_enabled() {
+        return Vec::new();
+    }
+    tdw_endpoint_catalog::catalog()
+        .into_iter()
+        // Compute routes need caller-supplied input data, not a provider fetch;
+        // out of scope for the v1 per-route Fetch family (deferred).
+        .filter(|entry| entry.kind == tdw_endpoint_catalog::EndpointKind::Fetch)
+        .map(|entry| {
+            tool(
+                &route_tool_name(entry.route),
+                &route_tool_title(entry.route),
+                &format!(
+                    "Fetch the `{}` catalog route through the TDW daemon and return its records. \
+                     {DATA_MODE_DISCLOSURE} {}",
+                    entry.route, entry.doc
+                ),
+                route_tool_input_schema(&entry),
+            )
+        })
+        .collect()
+}
+
+/// A short human title for a route tool, e.g. `equity/fundamental/income` →
+/// `Fetch equity/fundamental/income`.
+fn route_tool_title(route: &str) -> String {
+    format!("Fetch {route}")
+}
+
+/// Build a route tool's `inputSchema` from the route's `params_schema`, adding an
+/// optional `provider` enum (the route's candidate providers) for pinning a
+/// candidate.
+///
+/// The catalog's `params_schema` is the route's standardized query params; its
+/// `properties` are carried through verbatim as the tool's own properties so the
+/// agent sees the same fields the daemon decodes. A `provider` property is added
+/// whose `enum` is the route's candidate provider ids (declaration order = the
+/// daemon's fallback preference, so the first entry is the default). The schema
+/// is left `additionalProperties: true` so any future standard param flows
+/// through to the daemon without a tdw-mcp change — this crate adds no routes and
+/// pins no param contract of its own.
+fn route_tool_input_schema(entry: &tdw_endpoint_catalog::CatalogEntry) -> Value {
+    let params_schema = serde_json::to_value((entry.params_schema)()).unwrap_or(Value::Null);
+    let mut properties = params_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let providers: Vec<Value> = entry
+        .candidates
+        .iter()
+        .map(|candidate| Value::String(candidate.provider.to_string()))
+        .collect();
+    let default_provider = entry.candidates.first().map(|candidate| candidate.provider);
+    let provider_description = default_provider.map_or_else(
+        || "Provider id to pin a candidate for this route.".to_string(),
+        |provider| format!("Provider id to pin a candidate; defaults to {provider}."),
+    );
+    properties.insert(
+        "provider".to_string(),
+        json!({
+            "type": "string",
+            "description": provider_description,
+            "enum": providers,
+        }),
+    );
+
+    json!({
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": true,
+    })
 }
 
 /// First group of built-in MCP tool descriptors (providers through KG/tag evidence).
@@ -2660,12 +2799,99 @@ fn execute_tool(
         "tdw.widgets.list" => Ok(structured(json!({ "widgets": widget_summaries() }))),
         "tdw.widgets.describe" => execute_widget_describe(arguments_object),
         "tdw.apps.list" => Ok(structured(json!({ "apps": app_summaries() }))),
-        _ => Err(ToolFailure::Protocol(JsonRpcProblem::new(
-            Value::Null,
-            -32602,
-            format!("unknown tool: {name}"),
-        ))),
+        _ => {
+            // Dynamic per-route Fetch tools share the `tdw.route.*` namespace and
+            // dispatch through the daemon; everything else is genuinely unknown.
+            if let Some(route) = route_from_tool_name(name).filter(|_| route_tools_enabled()) {
+                return execute_route_tool(daemon, &route, arguments_object);
+            }
+            Err(ToolFailure::Protocol(JsonRpcProblem::new(
+                Value::Null,
+                -32602,
+                format!("unknown tool: {name}"),
+            )))
+        }
     }
+}
+
+/// Dispatch a dynamic `tdw.route.*` tool: resolve the catalog `Fetch` route,
+/// build a no-cache [`Op::FetchData`] envelope (mirroring how the daemon tools
+/// build their `RunQuery` envelope), submit it through the configured daemon, and
+/// return the terminal event.
+///
+/// Resolution posture matches the existing daemon-backed tools: an unknown route,
+/// a `Compute` route (no provider fetch), or a `provider` that is not one of the
+/// route's catalog candidates is a **tool error** (`isError`), never a protocol
+/// error; a missing daemon surfaces as a tool error from [`DaemonToolRuntime::submit`].
+/// The route's other arguments are passed through verbatim into the `FetchData`
+/// `params` so the daemon decodes them exactly as a REST caller would.
+fn execute_route_tool(
+    daemon: &DaemonToolRuntime,
+    route: &str,
+    arguments: &Map<String, Value>,
+) -> Result<ToolExecution, ToolFailure> {
+    let Some(entry) = tdw_endpoint_catalog::lookup(route) else {
+        return Err(ToolFailure::Execution(format!(
+            "unknown catalog route: {route}"
+        )));
+    };
+    if entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
+        return Err(ToolFailure::Execution(format!(
+            "route {route} is not a Fetch route and is not dispatchable here"
+        )));
+    }
+    // A pinned provider must be one of the route's catalog candidates; an unknown
+    // pin is a tool error rather than a silent fallback to the default candidate.
+    if let Some(provider) = optional_argument(arguments, "provider")
+        && !entry
+            .candidates
+            .iter()
+            .any(|candidate| candidate.provider == provider)
+    {
+        return Err(ToolFailure::Execution(format!(
+            "provider {provider} is not a candidate for route {route}"
+        )));
+    }
+
+    let params = Value::Object(arguments.clone());
+    let envelope = route_fetch_data_envelope(route, params)?;
+    let submission = daemon.submit(&envelope).map_err(ToolFailure::Execution)?;
+    Ok(structured(daemon_submission_value(
+        &route_tool_name(route),
+        &submission,
+        &json!({ "route": route }),
+    )))
+}
+
+/// Session id stamped on every per-route Fetch op, mirroring the diagnostic
+/// daemon tools' `session-mcp-daemon` default. The per-route tools carry no
+/// caller-supplied session, so a fixed label keeps the daemon's event stream
+/// attributable to this entrypoint.
+const ROUTE_TOOL_SESSION_ID: &str = "session-mcp-route";
+
+/// Build the `Op::FetchData` envelope for a per-route tool dispatch.
+///
+/// Mirrors [`daemon_run_query_envelope`]'s actor/session shape so the per-route
+/// tools and the diagnostic daemon tools present an identical caller identity to
+/// the daemon. `params` is the tool's arguments object passed straight through —
+/// it carries the route's standard query params plus an optional `provider` the
+/// daemon's resolver reads to pin a candidate.
+fn route_fetch_data_envelope(route: &str, params: Value) -> Result<OpEnvelope, ToolFailure> {
+    let session_id = SessionId::new(ROUTE_TOOL_SESSION_ID)
+        .map_err(|error| protocol_argument_failure(error.to_string()))?;
+    Ok(OpEnvelope::new(
+        session_id,
+        1,
+        ActorRef {
+            actor_id: "mcp:tdw-mcp".to_string(),
+            kind: ActorKind::Service,
+            tenant_id: Some("default".to_string()),
+        },
+        Op::FetchData {
+            route: route.to_string(),
+            params,
+        },
+    ))
 }
 
 /// `[{ id, name, category, endpoint }]` for every derived widget, in catalog order.
@@ -4886,5 +5112,226 @@ mod tests {
             checked > 0,
             "at least one widget should carry an mcp_tool citation to exercise the contract"
         );
+    }
+
+    // ---- Dynamic per-route Fetch tools (L5.6) ----
+
+    /// The number of `Fetch` routes in the live catalog — the exact count of
+    /// `tdw.route.*` tools the family must generate.
+    fn catalog_fetch_route_count() -> usize {
+        tdw_endpoint_catalog::catalog()
+            .into_iter()
+            .filter(|entry| entry.kind == tdw_endpoint_catalog::EndpointKind::Fetch)
+            .count()
+    }
+
+    #[test]
+    fn route_tool_name_round_trips_through_the_route() {
+        let route = "equity/fundamental/income";
+        let name = route_tool_name(route);
+        assert_eq!(name, "tdw.route.equity.fundamental.income");
+        assert_eq!(route_from_tool_name(&name).as_deref(), Some(route));
+        // A non-route tool id yields None (the dispatch fall-through stays exact).
+        assert_eq!(route_from_tool_name("tdw.equity.historical"), None);
+    }
+
+    #[test]
+    fn every_fetch_route_produces_exactly_one_route_tool_descriptor() {
+        let descriptors = tool_descriptors_routes();
+        assert_eq!(
+            descriptors.len(),
+            catalog_fetch_route_count(),
+            "one route tool per Fetch route"
+        );
+        // Each Fetch route's derived tool id is present exactly once; Compute
+        // routes are absent (they are not provider fetches).
+        let names: std::collections::BTreeSet<&str> =
+            descriptors.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            descriptors.len(),
+            "no duplicate route tool ids"
+        );
+        for entry in tdw_endpoint_catalog::catalog() {
+            let expected = route_tool_name(entry.route);
+            match entry.kind {
+                tdw_endpoint_catalog::EndpointKind::Fetch => assert!(
+                    names.contains(expected.as_str()),
+                    "Fetch route {} is missing its tool",
+                    entry.route
+                ),
+                tdw_endpoint_catalog::EndpointKind::Compute => assert!(
+                    !names.contains(expected.as_str()),
+                    "Compute route {} must not produce a route tool",
+                    entry.route
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn route_tools_are_read_only_idempotent_and_carry_a_provider_enum() {
+        for descriptor in tool_descriptors_routes() {
+            assert_eq!(descriptor.annotations["readOnlyHint"], true);
+            assert_eq!(descriptor.annotations["idempotentHint"], true);
+            let route = route_from_tool_name(&descriptor.name)
+                .unwrap_or_else(|| panic!("route tool id: {}", descriptor.name));
+            let entry =
+                tdw_endpoint_catalog::lookup(&route).unwrap_or_else(|| panic!("route {route}"));
+            // The provider arg enumerates exactly the route's candidate providers.
+            let providers: Vec<&str> = descriptor.input_schema["properties"]["provider"]["enum"]
+                .as_array()
+                .unwrap_or_else(|| panic!("provider enum for {route}"))
+                .iter()
+                .map(|value| value.as_str().unwrap_or_default())
+                .collect();
+            let expected: Vec<&str> = entry.candidates.iter().map(|c| c.provider).collect();
+            assert_eq!(providers, expected, "provider enum for {route}");
+        }
+    }
+
+    #[test]
+    fn route_tools_do_not_collide_with_static_tool_names() {
+        let static_names: std::collections::BTreeSet<String> = tool_descriptors_evidence()
+            .into_iter()
+            .chain(tool_descriptors_client_and_daemon())
+            .chain(tool_descriptors_widgets())
+            .map(|tool| tool.name)
+            .collect();
+        for descriptor in tool_descriptors_routes() {
+            assert!(
+                !static_names.contains(&descriptor.name),
+                "route tool {} collides with a static tool",
+                descriptor.name
+            );
+        }
+    }
+
+    #[test]
+    fn route_tools_are_present_in_the_mcp_tool_catalog_and_keep_it_consistent() {
+        // mcp_tool_catalog() is derived from tool_descriptors(), so advertising
+        // and the catalog stay in lockstep — the same invariant the tools/list
+        // contract test asserts at the protocol boundary.
+        let catalog: std::collections::BTreeSet<String> = mcp_tool_catalog().into_iter().collect();
+        assert_eq!(
+            catalog.len(),
+            mcp_tool_catalog().len(),
+            "no duplicate tool ids across the full catalog"
+        );
+        for descriptor in tool_descriptors_routes() {
+            assert!(
+                catalog.contains(&descriptor.name),
+                "route tool {} absent from mcp_tool_catalog()",
+                descriptor.name
+            );
+        }
+        assert_eq!(
+            tool_descriptors().len(),
+            mcp_tool_catalog().len(),
+            "descriptor list and catalog name list must be the same length"
+        );
+    }
+
+    #[test]
+    fn route_tools_env_gate_defaults_on_and_disables_on_off() {
+        assert!(route_tools_enabled_from(None), "unset is enabled");
+        assert!(
+            route_tools_enabled_from(Some("on")),
+            "any value but off enabled"
+        );
+        assert!(!route_tools_enabled_from(Some("off")));
+        assert!(!route_tools_enabled_from(Some("OFF")), "case-insensitive");
+    }
+
+    #[test]
+    fn route_fetch_data_envelope_carries_route_and_passthrough_params() {
+        let route = "equity/price/historical";
+        let mut arguments = Map::new();
+        arguments.insert("symbol".to_string(), json!("AAPL"));
+        arguments.insert("provider".to_string(), json!("fileset"));
+        let envelope = route_fetch_data_envelope(route, Value::Object(arguments))
+            .unwrap_or_else(|_| panic!("envelope should build for {route}"));
+        match envelope.op {
+            Op::FetchData {
+                route: ref op_route,
+                ref params,
+            } => {
+                assert_eq!(op_route, route);
+                assert_eq!(params["symbol"], json!("AAPL"));
+                // The provider arg flows through so the daemon's resolver pins it.
+                assert_eq!(params["provider"], json!("fileset"));
+            }
+            ref other => panic!("expected FetchData op, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn route_tool_dispatch_unknown_provider_is_a_tool_error_not_protocol_error() {
+        let mut server = McpServer::new();
+        initialize(&mut server);
+        // A provider that is not a candidate for the route is rejected before any
+        // daemon submit, as a tool-level error (isError), never a protocol error.
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"tdw.route.equity.price.historical","arguments":{"symbol":"AAPL","provider":"not_a_candidate"}}}"#,
+            )[0],
+        );
+        assert!(
+            response["error"].is_null(),
+            "unknown provider must not be a protocol error: {response}"
+        );
+        assert_eq!(response["result"]["isError"], true);
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("not a candidate")),
+            "unexpected error text: {response}"
+        );
+    }
+
+    #[test]
+    fn route_tool_dispatch_fails_closed_when_daemon_unavailable() {
+        // Reserve then drop a port so the configured daemon endpoint refuses.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap_or_else(|error| panic!("reserve local port: {error}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("reserved listener address: {error}"));
+        drop(listener);
+
+        let mut server = McpServer::with_daemon_config(
+            DaemonClientConfig::tcp(addr.to_string()).with_timeout(Duration::from_millis(100)),
+        );
+        initialize(&mut server);
+
+        let response = decode(
+            &server.handle_json_rpc_line(
+                r#"{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"tdw.route.equity.price.historical","arguments":{"symbol":"AAPL"}}}"#,
+            )[0],
+        );
+        assert_eq!(response["id"], 22);
+        // A missing daemon is a tool error, matching the daemon-tool posture.
+        assert_eq!(response["result"]["isError"], true);
+        let error_text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("daemon error text");
+        assert!(error_text.contains(&format!("endpoint=tcp://{addr}")));
+    }
+
+    #[test]
+    fn route_tool_dispatch_unknown_route_is_a_tool_error() {
+        // A `tdw.route.*` id whose route is absent from the catalog is a tool
+        // error, not the generic -32602 unknown-tool protocol error.
+        let result = execute_route_tool(
+            &DaemonToolRuntime::from_env(),
+            "does/not/exist",
+            &Map::new(),
+        );
+        match result {
+            Err(ToolFailure::Execution(message)) => {
+                assert!(message.contains("unknown catalog route"), "{message}");
+            }
+            other => panic!("expected execution error, got {:?}", other.is_ok()),
+        }
     }
 }
