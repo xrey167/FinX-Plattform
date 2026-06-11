@@ -309,6 +309,7 @@ fn submit_annotate(
     )
 }
 
+#[allow(clippy::significant_drop_tightening)] // ProposalPage<'a> borrows from the guard; guard must outlive the page borrow
 fn proposals(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
@@ -322,15 +323,20 @@ fn proposals(
             let limit = arguments
                 .get("limit")
                 .and_then(serde_json::Value::as_u64)
-                .map(|n| n as usize);
+                .map(|n| usize::try_from(n).unwrap_or(usize::MAX));
             let (proposals_val, total) = block_on(async {
-                let queue = queue.lock().await;
-                let page = queue.list(agent_id, limit);
-                let val = serde_json::to_value(page.proposals).map(|v| (v, page.total));
-                val
+                let (owned, total) = {
+                    let guard = queue.lock().await;
+                    let page = guard.list(agent_id, limit);
+                    let owned: Vec<_> = page.proposals.into_iter().cloned().collect();
+                    (owned, page.total)
+                };
+                serde_json::to_value(owned).map(|v| (v, total))
             })
             .map_err(|error| serde_failure(&error))?;
-            Ok(structured(json!({ "proposals": proposals_val, "total": total })))
+            Ok(structured(
+                json!({ "proposals": proposals_val, "total": total }),
+            ))
         }
         "approve" => {
             require_operator(runtime, "approve")?;

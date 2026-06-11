@@ -64,17 +64,19 @@ pub const LIST_PAGE_MAX: usize = 256;
 /// Default page size for [`ProposalQueue::list`] when no limit is supplied.
 pub const LIST_PAGE_DEFAULT: usize = 100;
 /// Minimum number of eval cases that must have been executed for
-/// `promote_for_agent` to grant promotion. A vacuous eval (0 cases) has a
-/// vacuously perfect pass rate and MUST NOT promote — this floor is the B9
-/// evidence guard. Authorship/provenance integrity of the cases themselves
-/// is B11 scope.
+/// `promote_for_agent` to grant promotion.
+///
+/// A vacuous eval (0 cases) has a vacuously perfect pass rate and MUST NOT
+/// promote — this floor is the B9 evidence guard. Authorship/provenance
+/// integrity of the cases themselves is B11 scope.
 pub const MIN_EVAL_CASES: usize = 5;
 
 /// Validate an agent id against the graph-id grammar plus the additional
-/// constraint that semicolons are forbidden (they are used as field separators
-/// in provenance strings of the form `agent:<id>;proposal:<pid>`).
+/// constraint that semicolons are forbidden.
 ///
-/// Allowed characters: `[A-Za-z0-9:._-]`. Control characters, semicolons,
+/// Semicolons are used as field separators in provenance strings of the form
+/// `agent:<id>;proposal:<pid>`. Allowed characters: `[A-Za-z0-9:._-]`. Control
+/// characters, semicolons,
 /// whitespace, and empty strings are all rejected. Ids longer than
 /// [`MAX_AGENT_ID_LEN`] bytes are also rejected.
 ///
@@ -99,8 +101,7 @@ pub fn validate_agent_id(agent_id: &str) -> Result<()> {
         .find(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
     {
         return Err(KnowledgeError::Storage(format!(
-            "agent id {:?} contains invalid character {:?} — only [A-Za-z0-9:._-] allowed",
-            agent_id, bad
+            "agent id {agent_id:?} contains invalid character {bad:?} — only [A-Za-z0-9:._-] allowed"
         )));
     }
     Ok(())

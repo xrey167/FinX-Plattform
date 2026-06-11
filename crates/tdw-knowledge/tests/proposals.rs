@@ -845,7 +845,9 @@ async fn double_reject_is_an_error() {
         .await
         .expect("submit");
 
-    queue.reject(&proposal.id, "first rejection", NOW).expect("first reject");
+    queue
+        .reject(&proposal.id, "first rejection", NOW)
+        .expect("first reject");
     let error = queue
         .reject(&proposal.id, "second rejection", NOW)
         .expect_err("double reject must error");
@@ -869,13 +871,16 @@ fn list_is_bounded_and_reports_total() {
     let mut map = serde_json::Map::new();
     for i in 1..=110_u64 {
         let id = format!("p{i}");
-        map.insert(id.clone(), serde_json::json!({
-            "id": id,
-            "kind": { "kind": "tag_define", "tag_id": format!("t:t{i}"), "parent": null },
-            "agent_id": "agent:a",
-            "status": "validated",
-            "history": [],
-        }));
+        map.insert(
+            id.clone(),
+            serde_json::json!({
+                "id": id,
+                "kind": { "kind": "tag_define", "tag_id": format!("t:t{i}"), "parent": null },
+                "agent_id": "agent:a",
+                "status": "validated",
+                "history": [],
+            }),
+        );
     }
     let queue: ProposalQueue = serde_json::from_value(serde_json::json!({
         "proposals": map,
@@ -908,22 +913,25 @@ fn serde_restore_rejects_malformed_state() {
     use tdw_knowledge::proposals::ProposalQueue;
 
     // Semicolon in agent_id: valid JSON, but invalid grammar.
-    let bad_agent: std::result::Result<ProposalQueue, _> = serde_json::from_value(serde_json::json!({
-        "proposals": {
-            "p1": {
-                "id": "p1",
-                "kind": { "kind": "tag_define", "tag_id": "t:x", "parent": null },
-                "agent_id": "bad;agent",
-                "status": "validated",
-                "history": [],
-            }
-        },
-        "next_id": 1,
-    }));
+    let bad_agent: std::result::Result<ProposalQueue, _> =
+        serde_json::from_value(serde_json::json!({
+            "proposals": {
+                "p1": {
+                    "id": "p1",
+                    "kind": { "kind": "tag_define", "tag_id": "t:x", "parent": null },
+                    "agent_id": "bad;agent",
+                    "status": "validated",
+                    "history": [],
+                }
+            },
+            "next_id": 1,
+        }));
     // Deserialize succeeds (serde does not call validate_restored),
     // but validate_restored must fail.
     let queue = bad_agent.expect("deserialize succeeds");
-    let error = queue.validate_restored().expect_err("must fail for bad agent id");
+    let error = queue
+        .validate_restored()
+        .expect_err("must fail for bad agent id");
     assert!(
         error.to_string().contains("invalid character"),
         "error names the bad char: {error}"
@@ -945,7 +953,9 @@ fn serde_restore_rejects_malformed_state() {
         "next_id": 1,
     }))
     .expect("deserialize succeeds");
-    let error = bad_state.validate_restored().expect_err("must fail for bad state");
+    let error = bad_state
+        .validate_restored()
+        .expect_err("must fail for bad state");
     assert!(
         error.to_string().contains("both materialized and rejected"),
         "error names the state: {error}"

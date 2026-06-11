@@ -550,7 +550,11 @@ fn list_returns_bounded_page_with_total() {
     let proposals = sc["proposals"]
         .as_array()
         .unwrap_or_else(|| panic!("proposals array: {listed}"));
-    assert_eq!(proposals.len(), 3, "3 proposals returned by default: {listed}");
+    assert_eq!(
+        proposals.len(),
+        3,
+        "3 proposals returned by default: {listed}"
+    );
     assert_eq!(sc["total"], 3, "total == 3: {listed}");
 
     // List with limit=1 — 1 returned, total still 3.
