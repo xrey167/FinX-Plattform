@@ -322,18 +322,32 @@ impl AgentBackend {
             .metrics
             .iter()
             .find(|metric| metric.metric_name == "case_count")
-            .map(|metric| metric.metric_value as usize)
-            .unwrap_or(0);
+            .map_or(0_usize, |metric| {
+                // case_count is a non-negative integer stored as f64 by the eval
+                // harness. Negative or NaN → 0; values ≥ u32::MAX are astronomically
+                // large eval suites that saturate to usize::MAX. u32::MAX fits f64
+                // exactly (2^32-1 < 2^53), so the comparison is lossless.
+                let v = metric.metric_value;
+                if !v.is_finite() || v < 0.0 {
+                    0
+                } else if v >= f64::from(u32::MAX) {
+                    usize::MAX
+                } else {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n = v as usize;
+                    n
+                }
+            });
 
-        if let Some(pass_rate) = pass_rate {
-            if let Some(proposals) = self.proposals.as_ref() {
-                // The queue is shared (tokio::sync::Mutex) with the MCP write
-                // surface. `run_eval_at` is sync; use `blocking_lock` so the
-                // promotion is never silently skipped on a contended lock.
-                let date = now.split('T').next().unwrap_or(now);
-                let mut queue = proposals.blocking_lock();
-                let _ = queue.promote_for_agent(&agent_id, pass_rate, case_count, date);
-            }
+        if let Some(pass_rate) = pass_rate
+            && let Some(proposals) = self.proposals.as_ref()
+        {
+            // The queue is shared (tokio::sync::Mutex) with the MCP write
+            // surface. `run_eval_at` is sync; use `blocking_lock` so the
+            // promotion is never silently skipped on a contended lock.
+            let date = now.split('T').next().unwrap_or(now);
+            let mut queue = proposals.blocking_lock();
+            let _ = queue.promote_for_agent(&agent_id, pass_rate, case_count, date);
         }
 
         outcome
@@ -1322,8 +1336,8 @@ mod tests {
         assert_eq!(config.surfaces, Surfaces::Both);
     }
 
-    /// B9 eval-floor: a single-case eval (below MIN_EVAL_CASES=5) must NOT promote
-    /// `Validated` proposals to `Ready`, even when pass_rate == 1.0.
+    /// B9 eval-floor: a single-case eval (below `MIN_EVAL_CASES=5`) must NOT promote
+    /// `Validated` proposals to `Ready`, even when `pass_rate == 1.0`.
     #[test]
     fn run_eval_under_floor_does_not_promote() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};

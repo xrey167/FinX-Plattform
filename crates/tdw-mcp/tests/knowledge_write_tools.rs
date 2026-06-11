@@ -507,7 +507,7 @@ fn write_surface_absent_without_bound_identity() {
         // proposals + resolver attached, but NO with_agent_id call
         let runtime = KnowledgeRuntime::new(embedder, vectors)
             .with_graph(Arc::new(SharedGraph(graph.clone())))
-            .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
+            .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph))))
             .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
             .with_adaptivity_resolver(stub_resolver());
         Arc::new(runtime)
@@ -523,7 +523,7 @@ fn write_surface_absent_without_bound_identity() {
     }
 }
 
-/// B9 pagination: list with no limit returns at most LIST_PAGE_DEFAULT proposals;
+/// B9 pagination: list with no limit returns at most `LIST_PAGE_DEFAULT` proposals;
 /// limit=1 returns exactly 1 with correct total.
 #[test]
 fn list_returns_bounded_page_with_total() {
