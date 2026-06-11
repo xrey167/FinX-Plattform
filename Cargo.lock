@@ -4997,6 +4997,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-analytics-econometrics"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-domain",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tdw-analytics-quant"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-domain",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-analytics-technical"
 version = "0.1.0"
 dependencies = [
@@ -5309,6 +5331,8 @@ version = "0.1.0"
 dependencies = [
  "schemars",
  "serde",
+ "tdw-analytics-econometrics",
+ "tdw-analytics-quant",
  "tdw-analytics-technical",
  "tdw-core",
  "tdw-domain",
@@ -6362,6 +6386,8 @@ dependencies = [
  "tdw-agent",
  "tdw-agent-store",
  "tdw-alerts",
+ "tdw-analytics-econometrics",
+ "tdw-analytics-quant",
  "tdw-analytics-technical",
  "tdw-app-client",
  "tdw-app-server",

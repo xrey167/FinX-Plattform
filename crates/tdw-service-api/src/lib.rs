@@ -23,12 +23,14 @@
 mod agent_bridge;
 mod app_state;
 mod dispatcher;
+mod econometrics_compute;
 mod event_sink;
 pub mod fetch_policy;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
 mod policy;
 mod provider_resolve;
+mod quant_compute;
 #[cfg(feature = "rest-api-route")]
 mod rest_handler;
 mod stream_ingest;

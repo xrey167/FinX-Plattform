@@ -335,17 +335,23 @@ mod tests {
     }
 
     #[test]
-    fn registry_routes_match_catalog_compute_routes() {
+    fn registry_routes_match_catalog_technical_compute_routes() {
         use std::collections::BTreeSet;
         let registry: BTreeSet<&str> = compute_registry().keys().copied().collect();
+        // The `quantitative/*` and `econometrics/*` Compute routes have their own
+        // namespace registries, so this technical registry must match exactly the
+        // `technical/*` Compute routes the catalog declares.
         let catalog: BTreeSet<&str> = tdw_endpoint_catalog::catalog()
             .iter()
-            .filter(|e| e.kind == tdw_endpoint_catalog::EndpointKind::Compute)
+            .filter(|e| {
+                e.kind == tdw_endpoint_catalog::EndpointKind::Compute
+                    && e.route.starts_with("technical/")
+            })
             .map(|e| e.route)
             .collect();
         assert_eq!(
             registry, catalog,
-            "compute registry must match catalog Compute routes"
+            "technical compute registry must match catalog technical/* Compute routes"
         );
     }
 }

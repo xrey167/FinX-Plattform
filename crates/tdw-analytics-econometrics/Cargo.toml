@@ -1,0 +1,25 @@
+# tdw-analytics-econometrics: pure-Rust, offline regression + econometric tests.
+#
+# Lib-only, no async, no I/O. Hand-rolled linear algebra (OLS via the normal
+# equations solved with a Cholesky factorization of the symmetric positive-
+# definite Gram matrix XᵀX) — NO nalgebra / faer / ndarray, zero new numeric
+# dependency. Every estimator is textbook math (OLS / Gauss-Markov; Durbin-Watson
+# 1950; Granger 1969; Engle-Granger 1987; the variance-inflation-factor
+# definition); see each module's docs for the cited definition and the numeric /
+# conditioning caveats.
+[package]
+name = "tdw-analytics-econometrics"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-domain = { workspace = true }
+
+[lints]
+workspace = true
