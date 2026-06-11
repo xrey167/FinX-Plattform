@@ -75,6 +75,11 @@ pub struct AgentBackend {
     /// share); `run_eval_at` is sync, so it takes the lock with `blocking_lock`
     /// (`promote_for_agent` is itself sync — no await is needed under the guard).
     proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
+    /// The retrieval feedback store (knowledge-system B10). The same `Arc` is
+    /// attached to the embedded [`McpServer`] so the `tdw.kg.feedback` MCP tool
+    /// and any consumer of `feedback_store_handle()` share one instance.
+    /// Always present after construction; never `None` after `assemble`.
+    feedback: Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>,
 }
 
 impl AgentBackend {
@@ -113,9 +118,13 @@ impl AgentBackend {
     /// Compose the facade from an already-resolved registry and command policy.
     fn assemble(registry: Registry, policy: CommandPolicy) -> Self {
         let executor = ToolExecutor::new().with_command_policy(policy.clone());
+        let feedback = Arc::new(tokio::sync::Mutex::new(
+            tdw_agent_store::RetrievalFeedbackStore::new(),
+        ));
         let mcp = McpServer::new()
             .with_registry(registry.clone())
-            .with_executor(ToolExecutor::new().with_command_policy(policy));
+            .with_executor(ToolExecutor::new().with_command_policy(policy))
+            .with_feedback_store(Arc::clone(&feedback));
         Self {
             registry,
             executor,
@@ -129,7 +138,20 @@ impl AgentBackend {
             hook_backend: SystemHookHandlerBackend::new(),
             language_model: Arc::new(StubLanguageModel),
             proposals: None,
+            feedback,
         }
+    }
+
+    /// A cloned `Arc` handle to the shared retrieval feedback store
+    /// (knowledge-system B10). The same handle is wired into the embedded
+    /// [`McpServer`] at construction; this accessor lets callers share it with
+    /// [`crate::data::Backend`] so `consolidate_now` consumes the same events
+    /// the MCP tool appends.
+    #[must_use]
+    pub fn feedback_store_handle(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>> {
+        Arc::clone(&self.feedback)
     }
 
     /// Replace the eval runner's [`LanguageModel`] (default: the offline
