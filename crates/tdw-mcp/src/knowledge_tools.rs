@@ -188,11 +188,20 @@ pub fn execute(
     }
 }
 
+/// Query-string ceiling: tool arguments are attacker-controlled, and API
+/// embedders bill per token — an unbounded query is a cost/DoS lever.
+const MAX_QUERY_CHARS: usize = 8192;
+
 fn search(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
     let query = require_str(arguments, "query")?;
+    if query.chars().count() > MAX_QUERY_CHARS {
+        return Err(execution(format!(
+            "query must be at most {MAX_QUERY_CHARS} characters"
+        )));
+    }
     let top_k = optional_usize(arguments, "top_k")?.unwrap_or(8);
     let filter = search_filter(arguments)?;
     let expand = optional_expansion(arguments)?;
@@ -268,11 +277,106 @@ fn traverse(
         max_hops,
     };
     let graph = require_graph(runtime)?;
-    let subgraph =
-        block_on(graph.expand(&seeds, &filter)).map_err(|error| execution(error.to_string()))?;
+    // The engine's expand is UNBOUNDED per hop (a hub node returns its whole
+    // neighborhood) — on this attacker-controlled surface the tool walks the
+    // graph itself under hard budgets. Exceeding any budget is a tool error
+    // telling the caller to narrow the query, never silent truncation.
+    let subgraph = block_on(budgeted_expand(graph.as_ref(), &seeds, &filter))?;
     // Provenance is serialized as-is so derived:* / Rule provenance stays VISIBLE.
     let subgraph = serde_json::to_value(&subgraph).map_err(|error| serde_failure(&error))?;
     Ok(structured(subgraph))
+}
+
+/// Per-anchor neighbor ceiling for one traverse hop.
+const TRAVERSE_NEIGHBORS_PER_NODE: usize = 64;
+/// Total node budget for one traverse response.
+const TRAVERSE_MAX_NODES: usize = 512;
+/// Total edge budget for one traverse response.
+const TRAVERSE_MAX_EDGES: usize = 1024;
+
+/// Hop-bounded BFS with hard node/edge budgets (deterministic order, edges
+/// deduplicated by identity).
+async fn budgeted_expand(
+    graph: &dyn tdw_core::GraphEngine,
+    seeds: &[String],
+    filter: &TraversalFilter,
+) -> Result<tdw_core::Subgraph, ToolFailure> {
+    let storage = |error: tdw_core::Error| execution(error.to_string());
+    let mut nodes: std::collections::BTreeMap<String, tdw_core::GraphNode> =
+        std::collections::BTreeMap::new();
+    let mut edge_identities: std::collections::BTreeSet<(String, String, String, Option<String>)> =
+        std::collections::BTreeSet::new();
+    let mut edges: Vec<tdw_core::GraphEdge> = Vec::new();
+    let mut visited: std::collections::BTreeSet<String> = seeds.iter().cloned().collect();
+    for seed in seeds {
+        if let Some(node) = graph.node(seed).await.map_err(storage)? {
+            nodes.insert(node.id.clone(), node);
+        }
+    }
+    let hop_filter = TraversalFilter {
+        max_hops: 1,
+        ..filter.clone()
+    };
+    let mut frontier: Vec<String> = seeds.to_vec();
+    for _ in 0..filter.max_hops {
+        let mut next = Vec::new();
+        for anchor in &frontier {
+            let reached = graph
+                .neighbors(anchor, &hop_filter)
+                .await
+                .map_err(storage)?;
+            if reached.len() > TRAVERSE_NEIGHBORS_PER_NODE {
+                return Err(execution(format!(
+                    "traverse budget exceeded: {anchor:?} has more than \
+                     {TRAVERSE_NEIGHBORS_PER_NODE} neighbors under this filter — narrow \
+                     rels/kinds or reduce seeds"
+                )));
+            }
+            for (edge, node) in reached {
+                let identity = (
+                    edge.from.clone(),
+                    edge.rel.clone(),
+                    edge.to.clone(),
+                    edge.valid_from.clone(),
+                );
+                if edge_identities.insert(identity) {
+                    edges.push(edge);
+                    if edges.len() > TRAVERSE_MAX_EDGES {
+                        return Err(execution(format!(
+                            "traverse budget exceeded: more than {TRAVERSE_MAX_EDGES} edges — \
+                             narrow rels/kinds or reduce seeds/max_hops"
+                        )));
+                    }
+                }
+                if visited.insert(node.id.clone()) {
+                    next.push(node.id.clone());
+                }
+                nodes.entry(node.id.clone()).or_insert(node);
+                if nodes.len() > TRAVERSE_MAX_NODES {
+                    return Err(execution(format!(
+                        "traverse budget exceeded: more than {TRAVERSE_MAX_NODES} nodes — \
+                         narrow rels/kinds or reduce seeds/max_hops"
+                    )));
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            break;
+        }
+    }
+    edges.sort_by(|left, right| {
+        (&left.from, &left.rel, &left.to, &left.valid_from).cmp(&(
+            &right.from,
+            &right.rel,
+            &right.to,
+            &right.valid_from,
+        ))
+    });
+    Ok(tdw_core::Subgraph {
+        nodes: nodes.into_values().collect(),
+        edges,
+    })
 }
 
 fn path(
@@ -480,14 +584,41 @@ fn is_date(value: &str) -> bool {
             .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
 }
 
-/// Drive an async knowledge call from sync `execute_tool`, mirroring the ops
-/// surface's bridge (a tiny current-thread runtime per call).
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("current-thread runtime should build")
-        .block_on(future)
+/// Drive an async knowledge call from sync `execute_tool`.
+///
+/// When an ambient tokio runtime exists (the embedded `McpOnly` surface runs
+/// the stdio loop inside `block_in_place` on a multi-thread runtime),
+/// building a fresh runtime here would PANIC ("Cannot start a runtime from
+/// within a runtime") — a remote crash per tool call (B8 security review).
+/// Reuse the ambient handle in that case; otherwise build the tiny per-call
+/// runtime the ops surface uses.
+fn block_on<F>(future: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    use tokio::runtime::{Builder, Handle, RuntimeFlavor};
+    let fresh = || {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build")
+    };
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        }
+        // Ambient CURRENT-THREAD runtime (e.g. a plain #[tokio::test]):
+        // block_in_place is unsupported there, so run the self-contained
+        // engine future on a scoped thread with its own tiny runtime.
+        Ok(_) => std::thread::scope(|scope| {
+            scope
+                .spawn(|| fresh().block_on(future))
+                .join()
+                .expect("bridge thread must not panic")
+        }),
+        Err(_) => fresh().block_on(future),
+    }
 }
 
 const fn execution(message: String) -> ToolFailure {

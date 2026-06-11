@@ -561,3 +561,96 @@ fn entity_without_graph_is_a_tool_error() {
             .contains("tag engine not attached")
     );
 }
+
+/// B8 security review: the sync→async bridge must reuse an ambient tokio
+/// runtime — building a fresh one inside `block_in_place` on a multi-thread
+/// runtime (the embedded `McpOnly` shape) previously panicked per tool call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn knowledge_tools_survive_an_ambient_runtime() {
+    let (runtime, _graph) = build_runtime().await;
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let response = tokio::task::block_in_place(|| {
+        call(
+            &mut server,
+            "tdw.kg.search",
+            &json!({ "query": "Apple AAPL" }),
+        )
+    });
+    assert!(
+        response.get("error").is_none(),
+        "search inside an ambient runtime must succeed: {response}"
+    );
+}
+
+/// B8 security review: query strings are attacker-controlled and API
+/// embedders bill per token — oversized queries are rejected as tool errors.
+#[tokio::test]
+async fn search_rejects_oversized_queries() {
+    let (runtime, _graph) = build_runtime().await;
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let huge = "a".repeat(8193);
+    let response = call(&mut server, "tdw.kg.search", &json!({ "query": huge }));
+    let text = response.to_string();
+    assert!(
+        text.contains("8192"),
+        "oversized query must be a tool error naming the cap: {text}"
+    );
+}
+
+/// B8 security review: traverse walks under hard budgets — a hub node whose
+/// neighborhood exceeds the per-anchor ceiling is a tool error, not an
+/// unbounded response.
+#[tokio::test]
+async fn traverse_rejects_hub_fanout() {
+    let (runtime, graph) = build_runtime().await;
+    // A star: hub -> 70 spokes (over the 64 per-anchor ceiling).
+    let mut nodes = vec![GraphNode {
+        id: "hub:center".to_string(),
+        kind: EntityKind::Instrument,
+        label: "hub".to_string(),
+        aliases: Vec::new(),
+        props: Value::Null,
+        valid_from: None,
+        valid_to: None,
+    }];
+    let mut edges = Vec::new();
+    for index in 0..70 {
+        nodes.push(GraphNode {
+            id: format!("spoke:{index}"),
+            kind: EntityKind::Instrument,
+            label: format!("spoke {index}"),
+            aliases: Vec::new(),
+            props: Value::Null,
+            valid_from: None,
+            valid_to: None,
+        });
+        edges.push(GraphEdge {
+            from: "hub:center".to_string(),
+            to: format!("spoke:{index}"),
+            rel: "links_to".to_string(),
+            props: Value::Null,
+            provenance: tdw_core::Provenance::Ingest {
+                source: "fixture".to_string(),
+            },
+            valid_from: None,
+            valid_to: None,
+        });
+    }
+    graph.upsert_nodes(nodes).await.expect("hub nodes");
+    graph.upsert_edges(edges).await.expect("hub edges");
+
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let response = call(
+        &mut server,
+        "tdw.kg.traverse",
+        &json!({ "seeds": ["hub:center"], "max_hops": 1 }),
+    );
+    let text = response.to_string();
+    assert!(
+        text.contains("traverse budget exceeded"),
+        "hub fan-out must be a budget tool error: {text}"
+    );
+}
