@@ -476,10 +476,15 @@ fn render_method(method: &Method) -> String {
         let _ = writeln!(out, "        {arg},");
     }
     // Force every following argument to be keyword-only for forward-compatible,
-    // unambiguous calls (OpenBB-style kwargs).
-    out.push_str("        *,\n");
-    for arg in &optional_args {
-        let _ = writeln!(out, "        {arg},");
+    // unambiguous calls (OpenBB-style kwargs). A bare `*` with nothing but
+    // `**kwargs` after it is a Python syntax error ("named arguments must
+    // follow bare *"), so the separator is emitted only when at least one
+    // named keyword-only argument follows.
+    if !optional_args.is_empty() {
+        out.push_str("        *,\n");
+        for arg in &optional_args {
+            let _ = writeln!(out, "        {arg},");
+        }
     }
     out.push_str("        **kwargs: object,\n");
     out.push_str("    ) -> FinXObject:\n");

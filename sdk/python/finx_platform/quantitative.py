@@ -16,7 +16,6 @@ class QuantitativeNamespace:
 
     def calmar_ratio(
         self,
-        *,
         **kwargs: object,
     ) -> FinXObject:
         """Calmar ratio: mean return over the absolute maximum drawdown.
@@ -81,7 +80,6 @@ class QuantitativeNamespace:
 
     def jarque_bera(
         self,
-        *,
         **kwargs: object,
     ) -> FinXObject:
         """Jarque-Bera normality statistic and its chi-squared p-value.
@@ -98,7 +96,6 @@ class QuantitativeNamespace:
 
     def kurtosis(
         self,
-        *,
         **kwargs: object,
     ) -> FinXObject:
         """Bias-corrected sample excess kurtosis of the returns.
@@ -115,7 +112,6 @@ class QuantitativeNamespace:
 
     def max_drawdown(
         self,
-        *,
         **kwargs: object,
     ) -> FinXObject:
         """Maximum peak-to-trough drawdown (and the derived Calmar ratio).
@@ -182,7 +178,6 @@ class QuantitativeNamespace:
 
     def skewness(
         self,
-        *,
         **kwargs: object,
     ) -> FinXObject:
         """Adjusted Fisher-Pearson sample skewness of the returns.
