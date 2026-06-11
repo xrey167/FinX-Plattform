@@ -97,15 +97,19 @@ pub fn consolidation_plan<'a>(
 /// superset of the original.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UsageHint {
-    /// How many days to subtract from the raw age (saturating at 0).
+    /// How many days to subtract from the raw age before the TTL check
+    /// (`effective_age = raw_age.saturating_sub(recency_credit_days)`).
     ///
-    /// Derived from the feedback store's `usage_for(name).last_used_at`:
-    /// `credit = min(raw_age, days_since_last_used)`. A memory used yesterday
-    /// gets a 1-day credit; a memory never marked `used` gets 0.
+    /// Derived from the most-recent `used=true` feedback event that references
+    /// the memory: `credit = raw_age.saturating_sub(days_since_last_used)`.
+    /// Equivalently, `effective_age = max(0, raw_age − days_since_last_used)`.
+    /// A memory used 2 days ago with a raw age of 5 gets `credit=3`,
+    /// `effective_age=2`. A memory never marked `used` gets `credit=0` and
+    /// is treated identically to the base [`consolidation_plan`].
     pub recency_credit_days: u32,
-    /// How many times the memory was retrieved and marked `used` across all
-    /// recorded feedback events. Informational; not used in the current
-    /// planner policy but available for future priority-weighting.
+    /// Number of *distinct* `query_fingerprint` values across `used=true`
+    /// feedback events that reference this memory. Informational; not used in
+    /// the current planner policy but available for future priority-weighting.
     pub use_count: u32,
 }
 
@@ -274,27 +278,71 @@ mod tests {
     }
 
     #[test]
-    fn recency_credit_prevents_premature_expiry_of_used_working_buffer() {
-        // A Working buffer aged 1 day (past its ttl=0) is normally expired.
-        // With a 1-day recency credit the effective age is 0, which equals ttl=0
-        // (age >= ttl still fires for Working). Credit cannot prevent expiry once
-        // effective_age >= ttl — verify the actual semantics: credit=1 on age=0.
+    fn working_buffer_always_expires_regardless_of_credit() {
+        // Working ttl=0: effective_age = age.saturating_sub(credit).
+        // Even with age=0 and credit=0, effective_age=0 >= ttl=0 → always expires.
+        // Credit cannot rescue a Working buffer because ttl=0 means any
+        // effective_age >= 0 fires the expiry — this is intentional: Working
+        // buffers are intra-session by design.
         let working = memory("buf", Retention::Working);
-        // age=0, ttl=0 — always expires with zero credit.
-        let zero_credit = consolidation_plan_with_usage([(
-            &working,
-            0,
+        for credit in [0_u32, 1, 100] {
+            let plan = consolidation_plan_with_usage([(
+                &working,
+                0,
+                UsageHint {
+                    recency_credit_days: credit,
+                    use_count: 1,
+                },
+            )]);
+            assert_eq!(
+                plan,
+                vec![ConsolidationAction::Expire {
+                    name: "buf".to_string()
+                }],
+                "Working buffer (credit={credit}) must always expire"
+            );
+        }
+    }
+
+    #[test]
+    fn recency_credit_formula_effective_age_is_raw_minus_days_since() {
+        // Pin the credit arithmetic: credit = raw_age.saturating_sub(days_since).
+        // effective_age = raw_age.saturating_sub(credit)
+        //               = raw_age.saturating_sub(raw_age.saturating_sub(days_since))
+        //               = min(raw_age, days_since).
+        // ShortTerm ttl=1: raw_age=5, days_since=3 → credit=2, effective_age=3 >= 1 → promote.
+        // ShortTerm ttl=1: raw_age=5, days_since=5 → credit=0, effective_age=5 >= 1 → promote.
+        // ShortTerm ttl=1: raw_age=1, days_since=0 → credit=1, effective_age=0 < 1 → no action.
+        let short = memory("note", Retention::ShortTerm);
+        let plan_a = consolidation_plan_with_usage([(
+            &short,
+            5,
             UsageHint {
-                recency_credit_days: 0,
-                use_count: 0,
+                recency_credit_days: 2,
+                use_count: 1,
             },
         )]);
         assert_eq!(
-            zero_credit,
-            vec![ConsolidationAction::Expire {
-                name: "buf".to_string()
+            plan_a,
+            vec![ConsolidationAction::Promote {
+                name: "note".to_string(),
+                from: Retention::ShortTerm,
+                to: Retention::MidTerm,
             }],
-            "Working buffer with zero credit still expires on first tick"
+            "effective_age=3 still exceeds ttl=1"
+        );
+        // credit exactly equals raw_age → effective_age=0 < ttl=1 → survives.
+        let plan_b = consolidation_plan_with_usage([(
+            &short,
+            1,
+            UsageHint {
+                recency_credit_days: 1,
+                use_count: 1,
+            },
+        )]);
+        assert!(
+            plan_b.is_empty(),
+            "credit == raw_age → effective_age=0 < ttl=1 → memory survives"
         );
     }
 

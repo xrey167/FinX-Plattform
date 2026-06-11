@@ -6,20 +6,35 @@
 //!
 //! ## Gating
 //!
-//! The tool appears in `tools/list` only when:
-//! - A [`KnowledgeRuntime`] is attached, AND
-//! - The runtime has a [`RetrievalFeedbackStore`] handle attached (via
-//!   [`KnowledgeRuntime::with_feedback_store`]).
+//! The tool appears in `tools/list` only when BOTH conditions hold:
+//! - A [`KnowledgeRuntime`] is attached to [`McpServer`], AND
+//! - A [`RetrievalFeedbackStore`] handle is attached to [`McpServer`] via
+//!   [`McpServer::with_feedback_store`] / [`McpServer::set_feedback_store`].
 //!
+//! The store is NOT attached to the runtime; it is a separate field on the server.
 //! Without the store the tool is absent from the catalog; a call to the name
 //! returns a tool error (never a protocol error), matching the B8/B9 posture.
 //!
-//! ## Identity
+//! ## Identity and trust model
 //!
-//! `agent_id` is a caller-supplied argument here (not host-bound like the B9
-//! write tools), because feedback recording is a safe append-only operation — it
-//! does not land graph mutations. The grammar is the same as B9 (validated via
-//! [`tdw_knowledge::proposals::validate_agent_id`]).
+//! `agent_id` is **caller-supplied** (not host-bound like the B9 write tools)
+//! because feedback recording is a safe append-only operation that does not land
+//! graph mutations. This is a **bounded trust** model: any caller that can reach
+//! the MCP surface can submit events under any valid `agent_id`. The consequence
+//! is a bounded poisoning channel — a rogue caller can submit spurious `used`
+//! events that credit another agent's working-buffer retention, limited by the
+//! per-agent + global caps and the eviction policy. Host-binding of `agent_id`
+//! (making it unforgeable) is deferred to a future session-identity story,
+//! following the B9 deferral precedent for write-tool identity binding.
+//!
+//! The `agent_id` links to a memory name via the convention
+//! `event.agent_id == memory.meta.base.name` OR `event.hit_ids` contains the
+//! memory name. When neither matches, the event silently contributes no credit
+//! to that memory — this is a deliberate no-op, not an error.
+//!
+//! The grammar for `agent_id` is `[A-Za-z0-9:._-]`, validated by
+//! [`tdw_knowledge::proposals::validate_agent_id`]. Note that `:` IS allowed
+//! (it is part of the grammar — it is `;` and control characters that are forbidden).
 //!
 //! ## Sync→async bridge
 //!
@@ -56,16 +71,16 @@ pub fn descriptor() -> ToolDescriptor {
         "Record Retrieval Feedback",
         "Record which knowledge-graph hits were helpful. APPEND-ONLY usage stats — does NOT \
          mutate graph nodes, tags, or proposals. Feeds the usage-aware consolidation planner \
-         so actively-referenced memories are retained longer. `agent_id` is validated \
-         (no `:`, `;`, or control characters; max 128 bytes). `hit_ids` is bounded to \
-         64 entries; excess ids are silently truncated. Requires the knowledge runtime \
-         with a feedback store attached.",
+         so actively-referenced memories are retained longer. `agent_id` grammar: \
+         [A-Za-z0-9:._-], max 128 bytes (`:` is allowed; `;` and control characters are not). \
+         `hit_ids` is bounded to 64 entries; excess ids are silently truncated. Requires the \
+         knowledge runtime with a feedback store attached.",
         json!({
             "type": "object",
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "The calling agent's id (grammar: no `:`/`;`/control chars, max 128 bytes)."
+                    "description": "The calling agent's id. Grammar: [A-Za-z0-9:._-], max 128 bytes. `:` is allowed; `;` and control characters are not."
                 },
                 "query_fingerprint": {
                     "type": "string",

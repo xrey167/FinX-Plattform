@@ -1,10 +1,18 @@
 //! Retrieval feedback store — usage statistics for knowledge-system B10.
 //!
-//! Agents record retrieval interactions via [`tdw.kg.feedback`](crate) after a
-//! search; each record is a [`RetrievalEvent`] keyed by the agent that made the
+//! Agents record retrieval interactions via the `tdw.kg.feedback` MCP tool after
+//! a search; each record is a [`RetrievalEvent`] keyed by the agent that made the
 //! query. The store is **append-only from the agent side** and is NEVER a direct
 //! mutation path to the graph, tags, or proposals — it is strictly a stats
 //! accumulator.
+//!
+//! ## Attachment
+//!
+//! The store is attached at the [`tdw_mcp::McpServer`] level via
+//! [`McpServer::with_feedback_store`] (builder) or
+//! [`McpServer::set_feedback_store`] (in-place setter). The same `Arc` handle is
+//! held by [`tdw_backend::data::Backend`] so `consolidate_now` and the MCP tool
+//! share one store instance.
 //!
 //! ## Bound / eviction policy
 //!
@@ -47,8 +55,9 @@ pub const DEFAULT_GLOBAL_CAP: usize = 4096;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetrievalEvent {
-    /// The submitting agent's id (validated grammar: no `:`/`;`/control chars,
-    /// max [`tdw_knowledge::proposals::MAX_AGENT_ID_LEN`] bytes).
+    /// The submitting agent's id. Grammar: `[A-Za-z0-9:._-]`, max
+    /// [`tdw_knowledge::proposals::MAX_AGENT_ID_LEN`] bytes. Validated by
+    /// [`tdw_knowledge::proposals::validate_agent_id`] before admission.
     pub agent_id: String,
     /// A short, caller-supplied fingerprint for the query (e.g. a truncated hash
     /// or a canonical normalised string). Non-empty, max 256 bytes.
