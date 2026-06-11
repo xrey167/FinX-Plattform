@@ -131,11 +131,12 @@ async fn fetch_socrata(
 
 /// Read the optional Socrata `X-App-Token` from the environment, trimming
 /// whitespace and treating an empty value as absent.
+///
+/// Routes through the shared `tdw_core::http_support::read_optional_key` helper
+/// so every provider reads credentials through one path (same trim/empty
+/// semantics) rather than calling `std::env::var` directly.
 fn optional_app_token() -> Option<String> {
-    std::env::var(APP_TOKEN_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    tdw_core::http_support::read_optional_key(APP_TOKEN_ENV)
 }
 
 /// Decode a Socrata response body (a bare JSON array of row objects) into a
