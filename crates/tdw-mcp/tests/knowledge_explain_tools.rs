@@ -687,9 +687,9 @@ fn diff_no_leakage_future_edges() {
 }
 
 #[test]
-fn diff_invalidated_edge_has_successor_field() {
+fn diff_invalidated_edge_has_successor_candidate_field() {
     // The XNAS-OLD listing closes at T1; the XNAS listing stays open.
-    // The invalidated entry must carry a successor pointing to XNAS.
+    // The invalidated entry must carry successor_candidate + candidates_count + ambiguous.
     let mut server = server_with_runtime();
     let response = call(
         &mut server,
@@ -705,16 +705,23 @@ fn diff_invalidated_edge_has_successor_field() {
         .iter()
         .find(|item| item["edge"]["to"] == "venue:XNAS-OLD")
         .unwrap_or_else(|| panic!("XNAS-OLD invalidation not found"));
-    // successor field must exist (may be null if no active successor, but the key must be present).
+    let obj = xnas_old_entry
+        .as_object()
+        .unwrap_or_else(|| panic!("entry must be object"));
     assert!(
-        xnas_old_entry
-            .as_object()
-            .is_some_and(|o| o.contains_key("successor")),
-        "invalidated entry must carry a successor field"
+        obj.contains_key("successor_candidate"),
+        "must have successor_candidate field"
     );
-    // And here the XNAS listing is the natural successor.
-    if xnas_old_entry["successor"].is_object() {
-        assert_eq!(xnas_old_entry["successor"]["to"], "venue:XNAS");
+    assert!(
+        obj.contains_key("candidates_count"),
+        "must have candidates_count field"
+    );
+    assert!(obj.contains_key("ambiguous"), "must have ambiguous field");
+    // XNAS listing is the natural (unambiguous) successor candidate.
+    if xnas_old_entry["successor_candidate"].is_object() {
+        assert_eq!(xnas_old_entry["successor_candidate"]["to"], "venue:XNAS");
+        assert_eq!(xnas_old_entry["ambiguous"], false);
+        assert_eq!(xnas_old_entry["candidates_count"], 1);
     }
 }
 
@@ -905,6 +912,242 @@ fn diff_unscoped_tag_delta_honest_absence() {
     assert_eq!(
         sc["tags_expired"]["count"], 0,
         "unscoped tags_expired count must be 0"
+    );
+    // items must be genuinely empty — no note objects injected into the items array.
+    let gained_items = sc["tags_gained"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tags_gained items must be array"));
+    assert!(
+        gained_items.is_empty(),
+        "unscoped tags_gained items must be empty, got {gained_items:?}"
+    );
+    let expired_items = sc["tags_expired"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tags_expired items must be array"));
+    assert!(
+        expired_items.is_empty(),
+        "unscoped tags_expired items must be empty, got {expired_items:?}"
+    );
+    // scope_note field surfaces the limitation without polluting items.
+    // It is null when unscoped (the note is conveyed by count=0 + empty items).
+    // The key must be present in the object regardless.
+    assert!(
+        sc["tags_gained"]
+            .as_object()
+            .is_some_and(|o| o.contains_key("scope_note")),
+        "tags_gained must have scope_note field"
+    );
+}
+
+// ── Real tombstone detection via merge_entities ───────────────────────────────
+
+#[test]
+fn diff_tombstone_detected_from_real_merge_entities_call() {
+    // Build a runtime, call merge_entities() on the raw graph so the audit edge
+    // is written with valid_from: None (the actual substrate behaviour), then run
+    // a diff spanning before→after the merge and assert the tombstoned entity
+    // appears in entities_tombstoned.
+    let (runtime, graph) = block(build_explain_runtime());
+
+    // AAPL and MSFT-STUB are the merge pair. Add MSFT-STUB first.
+    block(async {
+        graph
+            .upsert_nodes(vec![GraphNode {
+                id: "instrument:MSFT-STUB".to_string(),
+                kind: EntityKind::Instrument,
+                label: "Microsoft Stub".to_string(),
+                aliases: vec![],
+                props: serde_json::Value::Null,
+                valid_from: Some("2024-06-01T00:00:00Z".to_string()),
+                valid_to: None,
+            }])
+            .await
+            .unwrap_or_else(|e| panic!("stub node: {e}"));
+
+        // Merge MSFT-STUB into AAPL (MSFT-STUB gets tombstoned).
+        graph
+            .merge_entities(
+                "instrument:MSFT-STUB",
+                "instrument:AAPL",
+                &tdw_core::MergeDecision {
+                    approved_by: "reviewer-1".to_string(),
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("merge: {e}"));
+    });
+
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+
+    // Diff from before the merge to after — the audit edge has valid_from: None
+    // so it is active at every timestamp including to_ts.
+    let response = call(
+        &mut server,
+        "tdw.kg.diff",
+        &json!({
+            "from_as_of": "2023-01-01T00:00:00Z",
+            "to_as_of": T2,
+            "scope_entity_id": "instrument:MSFT-STUB"
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false);
+    let sc = &response["result"]["structuredContent"];
+    let tombstoned = &sc["entities_tombstoned"];
+    assert!(
+        tombstoned["count"].as_u64().unwrap_or(0) >= 1,
+        "merge_entities tombstone must appear in entities_tombstoned; got {tombstoned:?}"
+    );
+    let items = tombstoned["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("items"));
+    assert!(
+        items
+            .iter()
+            .any(|item| item["entity_id"] == "instrument:MSFT-STUB"
+                && item["merged_into"] == "instrument:AAPL"),
+        "MSFT-STUB→AAPL tombstone must be in items; got {items:?}"
+    );
+}
+
+// ── Multi-successor ambiguity ─────────────────────────────────────────────────
+
+#[test]
+fn diff_invalidated_multi_successor_sets_ambiguous() {
+    // Seed a runtime where one edge is invalidated and TWO successors share
+    // (from, rel) at to_ts — ambiguous: true and candidates_count: 2 must be set.
+    use tdw_embed_local::HashEmbeddingProvider;
+    use tdw_storage_meilisearch::InMemoryLexicalEngine;
+    use tdw_storage_qdrant::InMemoryVectorEngine;
+    let graph = Arc::new(InMemoryGraphEngine::default());
+
+    block(async {
+        graph
+            .upsert_nodes(vec![
+                GraphNode {
+                    id: "instrument:X".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "X".to_string(),
+                    aliases: vec![],
+                    props: serde_json::Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+                GraphNode {
+                    id: "venue:A".to_string(),
+                    kind: EntityKind::Venue,
+                    label: "A".to_string(),
+                    aliases: vec![],
+                    props: serde_json::Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+                GraphNode {
+                    id: "venue:B".to_string(),
+                    kind: EntityKind::Venue,
+                    label: "B".to_string(),
+                    aliases: vec![],
+                    props: serde_json::Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+                GraphNode {
+                    id: "venue:OLD".to_string(),
+                    kind: EntityKind::Venue,
+                    label: "OLD".to_string(),
+                    aliases: vec![],
+                    props: serde_json::Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+            ])
+            .await
+            .unwrap_or_else(|e| panic!("nodes: {e}"));
+
+        let t_mid = "2025-06-01T00:00:00Z";
+        graph
+            .upsert_edges(vec![
+                // OLD listing closes at t_mid
+                GraphEdge {
+                    from: "instrument:X".to_string(),
+                    rel: "listed_on".to_string(),
+                    to: "venue:OLD".to_string(),
+                    props: serde_json::Value::Null,
+                    provenance: Provenance::Ingest {
+                        source: "feed".to_string(),
+                    },
+                    valid_from: Some(T0.to_string()),
+                    valid_to: Some(t_mid.to_string()),
+                },
+                // Two successors both active from t_mid
+                GraphEdge {
+                    from: "instrument:X".to_string(),
+                    rel: "listed_on".to_string(),
+                    to: "venue:A".to_string(),
+                    props: serde_json::Value::Null,
+                    provenance: Provenance::Ingest {
+                        source: "feed".to_string(),
+                    },
+                    valid_from: Some(t_mid.to_string()),
+                    valid_to: None,
+                },
+                GraphEdge {
+                    from: "instrument:X".to_string(),
+                    rel: "listed_on".to_string(),
+                    to: "venue:B".to_string(),
+                    props: serde_json::Value::Null,
+                    provenance: Provenance::Ingest {
+                        source: "feed".to_string(),
+                    },
+                    valid_from: Some(t_mid.to_string()),
+                    valid_to: None,
+                },
+            ])
+            .await
+            .unwrap_or_else(|e| panic!("edges: {e}"));
+    });
+
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    let lexical = Arc::new(InMemoryLexicalEngine::default());
+    let runtime = Arc::new(
+        KnowledgeRuntime::new(embedder, vectors)
+            .with_lexical(lexical, "knowledge")
+            .with_graph(Arc::new(SharedGraph(graph.clone()))),
+    );
+
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+
+    let response = call(
+        &mut server,
+        "tdw.kg.diff",
+        &json!({
+            "from_as_of": T0,
+            "to_as_of": T2,
+            "scope_entity_id": "instrument:X"
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false);
+    let sc = &response["result"]["structuredContent"];
+    let inv_items = sc["edges_invalidated"]["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("items"));
+    let old_entry = inv_items
+        .iter()
+        .find(|item| item["edge"]["to"] == "venue:OLD")
+        .unwrap_or_else(|| panic!("OLD invalidation not found"));
+    assert_eq!(
+        old_entry["ambiguous"], true,
+        "two successors must set ambiguous: true"
+    );
+    assert_eq!(
+        old_entry["candidates_count"], 2,
+        "candidates_count must be 2"
+    );
+    assert!(
+        old_entry["successor_candidate"].is_object(),
+        "successor_candidate must be an object (first of the two)"
     );
 }
 

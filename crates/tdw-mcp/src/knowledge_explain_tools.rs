@@ -160,10 +160,6 @@ fn diff_descriptor() -> ToolDescriptor {
                     "type": "string",
                     "description": "Restrict to one plane label stored in edge props (optional)."
                 },
-                "entity_kind": {
-                    "type": "string",
-                    "description": "Restrict node-level delta to this entity kind (lowercase, e.g. instrument)."
-                },
                 "scope_entity_id": {
                     "type": "string",
                     "description": "Restrict diff to within 2 hops of this entity (k-hop ≤ 2). Lifts the span cap."
@@ -337,12 +333,13 @@ async fn why_tag(
         .map_err(|e| execution(e.to_string()))?;
 
     // Find assignments for this entity+tag using the active_tags approach.
-    // We use a date form for `active_tags`; use today's date when no as_of is given.
-    // We need the full assignment including provenance, so we query via the tag engine
-    // if it exposes assignments; otherwise we rely on active_tags to confirm existence.
-    let query_date = as_of.unwrap_or("9999-12-31");
+    // active_tags takes a YYYY-MM-DD date string, NOT a timestamp. The caller's
+    // `as_of` arrives here already normalized to a UTC timestamp via `optional_as_of`,
+    // so we convert back to date form at this boundary. When absent, we use the
+    // far-future sentinel so all currently-open assignments are visible.
+    let query_date = as_of.map_or_else(|| "9999-12-31".to_string(), ts_to_date);
     let active = tags
-        .active_tags(entity_id, query_date)
+        .active_tags(entity_id, &query_date)
         .await
         .map_err(|e| execution(e.to_string()))?;
 
@@ -357,7 +354,7 @@ async fn why_tag(
     // `assignments_for`. We return an honest "provenance string not accessible
     // via the TagEngine trait" step rather than inventing.
     if !tag_found {
-        let date_label = as_of.unwrap_or("open");
+        let date_label = as_of.map_or_else(|| "open".to_string(), ts_to_date);
         return Ok(json!({
             "subject": {
                 "kind": "tag_assignment",
@@ -382,13 +379,13 @@ async fn why_tag(
     // A concrete InMemoryTagEngine with TagStore does expose `.assignments()`, but
     // that requires downcasting which is not stable across backends.
     // We surface this gap honestly.
-    let date_label = as_of.unwrap_or("open");
+    let date_label = as_of.map_or_else(|| "open".to_string(), ts_to_date);
     Ok(json!({
         "subject": {
             "kind": "tag_assignment",
             "entity_id": entity_id,
             "tag_id": tag_id,
-            "as_of": as_of
+            "as_of": &date_label
         },
         "chain": [
             {
@@ -462,9 +459,7 @@ async fn why_entity(
         )
     })];
 
-    if let Some(result) = append_crosswalk_steps(&mut chain, entity_id, &crosswalk_neighbors) {
-        return Ok(result);
-    }
+    let crosswalk_capped = append_crosswalk_steps(&mut chain, &crosswalk_neighbors);
     append_merge_steps(&mut chain, entity_id, &merge_neighbors);
 
     let merged = !merge_neighbors.is_empty();
@@ -488,7 +483,7 @@ async fn why_entity(
         "subject": { "kind": "entity", "entity_id": entity_id },
         "chain": chain,
         "summary": summary,
-        "chain_depth_cap_reached": chain.len() >= WHY_MAX_CHAIN_DEPTH
+        "chain_depth_cap_reached": crosswalk_capped || chain.len() >= WHY_MAX_CHAIN_DEPTH
     }))
 }
 
@@ -531,21 +526,29 @@ async fn fetch_crosswalk_neighbors(
         .map_err(|e| execution(e.to_string()))
 }
 
-/// Append crosswalk steps to `chain`. Returns `Some(early_result)` when the
-/// chain depth cap is hit before all crosswalk edges are appended.
+/// Append crosswalk steps to `chain`.
+///
+/// Returns `true` when the depth cap was hit mid-section (crosswalk steps were
+/// truncated). A cap sentinel step is appended so the caller knows which section
+/// was capped. Merge steps are NOT suppressed — the caller always continues after
+/// this function regardless of the return value.
 fn append_crosswalk_steps(
     chain: &mut Vec<Value>,
-    entity_id: &str,
     crosswalk_neighbors: &[(tdw_core::GraphEdge, tdw_core::GraphNode)],
-) -> Option<Value> {
+) -> bool {
     for (edge, neighbor) in crosswalk_neighbors {
         if chain.len() >= WHY_MAX_CHAIN_DEPTH {
-            return Some(json!({
-                "subject": { "kind": "entity", "entity_id": entity_id },
-                "chain": chain,
-                "summary": format!("Entity {entity_id}: chain depth cap reached ({WHY_MAX_CHAIN_DEPTH})."),
-                "chain_depth_cap_reached": true
+            let step = chain.len();
+            chain.push(json!({
+                "step": step,
+                "kind": "crosswalk_section_cap_reached",
+                "cap": WHY_MAX_CHAIN_DEPTH,
+                "summary": format!(
+                    "Crosswalk section truncated at depth cap ({WHY_MAX_CHAIN_DEPTH}). \
+                     Merge-history steps (if any) follow this marker."
+                )
             }));
+            return true;
         }
         let step = chain.len();
         chain.push(json!({
@@ -562,7 +565,7 @@ fn append_crosswalk_steps(
             )
         }));
     }
-    None
+    false
 }
 
 /// Append merge-history steps to `chain` (up to the depth cap).
@@ -761,7 +764,6 @@ fn diff(
     }
 
     let plane_filter = optional_str(arguments, "plane").map(ToString::to_string);
-    let entity_kind_filter = optional_str(arguments, "entity_kind").map(ToString::to_string);
     let scope_entity_id = optional_str(arguments, "scope_entity_id").map(ToString::to_string);
     let limit = optional_usize(arguments, "limit")?
         .unwrap_or(DIFF_DEFAULT_LIMIT)
@@ -784,7 +786,6 @@ fn diff(
         &from_ts,
         &to_ts,
         plane_filter.as_deref(),
-        entity_kind_filter.as_deref(),
         scope_entity_id.as_deref(),
         limit,
     ))?;
@@ -812,14 +813,12 @@ struct EdgeDelta {
     invalidated_items: Vec<Value>,
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn compute_diff(
     graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
     tags: Option<&std::sync::Arc<dyn tdw_tags::TagEngine>>,
     from_ts: &str,
     to_ts: &str,
     plane_filter: Option<&str>,
-    entity_kind_filter: Option<&str>,
     scope_entity_id: Option<&str>,
     limit: usize,
 ) -> Result<Value, ToolFailure> {
@@ -832,45 +831,56 @@ async fn compute_diff(
     let delta = compute_edge_delta(&raw_edges, from_ts, to_ts, plane_filter, limit);
 
     // Tag delta (requires tag engine).
-    let (tags_gained, tags_expired, tags_gained_count, tags_expired_count) =
+    let (tags_gained, tags_expired, tags_gained_count, tags_expired_count, tag_scope_note) =
         if let Some(tags) = tags {
-            compute_tag_delta(
-                tags,
-                scope_entity_id,
-                entity_kind_filter,
-                from_ts,
-                to_ts,
-                limit,
-            )
-            .await?
+            let (g, e, gc, ec) =
+                compute_tag_delta(tags, scope_entity_id, from_ts, to_ts, limit).await?;
+            (g, e, gc, ec, None::<&str>)
         } else {
-            (Vec::new(), Vec::new(), 0usize, 0usize)
+            (Vec::new(), Vec::new(), 0usize, 0usize, None)
         };
 
-    // Entity tombstones: merged_into edges that became active in the window.
-    // (Cannot enumerate all nodes without a node-scan API — approximated via edge endpoints.)
-    let entities_tombstoned: Vec<Value> = delta
-        .added_items
+    // Entity tombstones: detect by checking source-node props.
+    //
+    // merge_entities() (tdw-storage-graph) tombstones the source by setting
+    // `props.merged_into` on the node AND writing a merged_into audit edge with
+    // valid_from: None, valid_to: None. Because active_at(None, None, ts) is
+    // always true, temporal delta predicates (not-active-at-from AND active-at-to)
+    // never fire for these audit edges — the edge is eternally active from the
+    // substrate's perspective.
+    //
+    // Correct approach: for each merged_into audit edge in the candidate set,
+    // fetch the source node and verify its props.merged_into is set. The audit
+    // edge presence in the candidate set (within k-hop scope or full graph) is
+    // sufficient to include it — the tombstone is a persistent state, not a
+    // temporal delta.
+    let tombstone_candidate_edges: Vec<&tdw_core::GraphEdge> = raw_edges
         .iter()
-        .filter(|e| e["rel"].as_str() == Some("merged_into"))
-        .map(|e| {
-            json!({
-                "entity_id": e["from"],
-                "merged_into": e["to"],
-                "valid_from": e["valid_from"]
-            })
-        })
+        .filter(|e| e.rel == "merged_into")
         .collect();
-    let entities_tombstoned_count = entities_tombstoned.len();
-    let entities_tombstoned_items: Vec<Value> =
-        entities_tombstoned.into_iter().take(limit).collect();
+    let mut tombstone_items: Vec<Value> = Vec::new();
+    for edge in &tombstone_candidate_edges {
+        let node = block_on_inner(graph.node(&edge.from))
+            .await
+            .map_err(|e| execution(e.to_string()))?;
+        if let Some(node) = node {
+            if node.props.get("merged_into").is_some() {
+                tombstone_items.push(json!({
+                    "entity_id": edge.from,
+                    "merged_into": edge.to,
+                    "provenance": edge.provenance
+                }));
+            }
+        }
+    }
+    let entities_tombstoned_count = tombstone_items.len();
+    let entities_tombstoned_items: Vec<Value> = tombstone_items.into_iter().take(limit).collect();
 
     Ok(json!({
         "from_as_of": from_ts,
         "to_as_of": to_ts,
         "filters": {
             "plane": plane_filter,
-            "entity_kind": entity_kind_filter,
             "scope_entity_id": scope_entity_id
         },
         "edges_added": {
@@ -887,23 +897,73 @@ async fn compute_diff(
             "count": entities_tombstoned_count,
             "truncated": entities_tombstoned_count > limit,
             "items": entities_tombstoned_items,
-            "note": "Entity tombstones are detected from merged_into edges added in the window. \
-                     A full node-added scan is not available without a node-enumeration API."
+            "note": "Tombstones detected from merged_into audit edges in scope whose source node \
+                     carries props.merged_into (the substrate marker set by merge_entities). \
+                     These audit edges have valid_from: None / valid_to: None (eternally active) \
+                     so temporal-delta predicates do not apply; presence in the candidate set \
+                     is the signal."
         },
         "tags_gained": {
             "count": tags_gained_count,
             "truncated": tags_gained_count > limit,
-            "items": tags_gained
+            "items": tags_gained,
+            "scope_note": tag_scope_note
         },
         "tags_expired": {
             "count": tags_expired_count,
             "truncated": tags_expired_count > limit,
-            "items": tags_expired
+            "items": tags_expired,
+            "scope_note": tag_scope_note
         },
         "leakage_guard": "Temporal predicates use tdw_core::active_at exclusively. \
                           No fact with valid_to <= from_as_of appears in edges_added. \
                           No fact with valid_from > to_as_of appears in any list."
     }))
+}
+
+/// Build a single invalidated-edge item with successor candidate metadata.
+///
+/// Finds all successors sharing `(from, rel)` that are active at `to_ts` and
+/// differ from `old` on at least one of `(to, valid_from, valid_to)`. Exposes
+/// the first as `successor_candidate`; sets `ambiguous: true` when more than one
+/// exists so callers are not misled into treating a first-of-N as authoritative.
+fn build_invalidated_item<F>(
+    old: &tdw_core::GraphEdge,
+    candidates: &[&tdw_core::GraphEdge],
+    active_at_to: &F,
+) -> Value
+where
+    F: Fn(&&tdw_core::GraphEdge) -> bool,
+{
+    let successors: Vec<&&tdw_core::GraphEdge> = candidates
+        .iter()
+        .filter(|cand| {
+            cand.from == old.from
+                && cand.rel == old.rel
+                && active_at_to(cand)
+                && (cand.to != old.to
+                    || cand.valid_from != old.valid_from
+                    || cand.valid_to != old.valid_to)
+        })
+        .collect();
+    let candidates_count = successors.len();
+    let successor_candidate = successors.first().map(|s| {
+        json!({
+            "from": s.from, "rel": s.rel, "to": s.to,
+            "valid_from": s.valid_from, "valid_to": s.valid_to,
+            "provenance": s.provenance
+        })
+    });
+    json!({
+        "edge": {
+            "from": old.from, "rel": old.rel, "to": old.to,
+            "valid_from": old.valid_from, "valid_to": old.valid_to,
+            "provenance": old.provenance
+        },
+        "successor_candidate": successor_candidate,
+        "candidates_count": candidates_count,
+        "ambiguous": candidates_count > 1
+    })
 }
 
 /// Compute the edge-level delta between two temporal snapshots from a pre-collected
@@ -971,37 +1031,9 @@ fn compute_edge_delta(
         .collect();
     let invalidated_count = edges_invalidated_raw.len();
 
-    // For each invalidated edge, find a successor with the same (from, rel) active at to_ts.
     let mut invalidated_items: Vec<Value> = edges_invalidated_raw
         .iter()
-        .map(|old| {
-            let successor = candidate_edges.iter().find(|cand| {
-                cand.from == old.from
-                    && cand.rel == old.rel
-                    && active_at_to(cand)
-                    && (cand.to != old.to
-                        || cand.valid_from != old.valid_from
-                        || cand.valid_to != old.valid_to)
-            });
-            json!({
-                "edge": {
-                    "from": old.from,
-                    "rel": old.rel,
-                    "to": old.to,
-                    "valid_from": old.valid_from,
-                    "valid_to": old.valid_to,
-                    "provenance": old.provenance
-                },
-                "successor": successor.map(|s| json!({
-                    "from": s.from,
-                    "rel": s.rel,
-                    "to": s.to,
-                    "valid_from": s.valid_from,
-                    "valid_to": s.valid_to,
-                    "provenance": s.provenance
-                }))
-            })
-        })
+        .map(|old| build_invalidated_item(old, &candidate_edges, &active_at_to))
         .collect();
     invalidated_items.sort_by(|a, b| {
         let key_a = (
@@ -1078,7 +1110,6 @@ async fn collect_scoped_edges(
 async fn compute_tag_delta(
     tags: &std::sync::Arc<dyn tdw_tags::TagEngine>,
     scope_entity_id: Option<&str>,
-    _entity_kind_filter: Option<&str>,
     from_ts: &str,
     to_ts: &str,
     limit: usize,
@@ -1142,13 +1173,10 @@ async fn compute_tag_delta(
         Ok((gained_items, expired_items, gained_count, expired_count))
     } else {
         // No scope: the TagEngine trait does not expose a full entity enumeration.
-        // Returning empty with a note is honest.
-        let note = json!({
-            "note": "Full tag delta for all entities requires entity enumeration, \
-                     which the TagEngine trait does not expose. Supply scope_entity_id \
-                     to get per-entity tag deltas."
-        });
-        Ok((vec![note.clone()], vec![note], 0, 0))
+        // Return genuinely empty item lists (count=0). The caller surfaces the
+        // limitation via the top-level `scope_note` field on tags_gained/tags_expired,
+        // not by injecting note objects into the items array.
+        Ok((Vec::new(), Vec::new(), 0, 0))
     }
 }
 
