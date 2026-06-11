@@ -461,9 +461,15 @@ impl Backend {
     }
 
     /// Build a [`KnowledgeIndexer`] backed by the daemon's graph engine and
-    /// lexical engine — the ingestion path hosted by the daemon (F1 scope).
-    /// Callers own the returned indexer; the daemon's `embedder`, `graph`,
-    /// and `lexical` handles are shared (`Arc` clones).
+    /// lexical engine. Callers own the returned indexer; the daemon's
+    /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
+    ///
+    /// **Deferral note (F1)**: this is a host-facing seam for future
+    /// daemon-hosted ingestion. The daemon's own ingestion methods
+    /// ([`knowledge_index_at`](Self::knowledge_index_at),
+    /// [`knowledge_ingest_at`](Self::knowledge_ingest_at)) still use the
+    /// internal [`KnowledgeIndex`] field directly; routing them through
+    /// this indexer is a deferred follow-up.
     #[must_use]
     pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
         let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));

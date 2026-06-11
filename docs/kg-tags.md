@@ -47,20 +47,36 @@ Cargo feature. Production builds and Dockerfiles enable it; the default
 
 ## MCP surface
 
-The knowledge read tools and the `tdw.kg.feedback` write tool (write-back gate
-requires the `write_tools_enabled` operator flag, off by default for the agent
-surface) are exposed via `McpServer::with_knowledge` /
-`McpServer::with_feedback_store`. In the unified `tdw-backend` (`Surfaces::Both`
-mode) these handles are injected from the co-resident `Backend` directly — no
-loopback round-trip for knowledge operations.
+The knowledge read tools (`tdw.kg.search`, `tdw.kg.entity`, `tdw.kg.traverse`,
+`tdw.kg.path`, `tdw.tags.query`) are live when a `KnowledgeRuntime` is
+attached via `McpServer::with_knowledge`. The `tdw.kg.feedback` write tool is
+additionally gated by the presence of an attached `RetrievalFeedbackStore`
+(`McpServer::with_feedback_store`) — it does not appear in `tools/list` when no
+store is injected, so agent surfaces default to read-only without any flag.
+
+The write tools for proposals/annotations (`tdw.kg.annotate`,
+`tdw.kg.proposals`, `tdw.tags.define`, `tdw.tags.assign`) are gated by
+`KnowledgeRuntime::operator_authority()`, which is off by default. Host code
+that constructs a `KnowledgeRuntime` must explicitly grant operator authority
+to enable those actions; a `KnowledgeRuntime` without it refuses operator
+actions at call time with a tool error.
+
+In the unified `tdw-backend` (`Surfaces::Both` mode) both handles are injected
+from the co-resident `Backend` directly — no loopback round-trip for knowledge
+operations.
 
 ## Retrieval feedback loop
 
 `tdw-agent-store::RetrievalFeedbackStore` records per-query signal (hit rank,
-accepted, skipped). The daemon's consolidation scheduler flushes pending
-feedback into the knowledge index on its hourly tick (configurable via
-`TDW_CONSOLIDATION_TICK_SECS`). The `tdw.kg.feedback` MCP tool gates writes
-behind `write_tools_enabled` so agent surfaces default to read-only.
+accepted, skipped) via the `tdw.kg.feedback` MCP tool (absent on agent
+surfaces where no store is injected — see MCP surface section above).
+
+Feedback is consumed on the **manual consolidation surface** only:
+`Backend::consolidate_now` / `Backend::consolidate_now_at` drain the feedback
+store into the consolidation plan via `consolidation_plan_with_usage`. The
+daemon's periodic consolidation scheduler (`spawn_consolidation_scheduler`)
+operates on the `MemoryStore` only and does not flush the feedback store
+automatically; periodic feedback consumption is a deferred follow-up.
 
 ## Postgres migration history
 

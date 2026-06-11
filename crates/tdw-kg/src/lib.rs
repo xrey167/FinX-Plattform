@@ -5,7 +5,7 @@
 //!
 //! A3 rebuilds this crate's internals while keeping its method surface:
 //!
-//! * [`EntityKind`] is now the platform-wide 50-kind taxonomy re-exported from
+//! * [`EntityKind`] is now the platform-wide 51-kind taxonomy re-exported from
 //!   `tdw-taxonomy` — the 5 local kinds this crate used to define (Instrument,
 //!   Account, Strategy, Agent, Dataset) are a subset of it, so existing
 //!   constructors compile unchanged. SERDE NOTE: kinds now serialize to the
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn entity_kind_is_the_unified_taxonomy() {
-        // The unification itself: tdw-kg's kind IS the 50-kind taxonomy; the
+        // The unification itself: tdw-kg's kind IS the 51-kind taxonomy; the
         // old local 5 variants are members of it, and warehouse kinds beyond
         // the old enum are usable directly.
         let venue = Entity {

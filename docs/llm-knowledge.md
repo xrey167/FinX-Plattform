@@ -57,8 +57,12 @@ error at daemon startup (B6 posture).
 - `KnowledgeRuntime` with the hybrid Retriever, graph engine, and lexical
   engine — all sharing the same `EmbeddingProvider` and `VectorEngine` as the
   daemon composition root.
-- `KnowledgeIndexer` constructed on demand (shares the same `Arc`s — no
-  duplication of large state).
+- `KnowledgeIndexer` exposed as a host-facing seam via
+  `Backend::knowledge_indexer()` (shares the same `Arc`s — no duplication of
+  large state). **Deferral note**: the daemon's own ingestion paths
+  (`knowledge_index_at`, `knowledge_ingest_at`) still use the internal
+  `KnowledgeIndex` field directly; daemon-hosted `KnowledgeIndexer` ingestion
+  is a deferred follow-up to this story.
 - `RetrievalFeedbackStore` for the write-back loop.
 - Graph engine selected at startup from `[knowledge.graph]` config: `bolt`
   (production) or `in-memory` (dev/test). Hard `Init` error on unreachable
@@ -71,12 +75,23 @@ read/write tools operate without a loopback round-trip to the daemon.
 
 ## MCP tools
 
-The following MCP tools are live when a `KnowledgeRuntime` is attached:
+The following MCP tools are live when a `KnowledgeRuntime` is attached
+(`tdw-mcp/src/knowledge_tools.rs`):
 
 | Tool | Description |
 |---|---|
 | `tdw.kg.search` | Hybrid semantic + lexical + graph-neighborhood search. |
-| `tdw.kg.get_entity` | Retrieve a single entity by ID with its tag set. |
-| `tdw.kg.neighbors` | BFS neighborhood traversal from an entity. |
-| `tdw.kg.infer` | Run inference rules against the graph. |
-| `tdw.kg.feedback` | Record retrieval feedback signal (write gate: requires `write_tools_enabled = true`; off by default for agent surfaces). |
+| `tdw.kg.entity` | Retrieve a single entity by ID with its tag set. |
+| `tdw.kg.traverse` | BFS neighbourhood traversal from an entity (hop cap: 3). |
+| `tdw.kg.path` | Shortest path between two entities. |
+| `tdw.tags.query` | Tag queries: active tags for an entity, entities matching a tag, or tag hierarchy. |
+
+The feedback write tool (`tdw-mcp/src/knowledge_feedback_tools.rs`) is live
+when a `RetrievalFeedbackStore` is also attached:
+
+| Tool | Description |
+|---|---|
+| `tdw.kg.feedback` | Record retrieval feedback signal (append-only). Gated by feedback-store attachment — absent on agent surfaces where no store is injected. |
+
+There is no inference MCP tool; `tdw-infer` is a library crate whose rules
+fire as part of `KnowledgeRuntime` internals, not as a standalone tool.
