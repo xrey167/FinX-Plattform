@@ -68,21 +68,34 @@ providers never mixes vector dimensions. See the migration path in step 4.
 
 ## 3. Ingest
 
-Index documents through the daemon's knowledge API or the MCP tool:
+Today the public ingest surface is the **Rust `Backend` API** and the **MCP
+`knowledge_index` path**. A public `tdw kg index` CLI/MCP ingest command is
+planned for story K-E3 (not yet merged); do not reference it until that PR lands.
 
-```bash
-# Via tdw-cli (if wired):
-tdw kg index --id "doc-aapl-1" --body "AAPL services revenue note" \
-  --entity "instrument:AAPL" --tags "asset:equity"
+Index documents via the `Backend` API (Rust):
 
-# Or programmatically via the Backend API (Rust):
+```rust
 backend.knowledge_index(KnowledgeDocument {
     id: "doc-aapl-1".to_string(),
     body: "AAPL services revenue note".to_string(),
-    entity: Entity { entity_id: "instrument:AAPL".to_string(), .. },
+    entity: Entity {
+        entity_id: "instrument:AAPL".to_string(),
+        kind: EntityKind::Instrument,
+        label: "Apple".to_string(),
+        aliases: vec!["AAPL".to_string()],
+    },
     tags: vec!["asset:equity".to_string()],
-    ..Default::default()
+    source: None,
+    plane: None,
+    as_of: None,
+    mentions: vec![],
 }).await?;
+```
+
+Or in batch via `Backend::knowledge_ingest_at`:
+
+```rust
+backend.knowledge_ingest_at(vec![doc1, doc2], "2026-06-11").await?;
 ```
 
 Ingest is content-hash-idempotent: re-indexing the same `id` with the same body

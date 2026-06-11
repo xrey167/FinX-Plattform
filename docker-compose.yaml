@@ -272,12 +272,13 @@ services:
       TDW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
       TDW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
       TDW_S3_REGION: us-east-1
-      # K-E1: pin graph backend to bolt explicitly so the in-memory default
-      # (first-run dev convenience) is never inherited by the live stack.
-      # TDW_CONFIG_CONTENT injects inline TOML that is merged as a config layer
-      # on top of any file-based config (see docs/CONFIGURATION.md). The
-      # memgraph service on port 7687 is declared in the `full`/`live` profiles;
-      # its Bolt URI is the compose-internal DNS name.
+      # K-E1: pin graph backend to bolt explicitly so the in-memory first-run
+      # default never silently propagates to the live stack. TDW_CONFIG_CONTENT
+      # is read by load_config() (tdw-backend/src/server/mod.rs) as an InlineEnv
+      # layer (precedence 50) merged on top of the base config — see
+      # docs/knowledge-quickstart.md §1 for the full layer-order reference.
+      # The memgraph service on port 7687 is declared above in the `full`/`live`
+      # profiles; `memgraph` resolves via compose-internal DNS.
       TDW_CONFIG_CONTENT: |
         [knowledge.graph]
         backend = "bolt"

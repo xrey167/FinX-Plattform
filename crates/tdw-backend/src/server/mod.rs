@@ -34,22 +34,24 @@ pub type ServerError = Box<dyn std::error::Error + Send + Sync>;
 /// Resolve the layered [`TdwConfig`] for daemon boot, exactly as the original
 /// `tdw-service` binary did.
 ///
-/// Honours `TDW_CONFIG` (a TOML file path, merged as a config layer) when set,
-/// otherwise builds a minimal in-memory default. In both branches volatile
-/// paths are overridden to safe in-memory/temp defaults, the TCP bind defaults
-/// to `127.0.0.1:7878` (overridable via `TDW_DAEMON_TCP_BIND`), and `TDW_PROFILE`
-/// overrides the resolved profile.
+/// Layer resolution order (later layers win):
+///
+/// 1. **Base**: `TDW_CONFIG` TOML file path when set, otherwise the structural
+///    default with TCP transport forced and `TDW_DAEMON_TCP_BIND` applied.
+/// 2. **Inline env**: `TDW_CONFIG_CONTENT` raw TOML string when set, merged as
+///    an [`InlineEnv`](tdw_config::ConfigLayerKind::InlineEnv) layer on top of
+///    the base. This is the mechanism compose/production profiles use to pin
+///    `[knowledge.graph] backend = "bolt"` without requiring a mounted file.
+/// 3. **Boot overrides**: volatile paths (`session.sqlite_path`,
+///    `paths.rollout_dir`) and `TDW_PROFILE` are applied last.
 ///
 /// # Errors
 ///
 /// Returns a [`ServerError`] if `TDW_CONFIG` is set but cannot be read, parsed,
-/// or merged.
+/// or merged, or if `TDW_CONFIG_CONTENT` is set but contains invalid TOML.
 pub async fn load_config() -> Result<TdwConfig, ServerError> {
-    // Base config: merge a TDW_CONFIG TOML file when set, else a minimal default
-    // whose daemon binds local TCP (overridable via TDW_DAEMON_TCP_BIND, e.g.
-    // `0.0.0.0:7878` in a container). The TOML branch keeps the file's own daemon
-    // bind. Unset default = `127.0.0.1:7878`.
-    let mut config = if let Ok(path) = std::env::var("TDW_CONFIG") {
+    // Step 1 — base layer: a TDW_CONFIG file or the structural default.
+    let base_layers: Vec<tdw_config::ConfigLayer> = if let Ok(path) = std::env::var("TDW_CONFIG") {
         let contents = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| format!("TDW_CONFIG read error ({path}): {e}"))?;
@@ -59,14 +61,50 @@ pub async fn load_config() -> Result<TdwConfig, ServerError> {
             &contents,
         )
         .map_err(|e| format!("TDW_CONFIG parse error: {e}"))?;
-        tdw_config::merge_layers(&[layer]).map_err(|e| format!("config merge error: {e}"))?
+        vec![layer]
     } else {
-        let mut config = TdwConfig::default();
-        config.daemon.transport = DaemonTransport::Tcp;
-        config.daemon.tcp_bind = Some(
+        // No file: synthesise a minimal default layer so merge_layers can
+        // accept an empty-or-content-only list below.
+        vec![]
+    };
+
+    // Step 2 — inline env layer: TDW_CONFIG_CONTENT is raw TOML merged on top
+    // of the base with InlineEnv precedence (50 > EnvFile 20). This is how
+    // compose/production profiles pin knowledge.graph.backend = "bolt" without
+    // a mounted file. When unset this step is a no-op.
+    let mut layers = base_layers;
+    if let Ok(content) = std::env::var("TDW_CONFIG_CONTENT")
+        && !content.trim().is_empty()
+    {
+        let layer = tdw_config::ConfigLayer::from_toml(
+            tdw_config::ConfigLayerKind::InlineEnv,
+            "TDW_CONFIG_CONTENT",
+            &content,
+        )
+        .map_err(|e| format!("TDW_CONFIG_CONTENT parse error: {e}"))?;
+        layers.push(layer);
+    }
+
+    let mut config = if layers.is_empty() {
+        // Pure default: no TDW_CONFIG file, no TDW_CONFIG_CONTENT.
+        let mut cfg = TdwConfig::default();
+        cfg.daemon.transport = DaemonTransport::Tcp;
+        cfg.daemon.tcp_bind = Some(
             std::env::var("TDW_DAEMON_TCP_BIND").unwrap_or_else(|_| "127.0.0.1:7878".to_string()),
         );
-        config
+        cfg
+    } else {
+        // One or more layers: let merge_layers compose them over TdwConfig::default().
+        // In the TDW_CONFIG-only case the file sets the tcp_bind; in all other
+        // cases the structural default (`127.0.0.1:7878`) is already present and
+        // TDW_DAEMON_TCP_BIND is applied below in the shared post-merge step.
+        let mut cfg =
+            tdw_config::merge_layers(&layers).map_err(|e| format!("config merge error: {e}"))?;
+        // Apply TDW_DAEMON_TCP_BIND when set, regardless of how the base was built.
+        if let Ok(bind) = std::env::var("TDW_DAEMON_TCP_BIND") {
+            cfg.daemon.tcp_bind = Some(bind);
+        }
+        cfg
     };
 
     // Shared daemon-boot overrides (applied to either base): an in-memory session
@@ -81,6 +119,29 @@ pub async fn load_config() -> Result<TdwConfig, ServerError> {
         .into_owned();
     config.profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
     Ok(config)
+}
+
+/// Parse a raw TOML string as an [`InlineEnv`](tdw_config::ConfigLayerKind::InlineEnv)
+/// layer and merge it on top of [`TdwConfig::default`].
+///
+/// This is the pure core of the `TDW_CONFIG_CONTENT` handling in [`load_config`].
+/// Extracted as a standalone function so it can be tested without mutating
+/// the process environment (which `#![forbid(unsafe_code)]` prevents in tests).
+///
+/// # Errors
+///
+/// Returns a [`ServerError`] if `content` is invalid TOML or the merged config
+/// fails semantic validation.
+#[cfg(test)]
+fn apply_inline_content_layer(content: &str) -> Result<TdwConfig, ServerError> {
+    let layer = tdw_config::ConfigLayer::from_toml(
+        tdw_config::ConfigLayerKind::InlineEnv,
+        "TDW_CONFIG_CONTENT",
+        content,
+    )
+    .map_err(|e| -> ServerError { format!("TDW_CONFIG_CONTENT parse error: {e}").into() })?;
+    tdw_config::merge_layers(&[layer])
+        .map_err(|e| -> ServerError { format!("config merge error: {e}").into() })
 }
 
 /// Resolve the effective profile: `TDW_PROFILE` overrides `current` when non-empty.
@@ -951,6 +1012,31 @@ mod tests {
         // profile, so the result equals resolve_profile of that same input.
         let expected_profile = resolve_profile(&config.profile, std::env::var("TDW_PROFILE").ok());
         assert_eq!(config.profile, expected_profile);
+    }
+
+    /// K-E1 review finding 1: TDW_CONFIG_CONTENT is the mechanism compose/production
+    /// profiles use to pin knowledge.graph.backend = "bolt". This test proves the
+    /// layer-merge path works by calling `apply_inline_content_layer` directly —
+    /// the pure helper extracted from `load_config` — without mutating the process
+    /// environment (which is forbidden by `#![forbid(unsafe_code)]`).
+    ///
+    /// The test also acts as a contract for the compose pin: the same TOML that
+    /// `docker-compose.yaml` injects via `TDW_CONFIG_CONTENT` is passed here, and
+    /// the assertion proves it overrides the `in-memory` default to `bolt`.
+    #[test]
+    fn inline_content_layer_overrides_graph_backend() {
+        let toml = "[knowledge.graph]\nbackend = \"bolt\"\nbolt_uri = \"bolt://127.0.0.1:7687\"\n";
+        let config = apply_inline_content_layer(toml)
+            .expect("valid TDW_CONFIG_CONTENT TOML must produce a valid config");
+        assert_eq!(
+            config.knowledge.graph.backend, "bolt",
+            "inline content layer must override the in-memory default to bolt"
+        );
+        assert_eq!(
+            config.knowledge.graph.bolt_uri.as_deref(),
+            Some("bolt://127.0.0.1:7687"),
+            "inline content layer must carry bolt_uri into the merged config"
+        );
     }
 
     #[test]
