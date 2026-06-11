@@ -82,7 +82,14 @@ impl ResultExtra {
 /// treat results uniformly: `results` carries the standardized rows, `provider`
 /// records which source served them, `warnings` surface non-fatal issues, and
 /// `extra` carries route/timestamp/arguments provenance.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// `Eq` is intentionally *not* derived: the optional `chart` slot holds an
+/// arbitrary [`serde_json::Value`] (which is `PartialEq` but not `Eq` because it
+/// can contain floats), so the envelope is structurally `PartialEq` only.
+// `serde_json::Value` is not `Eq`, so `Eq` cannot be derived here even though the
+// pedantic lint suggests it.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ResultEnvelope<T> {
     /// Stable identifier for this result (request id / correlation id).
     pub id: String,
@@ -97,6 +104,12 @@ pub struct ResultEnvelope<T> {
     /// Route / timestamp / arguments provenance.
     #[serde(default)]
     pub extra: ResultExtra,
+    /// Optional renderable chart spec (a Plotly figure JSON object) attached when
+    /// a chartable route is called with `chart=true`. Skipped entirely when
+    /// absent, so payloads without a chart are byte-identical to the pre-chart
+    /// envelope shape.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub chart: Option<serde_json::Value>,
 }
 
 impl<T> ResultEnvelope<T> {
@@ -108,6 +121,7 @@ impl<T> ResultEnvelope<T> {
             provider: None,
             warnings: Vec::new(),
             extra: ResultExtra::default(),
+            chart: None,
         }
     }
 
@@ -129,6 +143,14 @@ impl<T> ResultEnvelope<T> {
     #[must_use]
     pub fn with_warning(mut self, warning: Warning) -> Self {
         self.warnings.push(warning);
+        self
+    }
+
+    /// Attach a renderable chart spec (a Plotly figure JSON object) (builder
+    /// style). Pass the figure produced by `tdw-charting`'s spec builders.
+    #[must_use]
+    pub fn with_chart(mut self, chart: serde_json::Value) -> Self {
+        self.chart = Some(chart);
         self
     }
 
@@ -313,5 +335,21 @@ mod tests {
         // results / warnings / extra.arguments still present (default-emitting).
         assert!(json.contains("\"results\":[]"));
         assert!(json.contains("\"warnings\":[]"));
+        // The chart slot is skipped entirely when absent, so a chart-less
+        // payload is byte-identical to the pre-chart envelope shape.
+        assert!(!json.contains("\"chart\""));
+    }
+
+    #[test]
+    fn chart_slot_round_trips_and_is_present_when_set() {
+        let figure = serde_json::json!({ "data": [], "layout": { "title": "t" } });
+        let env = sample().with_chart(figure.clone());
+        assert_eq!(env.chart.as_ref(), Some(&figure));
+
+        let json = serde_json::to_string(&env).expect("serialize");
+        assert!(json.contains("\"chart\""));
+        let back: ResultEnvelope<Row> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(env, back);
+        assert_eq!(back.chart, Some(figure));
     }
 }

@@ -109,6 +109,48 @@ curl -i 'http://127.0.0.1:7879/api/v1/equity/price/historical?symbol=AAPL&interv
 # HTTP/1.1 400 Bad Request
 ```
 
+## Charts (`chart=true`)
+
+Append `chart=true` to any **chartable** route and the envelope gains a `chart`
+field carrying a renderable chart spec. The spec is a **Plotly figure** — the
+JSON object `{ "data": [...traces], "layout": {...} }` that the
+[plotly.js](https://plotly.com/javascript/) library renders directly in the
+browser. It is built server-side with plain JSON (no native graphics
+dependency); the client does the rendering. When `chart=true` is absent the
+`chart` field is omitted entirely, so existing payloads are unchanged.
+
+The shape is detected from the route's rows: OHLCV rows (e.g.
+`equity/price/historical`) yield a `candlestick` trace (plus a `volume` bar
+subplot when volume is present); a single-value `date`+`value` series (e.g. the
+fixed-income rate and yield-curve routes) yields a `scatter` line; a
+`technical/*` indicator over a fetched price series yields the indicator line(s)
+overlaid on a candlestick of the source bars. A chartable route whose rows are
+neither shape attaches no spec and records a `chart_unsupported` warning.
+
+```bash
+curl 'http://127.0.0.1:7879/api/v1/equity/price/historical?symbol=AAPL&provider=fileset&chart=true'
+```
+
+```json
+{
+  "id": "equity/price/historical",
+  "results": [ { "symbol": "AAPL", "date": "2026-05-20", "open": 100.0, "high": 102.0, "low": 99.0, "close": 101.0, "volume": 10000 } ],
+  "provider": "fileset",
+  "warnings": [],
+  "extra": { "route": "equity/price/historical", "arguments": { "provider": "fileset" } },
+  "chart": {
+    "data": [
+      { "type": "candlestick", "name": "OHLC", "x": ["2026-05-20"], "open": [100.0], "high": [102.0], "low": [99.0], "close": [101.0] },
+      { "type": "bar", "name": "Volume", "x": ["2026-05-20"], "y": [10000.0], "yaxis": "y2" }
+    ],
+    "layout": { "title": "Candlestick", "template": "plotly_dark", "showlegend": true }
+  }
+}
+```
+
+To render it, hand `envelope.chart` straight to `Plotly.newPlot(div,
+envelope.chart.data, envelope.chart.layout)`.
+
 The OpenAPI document:
 
 ```bash
