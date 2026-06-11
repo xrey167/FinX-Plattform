@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finx-platform"
+version = "0.1.0"
+description = "Thin, generated HTTP client for the FinX Platform daemon's catalog REST API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT OR Apache-2.0" }
+keywords = ["finance", "market-data", "openbb", "rest", "sdk"]
+# Zero required dependencies: the runtime uses only the Python standard library
+# (urllib). Dataframe conversion is opt-in via the extras below.
+dependencies = []
+
+[project.optional-dependencies]
+pandas = ["pandas>=1.5"]
+polars = ["polars>=0.20"]
+
+[project.urls]
+Homepage = "https://github.com/finx-finance/finx-platform"
+Documentation = "https://github.com/finx-finance/finx-platform/blob/main/docs/products/python-sdk.md"
+
+[tool.setuptools]
+# The package lives directly under this directory (sdk/python/finx_platform).
+packages = ["finx_platform"]
+
+[tool.setuptools.package-data]
+finx_platform = ["py.typed"]
