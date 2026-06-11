@@ -84,6 +84,13 @@ jobs:
       - run: cargo run -p xtask -- openapi-sync
       - run: git diff --exit-code -- docs/schemas/openapi.json
       - run: cargo run -p xtask -- openapi-check
+      - run: cargo run -p xtask -- pysdk-sync
+      - run: git diff --exit-code -- sdk/python/finx_platform
+      - run: cargo run -p xtask -- pysdk-check
+      # The Python SDK runtime ships zero third-party deps and is tested with the
+      # standard-library `unittest` runner (no pytest), so this step needs only the
+      # `python3` already present on the runner.
+      - run: python3 -m unittest discover sdk/python/tests
       - run: cargo run -p xtask -- clean-room-audit
 
   coverage:
