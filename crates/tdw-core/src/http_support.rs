@@ -176,12 +176,16 @@ mod tests {
             "unexpected error text: {msg}"
         );
         assert!(msg.contains(ENV_NAME), "missing env name in error: {msg}");
-        assert!(msg.contains("must be set"), "missing sentinel in error: {msg}");
+        assert!(
+            msg.contains("must be set"),
+            "missing sentinel in error: {msg}"
+        );
     }
 
     #[test]
     fn required_blank_is_hard_error() {
-        let err = resolve_required(Some("   ".to_string()), ENV_NAME, CTX).expect_err("expected Err");
+        let err =
+            resolve_required(Some("   ".to_string()), ENV_NAME, CTX).expect_err("expected Err");
         let msg = err.to_string();
         assert!(msg.contains("must be set"), "unexpected error text: {msg}");
     }
