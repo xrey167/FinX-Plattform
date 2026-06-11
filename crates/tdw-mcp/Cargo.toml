@@ -35,6 +35,10 @@ tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
 tdw-config = { workspace = true }
 tdw-core = { workspace = true }
+# Dynamic per-route MCP tools (L5.6) read the namespaced endpoint catalog at
+# runtime to generate one `tdw.route.*` tool per Fetch route; this crate adds NO
+# routes — it only reads catalog() to advertise and dispatch them.
+tdw-endpoint-catalog = { workspace = true }
 tdw-knowledge = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-retrieve = { path = "../tdw-retrieve" }
