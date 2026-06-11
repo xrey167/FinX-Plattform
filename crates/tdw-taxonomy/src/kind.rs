@@ -105,9 +105,23 @@ pub enum EntityKind {
     /// A first-class analyst finding (knowledge-system K-X6): a user-authored
     /// research note with optional evidence pinning and typed links to other
     /// entities or findings. Findings belong to the `Knowledge` group and are
-    /// retrievable via hybrid search. They carry user provenance and are
-    /// trust-dial-filterable as their own class; they do NOT enter inference
-    /// rule matching unless explicitly promoted by an operator.
+    /// retrievable via hybrid search. They carry user provenance
+    /// (`Provenance::Agent { gated: false }`) and are trust-dial-filterable.
+    ///
+    /// # Inference boundary (F4)
+    ///
+    /// * **`PropagateTag` rules CAN reach findings** — tag propagation walks
+    ///   existing graph edges *from* tag-holders outward; it does not consume
+    ///   a finding's own edges as chain-join inputs.  Auto-tagging of findings
+    ///   is therefore fine and aids retrieval.
+    ///
+    /// * **`DeriveEdge` rules do NOT consume finding edges by default** —
+    ///   [`tdw_infer::InferEngine`] sets `exclude_user_authored = true` so
+    ///   edges with `Provenance::Agent { gated: false }` are excluded from
+    ///   chain matching.  An operator may opt in via
+    ///   [`InferEngine::with_user_authored_inference(true)`].  This default
+    ///   prevents user findings from silently minting derived facts the
+    ///   operator never sanctioned.
     Finding,
 }
 

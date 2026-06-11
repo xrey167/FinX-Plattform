@@ -35,6 +35,7 @@ use serde_json::{Map, Value, json};
 use tdw_core::{Direction, GraphEdge, Provenance, TraversalFilter, active_at};
 use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_tags::date_to_timestamp;
+use tdw_taxonomy::EntityKind;
 
 use crate::{
     ToolDescriptor, ToolExecution, ToolFailure, knowledge_tools::block_on, structured, tool,
@@ -417,6 +418,45 @@ async fn why_tag(
     }))
 }
 
+/// Append user-provenance and evidence chain steps for a `Finding` node.
+fn append_finding_steps(chain: &mut Vec<Value>, props: &Value) {
+    let user_id = props
+        .get("user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let as_of_val = props.get("as_of").cloned().unwrap_or(Value::Null);
+    chain.push(json!({
+        "step": chain.len(),
+        "kind": "user_provenance",
+        "user_id": user_id,
+        "as_of": as_of_val,
+        "gated": false,
+        "summary": format!(
+            "Finding captured by user {user_id:?} with user provenance (not inference-eligible by default)."
+        )
+    }));
+    if let Some(evidence) = props.get("evidence").and_then(Value::as_object) {
+        let doc_id = evidence.get("document_id").and_then(Value::as_str);
+        let src_url = evidence.get("source_url").and_then(Value::as_str);
+        let snippet = evidence.get("snippet").and_then(Value::as_str);
+        let snippet_hash = evidence.get("snippet_hash").and_then(Value::as_str);
+        let ev_as_of = evidence.get("as_of").cloned().unwrap_or(Value::Null);
+        chain.push(json!({
+            "step": chain.len(),
+            "kind": "evidence",
+            "document_id": doc_id,
+            "source_url": src_url,
+            "snippet": snippet,
+            "snippet_hash": snippet_hash,
+            "as_of": ev_as_of,
+            "summary": format!(
+                "Evidence pinned at capture: document={doc_id:?} url={src_url:?} \
+                 snippet_hash={snippet_hash:?}."
+            )
+        }));
+    }
+}
+
 /// Build a why-chain for an entity node.
 async fn why_entity(
     graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
@@ -459,11 +499,27 @@ async fn why_entity(
         )
     })];
 
+    // K-X6: for Finding nodes emit user-provenance + evidence steps.
+    if node.kind == EntityKind::Finding {
+        append_finding_steps(&mut chain, &node.props);
+    }
+
     let crosswalk_capped = append_crosswalk_steps(&mut chain, &crosswalk_neighbors);
     append_merge_steps(&mut chain, entity_id, &merge_neighbors);
 
     let merged = !merge_neighbors.is_empty();
-    let summary = if merged {
+    let summary = if node.kind == EntityKind::Finding {
+        let user_id = node
+            .props
+            .get("user_id")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        format!(
+            "Finding {entity_id} captured by user {user_id:?}, label {:?}; evidence_pinned={}.",
+            node.label,
+            node.props.get("evidence").is_some()
+        )
+    } else if merged {
         format!(
             "Entity {entity_id} (kind {:?}, label {:?}) is tombstoned — merged into {:?}.",
             node.kind,

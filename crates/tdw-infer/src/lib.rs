@@ -171,16 +171,55 @@ pub enum InferError {
 }
 
 /// The forward-chaining inference engine.
-#[derive(Debug, Default)]
+///
+/// # User-authored fact exclusion (K-X6)
+///
+/// `exclude_user_authored` (default `true`) prevents `Provenance::Agent {
+/// gated: false }` edges — the edges written by the `tdw.kg.finding` /
+/// `tdw.kg.link` tools — from participating in `DeriveEdge` chain matching.
+/// The boundary is intentional:
+///
+/// * **Auto-TAGGING of findings via `PropagateTag` rules is allowed** — it
+///   aids retrieval and mirrors how other graph nodes are tagged.  A
+///   `PropagateTag` rule walks outbound edges FROM a tag-holder TO reachable
+///   nodes; this traversal does NOT consume the finding's own edges as
+///   chain-join inputs, so the exclusion does not affect it.
+///
+/// * **`DeriveEdge` derivations from user-authored edges are blocked** by
+///   default.  A user finding that happens to mention the same entities a
+///   `DeriveEdge` rule matches would silently mint new derived facts — facts
+///   the operator never sanctioned.  Set `exclude_user_authored = false` (opt-
+///   in) only if an operator explicitly wants user findings to feed a rule.
+#[derive(Debug)]
 pub struct InferEngine {
     rules: Vec<InferRule>,
     version: u64,
     limits: RunLimits,
     derivations: DerivationIndex,
+    /// When `true` (the default), edges with `Provenance::Agent { gated:
+    /// false }` are excluded from `DeriveEdge` chain matching so user-authored
+    /// findings do not drive inference by default.
+    pub exclude_user_authored: bool,
+}
+
+impl Default for InferEngine {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            version: 0,
+            limits: RunLimits::default(),
+            derivations: DerivationIndex::default(),
+            exclude_user_authored: true,
+        }
+    }
 }
 
 impl InferEngine {
     /// A fresh engine with the given limits and no rules.
+    ///
+    /// `exclude_user_authored` defaults to `true` — user-provenance edges are
+    /// not used as `DeriveEdge` chain-join inputs.  Call
+    /// [`Self::with_user_authored_inference`] to override.
     #[must_use]
     pub fn with_limits(limits: RunLimits) -> Self {
         Self {
@@ -188,7 +227,19 @@ impl InferEngine {
             version: 0,
             limits,
             derivations: DerivationIndex::default(),
+            exclude_user_authored: true,
         }
+    }
+
+    /// Override the user-authored edge exclusion policy.
+    ///
+    /// Set to `false` only when an operator explicitly wants `Provenance::Agent
+    /// { gated: false }` edges (user findings) to participate in `DeriveEdge`
+    /// chain matching.  The default is `true`.
+    #[must_use]
+    pub const fn with_user_authored_inference(mut self, allow: bool) -> Self {
+        self.exclude_user_authored = !allow;
+        self
     }
 
     /// The current rule-set version.
@@ -336,7 +387,9 @@ impl InferEngine {
                 // with the non-derived survivors.
                 let mut survivors = Vec::new();
                 let mut removed = 0_usize;
-                for edge in scan_rel(graph, derived_type).await? {
+                // Retract scans for Rule-provenance edges only — never exclude user-authored
+                // here because the filter would leave retracted derived edges alive.
+                for edge in scan_rel(graph, derived_type, false).await? {
                     if edge.from != from {
                         continue;
                     }
@@ -448,14 +501,16 @@ impl InferEngine {
             return Ok(Derived::default());
         };
 
-        let matches = self.match_chain(graph, when).await?;
+        let matches = self.match_chain(graph, when, self.exclude_user_authored).await?;
         // Existing (from, to) pairs of the derived type — base facts, or facts
         // derived by earlier runs. A derived edge NEVER re-asserts an existing
         // triple: upserting over a same-identity base edge would silently
         // clobber its provenance, and recording it in the index would put a
         // base fact's shape into the retraction set (3-lens review B1).
         let mut existing: BTreeSet<(String, String)> = BTreeSet::new();
-        for edge in scan_rel(graph, derived_type).await? {
+        // Existing-edge dedup scan: check all edges of the derived type regardless
+        // of provenance so we never re-assert over a same-identity base fact.
+        for edge in scan_rel(graph, derived_type, false).await? {
             existing.insert((edge.from.clone(), edge.to.clone()));
         }
         let mut new_edges = Vec::new();
@@ -612,15 +667,20 @@ impl InferEngine {
     /// Match a head-to-tail edge chain by paging [`GraphEngine::edges`] and joining in
     /// memory. Returns one [`ChainMatch`] per distinct endpoint pair (first `from`, last
     /// `to`) with the support set of the consumed input edges.
+    ///
+    /// When `exclude_user_authored` is `true`, edges with
+    /// `Provenance::Agent { gated: false }` are excluded from chain inputs so
+    /// user-authored findings do not drive `DeriveEdge` derivations.
     async fn match_chain(
         &self,
         graph: &Arc<dyn GraphEngine>,
         when: &[EdgePattern],
+        exclude_user_authored: bool,
     ) -> Result<Vec<ChainMatch>, InferError> {
         // Partial matches: (current tail node, support so far). Seeded by the first rel.
         let first = &when[0].rel;
         let mut partials: Vec<(String, String, Vec<String>)> = Vec::new();
-        for edge in scan_rel(graph, first).await? {
+        for edge in scan_rel(graph, first, exclude_user_authored).await? {
             partials.push((
                 edge.from.clone(),
                 edge.to.clone(),
@@ -630,7 +690,7 @@ impl InferEngine {
         for pattern in &when[1..] {
             // Index this hop's edges by their `from` so the join is a lookup, not a scan.
             let mut by_from: BTreeMap<String, Vec<GraphEdge>> = BTreeMap::new();
-            for edge in scan_rel(graph, &pattern.rel).await? {
+            for edge in scan_rel(graph, &pattern.rel, exclude_user_authored).await? {
                 by_from.entry(edge.from.clone()).or_default().push(edge);
             }
             let mut next = Vec::new();
@@ -678,7 +738,15 @@ struct ChainMatch {
 }
 
 /// Page through every edge of one relationship type.
-async fn scan_rel(graph: &Arc<dyn GraphEngine>, rel: &str) -> Result<Vec<GraphEdge>, InferError> {
+///
+/// When `exclude_user_authored` is `true`, edges with
+/// `Provenance::Agent { gated: false }` are dropped — they are user-finding
+/// edges that must not participate in `DeriveEdge` chain matching by default.
+async fn scan_rel(
+    graph: &Arc<dyn GraphEngine>,
+    rel: &str,
+    exclude_user_authored: bool,
+) -> Result<Vec<GraphEdge>, InferError> {
     let mut all = Vec::new();
     let mut offset = 0;
     loop {
@@ -687,7 +755,14 @@ async fn scan_rel(graph: &Arc<dyn GraphEngine>, rel: &str) -> Result<Vec<GraphEd
             .await
             .map_err(|error| InferError::Graph(error.to_string()))?;
         let count = page.len();
-        all.extend(page);
+        for edge in page {
+            if exclude_user_authored
+                && matches!(edge.provenance, Provenance::Agent { gated: false, .. })
+            {
+                continue;
+            }
+            all.push(edge);
+        }
         if count < EDGE_PAGE {
             break;
         }

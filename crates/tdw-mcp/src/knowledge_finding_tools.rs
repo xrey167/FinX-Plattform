@@ -19,10 +19,15 @@
 //!      accepted from the tool argument — identical to B9's host-binding).
 //!   2. The same caps, control-character, and length validation that protect
 //!      the B9 surface apply here.
-//!   3. Findings do NOT enter `tdw-infer` rule matching by default; they
-//!      carry the `finding` entity kind and are retrievable via hybrid search
-//!      but are never promoted into inference unless an operator explicitly
-//!      copies them into a rule body.
+//!   3. **Inference boundary**: `PropagateTag` rules CAN reach findings (tag
+//!      propagation walks outbound edges from tag-holders — finding edges are
+//!      not consumed as chain-join inputs, so auto-tagging is fine and aids
+//!      retrieval).  `DeriveEdge` rules do NOT consume finding edges by
+//!      default: [`tdw_infer::InferEngine`] excludes
+//!      `Provenance::Agent { gated: false }` edges from chain matching unless
+//!      the operator opts in via `InferEngine::with_user_authored_inference`.
+//!      This prevents user findings from silently minting derived facts the
+//!      operator never sanctioned.
 //!   4. They are trust-dial-filterable: the K-X3 trust dial can narrow
 //!      retrievals to `provenance: agent:<user_id>` so callers can distinguish
 //!      personal findings from ingested or operator-materialized facts.
@@ -47,8 +52,9 @@
 //! caller's intent is clear.
 
 use serde_json::{Map, Value, json};
-use tdw_core::{GraphEdge, GraphNode, Provenance};
+use tdw_core::{Direction, GraphEdge, GraphNode, Provenance, TraversalFilter};
 use tdw_kg::Entity;
+use tdw_knowledge::proposals::validate_agent_id;
 use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_taxonomy::EntityKind;
 
@@ -116,8 +122,9 @@ fn finding_descriptor() -> ToolDescriptor {
          made so the result is immediately inspectable.\n\
          \n\
          Trust class: USER knowledge — lands immediately with user provenance (host-bound \
-         identity, never accepted from the argument), no eval gate. Findings do NOT enter \
-         tdw-infer rule matching by default; use tdw.kg.link to create explicit typed relations. \
+         identity, never accepted from the argument), no eval gate. PropagateTag rules CAN \
+         reach findings (aids retrieval); DeriveEdge rules do NOT consume finding edges by \
+         default (operator opt-in required). Use tdw.kg.link for explicit typed relations. \
          Trust-dial-filterable via provenance field. Requires the knowledge runtime with a \
          graph engine and a bound user id.\n\
          \n\
@@ -225,7 +232,7 @@ pub fn execute(
     now: &str,
 ) -> Result<ToolExecution, ToolFailure> {
     match name {
-        "tdw.kg.finding" => capture_finding(runtime, arguments),
+        "tdw.kg.finding" => capture_finding(runtime, arguments, now),
         "tdw.kg.link" => link_finding(runtime, arguments, now),
         other => Err(execution(format!("unknown finding tool: {other}"))),
     }
@@ -239,6 +246,7 @@ pub fn execute(
 fn capture_finding(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
+    now: &str,
 ) -> Result<ToolExecution, ToolFailure> {
     let graph = require_graph(runtime)?;
     let user_id = require_user_id(runtime)?;
@@ -266,7 +274,7 @@ fn capture_finding(
         validate_tag_id(tag)?;
     }
 
-    let as_of = optional_str(arguments, "as_of").map_or_else(today, ToString::to_string);
+    let as_of = optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
     validate_date(&as_of)?;
 
     // Evidence pin (optional).
@@ -481,23 +489,21 @@ fn link_finding(
         Ok(())
     })?;
 
-    // Duplicate link detection: scan existing edges with this rel.
+    // Duplicate link detection: use a scoped one-hop neighbors lookup (O(degree)
+    // not O(total edges)) — only the outgoing edges from `from_id` with `rel`
+    // need to be inspected.
     let duplicate = block_on(async {
-        let mut offset = 0usize;
-        loop {
-            let page = graph
-                .edges(Some(rel), offset, 256)
-                .await
-                .map_err(|e| execution(e.to_string()))?;
-            if page.is_empty() {
-                break;
-            }
-            if page.iter().any(|e| e.from == from_id && e.to == to_id) {
-                return Ok(true);
-            }
-            offset += page.len();
-        }
-        Ok::<bool, ToolFailure>(false)
+        let filter = TraversalFilter {
+            rels: Some(vec![rel.to_string()]),
+            direction: Direction::Out,
+            max_hops: 1,
+            ..TraversalFilter::default()
+        };
+        let neighbors = graph
+            .neighbors(from_id, &filter)
+            .await
+            .map_err(|e| execution(e.to_string()))?;
+        Ok::<bool, ToolFailure>(neighbors.iter().any(|(edge, _)| edge.to == to_id))
     })?;
 
     if duplicate {
@@ -554,6 +560,10 @@ fn link_finding(
 /// the combined text.  The graph is queried for edges to enumerate known
 /// entity ids; the scan is bounded by the limit constant.
 ///
+/// Tombstoned / merged entities (`props.merged_into` present) and entities
+/// with a closed `valid_to` window are excluded so auto-links never point at
+/// dead nodes.
+///
 /// Only entities already present in the graph are linked — stub creation is
 /// not triggered here.
 async fn scan_auto_links(
@@ -588,28 +598,39 @@ async fn scan_auto_links(
         }
     }
 
-    // Also pull any node ids reachable from recent entities (best-effort).
-    // We limit to whatever we already collected.
-
     let combined = format!("{title} {body}");
     let combined_lower = combined.to_lowercase();
 
-    let mut matched: Vec<String> = entity_ids
-        .into_iter()
-        .filter(|id| {
-            // Match the suffix token (after last ':') as a whole word, or the
-            // full id itself.
-            let token = id.split(':').next_back().unwrap_or(id);
-            let token_lower = token.to_lowercase();
-            // Simple whole-token check: ensure the token is surrounded by
-            // non-alphanumeric boundaries in the combined text.
-            if token_lower.is_empty() {
-                return false;
+    // Filter: (a) must mention the token, (b) must not be tombstoned/merged,
+    // (c) must not have a closed valid_to window.
+    let mut matched: Vec<String> = Vec::new();
+    for id in entity_ids {
+        let token = id.split(':').next_back().unwrap_or(id.as_str());
+        let token_lower = token.to_lowercase();
+        if token_lower.is_empty() {
+            continue;
+        }
+        if !contains_token(&combined_lower, &token_lower)
+            && !contains_token(&combined_lower, &id.to_lowercase())
+        {
+            continue;
+        }
+        // Check tombstone/merge status and validity window.
+        if let Ok(Some(node)) = graph.node(&id).await {
+            // Skip merged/tombstoned nodes — they redirect to a successor.
+            if node.props.get("merged_into").is_some() {
+                continue;
             }
-            contains_token(&combined_lower, &token_lower)
-                || contains_token(&combined_lower, &id.to_lowercase())
-        })
-        .collect();
+            // Skip nodes whose valid_to has passed (closed window).
+            if let Some(valid_to) = node.valid_to.as_deref() {
+                // A non-empty valid_to means the entity is no longer current.
+                if !valid_to.is_empty() {
+                    continue;
+                }
+            }
+        }
+        matched.push(id);
+    }
 
     matched.sort();
     matched.dedup();
@@ -755,9 +776,14 @@ fn require_graph(
 }
 
 fn require_user_id(runtime: &KnowledgeRuntime) -> Result<&str, ToolFailure> {
-    runtime
+    let user_id = runtime
         .bound_user_id()
-        .ok_or_else(|| execution("no user identity bound to this finding surface".to_string()))
+        .ok_or_else(|| execution("no user identity bound to this finding surface".to_string()))?;
+    // Reuse B9 grammar validation: same charset ([A-Za-z0-9:._-]), length, and
+    // non-empty checks — the user id is host-bound, but we want the same
+    // guarantees before it lands in provenance strings.
+    validate_agent_id(user_id).map_err(|e| execution(e.to_string()))?;
+    Ok(user_id)
 }
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
@@ -788,12 +814,6 @@ fn optional_string_array(
             .map(Some),
         Some(_) => Err(execution(format!("{name} must be an array of strings"))),
     }
-}
-
-// ── Time helpers ──────────────────────────────────────────────────────────────
-
-fn today() -> String {
-    chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
 // ── FNV-1a hash ───────────────────────────────────────────────────────────────
