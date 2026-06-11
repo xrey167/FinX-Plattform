@@ -120,7 +120,10 @@ use tdw_provider_alpaca::AlpacaHttpStockBarsFetcher;
 #[cfg(feature = "provider-alpha-vantage")]
 use tdw_provider_alpha_vantage::AlphaVantageHttpFetcher;
 #[cfg(feature = "provider-benzinga")]
-use tdw_provider_benzinga::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher};
+use tdw_provider_benzinga::{
+    BenzingaCompanyNewsHttpFetcher, BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher,
+    BenzingaWorldNewsHttpFetcher,
+};
 #[cfg(feature = "provider-binance-http")]
 use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
 #[cfg(feature = "provider-bls")]
@@ -155,9 +158,10 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
     FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
-    FmpHttpStatementFetcher,
+    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -292,6 +296,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaNewsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaCompanyNewsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaWorldNewsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaEarningsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-bls")]
     registry.register(BlsHttpTimeSeriesFetcher::registry_entry())?;
@@ -353,6 +361,20 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpKeyMetricsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpProfileFetcher::registry_entry())?;
+    // FMP fundamentals completion (P2W2): dividends / splits / historical EPS /
+    // peers / market-movers discovery / equity screener.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpDividendsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpSplitsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEarningsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpPeersFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpDiscoveryFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpScreenerFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
@@ -557,6 +579,12 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // BenzingaNewsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "news") => dispatch!(BenzingaNewsHttpFetcher::default()),
+        // BenzingaCompanyNewsHttpFetcher (normalized → NewsArticle)
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "news_company") => dispatch!(BenzingaCompanyNewsHttpFetcher::default()),
+        // BenzingaWorldNewsHttpFetcher (normalized → NewsArticle)
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "news_world") => dispatch!(BenzingaWorldNewsHttpFetcher::default()),
         // BenzingaEarningsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "earnings") => dispatch!(BenzingaEarningsHttpFetcher::default()),
@@ -773,6 +801,8 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
     #[cfg(feature = "provider-benzinga")]
     {
         target!("benzinga", "news");
+        target!("benzinga", "news_company");
+        target!("benzinga", "news_world");
         target!("benzinga", "earnings");
     }
     #[cfg(feature = "provider-bls")]
@@ -893,7 +923,9 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
 ///
 /// Returns an error variant if the underlying operation fails.
 pub fn mcp_progress_sample(symbol: &str) -> Result<Vec<String>> {
-    let runner = CommandRunner::new(default_registry()?);
+    // G008/RT1b: this function uses the fetch-then-wrap path intentionally —
+    // it is a compatibility shim for MCP progress events, not real streaming.
+    let runner = CommandRunner::new(default_registry()?).allow_fake_streaming();
     let mut stream = block_on(
         runner.run_streaming(&FilesetEquityHistoricalFetcher, json!({ "symbol": symbol })),
     )?;

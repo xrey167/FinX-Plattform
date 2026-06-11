@@ -1321,6 +1321,82 @@ fn insert_fmp_fundamentals_fetch_bindings(
     );
 }
 
+/// Build a [`FetchBinding`] for the FMP market-movers discovery fetcher that
+/// injects a fixed `direction` discriminator (gainers / losers / actives) into
+/// the caller's params, so one fetcher type serves all three discovery routes
+/// while the dispatch key stays per-direction. Mirrors
+/// [`fmp_statement_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_discovery_fetch_binding(direction: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert(
+                    "direction".to_string(),
+                    Value::String(direction.to_string()),
+                );
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpDiscoveryFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the FMP fundamentals-completion fetch bindings (P2W2): corporate
+/// actions (dividends, splits), historical EPS, peers, the three market-movers
+/// discovery routes (one shared fetcher, the `direction` discriminator injected
+/// per binding), and the equity screener. Each is keyed by its catalog candidate
+/// endpoint. Mirrors [`insert_fmp_completion_ingest_bindings`] so the fetch and
+/// ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_completion_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpDividendsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpDividendsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSplitsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEarningsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEarningsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpPeersFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", "discovery_gainers"),
+        fmp_discovery_fetch_binding("gainers"),
+    );
+    table.insert(
+        ("fmp", "discovery_losers"),
+        fmp_discovery_fetch_binding("losers"),
+    );
+    table.insert(
+        ("fmp", "discovery_active"),
+        fmp_discovery_fetch_binding("actives"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpScreenerFetcher, _, _>(),
+    );
+}
+
 /// The no-persist fetch dispatch table for this build.
 ///
 /// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
@@ -1404,7 +1480,32 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_fetch_bindings(&mut table);
+    // P2W7: Benzinga normalized news cluster (news/company, news/world).
+    #[cfg(feature = "provider-benzinga")]
+    insert_benzinga_news_fetch_bindings(&mut table);
     table
+}
+
+/// Register the Benzinga normalized-news fetch bindings (P2W7), keyed by each
+/// fetcher's `ENDPOINT` const — the same key its catalog candidate declares.
+/// Both serve [`tdw_domain::NewsArticle`]. Mirrors
+/// [`insert_benzinga_news_ingest_bindings`] so the fetch and ingest paths stay
+/// in lockstep; a conformance test keeps these keys and the catalog candidates
+/// in sync.
+#[cfg(feature = "provider-benzinga")]
+fn insert_benzinga_news_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+    );
 }
 
 /// Register the keyless-government-wave SEC catalog fetch bindings (cik_map,
@@ -2486,7 +2587,34 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_ingest_bindings(&mut table);
+    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
+    // discovery, screener).
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_ingest_bindings(&mut table);
+    // P2W7: Benzinga normalized news cluster (news/company, news/world).
+    #[cfg(feature = "provider-benzinga")]
+    insert_benzinga_news_ingest_bindings(&mut table);
     table
+}
+
+/// Register the Benzinga normalized-news ingest bindings (P2W7), keyed by each
+/// fetcher's `ENDPOINT` const and bound to the shared `raw.news_article` bronze
+/// landing table. Mirrors [`insert_benzinga_news_fetch_bindings`] so the fetch
+/// and ingest paths stay in lockstep. The bronze table itself is provisioned by
+/// the later warehouse story (W10); registering the binding now keeps every
+/// catalog candidate dispatchable.
+#[cfg(feature = "provider-benzinga")]
+fn insert_benzinga_news_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+        binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
+    );
+    table.insert(
+        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+        binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+    );
 }
 
 /// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
@@ -2551,6 +2679,79 @@ fn insert_fmp_fundamentals_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         binding::<crate::FmpHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
+}
+
+/// Build an [`IngestBinding`] for the FMP market-movers discovery fetcher that
+/// injects a fixed `direction` discriminator (gainers / losers / actives) into
+/// the caller's params before the shared fetcher fetches one batch and persists
+/// it into `table`. Mirrors [`fmp_discovery_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_discovery_ingest_binding(direction: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert(
+                        "direction".to_string(),
+                        Value::String(direction.to_string()),
+                    );
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpDiscoveryFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the FMP fundamentals-completion ingest bindings (P2W2), keyed by each
+/// route's catalog candidate endpoint and bound to its bronze landing table.
+/// Mirrors [`insert_fmp_completion_fetch_bindings`] so the fetch and ingest paths
+/// stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_completion_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpDividendsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpDividendsFetcher, _, _>("raw.corporate_action"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSplitsFetcher, _, _>("raw.corporate_action"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEarningsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEarningsFetcher, _, _>("raw.estimate"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),
+        binding::<crate::FmpHttpPeersFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", "discovery_gainers"),
+        fmp_discovery_ingest_binding("gainers", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", "discovery_losers"),
+        fmp_discovery_ingest_binding("losers", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", "discovery_active"),
+        fmp_discovery_ingest_binding("actives", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
+        binding::<crate::FmpHttpScreenerFetcher, _, _>("raw.screener_row"),
     );
 }
 
@@ -4654,10 +4855,14 @@ mod tests {
         // the `upper` builtin uppercases its input. This drives the full udf.run
         // arm body — UdfRequest deserialization, sandbox.run, and the masked
         // response envelope (evidence/runtime/output).
+        //
+        // G008/UDF1: use `Wasm` runtime — it is the only runtime that passes
+        // the gate without TDW_ALLOW_FIXTURE_UDF=1. JavaScript/Python/External
+        // are gated; Wasm falls through to the name-keyed fixture path.
         let policy = udf_runner_policy();
         let arguments = json!({
             "name": "upper",
-            "runtime": "JavaScript",
+            "runtime": "Wasm",
             "source": "builtin",
             "input": "abc",
             "allow_network": false,
@@ -4675,7 +4880,7 @@ mod tests {
         // sandbox response. Empty mask_rules leave the payload unchanged.
         assert_eq!(value["evidence"]["principal"], "alice");
         assert_eq!(value["evidence"]["endpoint"], "tdw.udf.run");
-        assert_eq!(value["runtime"], "JavaScript");
+        assert_eq!(value["runtime"], "Wasm");
         assert_eq!(value["output"], "ABC");
     }
 
