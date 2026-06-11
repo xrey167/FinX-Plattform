@@ -120,7 +120,10 @@ use tdw_provider_alpaca::AlpacaHttpStockBarsFetcher;
 #[cfg(feature = "provider-alpha-vantage")]
 use tdw_provider_alpha_vantage::AlphaVantageHttpFetcher;
 #[cfg(feature = "provider-benzinga")]
-use tdw_provider_benzinga::{BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher};
+use tdw_provider_benzinga::{
+    BenzingaCompanyNewsHttpFetcher, BenzingaEarningsHttpFetcher, BenzingaNewsHttpFetcher,
+    BenzingaWorldNewsHttpFetcher,
+};
 #[cfg(feature = "provider-binance-http")]
 use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
 #[cfg(feature = "provider-bls")]
@@ -292,6 +295,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(AlphaVantageHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaNewsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaCompanyNewsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-benzinga")]
+    registry.register(BenzingaWorldNewsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaEarningsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-bls")]
@@ -572,6 +579,12 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // BenzingaNewsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "news") => dispatch!(BenzingaNewsHttpFetcher::default()),
+        // BenzingaCompanyNewsHttpFetcher (normalized → NewsArticle)
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "news_company") => dispatch!(BenzingaCompanyNewsHttpFetcher::default()),
+        // BenzingaWorldNewsHttpFetcher (normalized → NewsArticle)
+        #[cfg(feature = "provider-benzinga")]
+        ("benzinga", "news_world") => dispatch!(BenzingaWorldNewsHttpFetcher::default()),
         // BenzingaEarningsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "earnings") => dispatch!(BenzingaEarningsHttpFetcher::default()),
@@ -788,6 +801,8 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
     #[cfg(feature = "provider-benzinga")]
     {
         target!("benzinga", "news");
+        target!("benzinga", "news_company");
+        target!("benzinga", "news_world");
         target!("benzinga", "earnings");
     }
     #[cfg(feature = "provider-bls")]

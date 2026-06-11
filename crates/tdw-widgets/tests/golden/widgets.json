@@ -5634,6 +5634,204 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "news_company": {
+    "category": "news",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "author",
+            "headerName": "Author"
+          },
+          {
+            "cellDataType": "text",
+            "field": "id",
+            "headerName": "Id"
+          },
+          {
+            "cellDataType": "text",
+            "field": "published_at",
+            "headerName": "Published At"
+          },
+          {
+            "cellDataType": "text",
+            "field": "source",
+            "headerName": "Source"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbols",
+            "headerName": "Symbols"
+          },
+          {
+            "cellDataType": "text",
+            "field": "text",
+            "headerName": "Text"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Symbol-filtered company news articles (benzinga).",
+    "endpoint": "/widget-data/news/company",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "news_company",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Company",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "news_world": {
+    "category": "news",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "author",
+            "headerName": "Author"
+          },
+          {
+            "cellDataType": "text",
+            "field": "id",
+            "headerName": "Id"
+          },
+          {
+            "cellDataType": "text",
+            "field": "published_at",
+            "headerName": "Published At"
+          },
+          {
+            "cellDataType": "text",
+            "field": "source",
+            "headerName": "Source"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbols",
+            "headerName": "Symbols"
+          },
+          {
+            "cellDataType": "text",
+            "field": "text",
+            "headerName": "Text"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "General market / world news articles, no symbol filter (benzinga).",
+    "endpoint": "/widget-data/news/world",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "news_world",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "World",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "regulators_fed_fomc_documents": {
     "category": "regulators",
     "data": {

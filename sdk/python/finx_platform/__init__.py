@@ -29,6 +29,7 @@ from .equity import EquityNamespace
 from .etf import EtfNamespace
 from .fixedincome import FixedincomeNamespace
 from .index import IndexNamespace
+from .news import NewsNamespace
 from .quantitative import QuantitativeNamespace
 from .regulators import RegulatorsNamespace
 from .technical import TechnicalNamespace
@@ -68,6 +69,7 @@ class FinX:
         self.etf = EtfNamespace(self._client)
         self.fixedincome = FixedincomeNamespace(self._client)
         self.index = IndexNamespace(self._client)
+        self.news = NewsNamespace(self._client)
         self.quantitative = QuantitativeNamespace(self._client)
         self.regulators = RegulatorsNamespace(self._client)
         self.technical = TechnicalNamespace(self._client)
