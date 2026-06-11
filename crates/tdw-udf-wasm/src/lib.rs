@@ -204,7 +204,6 @@ impl WasmUdfRuntime {
         let env_allow = std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1");
         #[cfg(test)]
         #[allow(clippy::redundant_closure_for_method_calls)]
-        // Cell::get requires an import; closure form is clearer here
         let test_allow = ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.get());
         #[cfg(not(test))]
         let test_allow = false;
@@ -214,6 +213,7 @@ impl WasmUdfRuntime {
         // gate above is not needed for this path, but having it unconditional
         // means a renamed/refactored entry point will also be protected.
         #[cfg(feature = "wasmi")]
+        #[allow(clippy::needless_return)]
         {
             // The real wasmi execute path. fixture_dispatch is never reached
             // from this branch.
