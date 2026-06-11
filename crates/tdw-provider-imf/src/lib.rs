@@ -29,7 +29,11 @@ use tdw_core::query_params::StandardParams;
 use thiserror::Error;
 
 /// Public base URL for the IMF Data Services SDMX-JSON REST API.
-pub const BASE_URL: &str = "http://dataservices.imf.org/REST/SDMX_JSON.svc";
+///
+/// Uses TLS (`https`): the caller-supplied SDMX `key` and the requested series
+/// travel over the wire, so the transport is encrypted even though the API is
+/// keyless. The shared `build_client` enforces certificate validation.
+pub const BASE_URL: &str = "https://dataservices.imf.org/REST/SDMX_JSON.svc";
 /// Provider identifier used in the registry.
 pub const PROVIDER_ID: &str = "imf";
 
@@ -164,6 +168,16 @@ pub enum ImfProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_url_uses_tls() {
+        // The caller-supplied SDMX key travels on the request path; the
+        // transport must be encrypted. Guards against a plaintext regression.
+        assert!(
+            BASE_URL.starts_with("https://"),
+            "IMF BASE_URL must use TLS, got {BASE_URL:?}"
+        );
+    }
 
     #[test]
     fn catalog_query_resolves_command_to_database() {
