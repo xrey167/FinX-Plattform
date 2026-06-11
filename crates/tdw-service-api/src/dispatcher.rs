@@ -51,12 +51,12 @@ use tdw_tools::{RegisteredTool, ToolDefinition, ToolRegistry, ToolRouter};
 use uuid::Uuid;
 
 use crate::provider_resolve::{is_logical_endpoint, resolve_logical_endpoint};
-use crate::technical_compute;
 use crate::{
     AppState, PolicyEnforcementConfig, PolicyEnforcementEvidence,
     SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
     mask_json_response,
 };
+use crate::{econometrics_compute, quant_compute, technical_compute};
 
 #[async_trait]
 impl Dispatcher for AppState {
@@ -562,25 +562,83 @@ async fn dispatch_compute(
     params: &Value,
     evidence: &PolicyEnforcementEvidence,
 ) -> Result<Value> {
-    let mut source_provider: Option<&'static str> = None;
-    let mut warnings: Vec<Warning> = Vec::new();
+    // The `econometrics/*` estimators read their (multi-series) inputs entirely
+    // from the typed params — there is no `data`/`source` value series to
+    // resolve — so they take a parallel, source-less path.
+    if econometrics_compute::owns_route(route) {
+        return dispatch_econometrics_compute(route, params, policy, evidence);
+    }
 
-    let bars = if let Some(source) = params.get("source").filter(|v| !v.is_null()) {
+    // The `technical/*` and `quantitative/*` routes share one value-series
+    // resolution (inline `data` or a nested `source` fetch); the namespace then
+    // selects the bar-based or returns-based metric.
+    let resolved = resolve_compute_records(state, route, params).await?;
+
+    let (rows, chart) = if quant_compute::owns_route(route) {
+        run_quant_compute(route, params, &resolved)?
+    } else {
+        run_technical_compute(route, params, &resolved)?
+    };
+
+    let mut extra = ResultExtra::default().with_route(route);
+    if let Some(provider) = resolved.source_provider {
+        extra = extra.with_argument("source_provider", provider);
+    }
+    let mut envelope = ResultEnvelope::new(route, rows).with_extra(extra);
+    envelope.warnings = resolved.warnings;
+    envelope.chart = chart;
+    let body = serde_json::to_value(&envelope)
+        .map_err(|e| Error::Provider(format!("compute envelope serialize: {e}")))?;
+    Ok(mask_json_response(
+        json!({ "evidence": evidence, "result": body }),
+        &policy.mask_rules,
+    ))
+}
+
+/// The OHLCV/value records a value-series Compute route runs over, plus the
+/// nested-fetch provenance (which provider served a `source` fetch, and any
+/// fallback warnings). For an inline `data` request `source_provider` is `None`.
+struct ResolvedComputeRecords {
+    records: Value,
+    source_provider: Option<&'static str>,
+    warnings: Vec<Warning>,
+}
+
+/// Resolve the value-series records for a `technical/*` or `quantitative/*`
+/// Compute route from either an inline `data` array or a nested `source` fetch.
+///
+/// The nested fetch runs through the *same* policy-guarded fetch path
+/// (`resolve_and_fetch`), so a `source` price series is sourced under the normal
+/// provider-fallback policy before being piped into the metric. Returns the raw
+/// JSON records (not yet parsed into bars/values — the namespace decides how to
+/// interpret them).
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidQuery`] when neither `data` nor `source` is supplied
+/// or `source.route` is malformed; [`Error::Provider`] when a `source` route is
+/// unknown or not a `Fetch` route.
+async fn resolve_compute_records(
+    state: &AppState,
+    route: &str,
+    params: &Value,
+) -> Result<ResolvedComputeRecords> {
+    if let Some(source) = params.get("source").filter(|v| !v.is_null()) {
         let source_route = source.get("route").and_then(Value::as_str).ok_or_else(|| {
             Error::InvalidQuery(
-                "technical compute: `source.route` must be a catalog route string".to_string(),
+                "compute: `source.route` must be a catalog route string".to_string(),
             )
         })?;
         let source_params = source.get("params").cloned().unwrap_or_else(|| json!({}));
 
         let Some(source_entry) = tdw_endpoint_catalog::lookup(source_route) else {
             return Err(Error::Provider(format!(
-                "technical compute: unknown source route {source_route}"
+                "compute: unknown source route {source_route}"
             )));
         };
         if source_entry.kind != tdw_endpoint_catalog::EndpointKind::Fetch {
             return Err(Error::Provider(format!(
-                "technical compute: source route {source_route} is not a fetch route"
+                "compute: source route {source_route} is not a fetch route"
             )));
         }
 
@@ -600,35 +658,83 @@ async fn dispatch_compute(
             &runner,
         )
         .await?;
-        source_provider = Some(outcome.provider);
-        warnings = outcome.warnings;
-        let records = Value::Array(outcome.records);
-        technical_compute::parse_bars(&records)?
+        Ok(ResolvedComputeRecords {
+            records: Value::Array(outcome.records),
+            source_provider: Some(outcome.provider),
+            warnings: outcome.warnings,
+        })
     } else if let Some(data) = params.get("data").filter(|v| !v.is_null()) {
-        technical_compute::parse_bars(data)?
+        Ok(ResolvedComputeRecords {
+            records: data.clone(),
+            source_provider: None,
+            warnings: Vec::new(),
+        })
     } else {
-        return Err(Error::InvalidQuery(
-            "technical compute: provide either an inline `data` OHLCV array or a nested `source` \
-             { route, params } object"
-                .to_string(),
-        ));
-    };
+        Err(Error::InvalidQuery(format!(
+            "compute route {route}: provide either an inline `data` array or a nested `source` \
+             {{ route, params }} object"
+        )))
+    }
+}
 
+/// Run a `technical/*` Compute route over resolved OHLCV records, returning the
+/// indicator rows and (when requested) the chart spec.
+fn run_technical_compute(
+    route: &str,
+    params: &Value,
+    resolved: &ResolvedComputeRecords,
+) -> Result<(Vec<Value>, Option<Value>)> {
+    let bars = technical_compute::parse_bars(&resolved.records)?;
     let rows = technical_compute::run_compute(route, &bars, params)?;
-
     let chart = if chart_requested(params) {
-        Some(compute_chart_spec(&bars, &rows, source_provider.is_some()))
+        Some(compute_chart_spec(
+            &bars,
+            &rows,
+            resolved.source_provider.is_some(),
+        ))
     } else {
         None
     };
+    Ok((rows, chart))
+}
 
-    let mut extra = ResultExtra::default().with_route(route);
-    if let Some(provider) = source_provider {
-        extra = extra.with_argument("source_provider", provider);
-    }
-    let mut envelope = ResultEnvelope::new(route, rows).with_extra(extra);
-    envelope.warnings = warnings;
-    envelope.chart = chart;
+/// Run a `quantitative/*` Compute route over resolved records, returning the
+/// single summary row. Quantitative metrics consume a **returns** series: an
+/// inline `data` array is taken as returns directly (the documented input
+/// convention), while a nested `source` price fetch is reduced close-to-close
+/// to returns first. These routes are not chartable (a single summary figure
+/// has nothing per-bar to draw), so no chart spec is produced.
+fn run_quant_compute(
+    route: &str,
+    params: &Value,
+    resolved: &ResolvedComputeRecords,
+) -> Result<(Vec<Value>, Option<Value>)> {
+    let raw = quant_compute::parse_values(&resolved.records)?;
+    // Inline data is already returns; a fetched price series is reduced to
+    // returns. CAPM's benchmark series is handled inside the quant compute (it
+    // reads `params.benchmark` directly).
+    let values = if resolved.source_provider.is_some() {
+        tdw_analytics_quant::prices_to_returns(&raw)
+    } else {
+        raw
+    };
+    let rows = quant_compute::run_compute(route, &values, params)?;
+    Ok((rows, None))
+}
+
+/// Run an `econometrics/*` Compute route, whose series live entirely in the
+/// typed params (no `data`/`source` value series). Builds the same
+/// `{ evidence, result }` envelope as the value-series compute path; the result
+/// is never chartable.
+fn dispatch_econometrics_compute(
+    route: &str,
+    params: &Value,
+    policy: &PolicyEnforcementConfig,
+    evidence: &PolicyEnforcementEvidence,
+) -> Result<Value> {
+    let rows = econometrics_compute::run_compute(route, params)?;
+    let extra = ResultExtra::default().with_route(route);
+    let envelope = ResultEnvelope::new(route, rows).with_extra(extra);
     let body = serde_json::to_value(&envelope)
         .map_err(|e| Error::Provider(format!("compute envelope serialize: {e}")))?;
     Ok(mask_json_response(
@@ -2647,12 +2753,12 @@ async fn dispatch_tool(
         )));
     }
 
-    // The `technical.*` tools are the catalog's `technical/*` Compute routes
-    // exposed as tools: the tool name maps to the route by swapping `.` for `/`,
-    // and execution reuses the same compute path as `Op::FetchData`. Policy
+    // The analytics tools are the catalog's Compute routes (the `technical/*`,
+    // `quantitative/*`, and `econometrics/*` namespaces) exposed as tools: the
+    // tool name maps to the route by swapping the first `.` for `/`, and
+    // execution reuses the same compute path as `Op::FetchData`. Policy
     // enforcement already ran above; thread its evidence through unchanged.
-    if let Some(indicator) = tool_name.strip_prefix("technical.") {
-        let route = format!("technical/{indicator}");
+    if let Some(route) = compute_tool_route(tool_name) {
         return dispatch_compute(state, policy, &route, arguments, &evidence).await;
     }
 
@@ -2693,26 +2799,38 @@ fn service_tool_registry() -> ToolRegistry {
     registry
         .register(udf_run_tool())
         .expect("udf.run tool definition is valid and registered exactly once");
-    register_technical_tools(&mut registry);
+    register_compute_tools(&mut registry);
     registry
 }
 
-/// Register one [`RegisteredTool`] per `technical/*` catalog Compute route.
+/// Map a Compute-tool name to its catalog route by swapping the first `.` for
+/// `/`, but only for the analytics namespaces (`technical`, `quantitative`,
+/// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
+fn compute_tool_route(tool_name: &str) -> Option<String> {
+    let (namespace, member) = tool_name.split_once('.')?;
+    if matches!(namespace, "technical" | "quantitative" | "econometrics") {
+        Some(format!("{namespace}/{member}"))
+    } else {
+        None
+    }
+}
+
+/// Register one [`RegisteredTool`] per analytics Compute catalog route.
 ///
-/// The tool name is the route with `/` swapped for `.` (`technical/sma` →
-/// `technical.sma`), so `Op::ToolCall` and the MCP tool list expose every
-/// indicator for free with the route's own param/model JSON schemas attached.
-/// Driving this from `tdw_endpoint_catalog::catalog()` keeps the tool set in
-/// lockstep with the catalog (a conformance test pins the two together).
-fn register_technical_tools(registry: &mut ToolRegistry) {
+/// The tool name is the route with the namespace separator `/` swapped for `.`
+/// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
+/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`), so
+/// `Op::ToolCall` and the MCP tool list expose every metric for free with the
+/// route's own param/model JSON schemas attached. Driving this from
+/// `tdw_endpoint_catalog::catalog()` keeps the tool set in lockstep with the
+/// catalog (a conformance test pins the two together). Every Compute route lives
+/// in one of the analytics namespaces, so all are registered.
+fn register_compute_tools(registry: &mut ToolRegistry) {
     for entry in tdw_endpoint_catalog::catalog() {
         if entry.kind != tdw_endpoint_catalog::EndpointKind::Compute {
             continue;
         }
-        let Some(indicator) = entry.route.strip_prefix("technical/") else {
-            continue;
-        };
-        let name = format!("technical.{indicator}");
+        let name = entry.route.replacen('/', ".", 1);
         let input_schema = serde_json::to_value((entry.params_schema)())
             .unwrap_or_else(|_| json!({ "type": "object" }));
         let output_schema =
@@ -2727,18 +2845,18 @@ fn register_technical_tools(registry: &mut ToolRegistry) {
         registry
             .register(RegisteredTool::new(
                 definition,
-                technical_tool_placeholder_handler,
+                compute_tool_placeholder_handler,
             ))
-            .expect("technical tool definitions are valid and registered exactly once");
+            .expect("compute tool definitions are valid and registered exactly once");
     }
 }
 
-/// Placeholder handler for a `technical.*` registry entry. Never invoked:
-/// [`dispatch_tool`] executes technical tools via [`dispatch_compute`] (which
+/// Placeholder handler for an analytics Compute registry entry. Never invoked:
+/// [`dispatch_tool`] executes compute tools via [`dispatch_compute`] (which
 /// needs `AppState` for the nested-fetch path). The registry only needs a
 /// handler to construct a [`RegisteredTool`]; the echo behaviour is inert.
 #[allow(clippy::unnecessary_wraps)]
-const fn technical_tool_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
+const fn compute_tool_placeholder_handler(input: Value) -> tdw_tools::Result<Value> {
     Ok(input)
 }
 
@@ -3438,6 +3556,111 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // L4.2/L4.3 quant + econometrics compute: inline-data and nested-fetch e2e
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn fetch_data_compute_inline_sharpe_returns_single_figure() {
+        // A `quantitative/sharpe_ratio` Compute route over an inline returns
+        // `data` array runs network-free and returns one summary figure.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "quantitative/sharpe_ratio".to_string(),
+            params: json!({ "data": [0.10, -0.05, 0.10, -0.05] }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(
+                    value["result"]["extra"]["route"],
+                    "quantitative/sharpe_ratio"
+                );
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert_eq!(rows.len(), 1, "one summary figure, got {value}");
+                assert!((rows[0].as_f64().expect("sharpe") - 0.288_675_134_594_8).abs() < 1e-9);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_data_compute_nested_fetch_fileset_to_volatility_offline() {
+        // A nested `source` first fetches `equity/price/historical` through the
+        // offline fileset fixture, then reduces the close column to returns and
+        // pipes them into `quantitative/volatility`. Network-free; the response
+        // names the source provider.
+        let state = offline_fixture_ingest_state().await;
+        let env = make_envelope(Op::FetchData {
+            route: "quantitative/volatility".to_string(),
+            params: json!({
+                "periods": 252,
+                "source": {
+                    "route": "equity/price/historical",
+                    "params": { "symbol": "AAPL" }
+                }
+            }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["result"]["extra"]["route"], "quantitative/volatility");
+                assert_eq!(
+                    value["result"]["extra"]["arguments"]["source_provider"], "fileset",
+                    "nested fetch resolved through the offline fileset fixture, got {value}"
+                );
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert_eq!(rows.len(), 1, "one volatility figure, got {value}");
+                let vol = rows[0].as_f64().expect("volatility");
+                assert!(
+                    vol >= 0.0 && vol.is_finite(),
+                    "annualized vol is finite, got {vol}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_data_compute_inline_ols_recovers_a_line() {
+        // An `econometrics/ols` Compute route reads `y`/`x` from the params and
+        // recovers the exact line y = 2 + 3x.
+        let state = AppState::in_memory_for_tests()
+            .await
+            .with_policy(analyst_policy());
+        let env = make_envelope(Op::FetchData {
+            route: "econometrics/ols".to_string(),
+            params: json!({
+                "y": [5.0, 8.0, 11.0, 14.0],
+                "x": [[1.0, 2.0, 3.0, 4.0]]
+            }),
+        });
+        let events = dispatch_op(&state, env).await;
+        match &events[1] {
+            EventMsg::Completed {
+                result: Some(value),
+                ..
+            } => {
+                assert_eq!(value["result"]["extra"]["route"], "econometrics/ols");
+                let rows = value["result"]["results"].as_array().expect("results");
+                assert_eq!(rows.len(), 1, "one OLS summary row, got {value}");
+                let coeffs = rows[0]["coefficients"].as_array().expect("coefficients");
+                assert!((coeffs[0]["estimate"].as_f64().expect("intercept") - 2.0).abs() < 1e-9);
+                assert!((coeffs[1]["estimate"].as_f64().expect("slope") - 3.0).abs() < 1e-9);
+                assert!((rows[0]["r_squared"].as_f64().expect("r2") - 1.0).abs() < 1e-9);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn fetch_data_compute_without_data_or_source_is_invalid() {
         let state = AppState::in_memory_for_tests()
@@ -3489,11 +3712,12 @@ mod tests {
         }
     }
 
-    /// Every `technical/*` catalog Compute route is registered both as a compute
-    /// implementation and as a `technical.*` tool, and vice versa — no orphan on
-    /// either side.
+    /// Every catalog Compute route (across the `technical/*`, `quantitative/*`,
+    /// and `econometrics/*` namespaces) is registered both as a compute
+    /// implementation and as a `<namespace>.<member>` tool, and vice versa — no
+    /// orphan on either side.
     #[test]
-    fn technical_compute_routes_tools_and_catalog_agree() {
+    fn compute_routes_tools_and_catalog_agree() {
         use std::collections::BTreeSet;
 
         let catalog_routes: BTreeSet<String> = tdw_endpoint_catalog::catalog()
@@ -3506,25 +3730,36 @@ mod tests {
         let tool_routes: BTreeSet<String> = registry
             .definitions()
             .into_iter()
-            .filter_map(|d| {
-                d.name
-                    .strip_prefix("technical.")
-                    .map(|ind| format!("technical/{ind}"))
-            })
+            .filter_map(|d| compute_tool_route(&d.name))
             .collect();
         assert_eq!(
             catalog_routes, tool_routes,
-            "technical tool set must equal the catalog Compute route set"
+            "compute tool set must equal the catalog Compute route set"
         );
 
-        // And each route has a runnable compute implementation.
+        // And each route has a runnable compute implementation in its namespace
+        // registry. Empty/default inputs exercise the registry lookup, not the
+        // numeric path (a short series yields a defined-but-trivial result or a
+        // structured validation error — never a missing-route Provider error).
         let bars: Vec<tdw_domain::MarketDataBar> = Vec::new();
         for route in &catalog_routes {
-            let result = technical_compute::run_compute(route, &bars, &json!({}));
-            assert!(
-                result.is_ok(),
-                "compute route {route} has no registered implementation"
-            );
+            if quant_compute::owns_route(route) {
+                assert!(
+                    quant_compute::compute_registry().contains_key(route.as_str()),
+                    "quantitative compute route {route} has no registered implementation"
+                );
+            } else if econometrics_compute::owns_route(route) {
+                assert!(
+                    econometrics_compute::compute_registry().contains_key(route.as_str()),
+                    "econometrics compute route {route} has no registered implementation"
+                );
+            } else {
+                let result = technical_compute::run_compute(route, &bars, &json!({}));
+                assert!(
+                    result.is_ok(),
+                    "technical compute route {route} has no registered implementation"
+                );
+            }
         }
     }
 

@@ -23,11 +23,13 @@ from .commodity import CommodityNamespace
 from .crypto import CryptoNamespace
 from .currency import CurrencyNamespace
 from .derivatives import DerivativesNamespace
+from .econometrics import EconometricsNamespace
 from .economy import EconomyNamespace
 from .equity import EquityNamespace
 from .etf import EtfNamespace
 from .fixedincome import FixedincomeNamespace
 from .index import IndexNamespace
+from .quantitative import QuantitativeNamespace
 from .regulators import RegulatorsNamespace
 from .technical import TechnicalNamespace
 
@@ -60,11 +62,13 @@ class FinX:
         self.crypto = CryptoNamespace(self._client)
         self.currency = CurrencyNamespace(self._client)
         self.derivatives = DerivativesNamespace(self._client)
+        self.econometrics = EconometricsNamespace(self._client)
         self.economy = EconomyNamespace(self._client)
         self.equity = EquityNamespace(self._client)
         self.etf = EtfNamespace(self._client)
         self.fixedincome = FixedincomeNamespace(self._client)
         self.index = IndexNamespace(self._client)
+        self.quantitative = QuantitativeNamespace(self._client)
         self.regulators = RegulatorsNamespace(self._client)
         self.technical = TechnicalNamespace(self._client)
 

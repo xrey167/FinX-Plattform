@@ -82,6 +82,8 @@ tdw-taxonomy = { path = "crates/tdw-taxonomy" }
 tdw-config = { path = "crates/tdw-config" }
 tdw-acp = { path = "crates/tdw-acp" }
 tdw-analytics-technical = { path = "crates/tdw-analytics-technical" }
+tdw-analytics-quant = { path = "crates/tdw-analytics-quant" }
+tdw-analytics-econometrics = { path = "crates/tdw-analytics-econometrics" }
 tdw-charting = { path = "crates/tdw-charting" }
 tdw-core = { path = "crates/tdw-core" }
 tdw-domain = { path = "crates/tdw-domain" }

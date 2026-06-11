@@ -118,6 +118,8 @@ pub fn catalog() -> Vec<CatalogEntry> {
     entries.extend(routers::news::entries());
     entries.extend(routers::regulators::entries());
     entries.extend(routers::technical::entries());
+    entries.extend(routers::quantitative::entries());
+    entries.extend(routers::econometrics::entries());
     entries
 }
 
@@ -257,7 +259,10 @@ mod tests {
     fn chartable_flag_set_on_known_charting_routes() {
         // G014 sanity: the OHLCV equity price route and the fixed-income
         // single-series routes are chartable; every technical/* Compute route is
-        // chartable (set at construction in the technical router).
+        // chartable (set at construction in the technical router). The
+        // quantitative/* and econometrics/* Compute routes (G015) summarize a
+        // whole series into a single figure / coefficient table, so they are
+        // intentionally NOT chartable.
         assert!(
             lookup("equity/price/historical")
                 .expect("equity route")
@@ -269,12 +274,24 @@ mod tests {
                 .chartable
         );
         for entry in catalog() {
-            if entry.kind == EndpointKind::Compute {
+            if entry.kind == EndpointKind::Compute && entry.route.starts_with("technical/") {
                 assert!(
                     entry.chartable,
-                    "Compute route {:?} should be chartable",
+                    "technical Compute route {:?} should be chartable",
                     entry.route
                 );
+            }
+        }
+        // The non-technical analytics Compute routes are not chartable.
+        for namespace in ["quantitative/", "econometrics/"] {
+            for entry in catalog() {
+                if entry.route.starts_with(namespace) {
+                    assert!(
+                        !entry.chartable,
+                        "Compute route {:?} should not be chartable",
+                        entry.route
+                    );
+                }
             }
         }
     }

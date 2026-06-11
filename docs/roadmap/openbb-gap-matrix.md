@@ -171,8 +171,8 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | technical/* (sma, ema, rsi, macd, bbands, atr, ...) | NATIVE | tdw-analytics-technical: ~18 core indicators as `technical/*` Compute routes + `technical.*` MCP tools (L4.1 done; long-tail Ichimoku/cones/Clenow/Demark/fib/RRG deferred) | done |
-| quantitative/* (sharpe, sortino, capm, rolling stats) | MISSING | no native crate → see L4 | todo |
-| econometrics/* (ols, panel, cointegration, causality) | MISSING | no native crate → see L4 | todo |
+| quantitative/* (sharpe, sortino, capm, rolling stats) | NATIVE | tdw-analytics-quant: 12 returns-based metrics (sharpe/sortino/omega, max_drawdown/calmar, volatility, skewness/kurtosis, value_at_risk/expected_shortfall, capm, jarque_bera) as `quantitative/*` Compute routes + `quantitative.*` MCP tools (L4.2 done; rolling-window variants + standalone unit-root deferred) | done |
+| econometrics/* (ols, panel, cointegration, causality) | NATIVE | tdw-analytics-econometrics: 5 estimators (ols+summary, correlation_matrix, vif, granger_causality, cointegration) as `econometrics/*` Compute routes + `econometrics.*` MCP tools (L4.3 done; panel models + autocorrelation series + formal unit-root deferred; Granger/cointegration p-values documented as honest simplifications) | done |
 | famafrench/* (factors, portfolio returns) | MISSING | needs French Data Library provider | todo |
 
 ### Roll-up
@@ -263,8 +263,8 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 | # | New crate · scope · gates · done-when | Size | Status |
 |---|---|---|---|
 | L4.1 | **tdw-analytics-technical** · ~18 core indicators delivered (sma/ema/wma/hma, macd, rsi, stoch, cci, adx[+di/-di], aroon, bbands, kc, donchian, atr, obv, ad, vwap, fisher, roc, momentum) as `technical/*` Compute catalog routes + `technical.*` MCP/ToolCall tools, wired in tdw-service-api (inline-data OR nested source fetch). Gates: fmt+clippy(pedantic/nursery zero)+unit (golden vectors). Done-when: core set with numeric tests; callable as daemon op + MCP tool. Long-tail (zlma, adosc, cg, cones, clenow, demark, ichimoku, fib, relative_rotation) deferred. | L | done (core) |
-| L4.2 | **tdw-analytics-quant** · summary, normality, capm, unitroot, perf ratios (sharpe/sortino/omega), stats + rolling stats (mean/stdev/var/skew/kurtosis/quantile). Gates: unit (golden). Done-when: 19 functions with tests. | M | todo |
-| L4.3 | **tdw-analytics-econometrics** · correlation_matrix, ols(+summary), autocorrelation, residual_autocorr, cointegration, causality, unit_root, vif, panel models (random/fixed/between/pooled/first_diff/fmac). Gates: unit (golden vs statsmodels reference values, hardcoded). Done-when: 15 functions. | L | todo |
+| L4.2 | **tdw-analytics-quant** · G015 delivered 12 returns-based metrics (sharpe/sortino/omega, max_drawdown+calmar, volatility, skewness, excess kurtosis, value_at_risk, expected_shortfall, capm alpha+beta, jarque_bera with a χ²₂ p-value) as `quantitative/*` Compute catalog routes + `quantitative.*` MCP/ToolCall tools, wired in tdw-service-api (inline-data returns OR nested source price fetch reduced to returns). Gates: fmt+clippy(pedantic/nursery zero)+unit (golden vectors hand-derived). Done-when: core metric set with numeric tests; callable as daemon op + MCP tool. Deferred: rolling-window stat variants, a standalone normality `summary`, a formal unit-root route. | M | done (core) |
+| L4.3 | **tdw-analytics-econometrics** · G015 delivered 5 estimators (ols with std errors/t-stats/R²/adj-R²/F/Durbin-Watson, correlation_matrix, vif, granger_causality F-test, Engle-Granger cointegration step one + residual stationarity score) as `econometrics/*` Compute catalog routes + `econometrics.*` MCP/ToolCall tools. Hand-rolled OLS via the normal equations factored by a dependency-free Cholesky solve (NO nalgebra/faer/ndarray). Gates: fmt+clippy(pedantic/nursery zero)+unit (golden vs hand-derived worked examples; no Python statsmodels in this clean-room). Done-when: core estimator set with numeric tests. Honest simplifications documented: Granger reports F (no p-value); cointegration reports a Dickey-Fuller ρ score (no MacKinnon p-table). Deferred: panel models, autocorrelation series, formal unit-root route. | L | done (core) |
 | L4.4 | **tdw-analytics-portfolio** (beyond OpenBB parity) · returns, drawdown, allocation, attribution — uses L4.2. Gates: unit. Done-when: core portfolio metrics. | M | todo |
 | L4.5 | **tdw-service-api** · wire L4.1–L4.3 as computation ops (`technical/*`, `quantitative/*`, `econometrics/*`) taking caller data (no provider). Gates: integ. Done-when: ops resolve through daemon. | M | todo |
 
@@ -298,7 +298,7 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 | 6 | **L5.1** HTTP+SSE service (#161) | Turns the daemon into a usable REST surface; gates L5.2/L5.6 | in-progress |
 | 7 | **L2.4** yahoo expansion | No-key provider → ~15 cmds (profile/quote/discovery/options/futures) free to users | todo |
 | 8 | **L1.2** tdw-symbology (#173) | Symbol/exchange/FX/crypto normalization needed by nearly every endpoint | in-progress |
-| 9 | **L4.2** tdw-analytics-quant | sharpe/sortino/capm/rolling stats; high demand, pure compute, golden-testable | todo |
+| 9 | **L4.2** tdw-analytics-quant | sharpe/sortino/capm/rolling stats; high demand, pure compute, golden-testable. Core set delivered as `quantitative/*` ops + `quantitative.*` tools (G015) | done (core) |
 | 10 | **L2.6** sec utils (cik/symbol map, 13f, FTD) | No-key; completes ownership + shorts + regulators clusters cheaply | done |
 
 **Top-3 (act first):** L1.4 standard models → L2.3 fred expansion → L2.1 fmp fundamentals.

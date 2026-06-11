@@ -1,0 +1,128 @@
+//! `econometrics/*` catalog routes (gap-matrix item **L4.3**).
+//!
+//! Every route here is an [`EndpointKind::Compute`] derivation: a regression or
+//! econometric test computed over caller-supplied series rather than fetched
+//! from a provider. Per the catalog invariant, Compute routes declare **no**
+//! provider candidates. The params schema is the estimator's typed parameter
+//! struct and the model schema its typed output, both sourced from the
+//! `tdw-analytics-econometrics` crate so the catalog and the runtime compute
+//! implementation share one schema definition.
+//!
+//! # Input convention
+//!
+//! Unlike the single-series technical/quantitative routes, the econometric
+//! routes need richer multi-series inputs (a response `y` and a design `X` for
+//! OLS, a list of columns for the correlation matrix and VIF, a pair of series
+//! plus a lag for Granger causality). Those inputs are carried **inline in the
+//! params** (the typed param structs), so these routes are inline-only — they do
+//! not support the nested `source` price-fetch form, which yields a single
+//! series. Chartability is `false`: the outputs are coefficient tables and test
+//! statistics, not per-bar series.
+
+use schemars::{Schema, schema_for};
+use tdw_analytics_econometrics::cointegration::CointegrationResult;
+use tdw_analytics_econometrics::granger::GrangerResult;
+use tdw_analytics_econometrics::ols::OlsSummary;
+use tdw_analytics_econometrics::params::{
+    CointegrationParams, ColumnsParams, GrangerParams, OlsParams,
+};
+
+use crate::{CatalogEntry, EndpointKind};
+
+// --- Param-schema closures. --------------------------------------------------
+
+fn ols_params() -> Schema {
+    schema_for!(OlsParams)
+}
+fn columns_params() -> Schema {
+    schema_for!(ColumnsParams)
+}
+fn granger_params() -> Schema {
+    schema_for!(GrangerParams)
+}
+fn cointegration_params() -> Schema {
+    schema_for!(CointegrationParams)
+}
+
+// --- Output-model schema closures. -------------------------------------------
+
+fn ols_model() -> Schema {
+    schema_for!(OlsSummary)
+}
+fn granger_model() -> Schema {
+    schema_for!(GrangerResult)
+}
+fn cointegration_model() -> Schema {
+    schema_for!(CointegrationResult)
+}
+
+/// Model schema for a route whose row is a numeric vector — the correlation
+/// matrix emits one such row per input column, the VIF route one scalar per
+/// column. A JSON array of numbers describes both.
+fn numeric_row_model() -> Schema {
+    schema_for!(Vec<f64>)
+}
+
+/// Construct one non-chartable `econometrics/*` Compute entry with no
+/// candidates.
+const fn compute_entry(
+    route: &'static str,
+    params_schema: fn() -> Schema,
+    model: fn() -> Schema,
+    doc: &'static str,
+) -> CatalogEntry {
+    CatalogEntry {
+        route,
+        kind: EndpointKind::Compute,
+        params_schema,
+        model,
+        candidates: &[],
+        bronze_table: None,
+        doc,
+        chartable: false,
+    }
+}
+
+/// Declaration-order spec table for the `econometrics/*` routes.
+type RouteSpec = (&'static str, fn() -> Schema, fn() -> Schema, &'static str);
+
+const ROUTES: &[RouteSpec] = &[
+    (
+        "econometrics/ols",
+        ols_params,
+        ols_model,
+        "Ordinary least squares: coefficients, std errors, t-stats, R2, F, DW.",
+    ),
+    (
+        "econometrics/correlation_matrix",
+        columns_params,
+        numeric_row_model,
+        "Pearson correlation matrix of a set of equal-length columns.",
+    ),
+    (
+        "econometrics/vif",
+        columns_params,
+        numeric_row_model,
+        "Variance inflation factors via auxiliary-regression R-squared.",
+    ),
+    (
+        "econometrics/granger_causality",
+        granger_params,
+        granger_model,
+        "Granger-causality F-test of x-lags improving the prediction of y.",
+    ),
+    (
+        "econometrics/cointegration",
+        cointegration_params,
+        cointegration_model,
+        "Engle-Granger step one plus a residual stationarity score.",
+    ),
+];
+
+/// The `econometrics` namespace's catalog entries, in declaration order.
+pub fn entries() -> Vec<CatalogEntry> {
+    ROUTES
+        .iter()
+        .map(|&(route, params_schema, model, doc)| compute_entry(route, params_schema, model, doc))
+        .collect()
+}

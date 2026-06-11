@@ -1,0 +1,25 @@
+# tdw-analytics-quant: pure-Rust, offline returns-based quantitative metrics.
+#
+# Lib-only, no async, no I/O. Hand-rolled implementations over a value series
+# (returns, or prices reduced to returns) with typed serde+schemars param/output
+# structs. Every metric is textbook math (Sharpe 1966, Sortino 1994,
+# Keating-Shadwick 2002, Jarque-Bera 1980, ...); see each module's docs for the
+# cited definition. No new third-party numeric dependency is pulled in: the
+# normal-distribution tail used for the Jarque-Bera p-value is a hand-rolled
+# chi-squared approximation, so `statrs` is intentionally NOT a dependency.
+[package]
+name = "tdw-analytics-quant"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-domain = { workspace = true }
+
+[lints]
+workspace = true
