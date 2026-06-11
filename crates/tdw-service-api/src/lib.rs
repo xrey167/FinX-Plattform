@@ -225,7 +225,7 @@ use tdw_stage::StageLocation;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_storage_s3::InMemoryS3BlobEngine;
-use tdw_table_format::{TableFile, TableFormat, TableManifest};
+use tdw_table_format::{TableFile, TableFormat, TableManifest, VerifyOutcome};
 use tdw_tag_rules::{RuleEngine, RulePredicate, TagRule};
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use tdw_tools::{ToolOrchestrator, ToolRegistry, echo_tool};
@@ -1408,6 +1408,21 @@ fn parity_layer_evidence(
     )
     .map_err(|error| Error::Provider(error.to_string()))?;
     let (claims, auth_policy, define, masked_account) = parity_auth_mask_evidence()?;
+    // Surface the tri-state: verified / legacy_unverified / failed.
+    // Collapsing Vec<VerifyOutcome> to a bool would silently treat
+    // LegacyUnverified as success, so we emit per-category counts instead.
+    let table_manifest_status =
+        match manifest.verify_checksums(|_| Ok(std::io::Cursor::new(b"demo-content"))) {
+            Err(ref e) => format!("failed: {e}"),
+            Ok(ref v) => {
+                let verified = v.iter().filter(|o| **o == VerifyOutcome::Ok).count();
+                let legacy = v
+                    .iter()
+                    .filter(|o| matches!(o, VerifyOutcome::LegacyUnverified { .. }))
+                    .count();
+                format!("verified={verified} legacy_unverified={legacy} failed=0")
+            }
+        };
 
     Ok(json!({
         "snapshot_version": snapshot_version,
@@ -1418,7 +1433,7 @@ fn parity_layer_evidence(
         "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
         "copy_checksum": copy_plan.checksum,
         "pipe_offset": pipe.last_offset,
-        "table_manifest_ok": manifest.verify_checksums(|_| Ok(std::io::Cursor::new(b"demo-content"))).is_ok(),
+        "table_manifest_status": table_manifest_status,
         "udf_output": udf_output,
         "jwt_valid": validate_claims(
             &claims,
@@ -2343,7 +2358,12 @@ mod tests {
         assert_eq!(evidence["snapshot_version"], 2);
         assert_eq!(evidence["time_travel_rows"], 1);
         assert_eq!(evidence["udf_output"], "AAPL");
-        assert_eq!(evidence["table_manifest_ok"], true);
+        // tri-state: verified/legacy_unverified/failed counts — LegacyUnverified
+        // must NOT collapse to a boolean true the way .is_ok() would.
+        assert_eq!(
+            evidence["table_manifest_status"],
+            "verified=1 legacy_unverified=0 failed=0"
+        );
         assert_eq!(evidence["jwt_valid"], true);
         assert_eq!(evidence["authorized"], true);
         assert_eq!(evidence["masked_account"], "***3456");
