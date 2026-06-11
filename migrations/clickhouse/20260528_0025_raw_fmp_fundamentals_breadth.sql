@@ -34,7 +34,9 @@ create table if not exists raw.financial_statement (
   period LowCardinality(String),
   fiscal_year Nullable(Int32) codec(ZSTD),
   fiscal_period LowCardinality(Nullable(String)),
-  date Nullable(String),
+  -- Non-nullable: `date` is part of the sorting key and ClickHouse rejects
+  -- nullable key columns; absent dates arrive as '' (input_format_null_as_default).
+  date String default '',
   filing_date Nullable(String),
   currency LowCardinality(Nullable(String)),
   line_items Map(String, Float64) codec(ZSTD),
@@ -50,7 +52,9 @@ settings non_replicated_deduplication_window = 1000;
 create table if not exists raw.key_metrics (
   symbol String,
   period LowCardinality(Nullable(String)),
-  date Nullable(String),
+  -- Non-nullable: `date` is part of the sorting key and ClickHouse rejects
+  -- nullable key columns; absent dates arrive as '' (input_format_null_as_default).
+  date String default '',
   market_cap Nullable(Float64) codec(ZSTD),
   pe_ratio Nullable(Float64) codec(ZSTD),
   price_to_sales Nullable(Float64) codec(ZSTD),
@@ -75,7 +79,9 @@ settings non_replicated_deduplication_window = 1000;
 create table if not exists raw.ratios (
   symbol String,
   period LowCardinality(Nullable(String)),
-  date Nullable(String),
+  -- Non-nullable: `date` is part of the sorting key and ClickHouse rejects
+  -- nullable key columns; absent dates arrive as '' (input_format_null_as_default).
+  date String default '',
   current_ratio Nullable(Float64) codec(ZSTD),
   quick_ratio Nullable(Float64) codec(ZSTD),
   gross_margin Nullable(Float64) codec(ZSTD),
