@@ -17,7 +17,9 @@
 #![forbid(unsafe_code)]
 
 use tdw_protocol::{ApprovalDecision, PermissionId, SessionId};
-use tdw_session::{CostLedgerEntry, PendingApprovalRecord, SessionRecord, SessionStatus, SqliteSessionStore};
+use tdw_session::{
+    CostLedgerEntry, PendingApprovalRecord, SessionRecord, SessionStatus, SqliteSessionStore,
+};
 
 enum AnyStore {
     Sqlite(SqliteSessionStore),
