@@ -148,7 +148,7 @@ pub fn execute(
 
     // Stamp versions from the live runtime (never from arguments — caller
     // input is attacker-controlled; versions must come from the server).
-    let versions: KnowledgeVersions = runtime.versions().clone();
+    let versions: KnowledgeVersions = runtime.versions();
 
     let event = RetrievalEvent {
         agent_id: agent_id.to_string(),
