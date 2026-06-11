@@ -1,24 +1,114 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
+
+//! Parquet dataset manifest: file-level and manifest-level content integrity.
+//!
+//! # Integrity guarantees
+//!
+//! [`ParquetFile::from_reader`] computes a **SHA-256 digest of the parquet
+//! file bytes** via a streaming reader (64 KiB chunks; the file is never fully
+//! loaded into memory).  [`ParquetDatasetManifest::verify_checksums`] accepts
+//! an `open` callback that produces a reader for each listed path, re-hashes
+//! the bytes, and compares against the stored digest.  A corrupted or
+//! partially written parquet file is detected.
+//!
+//! The `(path, row_count, content_length)` triple is kept as **metadata
+//! validation** alongside the content hash: shape changes (wrong row count,
+//! truncated file length) are caught by
+//! [`ParquetDatasetManifest::verify_metadata`] without needing to re-read
+//! file bytes.
+//!
+//! ## What is **not** guaranteed
+//!
+//! * Remote storage consistency (S3 read-after-write, object versioning).
+//! * Atomicity of multi-file commits — each file is verified independently.
+//!
+//! ## Legacy manifests
+//!
+//! Manifests written before G008 (2026-06-11) set
+//! `content_checksum_kind = "legacy"`.
+//! [`ParquetDatasetManifest::verify_checksums`] returns
+//! [`VerifyOutcome::LegacyUnverified`] for every such entry without reading
+//! the file bytes — this is a **loud, distinct** status that is neither pass
+//! nor fail.  Callers should surface it and schedule a re-manifest.
+
+use std::io::{self, Read};
+
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, ParquetManifestError>;
 
+// ---------------------------------------------------------------------------
+// ChecksumKind
+// ---------------------------------------------------------------------------
+
+/// How the [`ParquetFile::content_checksum`] field was produced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChecksumKind {
+    /// Checksum is the lower-case hex-encoded SHA-256 of the **file bytes**.
+    /// This is the only kind written by current code.
+    #[default]
+    Sha256,
+    /// Checksum was produced by the pre-G008 `parquet_file_checksum` function,
+    /// which FNV-hashed `path + row_count + content_length` — there was no
+    /// file I/O and the parquet bytes were never read.  The stored value
+    /// provides **no** content-integrity guarantee; it is preserved so readers
+    /// surface a distinct "legacy, content-unverified" status rather than
+    /// silently passing or failing.
+    Legacy,
+}
+
+// ---------------------------------------------------------------------------
+// Structs
+// ---------------------------------------------------------------------------
+
+/// Manifest over a set of parquet files belonging to one logical table.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParquetDatasetManifest {
     pub table: String,
     pub files: Vec<ParquetFile>,
-    pub checksum: u64,
 }
 
+/// One parquet file entry inside a [`ParquetDatasetManifest`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParquetFile {
+    /// Path or URI to the parquet file.
     pub path: String,
+    /// Number of rows in the file — metadata validation only.
     pub row_count: u64,
+    /// On-disk byte length of the file — metadata validation only.
     pub content_length: u64,
-    pub checksum: u64,
+    /// Algorithm used to produce `content_checksum`.
+    #[serde(default)]
+    pub content_checksum_kind: ChecksumKind,
+    /// Content digest.
+    ///
+    /// * [`ChecksumKind::Sha256`] — lower-case hex SHA-256 of the file bytes.
+    /// * [`ChecksumKind::Legacy`] — decimal FNV of `path+row_count+length`;
+    ///   has no content-integrity meaning.
+    pub content_checksum: String,
 }
+
+// ---------------------------------------------------------------------------
+// VerifyOutcome
+// ---------------------------------------------------------------------------
+
+/// Per-file result from [`ParquetDatasetManifest::verify_checksums`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    /// File bytes matched the stored SHA-256 digest.
+    Ok,
+    /// Entry was written by pre-G008 code.  File bytes were **not** read;
+    /// no pass/fail verdict is available.  Schedule a re-manifest.
+    LegacyUnverified { path: String },
+}
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParquetManifestError {
@@ -32,60 +122,55 @@ pub enum ParquetManifestError {
     EmptyFileRows { path: String },
     #[error("parquet file {path} must have a non-zero content length")]
     EmptyFileBytes { path: String },
-    #[error("parquet file {path} checksum mismatch: expected {expected}, actual {actual}")]
-    FileChecksumMismatch {
+    #[error("parquet file {path} content checksum mismatch: expected {expected}, actual {actual}")]
+    ContentChecksumMismatch {
         path: String,
-        expected: u64,
-        actual: u64,
+        expected: String,
+        actual: String,
     },
-    #[error("parquet manifest checksum mismatch: expected {expected}, actual {actual}")]
-    ManifestChecksumMismatch { expected: u64, actual: u64 },
+    #[error("parquet file {path} I/O error: {message}")]
+    Io { path: String, message: String },
 }
 
+// ---------------------------------------------------------------------------
+// Impl ParquetDatasetManifest
+// ---------------------------------------------------------------------------
+
 impl ParquetDatasetManifest {
+    /// Build a manifest and validate shape constraints.
+    ///
     /// # Errors
     ///
-    /// Returns an error variant if the underlying operation fails.
+    /// Returns the first shape violation encountered.
     pub fn new(table: impl Into<String>, files: Vec<ParquetFile>) -> Result<Self> {
-        let mut manifest = Self {
+        let manifest = Self {
             table: table.into(),
             files,
-            checksum: 0,
         };
         manifest.validate_shape()?;
-        manifest.checksum = manifest.calculate_checksum();
         Ok(manifest)
     }
 
+    /// Sum of all recorded row counts (metadata, not re-validated from disk).
     #[must_use]
     pub fn total_rows(&self) -> u64 {
-        self.files.iter().map(|file| file.row_count).sum()
+        self.files.iter().map(|f| f.row_count).sum()
     }
 
+    /// Sum of all recorded content lengths (metadata, not re-validated from
+    /// disk).
     #[must_use]
     pub fn total_bytes(&self) -> u64 {
-        self.files.iter().map(|file| file.content_length).sum()
+        self.files.iter().map(|f| f.content_length).sum()
     }
 
+    /// Validate shape constraints (non-empty table, files list, paths,
+    /// `row_count`, `content_length`).  Does **not** open any files.
+    ///
     /// # Errors
     ///
-    /// Returns an error variant if the underlying operation fails.
-    pub fn verify_checksums(&self) -> Result<()> {
-        self.validate_shape()?;
-        for file in &self.files {
-            file.verify_checksum()?;
-        }
-        let expected = self.calculate_checksum();
-        if self.checksum != expected {
-            return Err(ParquetManifestError::ManifestChecksumMismatch {
-                expected,
-                actual: self.checksum,
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_shape(&self) -> Result<()> {
+    /// Returns the first shape violation.
+    pub fn validate_shape(&self) -> Result<()> {
         if self.table.trim().is_empty() {
             return Err(ParquetManifestError::EmptyTable);
         }
@@ -98,45 +183,126 @@ impl ParquetDatasetManifest {
         Ok(())
     }
 
-    fn calculate_checksum(&self) -> u64 {
-        let mut checksum = checksum_bytes(self.table.as_bytes());
+    /// Validate recorded metadata `(row_count, content_length)` for each file
+    /// without re-reading file bytes.  `meta` is called with each path and
+    /// must return `(actual_row_count, actual_content_length)`.
+    ///
+    /// This is a cheap pre-flight check; use [`Self::verify_checksums`] for
+    /// full content integrity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParquetManifestError::EmptyFileRows`] /
+    /// [`ParquetManifestError::EmptyFileBytes`] if the recorded values no
+    /// longer match what `meta` returns.
+    pub fn verify_metadata(&self, mut meta: impl FnMut(&str) -> (u64, u64)) -> Result<()> {
+        self.validate_shape()?;
         for file in &self.files {
-            checksum = checksum.wrapping_mul(FNV_PRIME).wrapping_add(file.checksum);
+            let (actual_rows, actual_bytes) = meta(&file.path);
+            if actual_rows != file.row_count {
+                return Err(ParquetManifestError::EmptyFileRows {
+                    path: file.path.clone(),
+                });
+            }
+            if actual_bytes != file.content_length {
+                return Err(ParquetManifestError::EmptyFileBytes {
+                    path: file.path.clone(),
+                });
+            }
         }
-        checksum
+        Ok(())
+    }
+
+    /// Re-read every file via `open` and verify its SHA-256 content digest.
+    ///
+    /// `open` receives the `path` string and must return a [`Read`] over the
+    /// file bytes.  The implementation hashes in 64 KiB chunks and never
+    /// loads the whole file into memory.
+    ///
+    /// Legacy entries (written before G008) return
+    /// [`VerifyOutcome::LegacyUnverified`] without calling `open`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParquetManifestError::ContentChecksumMismatch`] for the
+    /// first detected corruption, or [`ParquetManifestError::Io`] if `open`
+    /// fails.
+    pub fn verify_checksums<R: Read>(
+        &self,
+        mut open: impl FnMut(&str) -> io::Result<R>,
+    ) -> Result<Vec<VerifyOutcome>> {
+        self.validate_shape()?;
+        let mut outcomes = Vec::with_capacity(self.files.len());
+        for file in &self.files {
+            match file.content_checksum_kind {
+                ChecksumKind::Legacy => {
+                    outcomes.push(VerifyOutcome::LegacyUnverified {
+                        path: file.path.clone(),
+                    });
+                }
+                ChecksumKind::Sha256 => {
+                    let reader = open(&file.path).map_err(|e| ParquetManifestError::Io {
+                        path: file.path.clone(),
+                        message: e.to_string(),
+                    })?;
+                    let actual = sha256_reader(reader).map_err(|e| ParquetManifestError::Io {
+                        path: file.path.clone(),
+                        message: e.to_string(),
+                    })?;
+                    if actual != file.content_checksum {
+                        return Err(ParquetManifestError::ContentChecksumMismatch {
+                            path: file.path.clone(),
+                            expected: file.content_checksum.clone(),
+                            actual,
+                        });
+                    }
+                    outcomes.push(VerifyOutcome::Ok);
+                }
+            }
+        }
+        Ok(outcomes)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Impl ParquetFile
+// ---------------------------------------------------------------------------
+
 impl ParquetFile {
+    /// Build a [`ParquetFile`] by computing the SHA-256 digest of the bytes
+    /// produced by `reader`.
+    ///
+    /// `row_count` and `content_length` are recorded as metadata alongside
+    /// the content hash.  The reader is consumed in 64 KiB chunks; the file
+    /// is never fully loaded into memory.
+    ///
     /// # Errors
     ///
-    /// Returns an error variant if the underlying operation fails.
-    pub fn new(path: impl Into<String>, row_count: u64, content_length: u64) -> Result<Self> {
+    /// Returns a shape violation if `path`/`row_count`/`content_length` are empty,
+    /// or [`ParquetManifestError::Io`] if reading fails.
+    pub fn from_reader(
+        path: impl Into<String>,
+        row_count: u64,
+        content_length: u64,
+        reader: impl Read,
+    ) -> Result<Self> {
         let path = path.into();
         let file = Self {
-            checksum: parquet_file_checksum(&path, row_count, content_length),
+            content_checksum: String::new(), // filled below
+            content_checksum_kind: ChecksumKind::Sha256,
             path,
             row_count,
             content_length,
         };
         file.validate_shape()?;
-        Ok(file)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error variant if the underlying operation fails.
-    pub fn verify_checksum(&self) -> Result<()> {
-        self.validate_shape()?;
-        let expected = parquet_file_checksum(&self.path, self.row_count, self.content_length);
-        if self.checksum != expected {
-            return Err(ParquetManifestError::FileChecksumMismatch {
-                path: self.path.clone(),
-                expected,
-                actual: self.checksum,
-            });
-        }
-        Ok(())
+        let digest = sha256_reader(reader).map_err(|e| ParquetManifestError::Io {
+            path: file.path.clone(),
+            message: e.to_string(),
+        })?;
+        Ok(Self {
+            content_checksum: digest,
+            ..file
+        })
     }
 
     fn validate_shape(&self) -> Result<()> {
@@ -157,56 +323,195 @@ impl ParquetFile {
     }
 }
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
-fn parquet_file_checksum(path: &str, row_count: u64, content_length: u64) -> u64 {
-    let mut checksum = checksum_bytes(path.as_bytes());
-    checksum = checksum_bytes_with_seed(&row_count.to_le_bytes(), checksum);
-    checksum_bytes_with_seed(&content_length.to_le_bytes(), checksum)
+/// Stream `reader` through SHA-256 in 64 KiB chunks and return the lower-case
+/// hex digest.  Allocates one chunk buffer; never reads the whole file into
+/// memory.
+fn sha256_reader(mut reader: impl Read) -> io::Result<String> {
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 65_536];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    Ok(digest.iter().fold(String::with_capacity(64), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    }))
 }
 
-fn checksum_bytes(bytes: &[u8]) -> u64 {
-    checksum_bytes_with_seed(bytes, FNV_OFFSET)
-}
-
-fn checksum_bytes_with_seed(bytes: &[u8], seed: u64) -> u64 {
-    bytes.iter().fold(seed, |checksum, byte| {
-        (checksum ^ u64::from(*byte)).wrapping_mul(FNV_PRIME)
-    })
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
-    #[test]
-    fn manifest_records_totals_and_verifies_checksums() {
-        let file = ParquetFile::new("s3://bucket/raw/ohlcv.parquet", 42, 4096)
-            .unwrap_or_else(|error| panic!("parquet file should be valid: {error}"));
-        let manifest = ParquetDatasetManifest::new("raw.market_data_bar", vec![file])
-            .unwrap_or_else(|error| panic!("parquet manifest should be valid: {error}"));
-
-        assert_eq!(manifest.total_rows(), 42);
-        assert_eq!(manifest.total_bytes(), 4096);
-        assert!(manifest.verify_checksums().is_ok());
+    fn make_file(path: &str, content: &[u8]) -> ParquetFile {
+        ParquetFile::from_reader(
+            path,
+            42,
+            content.len() as u64,
+            Cursor::new(content.to_vec()),
+        )
+        .expect("ParquetFile::from_reader should not fail for valid input")
     }
 
+    fn make_manifest(files: Vec<ParquetFile>) -> ParquetDatasetManifest {
+        ParquetDatasetManifest::new("raw.market_data_bar", files)
+            .expect("ParquetDatasetManifest::new should not fail for valid input")
+    }
+
+    // -----------------------------------------------------------------------
+    // round-trip: totals correct and content hash verifies
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn rejects_empty_manifest_boundaries_and_checksum_drift() {
-        assert!(ParquetDatasetManifest::new("", Vec::new()).is_err());
-        assert!(ParquetFile::new("", 1, 1).is_err());
-        assert!(ParquetFile::new("s3://bucket/raw/empty.parquet", 0, 1).is_err());
+    fn round_trip_pass() {
+        let content = b"parquet-file-bytes-placeholder";
+        let file = make_file("s3://bucket/raw/ohlcv.parquet", content);
+        let manifest = make_manifest(vec![file]);
 
-        let mut file = ParquetFile::new("s3://bucket/raw/ohlcv.parquet", 1, 1)
-            .unwrap_or_else(|error| panic!("parquet file should be valid: {error}"));
-        file.checksum = file.checksum.wrapping_add(1);
-        let mut manifest = ParquetDatasetManifest::new("raw.market_data_bar", vec![file])
-            .unwrap_or_else(|error| {
-                panic!("shape-only manifest construction should pass: {error}")
-            });
-        manifest.checksum = manifest.checksum.wrapping_add(1);
+        assert_eq!(manifest.total_rows(), 42);
+        assert_eq!(manifest.total_bytes(), content.len() as u64);
 
-        assert!(manifest.verify_checksums().is_err());
+        let outcomes = manifest
+            .verify_checksums(|_| Ok(Cursor::new(content.to_vec())))
+            .expect("verify_checksums should pass on unmodified content");
+        assert_eq!(outcomes, vec![VerifyOutcome::Ok]);
+    }
+
+    // -----------------------------------------------------------------------
+    // corrupted-file detection: flip bytes keeping length, verify FAILS
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn corrupted_file_detected() {
+        let original = b"parquet-file-bytes-placeholder";
+        let file = make_file("s3://bucket/raw/ohlcv.parquet", original);
+        let manifest = make_manifest(vec![file]);
+
+        let corrupted: Vec<u8> = original.iter().map(|b| b ^ 0xFF).collect();
+        assert_eq!(corrupted.len(), original.len(), "length must be preserved");
+
+        let err = manifest
+            .verify_checksums(|_| Ok(Cursor::new(corrupted.clone())))
+            .expect_err("corrupted file must be detected");
+        assert!(
+            matches!(err, ParquetManifestError::ContentChecksumMismatch { .. }),
+            "expected ContentChecksumMismatch, got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // legacy manifest: distinct LegacyUnverified status, never opens file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn legacy_manifest_reports_distinct_unverified_status() {
+        let file = ParquetFile {
+            path: "s3://bucket/raw/ohlcv.parquet".to_string(),
+            row_count: 42,
+            content_length: 4096,
+            content_checksum_kind: ChecksumKind::Legacy,
+            // old FNV-of-metadata value — no content-integrity meaning
+            content_checksum: "12345678901234567".to_string(),
+        };
+        let manifest = make_manifest(vec![file.clone()]);
+
+        let outcomes = manifest
+            .verify_checksums(|_path| -> io::Result<Cursor<Vec<u8>>> {
+                Err(io::Error::other("must not be called for legacy entries"))
+            })
+            .expect("verify_checksums must not error on legacy entries");
+
+        assert_eq!(
+            outcomes,
+            vec![VerifyOutcome::LegacyUnverified { path: file.path }]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // large-file streaming: 4 MiB, well above the 64 KiB chunk size
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn large_file_streaming_no_full_read() {
+        let chunk = b"TDW-STREAMING-CHUNK-PATTERN-0123456789ABCDEF";
+        let big: Vec<u8> = chunk
+            .iter()
+            .copied()
+            .cycle()
+            .take(4 * 1024 * 1024)
+            .collect();
+
+        let file = make_file("s3://bucket/raw/large.parquet", &big);
+        let manifest = make_manifest(vec![file]);
+
+        let outcomes = manifest
+            .verify_checksums(|_| Ok(Cursor::new(big.clone())))
+            .expect("large-file round-trip should pass");
+        assert_eq!(outcomes, vec![VerifyOutcome::Ok]);
+    }
+
+    // -----------------------------------------------------------------------
+    // shape validation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shape_validation_rejects_empty_fields() {
+        let content = b"some bytes";
+        assert!(
+            ParquetDatasetManifest::new("", vec![make_file("s3://x/f.parquet", content)]).is_err()
+        );
+        assert!(
+            ParquetFile::from_reader("", 1, 1, Cursor::new(b"x".to_vec())).is_err(),
+            "empty path"
+        );
+        assert!(
+            ParquetFile::from_reader("s3://x/f.parquet", 0, 1, Cursor::new(b"x".to_vec())).is_err(),
+            "zero rows"
+        );
+        assert!(
+            ParquetFile::from_reader("s3://x/f.parquet", 1, 0, Cursor::new(b"x".to_vec())).is_err(),
+            "zero length"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // metadata validation helper
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn verify_metadata_detects_row_count_drift() {
+        let content = b"data";
+        let file = make_file("s3://bucket/raw/ohlcv.parquet", content);
+        let expected_rows = file.row_count;
+        let expected_bytes = file.content_length;
+        let manifest = make_manifest(vec![file]);
+
+        // correct metadata passes
+        assert!(
+            manifest
+                .verify_metadata(|_| (expected_rows, expected_bytes))
+                .is_ok()
+        );
+
+        // wrong row count fails
+        assert!(
+            manifest
+                .verify_metadata(|_| (expected_rows + 1, expected_bytes))
+                .is_err()
+        );
     }
 }

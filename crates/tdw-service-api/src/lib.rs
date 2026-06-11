@@ -225,7 +225,7 @@ use tdw_stage::StageLocation;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_storage_s3::InMemoryS3BlobEngine;
-use tdw_table_format::{TableFile, TableFormat, TableManifest, simple_checksum};
+use tdw_table_format::{TableFile, TableFormat, TableManifest};
 use tdw_tag_rules::{RuleEngine, RulePredicate, TagRule};
 use tdw_tags::{TagAssignment, TagDefinition, TagStore};
 use tdw_tools::{ToolOrchestrator, ToolRegistry, echo_tool};
@@ -1385,14 +1385,16 @@ fn parity_layer_evidence(
         .copy_plan(vec!["ohlcv.parquet".to_string()])
         .map_err(|error| Error::Storage(error.to_string()))?;
     pipe.advance(stream_offset);
+    let manifest_file = TableFile::from_reader(
+        "s3://bucket/market/ohlcv.parquet",
+        std::io::Cursor::new(b"demo-content"),
+    )
+    .map_err(|error| Error::Storage(error.to_string()))?;
     let manifest = TableManifest {
         format: TableFormat::Iceberg,
         table: "raw.market_data_bar".to_string(),
         version: snapshot_version,
-        files: vec![TableFile {
-            path: "s3://bucket/market/ohlcv.parquet".to_string(),
-            checksum: simple_checksum("s3://bucket/market/ohlcv.parquet"),
-        }],
+        files: vec![manifest_file],
     };
     let udf_output = evaluate(
         &UdfDefinition {
@@ -1416,7 +1418,7 @@ fn parity_layer_evidence(
         "spatial_contains": bbox.contains(Point { lat: 40.7, lon: -74.0 }),
         "copy_checksum": copy_plan.checksum,
         "pipe_offset": pipe.last_offset,
-        "table_manifest_ok": manifest.verify_checksums(),
+        "table_manifest_ok": manifest.verify_checksums(|_| Ok(std::io::Cursor::new(b"demo-content"))).is_ok(),
         "udf_output": udf_output,
         "jwt_valid": validate_claims(
             &claims,
