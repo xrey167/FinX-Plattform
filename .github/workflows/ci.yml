@@ -73,6 +73,12 @@ jobs:
       - run: cargo test -p tdw-app-server --features rest-api-route
       - run: cargo test -p tdw-service-api --features all-http-providers
       - run: cargo test -p tdw-service-api --features rest-api-route
+      # The OpenBB-Workspace example suite is a workspace member but is excluded
+      # from `default-members`, so a bare `cargo test` skips it. The default
+      # `cargo test --workspace` above already covers it; this explicit line makes
+      # the suite's offline boot-against-the-in-memory-daemon coverage visible and
+      # robust to the default-members exclusion.
+      - run: cargo test -p tdw-workspace-examples
       - run: cargo deny check
       - run: cargo run -p xtask -- schema-sync
       - run: git diff --exit-code -- docs/schemas/agent
@@ -91,6 +97,9 @@ jobs:
       # standard-library `unittest` runner (no pytest), so this step needs only the
       # `python3` already present on the runner.
       - run: python3 -m unittest discover sdk/python/tests
+      # The Python SDK example (80-python-sdk) is stdlib-only and run-manually
+      # against a live daemon; CI verifies it stays import-clean.
+      - run: python3 -m py_compile examples/workspace/80-python-sdk/main.py
       - run: cargo run -p xtask -- clean-room-audit
 
   coverage:
