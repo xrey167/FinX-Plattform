@@ -53,6 +53,11 @@ pub struct KnowledgeVersions {
 pub struct KnowledgeRuntime {
     retriever: Retriever,
     graph: Option<Arc<dyn GraphEngine>>,
+    /// Operator-supplied graph backend name (e.g. `"in-memory"`, `"neo4j"`).
+    /// Set via [`with_graph_name`](Self::with_graph_name). When absent, status
+    /// falls back to `"graph-engine"` rather than using an unstable type-name
+    /// heuristic.
+    graph_name: Option<String>,
     tags: Option<Arc<dyn TagEngine>>,
     versions: KnowledgeVersions,
     /// The gated write queue (knowledge-system B9). Behind a
@@ -91,6 +96,7 @@ impl KnowledgeRuntime {
         Self {
             retriever: Retriever::new(embedder, vectors, collection),
             graph: None,
+            graph_name: None,
             tags: None,
             versions,
             proposals: None,
@@ -126,6 +132,18 @@ impl KnowledgeRuntime {
     pub fn with_graph(mut self, engine: Arc<dyn GraphEngine>) -> Self {
         self.retriever = self.retriever.with_graph(engine.clone());
         self.graph = Some(engine);
+        self
+    }
+
+    /// Record the graph backend name reported by `tdw.kg.status`.
+    ///
+    /// The daemon knows which backend it constructed (e.g. `"in-memory"`,
+    /// `"neo4j"`) and should set this at construction time so the status
+    /// snapshot carries an accurate, stable name. When absent the snapshot
+    /// falls back to `"graph-engine"`.
+    #[must_use]
+    pub fn with_graph_name(mut self, name: impl Into<String>) -> Self {
+        self.graph_name = Some(name.into());
         self
     }
 
@@ -234,6 +252,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .debug_struct("KnowledgeRuntime")
             .field("versions", &self.versions)
             .field("graph", &self.graph.is_some())
+            .field("graph_name", &self.graph_name)
             .field("tags", &self.tags.is_some())
             .field("proposals", &self.proposals.is_some())
             .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
@@ -249,12 +268,16 @@ impl std::fmt::Debug for KnowledgeRuntime {
 
 /// Proposal counts broken down by [`ValidationStatus`].
 ///
-/// Counts reflect the pending (non-materialized, non-rejected) proposals only,
-/// which is what occupies queue capacity and is actionable by an operator.
-/// Available only when the proposal queue is attached; otherwise all fields are
-/// `None` and `operator_authority` is `false`.
+/// Counts reflect ALL pending (non-materialized, non-rejected) proposals,
+/// obtained via [`ProposalQueue::pending_counts_by_state`] — a single-pass
+/// scan that is NOT subject to the `LIST_PAGE_DEFAULT`/`LIST_PAGE_MAX`
+/// pagination cap, so these are always exact regardless of queue depth.
+/// Available only when the proposal queue is attached.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KgProposalCounts {
+    /// Proposals in the `Draft` state (submitted; automated validators not yet
+    /// run or still in progress).
+    pub draft: usize,
     /// Proposals in the `Validated` state (automated validators passed; awaiting
     /// eval promotion or human approval).
     pub validated: usize,
@@ -362,7 +385,12 @@ impl KnowledgeRuntime {
 
         let graph_health = if let Some(graph) = self.graph.as_ref() {
             let probe = graph.edges(None, 0, 1).await;
-            let backend_name = graph_backend_name(graph.as_ref());
+            // Use the operator-supplied name when available; fall back to the
+            // generic sentinel so the field is always a non-empty string.
+            let backend_name = self
+                .graph_name
+                .clone()
+                .unwrap_or_else(|| "graph-engine".to_string());
             Some(match probe {
                 Ok(_) => KgGraphHealth {
                     backend_name,
@@ -382,32 +410,19 @@ impl KnowledgeRuntime {
         let proposals = self.proposals.as_ref().map(|queue_mutex| {
             // The `ProposalQueue` lock is sync; `try_lock()` avoids blocking the
             // async context. If the lock is contended (another tool is mid-write)
-            // we report zero counts with a note rather than deadlocking.
+            // we report zero counts rather than deadlocking.
             queue_mutex.try_lock().map_or(
                 KgProposalCounts {
+                    draft: 0,
                     validated: 0,
                     ready: 0,
                     operator_authority: self.operator_authority,
                 },
                 |queue| {
-                    use tdw_taxonomy::ValidationStatus;
-                    let validated = queue
-                        .list(None, None)
-                        .proposals
-                        .iter()
-                        .filter(|proposal| {
-                            proposal.is_pending() && proposal.status == ValidationStatus::Validated
-                        })
-                        .count();
-                    let ready = queue
-                        .list(None, None)
-                        .proposals
-                        .iter()
-                        .filter(|proposal| {
-                            proposal.is_pending() && proposal.status == ValidationStatus::Ready
-                        })
-                        .count();
+                    // Single-pass exact count — not subject to LIST_PAGE caps.
+                    let (draft, validated, ready) = queue.pending_counts_by_state();
                     KgProposalCounts {
+                        draft,
                         validated,
                         ready,
                         operator_authority: self.operator_authority,
@@ -440,23 +455,6 @@ impl KnowledgeRuntime {
             language_model_grade,
         }
     }
-}
-
-/// Best-effort backend name derived from the graph engine's `Debug` type path.
-///
-/// Production backends should implement a `name()` accessor; until then the
-/// type-name heuristic gives operators a readable identifier (e.g.
-/// `"InMemoryGraphEngine"` vs `"Neo4jGraphEngine"`).
-fn graph_backend_name(engine: &dyn GraphEngine) -> String {
-    // Use the concrete type name to give operators a readable identifier
-    // (e.g. `"InMemoryGraphEngine"` vs `"Neo4jGraphEngine"`). Take only the
-    // final segment after `::` so the name stays short and stable across
-    // module-path changes.
-    let full = std::any::type_name_of_val(engine);
-    full.rsplit("::")
-        .next()
-        .unwrap_or("graph-engine")
-        .to_string()
 }
 
 #[cfg(test)]
@@ -520,10 +518,94 @@ mod status_tests {
     async fn status_with_graph_engine_probes_reachability() {
         use tdw_storage_graph::InMemoryGraphEngine;
         let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
-        let runtime = vector_only_runtime().with_graph(graph);
+        let runtime = vector_only_runtime()
+            .with_graph(graph)
+            .with_graph_name("in-memory");
         let status = runtime.status().await;
         let health = status.graph_health.expect("graph attached");
         assert!(health.reachable, "in-memory engine always reachable");
         assert!(health.error.is_none());
+        assert_eq!(health.backend_name, "in-memory", "explicit name used");
+    }
+
+    #[tokio::test]
+    async fn status_graph_without_name_falls_back_to_sentinel() {
+        use tdw_storage_graph::InMemoryGraphEngine;
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        // No with_graph_name — sentinel must be returned, not a type-name heuristic.
+        let runtime = vector_only_runtime().with_graph(graph);
+        let status = runtime.status().await;
+        let health = status.graph_health.expect("graph attached");
+        assert_eq!(
+            health.backend_name, "graph-engine",
+            "sentinel when no name supplied"
+        );
+    }
+
+    #[tokio::test]
+    async fn proposal_counts_are_exact_and_include_draft() {
+        use std::sync::Arc;
+        use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
+        use tdw_storage_qdrant::InMemoryVectorEngine;
+
+        use crate::proposals::{ProposalKind, ProposalQueue};
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_taxonomy::Adaptivity;
+
+        // Build a full runtime so submit() can run validators.
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        // GraphTagEngine<G> stores G by value and needs G: GraphEngine — it
+        // cannot take Arc<dyn GraphEngine>. Use two separate in-memory instances:
+        // one (erased) for the runtime graph handle, one (concrete) for the tags
+        // engine. The validators only need the tag engine to check tag-assign
+        // shape; the graph instances can be independent for this test.
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let tags: Arc<dyn tdw_tags::TagEngine> =
+            Arc::new(GraphTagEngine::new(InMemoryGraphEngine::default()));
+
+        let queue = Arc::new(tokio::sync::Mutex::new(ProposalQueue::default()));
+        // Submit two TagDefine proposals. These pass the validator without
+        // needing pre-existing graph nodes (the check is only grammar + uniqueness)
+        // and land as Validated after auto-validators run.
+        {
+            let mut q = queue.lock().await;
+            q.submit(
+                "agent-a",
+                Adaptivity::Learning,
+                ProposalKind::TagDefine {
+                    tag_id: "status-test:alpha".to_string(),
+                    parent: None,
+                },
+                &graph,
+                &tags,
+                "2026-06-11",
+            )
+            .await
+            .expect("submit 1");
+            q.submit(
+                "agent-a",
+                Adaptivity::Learning,
+                ProposalKind::TagDefine {
+                    tag_id: "status-test:beta".to_string(),
+                    parent: None,
+                },
+                &graph,
+                &tags,
+                "2026-06-11",
+            )
+            .await
+            .expect("submit 2");
+        }
+
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(graph)
+            .with_proposals(queue);
+        let status = runtime.status().await;
+        let counts = status.proposals.expect("proposals attached");
+        // Both proposals enter as Validated (Draft→Validated after auto-validate).
+        assert_eq!(counts.draft, 0, "no draft proposals");
+        assert_eq!(counts.validated, 2, "two validated proposals");
+        assert_eq!(counts.ready, 0, "none ready yet");
     }
 }

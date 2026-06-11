@@ -52,7 +52,7 @@ pub use policy::{
     service_hook_policy,
 };
 #[cfg(feature = "rest-api-route")]
-pub use rest_handler::RestApiState;
+pub use rest_handler::{KnowledgeStatusAdapter, RestApiState};
 pub use stream_ingest::{run_stream_ingest, run_ws_ingest};
 pub use tdw_hooks::HookExecutionPolicy;
 

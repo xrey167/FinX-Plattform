@@ -13,8 +13,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, KnowledgeStatusHandler, serve_rest_http};
-use tdw_service_api::{AppState, RestApiState};
+use tdw_app_server::{CancellationToken, serve_rest_http};
+use tdw_embed_local::HashEmbeddingProvider;
+use tdw_knowledge::runtime::KnowledgeRuntime;
+use tdw_service_api::{AppState, KnowledgeStatusAdapter, RestApiState};
+use tdw_storage_qdrant::InMemoryVectorEngine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -42,30 +45,21 @@ where
     let _ = tokio::time::timeout(Duration::from_secs(2), server).await;
 }
 
-/// Stub `KnowledgeStatusHandler` that returns a canned JSON snapshot.
-struct StubKnowledgeStatus;
-
-#[async_trait::async_trait]
-impl KnowledgeStatusHandler for StubKnowledgeStatus {
-    async fn knowledge_status(&self) -> Result<serde_json::Value, String> {
-        Ok(serde_json::json!({
-            "vector_collection": "tdw_knowledge__local_hash_8",
-            "embedder_model": "local-hash-8",
-            "document_count_note": "VectorEngine has no count()",
-            "taxonomy_kind_count": 51,
-            "graph_health": null,
-            "versions": {
-                "embedder_model": "local-hash-8",
-                "rules_version": null,
-                "infer_version": null
-            },
-            "proposals": null,
-            "language_model_grade": "stub — eval feedback and auto-materialization disabled"
-        }))
-    }
+/// Build a minimal in-memory [`KnowledgeRuntime`] (vector-only, no graph) for
+/// use in REST e2e tests. The runtime uses the same hash embedder as the
+/// knowledge unit tests so the `embedder_model` field is deterministic.
+fn build_test_runtime() -> Arc<KnowledgeRuntime> {
+    Arc::new(KnowledgeRuntime::new(
+        Arc::new(HashEmbeddingProvider::default()),
+        Arc::new(InMemoryVectorEngine::default()),
+    ))
 }
 
-/// Spin up a REST listener with a stub `KnowledgeStatusHandler` and run `body(addr)`.
+/// Spin up a REST listener with a REAL [`KnowledgeStatusAdapter`] backed by a
+/// minimal in-memory runtime, and run `body(addr)`.
+///
+/// This exercises the real status collection path (not a canned stub) so
+/// the test is an end-to-end proof that the live daemon path works.
 async fn with_status_server<F, Fut>(body: F)
 where
     F: FnOnce(std::net::SocketAddr) -> Fut,
@@ -73,7 +67,7 @@ where
 {
     let state = AppState::in_memory_for_tests().await;
     let handler = RestApiState::new(state).into_handler();
-    let ks: Arc<dyn KnowledgeStatusHandler> = Arc::new(StubKnowledgeStatus);
+    let ks = KnowledgeStatusAdapter::new(build_test_runtime()).into_handler();
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local addr");
     let cancel = CancellationToken::new();
@@ -258,24 +252,40 @@ async fn knowledge_status_returns_200_with_snapshot() {
             String::from_utf8_lossy(&resp)
         );
         let body = response_body_json(&resp);
-        // Every top-level field from the stub snapshot must be present.
-        assert!(
-            body["vector_collection"].is_string(),
-            "vector_collection: {body}"
+        // Assert seeded values from the real HashEmbeddingProvider runtime —
+        // not presence-only checks. This proves the live path, not a canned stub.
+        assert_eq!(
+            body["embedder_model"], "local-hash-8",
+            "embedder_model seeded value: {body}"
         );
-        assert!(body["embedder_model"].is_string(), "embedder_model: {body}");
+        assert!(
+            body["vector_collection"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("tdw_knowledge__")),
+            "vector_collection namespaced: {body}"
+        );
         assert!(
             body["document_count_note"].is_string(),
-            "document_count_note: {body}"
+            "honest count note present: {body}"
         );
-        assert!(
-            body["taxonomy_kind_count"].as_u64().is_some(),
-            "taxonomy_kind_count numeric: {body}"
+        assert_eq!(
+            body["taxonomy_kind_count"].as_u64(),
+            Some(51),
+            "taxonomy_kind_count is 51: {body}"
         );
-        assert!(body["versions"].is_object(), "versions: {body}");
+        assert!(body["versions"].is_object(), "versions object: {body}");
+        assert_eq!(
+            body["versions"]["embedder_model"], "local-hash-8",
+            "versions.embedder_model: {body}"
+        );
+        // No graph or proposals on this minimal runtime.
+        assert!(body["graph_health"].is_null(), "no graph: {body}");
+        assert!(body["proposals"].is_null(), "no proposals: {body}");
         assert!(
-            body["language_model_grade"].is_string(),
-            "language_model_grade: {body}"
+            body["language_model_grade"]
+                .as_str()
+                .is_some_and(|s| s.contains("stub")),
+            "language_model_grade is stub for minimal runtime: {body}"
         );
     })
     .await;

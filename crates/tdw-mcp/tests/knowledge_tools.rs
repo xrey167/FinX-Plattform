@@ -252,7 +252,7 @@ fn server_with_runtime() -> McpServer {
 
 #[test]
 fn descriptors_gated_on_attachment() {
-    // Without a runtime, none of the five tools are listed.
+    // Without a runtime, none of the six tools are listed.
     let mut bare = McpServer::new();
     initialize(&mut bare);
     let listed =
@@ -614,39 +614,48 @@ fn kg_status_returns_all_fields() {
     );
     let s = &response["result"]["structuredContent"];
 
-    // Vector / document channel.
-    assert!(
-        s["vector_collection"].is_string(),
-        "vector_collection present"
+    // Vector / document channel — assert exact seeded values, not just presence.
+    assert_eq!(
+        s["embedder_model"], "local-hash-8",
+        "embedder_model seeded: {s}"
     );
-    assert!(s["embedder_model"].is_string(), "embedder_model present");
+    assert!(
+        s["vector_collection"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("tdw_knowledge__")),
+        "vector_collection namespaced: {s}"
+    );
     assert!(
         s["document_count_note"].is_string(),
-        "document_count_note present"
+        "document_count_note present: {s}"
     );
 
-    // Taxonomy.
-    assert!(
-        s["taxonomy_kind_count"].as_u64().is_some_and(|n| n > 0),
-        "taxonomy_kind_count is a positive integer: {s}"
+    // Taxonomy — exactly 51 EntityKind variants in the current taxonomy.
+    assert_eq!(
+        s["taxonomy_kind_count"].as_u64(),
+        Some(51),
+        "taxonomy_kind_count is 51: {s}"
     );
 
     // Versions seeded via with_versions(Some(7), Some(3)).
     assert_eq!(s["versions"]["rules_version"], 7, "rules_version");
     assert_eq!(s["versions"]["infer_version"], 3, "infer_version");
-    assert!(
-        s["versions"]["embedder_model"].is_string(),
-        "versions.embedder_model present"
+    assert_eq!(
+        s["versions"]["embedder_model"], "local-hash-8",
+        "versions.embedder_model seeded: {s}"
     );
 
-    // Language-model grade — stub runtime, so the value must be a non-empty string.
+    // Language-model grade — no resolver/agent_id in the test runtime → stub.
     assert!(
-        s["language_model_grade"].is_string(),
-        "language_model_grade present"
+        s["language_model_grade"]
+            .as_str()
+            .is_some_and(|g| g.contains("stub")),
+        "language_model_grade is stub: {s}"
     );
 }
 
-/// K-E2: `tdw.kg.status` with graph attached reports graph health.
+/// K-E2: `tdw.kg.status` with graph attached reports graph health and the
+/// explicit backend name set via `with_graph_name`.
 #[test]
 fn kg_status_reports_graph_health_when_attached() {
     let (runtime, _graph) = block(build_runtime());
@@ -659,7 +668,11 @@ fn kg_status_reports_graph_health_when_attached() {
     let health = &s["graph_health"];
     assert!(health.is_object(), "graph_health present: {s}");
     assert_eq!(health["reachable"], true, "in-memory graph reachable");
-    assert!(health["backend_name"].is_string(), "backend_name present");
+    // build_runtime() does not call with_graph_name → sentinel "graph-engine".
+    assert_eq!(
+        health["backend_name"], "graph-engine",
+        "sentinel name when not explicitly set: {s}"
+    );
 }
 
 /// K-E2: `tdw.kg.status` on a vector-only runtime (no graph) returns null
