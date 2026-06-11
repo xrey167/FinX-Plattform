@@ -137,6 +137,36 @@ pub fn hma(prices: &[f64], params: HmaParams) -> Result<Vec<Option<f64>>> {
     Ok(out)
 }
 
+/// Zero-Lag Exponential Moving Average of `prices` over `length`.
+///
+/// Ehlers/Kaufman zero-lag EMA: with `lag = (length − 1)/2`, form the
+/// de-lagged series `d_t = 2·price_t − price_{t−lag}` and take its
+/// `EMA(length)`. The de-lagged series only exists from index `lag` onward, so
+/// the EMA (SMA-seeded over the first `length` de-lagged samples) first becomes
+/// defined at index `lag + length − 1`.
+///
+/// # Errors
+///
+/// Returns [`crate::IndicatorError::InvalidPeriod`] when `length == 0`.
+pub fn zlma(prices: &[f64], params: LengthParams) -> Result<Vec<Option<f64>>> {
+    let length = params.length;
+    require_period(length)?;
+    let lag = (length - 1) / 2;
+    let mut out = vec![None; prices.len()];
+    if prices.len() <= lag {
+        return Ok(out);
+    }
+    // De-lagged series, defined for indices `lag..len`.
+    let delagged: Vec<f64> = (lag..prices.len())
+        .map(|i| 2.0f64.mul_add(prices[i], -prices[i - lag]))
+        .collect();
+    let ema_tail = ema(&delagged, LengthParams::new(length))?;
+    for (k, value) in ema_tail.into_iter().enumerate() {
+        out[lag + k] = value;
+    }
+    Ok(out)
+}
+
 /// MACD line, signal, and histogram over `prices`.
 ///
 /// # Errors
@@ -223,6 +253,24 @@ mod tests {
         let out = hma(&closes(&series()), HmaParams { length: 4 }).expect("hma");
         assert_eq!(out.len(), series().len());
         assert!(out.last().expect("row").is_some());
+    }
+
+    #[test]
+    fn zlma_known_vector() {
+        // ZLMA(3) over [1,2,3,4,5]: lag = (3-1)/2 = 1.
+        //  de-lagged d_t = 2*p_t - p_{t-1} for t in 1..5: [3,4,5,6] at idx 1..4.
+        //  EMA(3) over [3,4,5,6]: seed = mean(3,4,5) = 4 (de-lag idx 2 ⇒ out 3);
+        //   α = 0.5 ⇒ next = 0.5*6 + 0.5*4 = 5 (de-lag idx 3 ⇒ out 4).
+        let out = zlma(&p(&[1.0, 2.0, 3.0, 4.0, 5.0]), LengthParams::new(3)).expect("zlma");
+        assert_close_opt(&out, &[None, None, None, Some(4.0), Some(5.0)], 1e-12);
+    }
+
+    #[test]
+    fn zlma_first_defined_index_accounts_for_lag() {
+        // length 5 ⇒ lag = 2; first EMA value sits at lag + length - 1 = 6.
+        let out = zlma(&closes(&series()), LengthParams::new(5)).expect("zlma");
+        assert!(out[5].is_none());
+        assert!(out[6].is_some());
     }
 
     #[test]

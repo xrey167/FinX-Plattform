@@ -11,11 +11,13 @@
 
 use schemars::{Schema, schema_for};
 use tdw_analytics_technical::indicators::{
-    AdxRow, AroonRow, ChannelRow, FisherRow, MacdRow, StochasticRow,
+    AdxRow, AroonRow, ChannelRow, FisherRow, IchimokuRow, MacdRow, StochasticRow, SupertrendRow,
+    VortexRow,
 };
 use tdw_analytics_technical::params::{
-    AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams, HmaParams,
-    KeltnerParams, LengthParams, MacdParams, RocParams, StochasticParams,
+    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams,
+    HmaParams, IchimokuParams, KeltnerParams, LengthParams, MacdParams, RocParams,
+    StochasticParams, SupertrendParams,
 };
 
 use crate::{CatalogEntry, EndpointKind};
@@ -65,6 +67,15 @@ fn roc_params() -> Schema {
 fn hma_params() -> Schema {
     schema_for!(HmaParams)
 }
+fn ichimoku_params() -> Schema {
+    schema_for!(IchimokuParams)
+}
+fn adosc_params() -> Schema {
+    schema_for!(AdoscParams)
+}
+fn supertrend_params() -> Schema {
+    schema_for!(SupertrendParams)
+}
 
 // --- Multi-line output-row schema closures. ----------------------------------
 
@@ -85,6 +96,15 @@ fn channel_model() -> Schema {
 }
 fn fisher_model() -> Schema {
     schema_for!(FisherRow)
+}
+fn ichimoku_model() -> Schema {
+    schema_for!(IchimokuRow)
+}
+fn vortex_model() -> Schema {
+    schema_for!(VortexRow)
+}
+fn supertrend_model() -> Schema {
+    schema_for!(SupertrendRow)
 }
 
 /// Construct one chartable `technical/*` Compute entry with no candidates.
@@ -237,6 +257,36 @@ const ROUTES: &[RouteSpec] = &[
         roc_params,
         scalar_model,
         "Momentum (price difference) over the close series.",
+    ),
+    (
+        "technical/ichimoku",
+        ichimoku_params,
+        ichimoku_model,
+        "Ichimoku Cloud (conversion, base, leading spans A/B, lagging span).",
+    ),
+    (
+        "technical/zlma",
+        length_params,
+        scalar_model,
+        "Zero-Lag Exponential Moving Average over the close series.",
+    ),
+    (
+        "technical/adosc",
+        adosc_params,
+        scalar_model,
+        "Chaikin Accumulation/Distribution Oscillator (EMA fast - EMA slow of A/D).",
+    ),
+    (
+        "technical/vortex",
+        length_params,
+        vortex_model,
+        "Vortex Indicator (VI+ and VI- directional movement lines).",
+    ),
+    (
+        "technical/supertrend",
+        supertrend_params,
+        supertrend_model,
+        "SuperTrend ATR trailing-stop line and trend direction.",
     ),
 ];
 

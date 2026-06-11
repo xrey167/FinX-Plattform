@@ -82,3 +82,44 @@ pub struct FisherRow {
     /// Trigger line: the prior bar's Fisher value.
     pub trigger: Option<f64>,
 }
+
+/// One Ichimoku Cloud row: the five Ichimoku lines.
+///
+/// `conversion` (tenkan-sen) and `base` (kijun-sen) are plotted at the current
+/// bar. `senkou_a` and `senkou_b` are the leading-span values *as computed at
+/// the current bar* (the caller shifts them forward by `base` bars when
+/// plotting the cloud). `chikou` is the current close written back `lagging`
+/// bars (here surfaced as the close echoed at the current row; the caller
+/// applies the back-shift when plotting).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct IchimokuRow {
+    /// Conversion line (tenkan-sen): midpoint of the conversion-window high/low.
+    pub conversion: Option<f64>,
+    /// Base line (kijun-sen): midpoint of the base-window high/low.
+    pub base: Option<f64>,
+    /// Leading span A (senkou span A): midpoint of conversion and base.
+    pub senkou_a: Option<f64>,
+    /// Leading span B (senkou span B): midpoint of the span-B-window high/low.
+    pub senkou_b: Option<f64>,
+    /// Lagging span (chikou): the current close (plotted shifted back).
+    pub chikou: Option<f64>,
+}
+
+/// One Vortex row: the positive and negative vortex movement lines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct VortexRow {
+    /// Positive vortex indicator (VI+).
+    pub plus_vi: Option<f64>,
+    /// Negative vortex indicator (VI−).
+    pub minus_vi: Option<f64>,
+}
+
+/// One `SuperTrend` row: the trailing-stop line and the trend direction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SupertrendRow {
+    /// `SuperTrend` trailing-stop value (the active band).
+    pub supertrend: Option<f64>,
+    /// Trend direction: `+1` for up-trend (price above the line), `−1` for
+    /// down-trend (price below the line).
+    pub direction: Option<i8>,
+}
