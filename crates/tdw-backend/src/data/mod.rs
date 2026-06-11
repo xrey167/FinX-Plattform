@@ -8,8 +8,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tdw_agent::{ConsolidationAction, Memory};
-use tdw_agent_store::{MemoryStore, consolidate_at, spawn_consolidation_scheduler};
+use tdw_agent::{ConsolidationAction, Memory, UsageHint, consolidation_plan_with_usage};
+use tdw_agent_store::{
+    MemoryStore, RetrievalFeedbackStore, consolidate_at, spawn_consolidation_scheduler,
+};
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
@@ -66,6 +68,11 @@ pub struct Backend {
     /// Loaded from `TDW_MEMORY_DIR` when set (round-tripping to `*.json5`), else
     /// purely in-memory.
     memory: Arc<Mutex<MemoryStore>>,
+    /// The retrieval feedback store (knowledge-system B10). Held behind a
+    /// [`tokio::sync::Mutex`] so the MCP feedback tool and [`consolidate_now`]
+    /// share one handle. `None` until attached via
+    /// [`Backend::with_feedback_store`] / [`Backend::set_feedback_store`].
+    feedback: Arc<Mutex<RetrievalFeedbackStore>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -117,6 +124,7 @@ impl Backend {
             runner,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
+            feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             daemon: None,
         })
     }
@@ -134,6 +142,7 @@ impl Backend {
             runner,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
+            feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             daemon: None,
         }
     }
@@ -344,6 +353,14 @@ impl Backend {
         Arc::clone(&self.memory)
     }
 
+    /// The shared retrieval feedback store handle (cloned `Arc`, knowledge-system
+    /// B10). The MCP feedback tool and [`consolidate_now`](Self::consolidate_now)
+    /// lock this same store.
+    #[must_use]
+    pub fn feedback_store_handle(&self) -> Arc<Mutex<RetrievalFeedbackStore>> {
+        Arc::clone(&self.feedback)
+    }
+
     /// Upsert a [`Memory`] into the store, stamping the current time as its
     /// `last_consolidated` anchor when none is set (so it ages from insertion).
     /// Persists to `*.json5` when the store has a backing dir.
@@ -370,14 +387,113 @@ impl Backend {
     /// Run one consolidation pass over the store at the current time, applying and
     /// persisting tier changes, and return the actions applied.
     ///
+    /// When the retrieval feedback store is non-empty, usage hints are derived for
+    /// each memory (recency credit based on `last_used_at`) and passed to
+    /// [`consolidation_plan_with_usage`] so actively-referenced memories are
+    /// retained longer. When the feedback store is empty or the memory has no
+    /// recorded events the behavior is identical to a plain [`consolidate_at`]
+    /// call — this is the B10 regression contract: an empty/absent feedback store
+    /// must produce the same result as the pre-B10 path.
+    ///
     /// # Errors
     ///
     /// Returns [`BackendError::Memory`] if persisting a promotion or deleting an
     /// expired memory's file fails.
     pub async fn consolidate_now(&self) -> BackendResult<Vec<ConsolidationAction>> {
+        use tdw_agent_store::age_days;
+
         let now = chrono::Utc::now().to_rfc3339();
-        let mut store = self.memory.lock().await;
-        consolidate_at(&mut store, &now).map_err(|error| BackendError::Memory(error.to_string()))
+
+        // Snapshot the feedback store (cheap clone of VecDeque<RetrievalEvent>).
+        let feedback_snapshot = {
+            let feedback = self.feedback.lock().await;
+            // Only materialise hints when there are events; empty store → base path.
+            if feedback.is_empty() {
+                None
+            } else {
+                Some(
+                    feedback
+                        .events()
+                        .map(|e| (e.agent_id.clone(), e.used, e.recorded_at.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
+
+        let actions = {
+            let mut store = self.memory.lock().await;
+
+            let Some(events) = feedback_snapshot else {
+                // No feedback data: fall straight through to the base planner so
+                // the behaviour is byte-for-byte identical to the pre-B10 path.
+                return consolidate_at(&mut store, &now)
+                    .map_err(|error| BackendError::Memory(error.to_string()));
+            };
+
+            // Build the usage-aware input. For each memory derive a recency credit
+            // from the most-recent `used` event whose `agent_id` matches the memory
+            // name (the conventional linking key). Credit = min(raw_age, days_since_last_used).
+            let aged: Vec<_> = store
+                .memories()
+                .map(|memory| {
+                    let raw_age = age_days(memory.last_consolidated.as_deref(), &now);
+
+                    // Find the most-recent `used` event for this memory name.
+                    let last_used_at = events
+                        .iter()
+                        .filter(|(agent_id, used, _)| *used && agent_id == &memory.meta.base.name)
+                        .map(|(_, _, recorded_at)| recorded_at.as_str())
+                        .max(); // RFC 3339 lexicographic order is chronological
+
+                    let recency_credit_days = last_used_at.map_or(0, |t| {
+                        // Days since the event was recorded; saturate at raw_age.
+                        let days_since = age_days(Some(t), &now);
+                        raw_age.saturating_sub(days_since)
+                    });
+
+                    let use_count = u32::try_from(
+                        events
+                            .iter()
+                            .filter(|(agent_id, used, _)| {
+                                *used && agent_id == &memory.meta.base.name
+                            })
+                            .count(),
+                    )
+                    .unwrap_or(u32::MAX);
+
+                    (
+                        memory,
+                        raw_age,
+                        UsageHint {
+                            recency_credit_days,
+                            use_count,
+                        },
+                    )
+                })
+                .collect();
+
+            let actions = consolidation_plan_with_usage(aged);
+
+            // Apply the decided actions — mirrors `consolidate_at`'s apply loop.
+            for action in &actions {
+                match action {
+                    ConsolidationAction::Promote { name, to, .. } => {
+                        store
+                            .promote_at(name, *to, &now)
+                            .map_err(|error| BackendError::Memory(error.to_string()))?;
+                    }
+                    ConsolidationAction::Expire { name } => {
+                        store
+                            .remove(name)
+                            .map_err(|error| BackendError::Memory(error.to_string()))?;
+                    }
+                }
+            }
+            // `store` (MutexGuard) is dropped here at the end of the block,
+            // releasing the lock before we return — satisfying significant_drop_tightening.
+            actions
+        };
+        Ok(actions)
     }
 
     // --- Typed fetch / stream ----------------------------------------------

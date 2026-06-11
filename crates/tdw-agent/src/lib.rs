@@ -23,7 +23,9 @@ pub use base::{
     Reference, Retention, Source, Tier, ToolEffect, ToolImplementation,
     ensure_adaptive_for_feedback,
 };
-pub use consolidate::{ConsolidationAction, consolidation_plan};
+pub use consolidate::{
+    ConsolidationAction, UsageHint, consolidation_plan, consolidation_plan_with_usage,
+};
 pub use facets::{
     DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState, ValidationStatus,
 };

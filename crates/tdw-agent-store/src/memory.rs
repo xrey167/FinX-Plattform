@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use tdw_agent::{
-    ConsolidationAction, Memory, RegistryEntity, consolidation_plan, entity_from_resource,
-    load_resource,
+    ConsolidationAction, Memory, RegistryEntity, Retention, consolidation_plan,
+    entity_from_resource, load_resource,
 };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -271,6 +271,33 @@ impl MemoryStore {
             })?;
         }
         Ok(())
+    }
+
+    /// Promote a memory to a new [`Retention`] tier, stamping `now` as its new
+    /// `last_consolidated` breadcrumb, then persisting the change when the store
+    /// has a backing file.
+    ///
+    /// Used by callers outside this module (e.g. `tdw-backend`'s
+    /// `consolidate_now`) that need to apply a [`ConsolidationAction::Promote`]
+    /// without accessing the private `entries` field directly.
+    ///
+    /// Promoting an absent name is a no-op (mirrors the inline pattern in
+    /// [`consolidate_at`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MemoryStoreError`] if the backing file cannot be written.
+    pub fn promote_at(
+        &mut self,
+        name: &str,
+        to: Retention,
+        now: &str,
+    ) -> Result<(), MemoryStoreError> {
+        if let Some(entry) = self.entries.get_mut(name) {
+            entry.memory.retention = to;
+            entry.memory.last_consolidated = Some(now.to_string());
+        }
+        self.persist(name)
     }
 }
 

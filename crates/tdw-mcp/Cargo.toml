@@ -29,6 +29,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
+# B10 — feedback tool stores RetrievalEvent records via RetrievalFeedbackStore.
+tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
 tdw-config = { workspace = true }

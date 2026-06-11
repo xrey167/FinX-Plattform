@@ -4964,6 +4964,7 @@ dependencies = [
  "serde_json",
  "tdw-agent",
  "tdw-core",
+ "tdw-knowledge",
  "tokio",
  "tokio-util",
 ]
@@ -5567,6 +5568,7 @@ dependencies = [
  "serde_json",
  "subtle",
  "tdw-agent",
+ "tdw-agent-store",
  "tdw-app-client",
  "tdw-app-server",
  "tdw-config",

@@ -17,6 +17,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-core = { workspace = true }
+# B10 — RetrievalEvent stores the KnowledgeVersions triple stamped on each
+# search response so the feedback record is version-attributed.
+tdw-knowledge = { path = "../tdw-knowledge" }
 # Phase B — RFC3339 age arithmetic + the live consolidation scheduler's wall clock.
 chrono = { workspace = true }
 # Phase B — the periodic consolidation scheduler task + cooperative shutdown,
