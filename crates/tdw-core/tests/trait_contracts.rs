@@ -297,6 +297,7 @@ fn error_string_variants_have_no_source() {
 /// `ErrorCode` is `Copy` + `PartialEq` + `Hash` — required for use in metrics
 /// labels and `HashMap` keys without cloning.
 #[test]
+#[allow(clippy::items_after_statements)] // use follows assert to co-locate the Hash contract comment
 fn error_code_is_copy_and_eq() {
     let code = ErrorCode::Storage;
     let copy = code;
