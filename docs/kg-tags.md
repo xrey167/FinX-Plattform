@@ -1,9 +1,13 @@
 # Knowledge Graph And Tags
 
+> **New here?** See [`docs/knowledge-quickstart.md`](knowledge-quickstart.md)
+> for config → ingest → search → answer in four steps, the embedder matrix, and
+> the `in-memory` → `bolt` migration path.
+
 The knowledge-system (stories A1–F1) ships a unified graph-backed KG and tag
 layer. All entity, relationship, and tag state lives in the graph engine
-(Bolt/Memgraph in production; `InMemoryGraphEngine` in dev/test). There is no
-longer a Postgres KG table; the legacy tables
+(Bolt/Memgraph in production; `InMemoryGraphEngine` in the zero-config default).
+There is no longer a Postgres KG table; the legacy tables
 (`kg_entity`, `kg_relationship`, `kg_merge_audit`, `tag_definition`,
 `tag_assignment`, `tag_rule`) are dropped by the operator script
 `sql/ops/drop-kg-pg-tables.sql` after the F1 cutover. The `feature_snapshot`
@@ -35,11 +39,17 @@ bolt_user = ""
 bolt_password_env = "TDW_GRAPH_PASSWORD"
 ```
 
-- `bolt` (production default): connects to Memgraph/Neo4j at `bolt_uri`.
+- `in-memory` (zero-config default, K-E1): ephemeral `InMemoryGraphEngine`,
+  resets on restart. A notice is printed to stderr at startup. Use for dev/test
+  and first runs.
+- `bolt` (production): connects to Memgraph/Neo4j at `bolt_uri`.
   Hard `Init` error if unreachable — no silent fallback.
-- `in-memory` (dev/test default): ephemeral `InMemoryGraphEngine`, resets on
-  restart.
 - Unknown backend value: hard `Init` error at daemon startup.
+
+Both backends are first-class. There is NO silent fallback — selecting `bolt`
+with an unreachable endpoint is a hard error, not a quiet `in-memory` switch.
+See [`docs/knowledge-quickstart.md`](knowledge-quickstart.md) for the migration
+path from `in-memory` to `bolt`.
 
 The `tdw-backend` crate gates the `BoltGraphEngine` arm behind the `bolt`
 Cargo feature. Production builds and Dockerfiles enable it; the default

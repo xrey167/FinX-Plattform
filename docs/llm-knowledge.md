@@ -1,5 +1,9 @@
 # LLM And Knowledge Intelligence
 
+> **New here?** See [`docs/knowledge-quickstart.md`](knowledge-quickstart.md)
+> for config → ingest → search → answer in four steps, the embedder matrix
+> (hash / local / openai / google), and the `in-memory` → `bolt` migration path.
+
 The knowledge-system (stories A1–F1) ships a fully integrated retrieval and
 inference layer. The key crates are:
 
@@ -64,9 +68,11 @@ error at daemon startup (B6 posture).
   `KnowledgeIndex` field directly; daemon-hosted `KnowledgeIndexer` ingestion
   is a deferred follow-up to this story.
 - `RetrievalFeedbackStore` for the write-back loop.
-- Graph engine selected at startup from `[knowledge.graph]` config: `bolt`
-  (production) or `in-memory` (dev/test). Hard `Init` error on unreachable
-  Bolt — no silent fallback.
+- Graph engine selected at startup from `[knowledge.graph]` config: `in-memory`
+  (zero-config default, K-E1) or `bolt` (production). Hard `Init` error on
+  unreachable Bolt — no silent fallback. See
+  [`docs/knowledge-quickstart.md`](knowledge-quickstart.md) for the migration
+  path and the `in-memory` → `bolt` reindex requirement.
 
 In `Surfaces::Both` mode the `KnowledgeRuntime` and `RetrievalFeedbackStore`
 handles are injected directly into the embedded MCP server via

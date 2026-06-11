@@ -1031,28 +1031,32 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
 
 /// Build the graph engine from `knowledge.graph` config (knowledge-system F1).
 ///
-/// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled).
+/// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled). When
+/// this branch is taken a one-line notice is printed to stderr reminding the
+/// operator that data is not persisted. This is an **explicit default** (K-E1),
+/// not a silent fallback — the no-silent-fallback posture is preserved: both
+/// backends are first-class and an unreachable `bolt` endpoint is still a hard
+/// `Init` error.
+///
 /// `backend = "bolt"` → [`BoltGraphEngine`] (requires the `bolt` feature; hard
 /// [`BackendError::Init`] if unreachable — NO silent fallback).
 ///
 /// # Errors
 ///
 /// Returns [`BackendError::Init`] for unknown backends, missing bolt URI, missing
-/// `bolt` build feature, or a Bolt connection error.
-/// Build the graph engine from `knowledge.graph` config (knowledge-system F1).
-///
-/// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled).
-/// `backend = "bolt"` → [`BoltGraphEngine`] (requires the `bolt` feature; hard
-/// [`BackendError::Init`] if unreachable — NO silent fallback).
-///
-/// # Errors
-///
-/// Returns [`BackendError::Init`] for unknown backends, missing bolt URI, missing
-/// `bolt` build feature, or a Bolt connection error.
+/// `bolt` build feature, or a Bolt connection error. Bolt errors include the
+/// exact remediation command so the operator can act without reading the runbook.
 #[cfg(feature = "bolt")]
 async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<dyn GraphEngine>> {
     match cfg.backend.as_str() {
-        "in-memory" => Ok(Arc::new(InMemoryGraphEngine::default())),
+        "in-memory" => {
+            eprintln!(
+                "[tdw] NOTICE: knowledge graph running in-memory — data is NOT persisted \
+                 across restarts. Set [knowledge.graph] backend=\"bolt\" for production. \
+                 See docs/ops/graph-db.md."
+            );
+            Ok(Arc::new(InMemoryGraphEngine::default()))
+        }
         "bolt" => {
             let uri = cfg
                 .bolt_uri
@@ -1073,7 +1077,17 @@ async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<
             )
             .await
             .map(|engine| -> Arc<dyn GraphEngine> { Arc::new(engine) })
-            .map_err(|error| BackendError::Init(format!("bolt graph connect ({uri}): {error}")))
+            .map_err(|error| {
+                BackendError::Init(format!(
+                    "bolt graph connect ({uri}): {error}. \
+                     Remediation: start Memgraph with \
+                     `docker compose --profile full up -d memgraph` \
+                     and verify port 7687 is reachable, or switch to the \
+                     in-memory dev backend with \
+                     `[knowledge.graph] backend = \"in-memory\"` in your \
+                     daemon TOML. See docs/ops/graph-db.md."
+                ))
+            })
         }
         other => Err(BackendError::Init(format!(
             "unknown knowledge.graph.backend {other:?}; valid values: bolt | in-memory"
@@ -1089,11 +1103,24 @@ async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<
 #[allow(clippy::unused_async)]
 async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<dyn GraphEngine>> {
     match cfg.backend.as_str() {
-        "in-memory" => Ok(Arc::new(InMemoryGraphEngine::default())),
+        "in-memory" => {
+            eprintln!(
+                "[tdw] NOTICE: knowledge graph running in-memory — data is NOT persisted \
+                 across restarts. Set [knowledge.graph] backend=\"bolt\" for production. \
+                 See docs/ops/graph-db.md."
+            );
+            Ok(Arc::new(InMemoryGraphEngine::default()))
+        }
         "bolt" => Err(BackendError::Init(
             "knowledge.graph.backend = bolt requires the `bolt` build feature \
              (compile tdw-backend with --features bolt) — refusing to silently \
-             fall back to the in-memory engine"
+             fall back to the in-memory engine. \
+             Remediation: start Memgraph with \
+             `docker compose --profile full up -d memgraph` \
+             and rebuild with `--features bolt`, or switch to the \
+             in-memory dev backend with \
+             `[knowledge.graph] backend = \"in-memory\"` in your daemon TOML. \
+             See docs/ops/graph-db.md."
                 .to_string(),
         )),
         other => Err(BackendError::Init(format!(
@@ -1787,6 +1814,35 @@ mod tests {
         assert!(
             backend.bound_addr().is_none(),
             "handle cleared after shutdown"
+        );
+    }
+
+    /// K-E1: bolt error text contains both the compose remediation and the
+    /// in-memory dev alternative. This is a non-bolt build test (the bolt feature
+    /// is never compiled in default CI), so it exercises the `#[cfg(not(feature =
+    /// "bolt"))]` arm of `build_graph_engine`.
+    #[tokio::test]
+    #[cfg(not(feature = "bolt"))]
+    async fn bolt_backend_error_contains_remediation_and_in_memory_alternative() {
+        let cfg = tdw_config::GraphConfig {
+            backend: "bolt".to_string(),
+            bolt_uri: Some("bolt://127.0.0.1:7687".to_string()),
+            bolt_user: String::new(),
+            bolt_password_env: "TDW_GRAPH_PASSWORD".to_string(),
+            bolt_db: "memgraph".to_string(),
+        };
+        let error = build_graph_engine(&cfg)
+            .await
+            .err()
+            .expect("bolt backend without bolt feature must return an Init error")
+            .to_string();
+        assert!(
+            error.contains("docker compose"),
+            "error must include the compose one-liner: {error}"
+        );
+        assert!(
+            error.contains("in-memory"),
+            "error must name the in-memory dev alternative: {error}"
         );
     }
 

@@ -272,6 +272,16 @@ services:
       TDW_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minio}
       TDW_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minio123}
       TDW_S3_REGION: us-east-1
+      # K-E1: pin graph backend to bolt explicitly so the in-memory default
+      # (first-run dev convenience) is never inherited by the live stack.
+      # TDW_CONFIG_CONTENT injects inline TOML that is merged as a config layer
+      # on top of any file-based config (see docs/CONFIGURATION.md). The
+      # memgraph service on port 7687 is declared in the `full`/`live` profiles;
+      # its Bolt URI is the compose-internal DNS name.
+      TDW_CONFIG_CONTENT: |
+        [knowledge.graph]
+        backend = "bolt"
+        bolt_uri = "bolt://memgraph:7687"
       # Production OIDC ingress auth. Read ONLY when TDW_PROFILE is prod|production
       # (this stack runs `docker`, so they are inert here and left commented).
       # Set all five required vars to attach an auth-backed policy; otherwise the
