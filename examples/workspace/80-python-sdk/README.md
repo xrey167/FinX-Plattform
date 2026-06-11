@@ -19,10 +19,12 @@ client.
 
 ## Run (manual, end to end)
 
-1. Start the daemon's REST surface from the workspace root, e.g.:
+1. Start the daemon's REST surface from the workspace root — the listener is
+   env-gated on `TDW_DAEMON_REST_BIND` and compiled behind the daemon's
+   `rest-api-route` feature:
 
    ```sh
-   cargo run -p tdw-cli --features rest-api-route -- serve-rest --bind 127.0.0.1:7879
+   TDW_DAEMON_REST_BIND=127.0.0.1:7879 cargo run -p tdw-backend --features rest-api-route --target-dir target
    ```
 
 2. Run the script:
