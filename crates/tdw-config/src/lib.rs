@@ -539,38 +539,163 @@ pub struct CredentialEntry {
     pub doc: &'static str,
 }
 
-/// The documented per-provider credential registry.
+/// The documented per-provider credential registry — the single source of truth
+/// for which environment variable (and optional config-file key) each keyed
+/// provider uses.
 ///
-/// Entries are in provider-key order so the table is deterministic for docs and
-/// snapshots. The FRED, EIA, FMP, and Polygon keyed providers are wired here;
-/// the remaining provider crates still read their own env vars directly
-/// (migrating every one is out of scope — this table is the single point new
-/// wiring should route through).
+/// ## Architecture contract (G008 CORE2)
+///
+/// * **`tdw-config` (this crate)** — sole declaration surface. Every keyed
+///   provider has exactly one entry here. New providers register here first.
+/// * **`tdw-core::http_support`** — resolution logic only (`read_required_key`,
+///   `read_optional_key`). It has no knowledge of provider names; it receives
+///   the env-var name from the provider crate, which must match `env_var` in
+///   this table.
+///
+/// Entries are in provider-key lexicographic order so the deterministic-order
+/// test and snapshot diffs stay stable.
+///
+/// ### Required vs. optional
+///
+/// Providers whose `config_key` is `None` and whose `doc` says "optional" use
+/// `read_optional_key` — they degrade gracefully (unauthenticated tier) when
+/// the variable is absent. All other entries are required keys.
+///
+/// ### Multi-variable providers
+///
+/// Some providers accept several env-var aliases (e.g. `HuggingFace`). Only the
+/// primary / preferred name appears in `env_var`; aliases are noted in `doc`.
 const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
+    // --- alpaca ---
+    CredentialEntry {
+        provider: "alpaca_key",
+        env_var: "APCA_API_KEY_ID",
+        config_key: Some("apca_api_key_id"),
+        doc: "Alpaca brokerage API key ID.",
+    },
+    CredentialEntry {
+        provider: "alpaca_secret",
+        env_var: "APCA_API_SECRET_KEY",
+        config_key: Some("apca_api_secret_key"),
+        doc: "Alpaca brokerage API secret key (paired with alpaca_key).",
+    },
+    // --- alpha vantage ---
+    CredentialEntry {
+        provider: "alpha_vantage",
+        env_var: "TDW_ALPHA_VANTAGE_API_KEY",
+        config_key: Some("alpha_vantage_api_key"),
+        doc: "Alpha Vantage market-data API key.",
+    },
+    // --- benzinga ---
+    CredentialEntry {
+        provider: "benzinga",
+        env_var: "TDW_BENZINGA_API_KEY",
+        config_key: Some("benzinga_api_key"),
+        doc: "Benzinga news API key.",
+    },
+    // --- bls (optional) ---
+    CredentialEntry {
+        provider: "bls",
+        env_var: "TDW_BLS_API_KEY",
+        config_key: Some("bls_api_key"),
+        doc: "BLS (Bureau of Labor Statistics) API key (optional — unauthenticated \
+              tier available without a key).",
+    },
+    // --- ccdata ---
+    CredentialEntry {
+        provider: "ccdata",
+        env_var: "TDW_CCDATA_API_KEY",
+        config_key: Some("ccdata_api_key"),
+        doc: "CryptoCompare / CCData market-data API key.",
+    },
+    // --- coingecko (optional) ---
+    CredentialEntry {
+        provider: "coingecko",
+        env_var: "COINGECKO_API_KEY",
+        config_key: Some("coingecko_api_key"),
+        doc: "CoinGecko cryptocurrency API key (optional — free tier available \
+              without a key).",
+    },
+    // --- databento ---
+    CredentialEntry {
+        provider: "databento",
+        env_var: "TDW_DATABENTO_API_KEY",
+        config_key: Some("databento_api_key"),
+        doc: "Databento historical market-data API key.",
+    },
+    // --- eia ---
     CredentialEntry {
         provider: "eia",
         env_var: "EIA_API_KEY",
         config_key: Some("eia_api_key"),
         doc: "U.S. Energy Information Administration API key (free registration).",
     },
+    // --- finnhub ---
+    CredentialEntry {
+        provider: "finnhub",
+        env_var: "TDW_FINNHUB_API_KEY",
+        config_key: Some("finnhub_api_key"),
+        doc: "Finnhub stock / forex / crypto API key.",
+    },
+    // --- fmp ---
     CredentialEntry {
         provider: "fmp",
-        env_var: "FMP_API_KEY",
+        env_var: "TDW_FMP_API_KEY",
         config_key: Some("fmp_api_key"),
-        doc: "Financial Modeling Prep API key (the tdw-provider-fmp crate currently \
-              reads TDW_FMP_API_KEY directly; this entry is the OpenBB-parity name).",
+        doc: "Financial Modeling Prep API key. The provider crate reads \
+              TDW_FMP_API_KEY (authoritative); FMP_API_KEY is the OpenBB-parity \
+              alias — both names are accepted via the provider's own alias logic.",
     },
+    // --- fred ---
     CredentialEntry {
         provider: "fred",
         env_var: "FRED_API_KEY",
         config_key: Some("fred_api_key"),
         doc: "FRED (St. Louis Fed) API key.",
     },
+    // --- huggingface (optional) ---
+    CredentialEntry {
+        provider: "huggingface",
+        env_var: "HF_TOKEN",
+        config_key: Some("hf_token"),
+        doc: "HuggingFace inference API token (optional — some public models work \
+              without authentication). Aliases tried in order: HF_TOKEN (primary), \
+              HUGGINGFACE_API_TOKEN, HF_API_TOKEN.",
+    },
+    // --- polygon ---
     CredentialEntry {
         provider: "polygon",
         env_var: "POLYGON_API_KEY",
         config_key: Some("polygon_api_key"),
         doc: "Polygon.io API key (used for FX / crypto / index aggregate bars).",
+    },
+    // --- seeking alpha ---
+    CredentialEntry {
+        provider: "seeking_alpha",
+        env_var: "TDW_SEEKING_ALPHA_API_KEY",
+        config_key: Some("seeking_alpha_api_key"),
+        doc: "Seeking Alpha news / analysis API key.",
+    },
+    // --- tiingo ---
+    CredentialEntry {
+        provider: "tiingo",
+        env_var: "TDW_TIINGO_API_KEY",
+        config_key: Some("tiingo_api_key"),
+        doc: "Tiingo financial data API key.",
+    },
+    // --- trading economics ---
+    CredentialEntry {
+        provider: "trading_economics",
+        env_var: "TDW_TRADING_ECONOMICS_API_KEY",
+        config_key: Some("trading_economics_api_key"),
+        doc: "Trading Economics macroeconomic data API key.",
+    },
+    // --- velodata ---
+    CredentialEntry {
+        provider: "velodata",
+        env_var: "TDW_VELODATA_API_KEY",
+        config_key: Some("velodata_api_key"),
+        doc: "Velodata on-chain / derivatives API key.",
     },
 ];
 
@@ -840,13 +965,49 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
 
     #[test]
     fn credential_registry_wires_fmp_and_polygon() {
+        // FMP: authoritative env var is TDW_FMP_API_KEY (finding #4 — FMP_API_KEY
+        // was the pre-G008 OpenBB-parity alias; TDW_FMP_API_KEY is what the
+        // provider crate actually reads today).
         let fmp = credential_for_provider("fmp").expect("fmp credential registered");
-        assert_eq!(fmp.env_var, "FMP_API_KEY");
+        assert_eq!(fmp.env_var, "TDW_FMP_API_KEY");
         assert_eq!(fmp.config_key, Some("fmp_api_key"));
 
         let polygon = credential_for_provider("polygon").expect("polygon credential registered");
         assert_eq!(polygon.env_var, "POLYGON_API_KEY");
         assert_eq!(polygon.config_key, Some("polygon_api_key"));
+    }
+
+    #[test]
+    fn credential_registry_covers_all_g008_providers() {
+        // Every provider migrated under G008 CORE2 must have a registry entry.
+        for provider in &[
+            "alpaca_key",
+            "alpaca_secret",
+            "alpha_vantage",
+            "benzinga",
+            "bls",
+            "ccdata",
+            "coingecko",
+            "databento",
+            "eia",
+            "finnhub",
+            "fmp",
+            "fred",
+            "huggingface",
+            "polygon",
+            "seeking_alpha",
+            "tiingo",
+            "trading_economics",
+            "velodata",
+        ] {
+            assert!(
+                credential_for_provider(provider).is_some(),
+                "provider {provider} missing from CREDENTIAL_REGISTRY"
+            );
+        }
+        // Keyless providers must NOT appear.
+        assert!(credential_for_provider("yahoo").is_none());
+        assert!(credential_for_provider("ecb").is_none());
     }
 
     #[test]
