@@ -23,6 +23,7 @@
 //! `as_of`/`plane` mirror plus the entity node's kind), so no channel is a
 //! way around the payload gate.
 
+pub mod evals;
 pub mod rrf;
 
 use std::collections::BTreeMap;
