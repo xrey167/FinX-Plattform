@@ -340,7 +340,8 @@ impl AgentBackend {
             || {
                 #[cfg(test)]
                 {
-                    #[allow(clippy::redundant_closure_for_method_calls)] // Cell::get requires an import; closure form is clearer here
+                    #[allow(clippy::redundant_closure_for_method_calls)]
+                    // Cell::get requires an import; closure form is clearer here
                     ALLOW_STUB_FEEDBACK_FOR_TEST.with(|cell| cell.get())
                 }
                 #[cfg(not(test))]
@@ -877,9 +878,9 @@ mod tests {
                     "research.note",
                     "0.1.0",
                     Origin {
-                    tier: Tier::Domain,
-                    source: Source::Internal,
-                },
+                        tier: Tier::Domain,
+                        source: Source::Internal,
+                    },
                     Adaptivity::Learning,
                     false,
                 )
@@ -985,9 +986,9 @@ mod tests {
                     "research.note",
                     "0.1.0",
                     Origin {
-                    tier: Tier::Domain,
-                    source: Source::Internal,
-                },
+                        tier: Tier::Domain,
+                        source: Source::Internal,
+                    },
                     Adaptivity::Learning,
                     false,
                 )
@@ -1067,7 +1068,7 @@ mod tests {
     #[allow(clippy::items_after_statements)] // local struct and impl follow use import; reordering would obscure intent
     #[allow(clippy::unnecessary_literal_bound)] // LanguageModel::model_id returns &str by trait contract
     fn novel_unknown_model_defaults_to_not_production_grade() {
-        use tdw_llm::{ChatRequest, ChatResponse, MessageRole, ChatMessage, Usage};
+        use tdw_llm::{ChatMessage, ChatRequest, ChatResponse, MessageRole, Usage};
         struct NovelModel;
         impl tdw_llm::LanguageModel for NovelModel {
             fn model_id(&self) -> &str {
