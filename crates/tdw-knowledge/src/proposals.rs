@@ -34,6 +34,11 @@ use crate::{KnowledgeError, Result};
 pub const READY_THRESHOLD: f64 = 0.8;
 /// Default cap on one agent's pending (non-materialized) proposals.
 pub const PER_AGENT_PENDING_CAP: usize = 32;
+/// Hard cap on TOTAL pending proposals across ALL agents.
+///
+/// Because the caller supplies `agent_id`, the per-agent cap alone is evadable
+/// by rotating ids; this bounds the queue regardless of identity (B9 review).
+pub const MAX_TOTAL_PENDING: usize = 4096;
 /// Annotation note ceiling (notes flow into graph props and agent context).
 pub const MAX_NOTE_CHARS: usize = 4096;
 
@@ -91,10 +96,24 @@ impl Proposal {
 pub struct MaterializeReport {
     /// Proposal ids written into the engines.
     pub materialized: Vec<String>,
+    /// `(proposal id, reason)` for `Ready` proposals that FAILED
+    /// re-validation at write time (the world changed since enqueue) — they
+    /// are rejected, not written, so a stale proposal can never clobber a
+    /// fact asserted in the meantime.
+    pub rejected_at_materialize: Vec<(String, String)>,
 }
 
-/// The gated proposal queue. In-process state; persistence (when needed)
-/// goes through serde like the B5 manifest — the daemon owns paths.
+/// The gated proposal queue.
+///
+/// In-process state; persistence round-trips through serde like the B5
+/// `IndexManifest` and B7 `DerivationIndex`.
+///
+/// TRUST MODEL: a deserialized queue is the DAEMON's own persisted state,
+/// never an agent-supplied value — an operator who can write the queue's
+/// persistence file already controls the substrate. Status fields are trusted
+/// on load; agents reach this type ONLY through [`ProposalQueue::submit`],
+/// which forces every proposal through admission + validators starting at
+/// `Validated`. Never deserialize a queue from an agent-controlled source.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ProposalQueue {
     proposals: BTreeMap<String, Proposal>,
@@ -150,7 +169,20 @@ impl ProposalQueue {
                  not admitted"
             )));
         }
-        // 2. Per-agent pending cap.
+        // 2a. Queue-wide cap: bounds total pending regardless of how many
+        // distinct agent_ids a caller invents (the per-agent cap alone is
+        // evadable by id rotation since agent_id is caller-supplied).
+        let total_pending = self
+            .proposals
+            .values()
+            .filter(|proposal| proposal.is_pending())
+            .count();
+        if total_pending >= MAX_TOTAL_PENDING {
+            return Err(KnowledgeError::Storage(format!(
+                "proposal queue is full ({total_pending} pending, cap {MAX_TOTAL_PENDING})"
+            )));
+        }
+        // 2b. Per-agent pending cap.
         let pending = self
             .proposals
             .values()
@@ -275,6 +307,23 @@ impl ProposalQueue {
             let proposal = self.proposals.get(&id).cloned().ok_or_else(|| {
                 KnowledgeError::Storage(format!("proposal {id:?} vanished mid-sweep"))
             })?;
+            // RE-VALIDATE at write time: the validators ran at ENQUEUE, but
+            // the world may have changed (an endpoint deleted, or — the sharp
+            // case — the same triple asserted by another path, which an
+            // unconditional upsert would CLOBBER, overwriting that fact's
+            // provenance: exactly the B7-review hazard). A proposal that no
+            // longer validates is rejected here, never written.
+            if let Err(error) = validate_kind(&proposal.kind, graph, tags).await {
+                let reason = error.to_string();
+                if let Some(proposal) = self.proposals.get_mut(&id) {
+                    proposal.rejected = Some(reason.clone());
+                    proposal
+                        .history
+                        .push(format!("{now} rejected at materialize: {reason}"));
+                }
+                report.rejected_at_materialize.push((id, reason));
+                continue;
+            }
             write_proposal(&proposal, graph, tags, now).await?;
             if let Some(proposal) = self.proposals.get_mut(&id) {
                 proposal.materialized = true;

@@ -693,3 +693,127 @@ async fn queue_serde_round_trip_preserves_state() {
     assert_ne!(fresh.id, validated.id);
     assert_ne!(fresh.id, ready.id);
 }
+
+/// B9 correctness review: a Ready proposal whose validity LAPSES between
+/// enqueue and materialization is rejected at write time, never written —
+/// closing the TOCTOU provenance-clobber hazard.
+#[tokio::test]
+async fn materialize_revalidates_and_skips_stale_proposals() {
+    let (graph, tags, raw) = engines().await;
+    let mut queue = ProposalQueue::default();
+
+    let proposal = queue
+        .submit(
+            "agent:v",
+            Adaptivity::Learning,
+            edge_kind("instrument:AAPL", "instrument:MSFT", "peer_of"),
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect("valid at enqueue");
+    queue.approve(&proposal.id, "human", NOW).expect("approve");
+
+    // The world changes: the SAME triple is asserted by another path (a base
+    // ingest edge) BEFORE materialization.
+    raw.upsert_edges(vec![GraphEdge {
+        from: "instrument:AAPL".to_string(),
+        to: "instrument:MSFT".to_string(),
+        rel: "peer_of".to_string(),
+        props: serde_json::Value::Null,
+        provenance: Provenance::Ingest {
+            source: "fixture".to_string(),
+        },
+        valid_from: None,
+        valid_to: None,
+    }])
+    .await
+    .expect("base edge lands first");
+
+    let report = queue
+        .materialize_ready(&graph, &tags, NOW)
+        .await
+        .expect("sweep runs");
+    assert!(report.materialized.is_empty(), "stale proposal not written");
+    assert_eq!(report.rejected_at_materialize.len(), 1);
+    assert!(
+        report.rejected_at_materialize[0]
+            .1
+            .contains("already exists"),
+        "{:?}",
+        report.rejected_at_materialize
+    );
+    // The base edge's Ingest provenance survives — no clobber.
+    let edges = graph
+        .edges(Some("peer_of"), 0, 16)
+        .await
+        .expect("scan peer_of");
+    assert_eq!(edges.len(), 1);
+    assert!(
+        matches!(edges[0].provenance, Provenance::Ingest { .. }),
+        "base provenance intact: {:?}",
+        edges[0].provenance
+    );
+}
+
+/// B9 security review: the per-agent cap is evadable by id rotation, so a
+/// queue-wide cap bounds total pending regardless of `agent_id`. Probe the
+/// cap math without flooding: the per-agent cap fires first for one agent,
+/// and a distinct agent is independently capped.
+#[tokio::test]
+async fn per_agent_cap_is_independent_per_agent_id() {
+    let (graph, tags, _raw) = engines().await;
+    // A tiny per-agent cap so the test stays fast; the queue-wide cap
+    // (MAX_TOTAL_PENDING) is far larger and not reached here.
+    let mut queue = ProposalQueue::default().with_ready_threshold(READY_THRESHOLD);
+
+    // Define a tag once so each TagDefine is distinct + valid.
+    for index in 0..PER_AGENT_PENDING_CAP {
+        queue
+            .submit(
+                "agent:a",
+                Adaptivity::Learning,
+                ProposalKind::TagDefine {
+                    tag_id: format!("topic:t{index}"),
+                    parent: None,
+                },
+                &graph,
+                &tags,
+                NOW,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("submit {index}: {error}"));
+    }
+    // agent:a is now at its cap.
+    let over = queue
+        .submit(
+            "agent:a",
+            Adaptivity::Learning,
+            ProposalKind::TagDefine {
+                tag_id: "topic:over".to_string(),
+                parent: None,
+            },
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect_err("agent:a over its cap");
+    assert!(over.to_string().contains("pending proposals"), "{over}");
+    // A DIFFERENT agent is unaffected (its own cap is independent).
+    queue
+        .submit(
+            "agent:b",
+            Adaptivity::Learning,
+            ProposalKind::TagDefine {
+                tag_id: "topic:b".to_string(),
+                parent: None,
+            },
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect("agent:b has its own cap budget");
+}

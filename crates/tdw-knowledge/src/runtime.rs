@@ -57,6 +57,14 @@ pub struct KnowledgeRuntime {
     /// Resolves the calling agent's [`Adaptivity`] for admission. `None` (or a
     /// resolver returning `None`) means writes are unavailable for that agent.
     adaptivity_resolver: Option<AdaptivityResolver>,
+    /// OPERATOR authority (knowledge-system B9 security review). The
+    /// human-review actions — proposal approve/reject and materialization —
+    /// run only when this is set. It defaults OFF, so an agent-facing runtime
+    /// NEVER exposes the operator path: an agent can submit and list, but
+    /// cannot approve, reject, or land its own proposals. A daemon built for
+    /// operator use opts in explicitly via
+    /// [`with_operator_authority`](Self::with_operator_authority).
+    operator_authority: bool,
 }
 
 impl KnowledgeRuntime {
@@ -76,6 +84,7 @@ impl KnowledgeRuntime {
             versions,
             proposals: None,
             adaptivity_resolver: None,
+            operator_authority: false,
         }
     }
 
@@ -175,6 +184,21 @@ impl KnowledgeRuntime {
     pub fn adaptivity_resolver(&self) -> Option<&AdaptivityResolver> {
         self.adaptivity_resolver.as_ref()
     }
+
+    /// Grant OPERATOR authority — enables the proposal approve/reject and
+    /// materialization actions. Leave OFF (the default) for any runtime an
+    /// agent can reach; turn it on only for an operator-controlled surface.
+    #[must_use]
+    pub const fn with_operator_authority(mut self, enabled: bool) -> Self {
+        self.operator_authority = enabled;
+        self
+    }
+
+    /// Whether the operator (approve/reject/materialize) path is enabled.
+    #[must_use]
+    pub const fn operator_authority(&self) -> bool {
+        self.operator_authority
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -186,6 +210,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("tags", &self.tags.is_some())
             .field("proposals", &self.proposals.is_some())
             .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
+            .field("operator_authority", &self.operator_authority)
             .finish_non_exhaustive()
     }
 }

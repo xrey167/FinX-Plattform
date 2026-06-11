@@ -323,7 +323,11 @@ impl AgentBackend {
             && let Some(proposals) = self.proposals.as_ref()
             && let Ok(mut queue) = proposals.try_lock()
         {
-            queue.promote_for_agent(&agent_id, pass_rate, now);
+            // The gate stamps history with a YYYY-MM-DD date (the MCP write
+            // tools use today's date); `now` here is an RFC 3339 datetime, so
+            // pass only its date part to keep the audit trail uniform.
+            let date = now.split('T').next().unwrap_or(now);
+            queue.promote_for_agent(&agent_id, pass_rate, date);
         }
 
         outcome

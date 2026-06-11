@@ -105,9 +105,20 @@ fn stub_resolver() -> AdaptivityResolver {
     })
 }
 
-/// Build a write-enabled runtime: in-memory engines with one seeded entity node,
-/// a proposal queue, and the stub resolver.
+/// Build an OPERATOR runtime: in-memory engines with one seeded entity node,
+/// a proposal queue, the stub resolver, and operator authority (so the
+/// approve/materialize lifecycle tests can run the human path).
 async fn build_write_runtime() -> Arc<KnowledgeRuntime> {
+    build_runtime_with_operator(true).await
+}
+
+/// An AGENT-FACING runtime (operator authority OFF) — what a real
+/// agent-reachable daemon would attach.
+async fn build_agent_runtime() -> Arc<KnowledgeRuntime> {
+    build_runtime_with_operator(false).await
+}
+
+async fn build_runtime_with_operator(operator: bool) -> Arc<KnowledgeRuntime> {
     let embedder = Arc::new(HashEmbeddingProvider::default());
     let vectors = Arc::new(InMemoryVectorEngine::default());
     let graph = Arc::new(InMemoryGraphEngine::default());
@@ -120,7 +131,8 @@ async fn build_write_runtime() -> Arc<KnowledgeRuntime> {
         .with_graph(Arc::new(SharedGraph(graph.clone())))
         .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
         .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
-        .with_adaptivity_resolver(stub_resolver());
+        .with_adaptivity_resolver(stub_resolver())
+        .with_operator_authority(operator);
     Arc::new(runtime)
 }
 
@@ -409,4 +421,44 @@ fn reject_path_is_terminal() {
         &json!({ "action": "approve", "proposal_id": proposal_id }),
     );
     assert_eq!(approve["result"]["isError"], true);
+}
+
+/// B9 security review B1: an AGENT-FACING runtime (no operator authority)
+/// rejects approve / reject / materialize, so an agent cannot land its own
+/// proposals — submit and list still work.
+#[test]
+fn operator_actions_require_operator_authority() {
+    let runtime = block(build_agent_runtime());
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+
+    // Submit is allowed for a Learning agent.
+    let submit = call(
+        &mut server,
+        "tdw.tags.define",
+        &json!({ "agent_id": "agent:learning", "tag_id": "asset:equity" }),
+    );
+    assert_ne!(submit["result"]["isError"], true, "submit: {submit}");
+
+    // list is allowed.
+    let list = call(
+        &mut server,
+        "tdw.kg.proposals",
+        &json!({ "action": "list" }),
+    );
+    assert_ne!(list["result"]["isError"], true, "list: {list}");
+
+    // approve / reject / materialize are all refused.
+    for action in ["approve", "reject", "materialize"] {
+        let response = call(
+            &mut server,
+            "tdw.kg.proposals",
+            &json!({ "action": action, "proposal_id": "p1" }),
+        );
+        assert_eq!(response["result"]["isError"], true, "{action}: {response}");
+        assert!(
+            response.to_string().contains("operator authority"),
+            "{action} must name the missing authority: {response}"
+        );
+    }
 }

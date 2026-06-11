@@ -122,11 +122,13 @@ fn proposals_descriptor() -> ToolDescriptor {
         "tdw.kg.proposals",
         "Manage Gated Proposals",
         "List or act on gated write proposals. action=list returns serialized proposals \
-         (filtered by agent_id when given). action=approve / action=reject are OPERATOR actions \
-         (the human review path) and require proposal_id (approve also takes approved_by; reject \
-         a reason). action=materialize writes every Ready proposal into the engines and returns \
-         the materialization report. Reads (tdw.kg.* / tdw.tags.query) exclude pending facts by \
-         default because only materialized facts exist in the engines.",
+         (filtered by agent_id when given) and is available to anyone. action=approve / \
+         action=reject / action=materialize are OPERATOR actions: they run ONLY on a runtime \
+         granted operator authority, so an agent cannot approve or materialize its own \
+         proposals. approve/reject require proposal_id (approve also takes approved_by; reject a \
+         reason); materialize writes every Ready proposal into the engines, RE-VALIDATING each \
+         at write time, and returns the report. Reads (tdw.kg.* / tdw.tags.query) exclude \
+         pending facts because only materialized facts exist in the engines.",
         json!({
             "type": "object",
             "properties": {
@@ -169,8 +171,31 @@ fn today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
 
+/// Gate an OPERATOR action: approve/reject/materialize run only when the
+/// runtime was granted operator authority. An agent-facing runtime leaves it
+/// off, so an agent cannot approve or materialize its own proposals — the
+/// whole point of the gate (B9 security review).
+fn require_operator(runtime: &KnowledgeRuntime, action: &str) -> Result<(), ToolFailure> {
+    if runtime.operator_authority() {
+        Ok(())
+    } else {
+        Err(execution(format!(
+            "tdw.kg.proposals action {action:?} is an operator action and this runtime has no \
+             operator authority — agents may submit and list, never approve or materialize"
+        )))
+    }
+}
+
 /// Resolve the calling agent's [`Adaptivity`] via the runtime's resolver. A
 /// missing resolver OR an unknown agent is a tool error (writes unavailable).
+///
+/// IDENTITY TRUST MODEL (B9 security review): `agent_id` is currently a
+/// caller-asserted tool argument — nothing here proves the caller IS that
+/// agent. The resolver is the enforcement boundary (only known agent ids map
+/// to an adaptivity; the queue-wide cap bounds abuse). Binding `agent_id` to
+/// an authenticated session principal is a HARD precondition for exposing
+/// this surface over a non-local transport, and is F1-cutover scope; until
+/// then the write surface is constructed only for trusted/local callers.
 fn resolve_adaptivity(
     runtime: &KnowledgeRuntime,
     agent_id: &str,
@@ -293,6 +318,7 @@ fn proposals(
             Ok(structured(json!({ "proposals": listed })))
         }
         "approve" => {
+            require_operator(runtime, "approve")?;
             let proposal_id = require_str(arguments, "proposal_id")?;
             let approved_by = optional_str(arguments, "approved_by").unwrap_or("operator");
             block_on(async {
@@ -303,6 +329,7 @@ fn proposals(
             Ok(structured(json!({ "approved": proposal_id })))
         }
         "reject" => {
+            require_operator(runtime, "reject")?;
             let proposal_id = require_str(arguments, "proposal_id")?;
             let reason = optional_str(arguments, "reason").unwrap_or("rejected by operator");
             block_on(async {
@@ -313,6 +340,7 @@ fn proposals(
             Ok(structured(json!({ "rejected": proposal_id })))
         }
         "materialize" => {
+            require_operator(runtime, "materialize")?;
             let report = block_on(async {
                 let mut queue = queue.lock().await;
                 queue.materialize_ready(graph, tags, &now).await
