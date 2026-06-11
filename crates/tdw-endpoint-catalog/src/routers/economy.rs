@@ -53,6 +53,23 @@ const ECONOMY_FACTORS_FAMAFRENCH: &[ProviderCandidate] = &[ProviderCandidate::ne
     "famafrench",
     "economy_factors_famafrench",
 )];
+/// IMF SDMX-JSON candidates (OpenBB-parity **P3W3**) — international/cross-country
+/// macro series the US-centric FRED cluster does not cover. The endpoint key is
+/// the route's `'/'→'_'` form, matching `endpoint_key_for_route` and the
+/// `(provider="imf", endpoint=…)` dispatch binding registered under
+/// `provider-imf`.
+const ECONOMY_IMF_IFS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "imf",
+    "economy_imf_international_financial_statistics",
+)];
+const ECONOMY_IMF_DOT: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "imf",
+    "economy_imf_direction_of_trade",
+)];
+const ECONOMY_IMF_BOP: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "imf",
+    "economy_imf_balance_of_payments",
+)];
 /// Keyless Federal Reserve candidate for the full H.6 money-measures table
 /// (gap-matrix item **L3.1**) — distinct from the FRED-backed single-series
 /// `economy/money_measures/{m1,m2}` routes above.
@@ -152,6 +169,21 @@ pub fn entries() -> Vec<CatalogEntry> {
             "economy/survey/inflation_expectations",
             ECONOMY_INFLATION_EXPECTATIONS,
             "University of Michigan inflation expectations, FRED-backed macro series.",
+        ),
+        macro_entry(
+            "economy/imf/international_financial_statistics",
+            ECONOMY_IMF_IFS,
+            "IMF International Financial Statistics time series, SDMX-JSON macro series.",
+        ),
+        macro_entry(
+            "economy/imf/direction_of_trade",
+            ECONOMY_IMF_DOT,
+            "IMF Direction of Trade Statistics time series, SDMX-JSON macro series.",
+        ),
+        macro_entry(
+            "economy/imf/balance_of_payments",
+            ECONOMY_IMF_BOP,
+            "IMF Balance of Payments time series, SDMX-JSON macro series.",
         ),
         CatalogEntry {
             route: "economy/fred_search",
