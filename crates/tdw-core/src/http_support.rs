@@ -43,7 +43,10 @@ pub fn build_client(user_agent: &str, ctx: &str) -> Result<Client> {
         .timeout(std::time::Duration::from_secs(30))
         .user_agent(user_agent)
         .build()
-        .map_err(|error| Error::Provider(format!("{ctx}: {error}")))
+        .map_err(|source| Error::HttpClient {
+            message: format!("{ctx}: {source}"),
+            source,
+        })
 }
 
 /// Read a required API key from the `env` environment variable, trimming
