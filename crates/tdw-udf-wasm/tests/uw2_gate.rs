@@ -23,9 +23,7 @@ fn minimal_wasm() -> Vec<u8> {
 #[cfg(not(feature = "wasmi"))]
 fn execute_fixture_path_reachable_with_opt_in() {
     if std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() != Ok("1") {
-        eprintln!(
-            "SKIP: set TDW_ALLOW_FIXTURE_EXECUTION=1 to run the fixture opt-in test"
-        );
+        eprintln!("SKIP: set TDW_ALLOW_FIXTURE_EXECUTION=1 to run the fixture opt-in test");
         return;
     }
     let rt = WasmUdfRuntime::new();
@@ -50,9 +48,7 @@ fn execute_fixture_path_reachable_with_opt_in() {
 #[cfg(not(feature = "wasmi"))]
 fn execute_refuses_without_opt_in() {
     if std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1") {
-        eprintln!(
-            "SKIP: TDW_ALLOW_FIXTURE_EXECUTION=1 is set; gate-closed path not testable"
-        );
+        eprintln!("SKIP: TDW_ALLOW_FIXTURE_EXECUTION=1 is set; gate-closed path not testable");
         return;
     }
     let rt = WasmUdfRuntime::new();

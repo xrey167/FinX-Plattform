@@ -82,8 +82,7 @@ pub fn evaluate(definition: &UdfDefinition, input: &str) -> Result<String, UdfEr
     match definition.runtime {
         UdfRuntime::Wasm => {} // falls through to dispatch_builtin (name-keyed fixtures)
         UdfRuntime::JavaScript | UdfRuntime::Python | UdfRuntime::External => {
-            let fixture_allowed =
-                std::env::var("TDW_ALLOW_FIXTURE_UDF").as_deref() == Ok("1");
+            let fixture_allowed = std::env::var("TDW_ALLOW_FIXTURE_UDF").as_deref() == Ok("1");
             if !fixture_allowed {
                 return Err(UdfError::RuntimeNotImplemented(definition.runtime));
             }
@@ -257,8 +256,7 @@ mod tests {
             allow_filesystem: false,
         };
         assert_eq!(
-            evaluate(&def, "aapl")
-                .unwrap_or_else(|e| panic!("Wasm builtin should evaluate: {e}")),
+            evaluate(&def, "aapl").unwrap_or_else(|e| panic!("Wasm builtin should evaluate: {e}")),
             "AAPL"
         );
     }
@@ -280,8 +278,15 @@ mod tests {
             allow_network: false,
             allow_filesystem: false,
         };
-        for runtime in [UdfRuntime::JavaScript, UdfRuntime::Python, UdfRuntime::External] {
-            let def = UdfDefinition { runtime, ..base.clone() };
+        for runtime in [
+            UdfRuntime::JavaScript,
+            UdfRuntime::Python,
+            UdfRuntime::External,
+        ] {
+            let def = UdfDefinition {
+                runtime,
+                ..base.clone()
+            };
             assert_eq!(
                 evaluate(&def, "aapl"),
                 Err(UdfError::RuntimeNotImplemented(runtime)),

@@ -55,8 +55,15 @@ fn unimplemented_runtimes_refused_without_opt_in() {
         allow_network: false,
         allow_filesystem: false,
     };
-    for runtime in [UdfRuntime::JavaScript, UdfRuntime::Python, UdfRuntime::External] {
-        let def = UdfDefinition { runtime, ..base.clone() };
+    for runtime in [
+        UdfRuntime::JavaScript,
+        UdfRuntime::Python,
+        UdfRuntime::External,
+    ] {
+        let def = UdfDefinition {
+            runtime,
+            ..base.clone()
+        };
         assert_eq!(
             evaluate(&def, "aapl"),
             Err(tdw_udf::UdfError::RuntimeNotImplemented(runtime)),

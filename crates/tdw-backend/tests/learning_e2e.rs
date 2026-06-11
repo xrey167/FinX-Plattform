@@ -145,9 +145,7 @@ fn eval_feedback_updates_learning_skill_and_skips_configured_skill() {
     // TDW_ALLOW_STUB_FEEDBACK=1 to exercise the feedback code path with the default
     // StubLanguageModel. Skip gracefully when the bypass is not configured.
     if std::env::var("TDW_ALLOW_STUB_FEEDBACK").as_deref() != Ok("1") {
-        eprintln!(
-            "SKIP: set TDW_ALLOW_STUB_FEEDBACK=1 to run the eval-feedback end-to-end test"
-        );
+        eprintln!("SKIP: set TDW_ALLOW_STUB_FEEDBACK=1 to run the eval-feedback end-to-end test");
         return;
     }
 
@@ -204,7 +202,6 @@ fn eval_feedback_updates_learning_skill_and_skips_configured_skill() {
         configured.quality.is_none(),
         "the Adaptivity gate must skip the Configured skill"
     );
-
 }
 
 // --- Fixtures ---------------------------------------------------------------

@@ -25,16 +25,12 @@ use serde_json::Value;
 use tdw_core::{Credentials, Fetcher, Result};
 use tdw_runtime::CommandRunner;
 
-#[derive(
-    Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 struct Query {
     symbol: String,
 }
 
-#[derive(
-    Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 struct Row {
     symbol: String,
 }
@@ -51,7 +47,9 @@ impl Fetcher<Query, Row> for MockFetcher {
             .get("symbol")
             .and_then(Value::as_str)
             .ok_or_else(|| tdw_core::Error::InvalidQuery("missing symbol".to_string()))?;
-        Ok(Query { symbol: symbol.to_string() })
+        Ok(Query {
+            symbol: symbol.to_string(),
+        })
     }
 
     async fn extract_data(&self, query: &Query, _creds: &Credentials) -> Result<Bytes> {
@@ -89,9 +87,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 #[test]
 fn run_streaming_refuses_without_opt_in() {
     if std::env::var("TDW_ALLOW_FAKE_STREAMING").as_deref() == Ok("1") {
-        eprintln!(
-            "SKIP: TDW_ALLOW_FAKE_STREAMING=1 is set; gate-closed path not testable"
-        );
+        eprintln!("SKIP: TDW_ALLOW_FAKE_STREAMING=1 is set; gate-closed path not testable");
         return;
     }
     let runner = CommandRunner::default();
@@ -120,18 +116,14 @@ fn run_streaming_refuses_without_opt_in() {
 #[test]
 fn run_streaming_allowed_via_env_var() {
     if std::env::var("TDW_ALLOW_FAKE_STREAMING").as_deref() != Ok("1") {
-        eprintln!(
-            "SKIP: set TDW_ALLOW_FAKE_STREAMING=1 to run the env-var bypass test"
-        );
+        eprintln!("SKIP: set TDW_ALLOW_FAKE_STREAMING=1 to run the env-var bypass test");
         return;
     }
     let runner = CommandRunner::default(); // builder flag NOT set — env var triggers
     let fetcher = MockFetcher;
-    let mut stream = block_on(runner.run_streaming(
-        &fetcher,
-        serde_json::json!({"symbol": "AAPL"}),
-    ))
-    .unwrap_or_else(|e| panic!("env-var bypass must allow streaming: {e}"));
+    let mut stream =
+        block_on(runner.run_streaming(&fetcher, serde_json::json!({"symbol": "AAPL"})))
+            .unwrap_or_else(|e| panic!("env-var bypass must allow streaming: {e}"));
 
     // Consume the stream — must produce two Progress items then Done.
     let waker = Waker::from(Arc::new(NoopWake));
@@ -140,5 +132,10 @@ fn run_streaming_allowed_via_env_var() {
     while let Poll::Ready(Some(item)) = stream.as_mut().poll_next(&mut cx) {
         items.push(item);
     }
-    assert_eq!(items.len(), 3, "expected 2 Progress + 1 Done: got {}", items.len());
+    assert_eq!(
+        items.len(),
+        3,
+        "expected 2 Progress + 1 Done: got {}",
+        items.len()
+    );
 }

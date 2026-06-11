@@ -1077,8 +1077,14 @@ mod tests {
             fn complete(&self, _: ChatRequest) -> tdw_llm::Result<ChatResponse> {
                 Ok(ChatResponse {
                     model_id: self.model_id().to_string(),
-                    message: ChatMessage { role: MessageRole::Assistant, content: String::new() },
-                    usage: Usage { input_tokens: 0, output_tokens: 0 },
+                    message: ChatMessage {
+                        role: MessageRole::Assistant,
+                        content: String::new(),
+                    },
+                    usage: Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    },
                 })
             }
         }

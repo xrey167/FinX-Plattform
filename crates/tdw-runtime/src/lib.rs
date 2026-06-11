@@ -119,8 +119,7 @@ impl CommandRunner {
         D: DataModel,
     {
         // G008/`RT1b`: refuse to silently fake-stream unless the caller opted in.
-        let env_allow =
-            std::env::var("TDW_ALLOW_FAKE_STREAMING").as_deref() == Ok("1");
+        let env_allow = std::env::var("TDW_ALLOW_FAKE_STREAMING").as_deref() == Ok("1");
         if !self.allow_fake_streaming && !env_allow {
             return Err(tdw_core::Error::Provider(
                 "run_streaming performs a full blocking fetch then wraps the \
@@ -254,10 +253,8 @@ mod tests {
         }
         let runner = CommandRunner::default(); // allow_fake_streaming = false
         let fetcher = MockFetcher;
-        let result = block_on(runner.run_streaming(
-            &fetcher,
-            serde_json::json!({"symbol": "AAPL"}),
-        ));
+        let result =
+            block_on(runner.run_streaming(&fetcher, serde_json::json!({"symbol": "AAPL"})));
         match result {
             Err(tdw_core::Error::Provider(msg)) => {
                 assert!(

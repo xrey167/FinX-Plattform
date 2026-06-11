@@ -203,7 +203,8 @@ impl WasmUdfRuntime {
         // unconditionally so a future code path change cannot silently bypass it.
         let env_allow = std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1");
         #[cfg(test)]
-        #[allow(clippy::redundant_closure_for_method_calls)] // Cell::get requires an import; closure form is clearer here
+        #[allow(clippy::redundant_closure_for_method_calls)]
+        // Cell::get requires an import; closure form is clearer here
         let test_allow = ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.get());
         #[cfg(not(test))]
         let test_allow = false;
