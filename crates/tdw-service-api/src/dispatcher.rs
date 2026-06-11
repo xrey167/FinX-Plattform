@@ -56,7 +56,7 @@ use crate::{
     SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
     mask_json_response,
 };
-use crate::{econometrics_compute, quant_compute, technical_compute};
+use crate::{econometrics_compute, portfolio_compute, quant_compute, technical_compute};
 
 #[async_trait]
 impl Dispatcher for AppState {
@@ -562,11 +562,18 @@ async fn dispatch_compute(
     params: &Value,
     evidence: &PolicyEnforcementEvidence,
 ) -> Result<Value> {
-    // The `econometrics/*` estimators read their (multi-series) inputs entirely
-    // from the typed params — there is no `data`/`source` value series to
-    // resolve — so they take a parallel, source-less path.
+    // The `econometrics/*` estimators and the `portfolio/*` metrics read their
+    // inputs entirely from the typed params — there is no `data`/`source` value
+    // series to resolve — so they take a parallel, source-less path.
     if econometrics_compute::owns_route(route) {
-        return dispatch_econometrics_compute(route, params, policy, evidence);
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            econometrics_compute::run_compute(route, params)
+        });
+    }
+    if portfolio_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            portfolio_compute::run_compute(route, params)
+        });
     }
 
     // The `technical/*` and `quantitative/*` routes share one value-series
@@ -722,17 +729,22 @@ fn run_quant_compute(
     Ok((rows, None))
 }
 
-/// Run an `econometrics/*` Compute route, whose series live entirely in the
-/// typed params (no `data`/`source` value series). Builds the same
-/// `{ evidence, result }` envelope as the value-series compute path; the result
-/// is never chartable.
-fn dispatch_econometrics_compute(
+/// Run a params-only Compute route (the `econometrics/*` estimators and the
+/// `portfolio/*` metrics), whose inputs live entirely in the typed params (no
+/// `data`/`source` value series). The namespace's `run` closure produces the
+/// result rows. Builds the same `{ evidence, result }` envelope as the
+/// value-series compute path; the result is never chartable.
+fn dispatch_params_only_compute<R>(
     route: &str,
     params: &Value,
     policy: &PolicyEnforcementConfig,
     evidence: &PolicyEnforcementEvidence,
-) -> Result<Value> {
-    let rows = econometrics_compute::run_compute(route, params)?;
+    run: R,
+) -> Result<Value>
+where
+    R: FnOnce(&str, &Value) -> Result<Vec<Value>>,
+{
+    let rows = run(route, params)?;
     let extra = ResultExtra::default().with_route(route);
     let envelope = ResultEnvelope::new(route, rows).with_extra(extra);
     let body = serde_json::to_value(&envelope)
@@ -3067,9 +3079,9 @@ async fn dispatch_tool(
     }
 
     // The analytics tools are the catalog's Compute routes (the `technical/*`,
-    // `quantitative/*`, and `econometrics/*` namespaces) exposed as tools: the
-    // tool name maps to the route by swapping the first `.` for `/`, and
-    // execution reuses the same compute path as `Op::FetchData`. Policy
+    // `quantitative/*`, `econometrics/*`, and `portfolio/*` namespaces) exposed
+    // as tools: the tool name maps to the route by swapping the first `.` for
+    // `/`, and execution reuses the same compute path as `Op::FetchData`. Policy
     // enforcement already ran above; thread its evidence through unchanged.
     if let Some(route) = compute_tool_route(tool_name) {
         return dispatch_compute(state, policy, &route, arguments, &evidence).await;
@@ -3121,7 +3133,10 @@ fn service_tool_registry() -> ToolRegistry {
 /// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
-    if matches!(namespace, "technical" | "quantitative" | "econometrics") {
+    if matches!(
+        namespace,
+        "technical" | "quantitative" | "econometrics" | "portfolio"
+    ) {
         Some(format!("{namespace}/{member}"))
     } else {
         None
@@ -3132,7 +3147,8 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
 ///
 /// The tool name is the route with the namespace separator `/` swapped for `.`
 /// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
-/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`), so
+/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`,
+/// `portfolio/drawdown` → `portfolio.drawdown`), so
 /// `Op::ToolCall` and the MCP tool list expose every metric for free with the
 /// route's own param/model JSON schemas attached. Driving this from
 /// `tdw_endpoint_catalog::catalog()` keeps the tool set in lockstep with the
@@ -4026,9 +4042,9 @@ mod tests {
     }
 
     /// Every catalog Compute route (across the `technical/*`, `quantitative/*`,
-    /// and `econometrics/*` namespaces) is registered both as a compute
-    /// implementation and as a `<namespace>.<member>` tool, and vice versa — no
-    /// orphan on either side.
+    /// `econometrics/*`, and `portfolio/*` namespaces) is registered both as a
+    /// compute implementation and as a `<namespace>.<member>` tool, and vice
+    /// versa — no orphan on either side.
     #[test]
     fn compute_routes_tools_and_catalog_agree() {
         use std::collections::BTreeSet;
@@ -4065,6 +4081,11 @@ mod tests {
                 assert!(
                     econometrics_compute::compute_registry().contains_key(route.as_str()),
                     "econometrics compute route {route} has no registered implementation"
+                );
+            } else if portfolio_compute::owns_route(route) {
+                assert!(
+                    portfolio_compute::compute_registry().contains_key(route.as_str()),
+                    "portfolio compute route {route} has no registered implementation"
                 );
             } else {
                 let result = technical_compute::run_compute(route, &bars, &json!({}));

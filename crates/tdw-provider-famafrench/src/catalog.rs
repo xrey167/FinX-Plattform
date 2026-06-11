@@ -149,9 +149,11 @@ pub fn resolve(factor_set: FactorSet, frequency: Frequency) -> Option<&'static F
         .find(|d| d.factor_set == factor_set && d.frequency == frequency)
 }
 
-/// One standardized Ken French endpoint, mirroring the sibling-provider
-/// `ENDPOINTS` shape so the `tdw-service-api` conformance test can pin the
-/// catalog route, the dispatch tables, and this table to one command path.
+/// One standardized Ken French endpoint.
+///
+/// Mirrors the sibling-provider `ENDPOINTS` shape so the `tdw-service-api`
+/// conformance test can pin the catalog route, the dispatch tables, and this
+/// table to one command path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FamaFrenchEndpoint {
     /// `OpenBB`-parity command path this endpoint standardizes.
@@ -190,6 +192,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "Ken French publishes its archive/member names with a literal \
+                  uppercase `_CSV.zip` / `.CSV` extension; the exact-case suffix \
+                  assertion is intentional, not a user-supplied filename check"
+    )]
     fn resolve_covers_every_combination_uniquely() {
         for set in [
             FactorSet::ThreeFactor,

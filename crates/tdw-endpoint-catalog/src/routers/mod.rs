@@ -18,6 +18,7 @@ pub mod etf;
 pub mod fixedincome;
 pub mod index;
 pub mod news;
+pub mod portfolio;
 pub mod quantitative;
 pub mod regulators;
 pub mod technical;

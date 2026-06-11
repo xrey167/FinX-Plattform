@@ -6,6 +6,7 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+chrono = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
@@ -17,6 +18,7 @@ tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
 tdw-knowledge = { path = "../tdw-knowledge" }
 tdw-protocol = { workspace = true }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch", features = ["meilisearch"] }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant", features = ["qdrant"] }
 tdw-test-utils = { workspace = true }
@@ -30,6 +32,9 @@ local-model = ["tdw-embed-local/model"]
 ## env keys as the daemon's selector arms.
 openai = ["dep:tdw-embed-openai", "tdw-embed-openai/http"]
 google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
+
+[dev-dependencies]
+tdw-kg = { path = "../tdw-kg" }
 
 [[example]]
 name = "tdw_cli_basic"

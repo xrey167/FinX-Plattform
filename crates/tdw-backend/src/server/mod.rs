@@ -688,12 +688,12 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
 /// `daemon_addr` is `None`, the loop falls back to the env-derived daemon config
 /// (identical to `tdw-mcp`'s standalone entrypoints).
 ///
-/// `knowledge` and `feedback` are the co-resident handles from `Backend`
-/// (knowledge-system F1): when `Some` they are injected into the MCP server so
-/// the knowledge read tools and `tdw.kg.feedback` write tool are live on the
-/// embedded surface without a loopback round-trip to the daemon. When `None`
-/// (standalone `McpOnly` surface without a co-resident `Backend`) the server
-/// omits those tools, exactly as the `tdw-mcp` standalone binary does.
+/// `knowledge`, `feedback`, and `indexer` are the co-resident handles from
+/// `Backend` (knowledge-system F1/K-E3): when `Some` they are injected into the
+/// MCP server so the knowledge read tools, `tdw.kg.feedback`, and `tdw.kg.ingest`
+/// are live on the embedded surface without a loopback round-trip to the daemon.
+/// When `None` (standalone `McpOnly` surface without a co-resident `Backend`)
+/// the server omits those tools, exactly as the `tdw-mcp` standalone binary does.
 ///
 /// Returns the process exit code from the underlying loop.
 fn run_mcp_loop(
@@ -701,6 +701,7 @@ fn run_mcp_loop(
     daemon_addr: Option<&str>,
     knowledge: Option<std::sync::Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<std::sync::Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+    indexer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_knowledge::indexer::KnowledgeIndexer>>>,
 ) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
@@ -708,10 +709,10 @@ fn run_mcp_loop(
     });
     match transport {
         McpTransport::Stdio => {
-            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback)
+            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback, indexer)
         }
         McpTransport::Http(bind) => {
-            tdw_mcp::run_streamable_http_with_knowledge(bind, daemon, knowledge, feedback)
+            tdw_mcp::run_streamable_http_with_knowledge(bind, daemon, knowledge, feedback, indexer)
         }
     }
 }
@@ -744,7 +745,8 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             // (the standalone surface reaches knowledge via the daemon's loopback
             // transport, not in-process injection).
             let transport = cfg.mcp_transport.clone();
-            let code = tokio::task::block_in_place(|| run_mcp_loop(&transport, None, None, None));
+            let code =
+                tokio::task::block_in_place(|| run_mcp_loop(&transport, None, None, None, None));
             exit_code_to_result(code)
         }
 
@@ -762,15 +764,16 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
         .map(str::to_string)
         .ok_or_else(|| BackendError::Init("daemon did not expose a bound address".to_string()))?;
 
-    // Inject the co-resident knowledge runtime and feedback store into the
-    // embedded MCP server (knowledge-system F1). Both are cheap Arc clones.
+    // Inject the co-resident knowledge runtime, feedback store, and indexer into
+    // the embedded MCP server (knowledge-system F1/K-E3). All are cheap Arc clones.
     let knowledge = Some(backend.knowledge_runtime_handle());
     let feedback = Some(backend.feedback_store_handle());
+    let indexer = Some(backend.knowledge_indexer_handle());
 
     let transport = cfg.mcp_transport.clone();
     let mcp_thread = std::thread::Builder::new()
         .name("tdw-backend-mcp".to_string())
-        .spawn(move || run_mcp_loop(&transport, Some(&daemon_addr), knowledge, feedback))
+        .spawn(move || run_mcp_loop(&transport, Some(&daemon_addr), knowledge, feedback, indexer))
         .map_err(BackendError::Io)?;
 
     // Wait for the MCP loop to finish on a blocking thread so we do not stall

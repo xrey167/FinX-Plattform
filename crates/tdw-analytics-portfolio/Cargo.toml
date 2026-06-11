@@ -1,0 +1,26 @@
+# tdw-analytics-portfolio: pure-Rust, offline portfolio analytics.
+#
+# Lib-only, no async, no I/O. Hand-rolled implementations over caller-supplied
+# returns / weights / position-value series, with typed serde+schemars
+# param/output structs. Every metric is textbook portfolio math (compounded
+# cumulative returns; the running peak-to-trough drawdown; normalize-to-weights
+# allocation; per-asset return contribution weight_i * return_i); see each
+# module's docs for the cited definition. No new third-party numeric dependency
+# is pulled in: the crate reuses `tdw-analytics-quant`'s descriptive-statistics
+# helpers where sensible rather than duplicating them.
+[package]
+name = "tdw-analytics-portfolio"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-analytics-quant = { workspace = true }
+
+[lints]
+workspace = true
