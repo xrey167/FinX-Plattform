@@ -111,6 +111,7 @@ impl SqliteSessionStore {
             on conflict(session_id) do update set
                 status = excluded.status,
                 updated_at = excluded.updated_at
+            where sessions.status not in ('Completed', 'Failed')
             ",
         )
         .bind(&record.session_id)
