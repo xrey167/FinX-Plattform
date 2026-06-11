@@ -157,11 +157,55 @@ pub struct ProtocolConfig {
     pub replay_enabled: bool,
 }
 
-/// Knowledge-system settings (knowledge-system B6).
+/// Knowledge-system settings (knowledge-system B6 + F1).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
     pub embedding: EmbeddingConfig,
+    /// Graph-database backend for the live daemon's knowledge graph (F1).
+    ///
+    /// Default backend is `bolt` (Memgraph/Neo4j). There is **NO silent
+    /// fallback**: if `bolt` is selected and the endpoint is unreachable at
+    /// daemon startup, the daemon refuses to boot with an `Init` error.
+    ///
+    /// Use `in-memory` explicitly for development and tests.
+    #[serde(default)]
+    pub graph: GraphConfig,
+}
+
+/// Which graph-database backend the knowledge graph uses.
+///
+/// BOTH `bolt` (Memgraph/Neo4j, production) and `in-memory` (dev/test) are
+/// first-class. There is **NO silent fallback**: a `bolt` backend whose URI
+/// is unreachable at daemon startup is a hard `Init` error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct GraphConfig {
+    /// `bolt` (Memgraph/Neo4j, production default) or `in-memory` (dev/test).
+    pub backend: String,
+    /// Bolt endpoint URI, e.g. `bolt://127.0.0.1:7687`. Required when
+    /// `backend = bolt`; ignored for `in-memory`.
+    #[serde(default)]
+    pub bolt_uri: Option<String>,
+    /// Bolt username. Defaults to the empty string (Memgraph auth-disabled).
+    #[serde(default)]
+    pub bolt_user: String,
+    /// Environment variable holding the Bolt password. The variable is read at
+    /// daemon startup, not at config load. Defaults to `TDW_GRAPH_PASSWORD`.
+    /// The resolved value is the empty string when the variable is unset
+    /// (Memgraph auth-disabled default).
+    #[serde(default)]
+    pub bolt_password_env: String,
+}
+
+impl Default for GraphConfig {
+    fn default() -> Self {
+        Self {
+            backend: "bolt".to_string(),
+            bolt_uri: Some("bolt://127.0.0.1:7687".to_string()),
+            bolt_user: String::new(),
+            bolt_password_env: "TDW_GRAPH_PASSWORD".to_string(),
+        }
+    }
 }
 
 /// Which embedder the knowledge index uses.
@@ -360,6 +404,29 @@ impl TdwConfig {
             other => {
                 return Err(ConfigError::Validation(format!(
                     "knowledge.embedding.provider must be hash|local|openai|google, got {other:?}"
+                )));
+            }
+        }
+
+        // Graph backend: known token, and `bolt` must supply a URI.
+        let graph = &self.knowledge.graph;
+        match graph.backend.as_str() {
+            "in-memory" => {}
+            "bolt" => {
+                if graph
+                    .bolt_uri
+                    .as_deref()
+                    .is_none_or(|uri| uri.trim().is_empty())
+                {
+                    return Err(ConfigError::Validation(
+                        "knowledge.graph.backend = bolt requires knowledge.graph.bolt_uri"
+                            .to_string(),
+                    ));
+                }
+            }
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.graph.backend must be bolt|in-memory, got {other:?}"
                 )));
             }
         }
@@ -706,6 +773,37 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         assert_eq!(config.worker.backend, WorkerBackend::Postgres);
         assert_eq!(config.worker.sqlite_path, ".tdw/worker.sqlite");
         assert_eq!(config.worker.postgres_url_env, "TDW_WORKER_POSTGRES_URL");
+    }
+
+    #[test]
+    fn graph_config_defaults_to_bolt() {
+        let cfg = TdwConfig::default();
+        assert_eq!(cfg.knowledge.graph.backend, "bolt");
+        assert!(cfg.knowledge.graph.bolt_uri.is_some());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn graph_config_in_memory_passes_without_uri() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.graph.backend = "in-memory".to_string();
+        cfg.knowledge.graph.bolt_uri = None;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn graph_config_bolt_without_uri_fails() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.graph.backend = "bolt".to_string();
+        cfg.knowledge.graph.bolt_uri = None;
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn graph_config_unknown_backend_fails() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.graph.backend = "neo4j-unknown".to_string();
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
     }
 
     #[test]

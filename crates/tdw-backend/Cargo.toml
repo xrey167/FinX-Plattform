@@ -37,6 +37,13 @@ tdw-kg = { path = "../tdw-kg" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-feature-store = { path = "../tdw-feature-store" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+# F1 — graph storage (InMemory always; Bolt behind the `bolt` feature).
+# tdw-retrieve wires the hybrid Retriever into KnowledgeRuntime.
+# tdw-infer and tdw-tag-rules expose version stamps to KnowledgeVersions.
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-retrieve = { path = "../tdw-retrieve" }
+tdw-infer = { path = "../tdw-infer" }
+tdw-tag-rules = { path = "../tdw-tag-rules" }
 # Phase A1 — the hash embedder injected into the shared knowledge index so it
 # rides on `AppState.vector` (durable when that is a real Qdrant engine).
 tdw-embed = { path = "../tdw-embed" }
@@ -77,6 +84,11 @@ google = ["dep:tdw-embed-google", "tdw-embed-google/http"]
 ## Forwards `tdw-embed-local/model` (the pure-Rust candle BERT stack). Off by
 ## default so the standard build stays dependency-light (knowledge-system B6).
 local-model = ["tdw-embed-local/model"]
+## Compile the Bolt/Memgraph graph-database backend. Enables the `bolt` arm of
+## `knowledge.graph.backend` selection at daemon startup. Off by default so the
+## standard build pulls no neo4rs/tokio-network graph dependency; the daemon
+## binary and production Dockerfiles turn it on.
+bolt = ["tdw-storage-graph/bolt"]
 ## Forward the daemon transport features to `tdw-app-server`/`server::spawn_transport`
 ## so a `tdw-backend` build (lib or binary) can serve UDS/HTTP, exactly as the
 ## `tdw-service` binary's features did. `transport-tcp` is always on via the
