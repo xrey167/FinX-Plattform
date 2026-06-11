@@ -75,6 +75,11 @@ attaches an auth-backed ingress policy from the six `TDW_OIDC_*` variables
 > [`docs/products/mcp-quickstart.md`](docs/products/mcp-quickstart.md) gets you
 > from zero to live AAPL bars in an MCP client in under 10 minutes.
 
+> **Using the knowledge graph?** See
+> [`docs/knowledge-quickstart.md`](docs/knowledge-quickstart.md) for config →
+> ingest → search → answer in four steps, the embedder matrix, and the
+> zero-config first-run posture (no external services required by default).
+
 Prerequisites: Rust toolchain pinned by [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.95.0). Docker Desktop is only needed for live container smoke tests; the offline gates run without it.
 
 ```powershell

@@ -90,6 +90,34 @@ jobs:
           docker compose --profile live logs tdw-service-daemon
           exit 1
 
+      # K-E1 review finding 2: assert the daemon booted with the bolt graph
+      # backend, not the in-memory dev default. Two signals in daemon logs:
+      # (a) the "[tdw] knowledge graph: bolt backend connected" line must appear
+      #     (emitted by build_graph_engine on a successful bolt connect).
+      # (b) the "[tdw] NOTICE: knowledge graph running in-memory" line must be
+      #     absent (emitted only when in-memory is selected).
+      # Together they prove the TDW_CONFIG_CONTENT pin reached load_config AND
+      # that Memgraph is actually reachable in the live stack.
+      - name: Assert daemon graph backend is bolt (not in-memory)
+        run: |
+          set -euo pipefail
+          logs="$(docker compose --profile live logs tdw-service-daemon 2>&1)"
+          # (a) bolt connected line must appear.
+          if ! echo "$logs" | grep -q "bolt backend connected"; then
+            echo "FAIL: daemon logs do not contain the bolt-connected line"
+            echo "--- daemon logs ---"
+            echo "$logs"
+            exit 1
+          fi
+          # (b) in-memory NOTICE must NOT appear.
+          if echo "$logs" | grep -q "running in-memory"; then
+            echo "FAIL: daemon logs contain the in-memory NOTICE — bolt pin did not take effect"
+            echo "--- daemon logs ---"
+            echo "$logs"
+            exit 1
+          fi
+          echo "graph backend guard passed: bolt connected, no in-memory notice"
+
       - name: Worker leases against the Postgres backend
         run: |
           set -euo pipefail
