@@ -1147,6 +1147,74 @@ fn insert_yahoo_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Build a [`FetchBinding`] for the FMP financial-statement fetcher that injects
+/// a fixed `statement` discriminator (income / balance / cash) into the caller's
+/// params, so one fetcher type serves all three statement routes while the
+/// dispatch key stays per-statement. Mirrors [`nasdaq_calendar_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_fetch_binding(statement: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert(
+                    "statement".to_string(),
+                    Value::String(statement.to_string()),
+                );
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpStatementFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the FMP fundamentals breadth fetch bindings (G011), keyed by each
+/// route's catalog candidate endpoint. The three statement routes share one
+/// fetcher (the `statement` discriminator is injected per binding); ratios,
+/// key-metrics and profile are their own fetchers keyed by their `ENDPOINT`
+/// const. Mirrors [`insert_fmp_fundamentals_ingest_bindings`] so the fetch and
+/// ingest paths stay in lockstep; a conformance test keeps these keys and the
+/// catalog candidates in sync.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_fundamentals_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_income"),
+        fmp_statement_fetch_binding("income"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_balance"),
+        fmp_statement_fetch_binding("balance"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash"),
+        fmp_statement_fetch_binding("cashflow"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpRatiosFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpRatiosFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyMetricsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpKeyMetricsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpProfileFetcher, _, _>(),
+    );
+}
+
 /// The no-persist fetch dispatch table for this build.
 ///
 /// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
@@ -1227,6 +1295,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_eia_fetch_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
     insert_nasdaq_fetch_bindings(&mut table);
+    // G011: FMP keyed-provider fundamentals breadth.
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_fundamentals_fetch_bindings(&mut table);
     table
 }
 
@@ -2306,7 +2377,75 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_eia_ingest_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
     insert_nasdaq_ingest_bindings(&mut table);
+    // G011: FMP keyed-provider fundamentals breadth.
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_fundamentals_ingest_bindings(&mut table);
     table
+}
+
+/// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
+/// injects a fixed `statement` discriminator (income / balance / cash) into the
+/// caller's params before the shared fetcher fetches one batch and persists it
+/// into `table`. Mirrors [`fmp_statement_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_ingest_binding(statement: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert(
+                        "statement".to_string(),
+                        Value::String(statement.to_string()),
+                    );
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpStatementFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the FMP fundamentals breadth ingest bindings (G011), keyed by each
+/// route's catalog candidate endpoint and bound to its bronze landing table.
+/// Mirrors [`insert_fmp_fundamentals_fetch_bindings`] so the fetch and ingest
+/// paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_fundamentals_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_income"),
+        fmp_statement_ingest_binding("income", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_balance"),
+        fmp_statement_ingest_binding("balance", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash"),
+        fmp_statement_ingest_binding("cashflow", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpRatiosFetcher::ENDPOINT),
+        binding::<crate::FmpHttpRatiosFetcher, _, _>("raw.ratios"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyMetricsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpKeyMetricsFetcher, _, _>("raw.key_metrics"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
+        binding::<crate::FmpHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
 }
 
 /// Register the keyless-government-wave SEC catalog ingest bindings, mirroring
@@ -3819,6 +3958,110 @@ mod tests {
                 "G004 part 2 endpoint {}/{} is not referenced by any catalog route",
                 key.0,
                 key.1
+            );
+        }
+    }
+
+    /// Catalog <-> FMP fundamentals breadth sync (G011, gap-matrix item L2.x
+    /// fmp): every FMP candidate this wave projects (the three statement routes
+    /// plus ratios, key-metrics, and the multi-provider profile candidate) has a
+    /// fetch and an ingest dispatch binding under `provider-fmp`, and each
+    /// binding key matches the candidate's declared endpoint. Pins the new
+    /// catalog rows, the dispatch tables, and the registered FMP fetchers to one
+    /// set of endpoint keys; the expected set is asserted fully covered so a
+    /// dropped route is caught.
+    #[cfg(feature = "provider-fmp")]
+    #[test]
+    fn fmp_fundamentals_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        // The FMP endpoints projected by G011. The three statement routes share
+        // one fetcher but get distinct dispatch keys (the statement discriminator
+        // is injected per binding), matching the NASDAQ-calendar pattern.
+        const EXPECTED: &[(&str, &str)] = &[
+            ("fmp", "financial_statement_income"),
+            ("fmp", "financial_statement_balance"),
+            ("fmp", "financial_statement_cash"),
+            ("fmp", "ratios"),
+            ("fmp", "key_metrics"),
+            ("fmp", "profile"),
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                let key = (candidate.provider, candidate.endpoint);
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no fetch binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no ingest binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "G011 FMP endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
+            );
+        }
+    }
+
+    /// Catalog <-> Polygon breadth sync (G011, gap-matrix item L2.x polygon): the
+    /// single Polygon `aggregates` fetcher is reused as a candidate on the
+    /// currency / crypto / index historical routes (via `C:` / `X:` / `I:` ticker
+    /// prefixes the caller supplies), so it must have a fetch and an ingest
+    /// binding under `provider-polygon`, and each of those three routes must list
+    /// the polygon candidate.
+    #[cfg(feature = "provider-polygon")]
+    #[test]
+    fn polygon_breadth_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        const POLYGON_AGGREGATES: (&str, &str) = ("polygon", "aggregates");
+        const EXPECTED_ROUTES: &[&str] = &[
+            "currency/price/historical",
+            "crypto/price/historical",
+            "index/price/historical",
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        assert!(
+            fetch_keys.contains(&POLYGON_AGGREGATES),
+            "polygon aggregates has no fetch binding"
+        );
+        assert!(
+            ingest_keys.contains(&POLYGON_AGGREGATES),
+            "polygon aggregates has no ingest binding"
+        );
+
+        for route in EXPECTED_ROUTES {
+            let entry = tdw_endpoint_catalog::lookup(route)
+                .unwrap_or_else(|| panic!("route {route} present"));
+            assert!(
+                entry
+                    .candidates
+                    .iter()
+                    .any(|c| (c.provider, c.endpoint) == POLYGON_AGGREGATES),
+                "route {route} is missing the polygon aggregates candidate"
             );
         }
     }

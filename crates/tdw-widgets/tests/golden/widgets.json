@@ -178,6 +178,71 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "currency_price_historical": {
+    "category": "currency",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Historical OHLCV bars for an FX pair (Polygon `C:` ticker prefix).",
+    "endpoint": "/widget-data/currency/price/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "currency_price_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Historical",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "currency_reference_rates": {
     "category": "currency",
     "data": {
@@ -1720,6 +1785,230 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_fundamental_balance": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "filing_date",
+            "headerName": "Filing Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "fiscal_year",
+            "headerName": "Fiscal Year"
+          },
+          {
+            "cellDataType": "text",
+            "field": "line_items",
+            "headerName": "Line Items"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period",
+            "headerName": "Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "statement",
+            "headerName": "Statement"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Balance sheet (assets, liabilities, equity) per period, FMP-backed.",
+    "endpoint": "/widget-data/equity/fundamental/balance",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_balance",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Balance",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_fundamental_cash": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "filing_date",
+            "headerName": "Filing Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "fiscal_year",
+            "headerName": "Fiscal Year"
+          },
+          {
+            "cellDataType": "text",
+            "field": "line_items",
+            "headerName": "Line Items"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period",
+            "headerName": "Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "statement",
+            "headerName": "Statement"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Cash-flow statement (operating/investing/financing) per period, FMP-backed.",
+    "endpoint": "/widget-data/equity/fundamental/cash",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_cash",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Cash",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_fundamental_dividends": {
     "category": "equity",
     "data": {
@@ -1775,6 +2064,402 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Dividends",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_fundamental_income": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "filing_date",
+            "headerName": "Filing Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "fiscal_year",
+            "headerName": "Fiscal Year"
+          },
+          {
+            "cellDataType": "text",
+            "field": "line_items",
+            "headerName": "Line Items"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period",
+            "headerName": "Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "statement",
+            "headerName": "Statement"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Income statement (revenue, margins, net income) per period, FMP-backed.",
+    "endpoint": "/widget-data/equity/fundamental/income",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_income",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Income",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_fundamental_metrics": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "book_value_per_share",
+            "headerName": "Book Value Per Share"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "dividend_yield",
+            "formatterFn": "percent",
+            "headerName": "Dividend Yield"
+          },
+          {
+            "cellDataType": "number",
+            "field": "earnings_per_share",
+            "headerName": "Earnings Per Share"
+          },
+          {
+            "cellDataType": "number",
+            "field": "enterprise_value",
+            "headerName": "Enterprise Value"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ev_to_ebitda",
+            "headerName": "Ev To Ebitda"
+          },
+          {
+            "cellDataType": "text",
+            "field": "extra_metrics",
+            "headerName": "Extra Metrics"
+          },
+          {
+            "cellDataType": "number",
+            "field": "free_cash_flow_per_share",
+            "headerName": "Free Cash Flow Per Share"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "pe_ratio",
+            "formatterFn": "percent",
+            "headerName": "Pe Ratio"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period",
+            "headerName": "Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price_to_book",
+            "headerName": "Price To Book"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price_to_sales",
+            "headerName": "Price To Sales"
+          },
+          {
+            "cellDataType": "number",
+            "field": "revenue_per_share",
+            "headerName": "Revenue Per Share"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Key metrics (per-share and valuation), FMP-backed.",
+    "endpoint": "/widget-data/equity/fundamental/metrics",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_metrics",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Metrics",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_fundamental_ratios": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "asset_turnover",
+            "headerName": "Asset Turnover"
+          },
+          {
+            "cellDataType": "number",
+            "field": "current_ratio",
+            "formatterFn": "percent",
+            "headerName": "Current Ratio"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "debt_to_equity",
+            "headerName": "Debt To Equity"
+          },
+          {
+            "cellDataType": "text",
+            "field": "extra_ratios",
+            "formatterFn": "percent",
+            "headerName": "Extra Ratios"
+          },
+          {
+            "cellDataType": "number",
+            "field": "gross_margin",
+            "headerName": "Gross Margin"
+          },
+          {
+            "cellDataType": "number",
+            "field": "interest_coverage",
+            "headerName": "Interest Coverage"
+          },
+          {
+            "cellDataType": "number",
+            "field": "net_profit_margin",
+            "headerName": "Net Profit Margin"
+          },
+          {
+            "cellDataType": "number",
+            "field": "operating_margin",
+            "headerName": "Operating Margin"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period",
+            "headerName": "Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "quick_ratio",
+            "formatterFn": "percent",
+            "headerName": "Quick Ratio"
+          },
+          {
+            "cellDataType": "number",
+            "field": "return_on_assets",
+            "headerName": "Return On Assets"
+          },
+          {
+            "cellDataType": "number",
+            "field": "return_on_equity",
+            "headerName": "Return On Equity"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Financial ratios (liquidity, profitability, leverage), FMP-backed.",
+    "endpoint": "/widget-data/equity/fundamental/ratios",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_ratios",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Ratios",
     "params": [
       {
         "description": "Ticker symbol to query.",
@@ -2356,7 +3041,7 @@
         "showAll": true
       }
     },
-    "description": "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
+    "description": "Company profile (name, exchange, currency, market cap); Yahoo (keyless) then FMP candidate.",
     "endpoint": "/widget-data/equity/profile",
     "gridData": {
       "h": 9,
