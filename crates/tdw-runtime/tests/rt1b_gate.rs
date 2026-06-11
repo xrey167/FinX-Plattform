@@ -137,11 +137,8 @@ fn run_streaming_allowed_via_env_var() {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut cx = Context::from_waker(&waker);
     let mut items = Vec::new();
-    loop {
-        match stream.as_mut().poll_next(&mut cx) {
-            Poll::Ready(Some(item)) => items.push(item),
-            Poll::Ready(None) | Poll::Pending => break,
-        }
+    while let Poll::Ready(Some(item)) = stream.as_mut().poll_next(&mut cx) {
+        items.push(item);
     }
     assert_eq!(items.len(), 3, "expected 2 Progress + 1 Done: got {}", items.len());
 }

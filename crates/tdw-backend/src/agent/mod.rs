@@ -1064,7 +1064,8 @@ mod tests {
     // G008/ER3 F3: a novel unnamed model that does not override
     // is_production_grade() must default to false (fail-safe).
     #[test]
-    #[allow(clippy::items_after_statements)] // local struct must follow the use import; reordering would obscure intent
+    #[allow(clippy::items_after_statements)] // local struct and impl follow use import; reordering would obscure intent
+    #[allow(clippy::unnecessary_literal_bound)] // LanguageModel::model_id returns &str by trait contract
     fn novel_unknown_model_defaults_to_not_production_grade() {
         use tdw_llm::{ChatRequest, ChatResponse, MessageRole, ChatMessage, Usage};
         struct NovelModel;
@@ -1194,6 +1195,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::items_after_statements)] // use follows set_allow call to keep setup co-located
     fn run_eval_promotes_attached_proposals_on_a_passing_eval() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
         // G008/ER3: this test exercises the proposal-promotion path (not skill
