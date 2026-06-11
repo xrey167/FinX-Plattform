@@ -1482,7 +1482,30 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_fmp_fundamentals_fetch_bindings(&mut table);
     #[cfg(feature = "provider-fmp")]
     insert_fmp_completion_fetch_bindings(&mut table);
+    // P2W7: Benzinga normalized news cluster (news/company, news/world).
+    #[cfg(feature = "provider-benzinga")]
+    insert_benzinga_news_fetch_bindings(&mut table);
     table
+}
+
+/// Register the Benzinga normalized-news fetch bindings (P2W7), keyed by each
+/// fetcher's `ENDPOINT` const — the same key its catalog candidate declares.
+/// Both serve [`tdw_domain::NewsArticle`]. Mirrors
+/// [`insert_benzinga_news_ingest_bindings`] so the fetch and ingest paths stay
+/// in lockstep; a conformance test keeps these keys and the catalog candidates
+/// in sync.
+#[cfg(feature = "provider-benzinga")]
+fn insert_benzinga_news_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+    );
 }
 
 /// Register the keyless-government-wave SEC catalog fetch bindings (cik_map,
@@ -2568,7 +2591,30 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     // discovery, screener).
     #[cfg(feature = "provider-fmp")]
     insert_fmp_completion_ingest_bindings(&mut table);
+    // P2W7: Benzinga normalized news cluster (news/company, news/world).
+    #[cfg(feature = "provider-benzinga")]
+    insert_benzinga_news_ingest_bindings(&mut table);
     table
+}
+
+/// Register the Benzinga normalized-news ingest bindings (P2W7), keyed by each
+/// fetcher's `ENDPOINT` const and bound to the shared `raw.news_article` bronze
+/// landing table. Mirrors [`insert_benzinga_news_fetch_bindings`] so the fetch
+/// and ingest paths stay in lockstep. The bronze table itself is provisioned by
+/// the later warehouse story (W10); registering the binding now keeps every
+/// catalog candidate dispatchable.
+#[cfg(feature = "provider-benzinga")]
+fn insert_benzinga_news_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+        binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
+    );
+    table.insert(
+        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+        binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+    );
 }
 
 /// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
