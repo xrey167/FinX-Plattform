@@ -408,7 +408,7 @@ async fn promote_for_agent_respects_threshold_and_scope() {
         .expect("agent b proposal");
 
     // Below threshold: nothing promotes, and it is not an error.
-    let promoted = queue.promote_for_agent("agent:a", READY_THRESHOLD - 0.1, NOW);
+    let promoted = queue.promote_for_agent("agent:a", READY_THRESHOLD - 0.1, 5, NOW);
     assert!(promoted.is_empty(), "below threshold promotes nothing");
     assert_eq!(
         queue.get(&a.id).expect("a present").status,
@@ -416,7 +416,7 @@ async fn promote_for_agent_respects_threshold_and_scope() {
     );
 
     // At threshold: only agent:a's Validated proposals promote.
-    let promoted = queue.promote_for_agent("agent:a", READY_THRESHOLD, NOW);
+    let promoted = queue.promote_for_agent("agent:a", READY_THRESHOLD, 5, NOW);
     assert_eq!(promoted, vec![a.id.clone()]);
     assert_eq!(
         queue.get(&a.id).expect("a present").status,
@@ -473,7 +473,7 @@ async fn reject_is_terminal() {
         .expect("reject");
 
     // A rejected proposal never promotes.
-    let promoted = queue.promote_for_agent("agent:a", 1.0, NOW);
+    let promoted = queue.promote_for_agent("agent:a", 1.0, 5, NOW);
     assert!(promoted.is_empty(), "rejected proposals do not promote");
     // Nor does it materialize.
     let report = queue
@@ -754,6 +754,201 @@ async fn materialize_revalidates_and_skips_stale_proposals() {
         matches!(edges[0].provenance, Provenance::Ingest { .. }),
         "base provenance intact: {:?}",
         edges[0].provenance
+    );
+}
+
+#[tokio::test]
+async fn agent_id_grammar_is_validated_at_submit() {
+    let (graph, tags, _raw) = engines().await;
+    let mut queue = ProposalQueue::default();
+
+    // Semicolon in agent id — corrupts provenance string.
+    let error = queue
+        .submit(
+            "agent;evil",
+            Adaptivity::Learning,
+            edge_kind("instrument:AAPL", "instrument:MSFT", "peer_of"),
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect_err("semicolon in agent id must be rejected");
+    assert!(
+        error.to_string().contains("invalid character"),
+        "error names the bad char: {error}"
+    );
+
+    // Colon IS allowed (namespace separator).
+    queue
+        .submit(
+            "agent:valid",
+            Adaptivity::Learning,
+            edge_kind("instrument:AAPL", "instrument:MSFT", "peer_of"),
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect("colon is valid in agent id");
+}
+
+#[tokio::test]
+async fn vacuous_eval_does_not_promote() {
+    let (graph, tags, _raw) = engines().await;
+    let mut queue = ProposalQueue::default();
+    let proposal = queue
+        .submit(
+            "agent:a",
+            Adaptivity::Learning,
+            edge_kind("instrument:AAPL", "instrument:MSFT", "peer_of"),
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect("submit");
+
+    // Zero cases: vacuous pass_rate 1.0 must NOT promote.
+    let promoted = queue.promote_for_agent("agent:a", 1.0, 0, NOW);
+    assert!(promoted.is_empty(), "zero cases must not promote");
+
+    // Below floor (MIN_EVAL_CASES - 1): also must not promote.
+    let below = tdw_knowledge::proposals::MIN_EVAL_CASES - 1;
+    let promoted = queue.promote_for_agent("agent:a", 1.0, below, NOW);
+    assert!(promoted.is_empty(), "below floor must not promote");
+    assert_eq!(
+        queue.get(&proposal.id).expect("present").status,
+        ValidationStatus::Validated,
+        "status stays Validated"
+    );
+
+    // At floor: promotes.
+    let floor = tdw_knowledge::proposals::MIN_EVAL_CASES;
+    let promoted = queue.promote_for_agent("agent:a", 1.0, floor, NOW);
+    assert_eq!(promoted.len(), 1, "at floor promotes");
+}
+
+#[tokio::test]
+async fn double_reject_is_an_error() {
+    let (graph, tags, _raw) = engines().await;
+    let mut queue = ProposalQueue::default();
+    let proposal = queue
+        .submit(
+            "agent:a",
+            Adaptivity::Learning,
+            edge_kind("instrument:AAPL", "instrument:MSFT", "peer_of"),
+            &graph,
+            &tags,
+            NOW,
+        )
+        .await
+        .expect("submit");
+
+    queue.reject(&proposal.id, "first rejection", NOW).expect("first reject");
+    let error = queue
+        .reject(&proposal.id, "second rejection", NOW)
+        .expect_err("double reject must error");
+    assert!(
+        error.to_string().contains("already rejected"),
+        "error names the state: {error}"
+    );
+    // The audit trail has only the FIRST reason, not the second.
+    let stored = queue.get(&proposal.id).expect("present");
+    assert_eq!(
+        stored.rejected.as_deref(),
+        Some("first rejection"),
+        "rejection reason is the first one only"
+    );
+}
+
+#[test]
+fn list_is_bounded_and_reports_total() {
+    // Build a queue with more proposals than the default page size by injecting
+    // via serde (no graph/tag engines needed for structural tests).
+    let mut map = serde_json::Map::new();
+    for i in 1..=110_u64 {
+        let id = format!("p{i}");
+        map.insert(id.clone(), serde_json::json!({
+            "id": id,
+            "kind": { "kind": "tag_define", "tag_id": format!("t:t{i}"), "parent": null },
+            "agent_id": "agent:a",
+            "status": "validated",
+            "history": [],
+        }));
+    }
+    let queue: ProposalQueue = serde_json::from_value(serde_json::json!({
+        "proposals": map,
+        "next_id": 110,
+    }))
+    .expect("deserialize");
+
+    // Default limit (100): total=110, returned=100.
+    let page = queue.list(None, None);
+    assert_eq!(page.total, 110);
+    assert_eq!(page.proposals.len(), 100);
+
+    // Explicit limit of 10.
+    let page10 = queue.list(None, Some(10));
+    assert_eq!(page10.total, 110);
+    assert_eq!(page10.proposals.len(), 10);
+
+    // Limit > MAX is capped at min(LIST_PAGE_MAX, total): 110 proposals < 256 cap,
+    // so all 110 are returned.
+    let page_max = queue.list(None, Some(9999));
+    assert_eq!(page_max.total, 110);
+    assert_eq!(
+        page_max.proposals.len(),
+        110.min(tdw_knowledge::proposals::LIST_PAGE_MAX),
+    );
+}
+
+#[test]
+fn serde_restore_rejects_malformed_state() {
+    use tdw_knowledge::proposals::ProposalQueue;
+
+    // Semicolon in agent_id: valid JSON, but invalid grammar.
+    let bad_agent: std::result::Result<ProposalQueue, _> = serde_json::from_value(serde_json::json!({
+        "proposals": {
+            "p1": {
+                "id": "p1",
+                "kind": { "kind": "tag_define", "tag_id": "t:x", "parent": null },
+                "agent_id": "bad;agent",
+                "status": "validated",
+                "history": [],
+            }
+        },
+        "next_id": 1,
+    }));
+    // Deserialize succeeds (serde does not call validate_restored),
+    // but validate_restored must fail.
+    let queue = bad_agent.expect("deserialize succeeds");
+    let error = queue.validate_restored().expect_err("must fail for bad agent id");
+    assert!(
+        error.to_string().contains("invalid character"),
+        "error names the bad char: {error}"
+    );
+
+    // Both materialized AND rejected: invariant violation.
+    let bad_state: ProposalQueue = serde_json::from_value(serde_json::json!({
+        "proposals": {
+            "p1": {
+                "id": "p1",
+                "kind": { "kind": "tag_define", "tag_id": "t:x", "parent": null },
+                "agent_id": "agent:a",
+                "status": "validated",
+                "rejected": "some reason",
+                "materialized": true,
+                "history": [],
+            }
+        },
+        "next_id": 1,
+    }))
+    .expect("deserialize succeeds");
+    let error = bad_state.validate_restored().expect_err("must fail for bad state");
+    assert!(
+        error.to_string().contains("both materialized and rejected"),
+        "error names the state: {error}"
     );
 }
 

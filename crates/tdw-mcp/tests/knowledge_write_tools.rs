@@ -132,6 +132,7 @@ async fn build_runtime_with_operator(operator: bool) -> Arc<KnowledgeRuntime> {
         .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
         .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
         .with_adaptivity_resolver(stub_resolver())
+        .with_agent_id("agent:learning")
         .with_operator_authority(operator);
     Arc::new(runtime)
 }
@@ -245,7 +246,7 @@ fn full_lifecycle_define_approve_materialize() {
     let submitted = call(
         &mut server,
         "tdw.tags.define",
-        &json!({ "agent_id": "agent:learning", "tag_id": "asset:equity" }),
+        &json!({ "tag_id": "asset:equity" }),
     );
     assert_eq!(submitted["result"]["isError"], false);
     let structured = &submitted["result"]["structuredContent"];
@@ -301,7 +302,7 @@ fn full_lifecycle_define_approve_materialize() {
     let assign = call(
         &mut server,
         "tdw.tags.assign",
-        &json!({ "agent_id": "agent:learning", "entity_id": "instrument:AAPL", "tag_id": "asset:equity" }),
+        &json!({ "entity_id": "instrument:AAPL", "tag_id": "asset:equity" }),
     );
     assert_eq!(
         assign["result"]["isError"], false,
@@ -315,11 +316,30 @@ fn full_lifecycle_define_approve_materialize() {
 
 #[test]
 fn below_learning_submit_is_a_tool_error() {
-    let mut server = write_server();
+    // Build a runtime bound to "agent:configured" (below Learning gate).
+    let runtime = block(async {
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        let graph = Arc::new(InMemoryGraphEngine::default());
+        graph
+            .upsert_nodes(vec![node("instrument:AAPL")])
+            .await
+            .unwrap_or_else(|error| panic!("seed node: {error}"));
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(Arc::new(SharedGraph(graph.clone())))
+            .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
+            .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
+            .with_adaptivity_resolver(stub_resolver())
+            .with_agent_id("agent:configured")
+            .with_operator_authority(false);
+        Arc::new(runtime)
+    });
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
     let response = call(
         &mut server,
         "tdw.tags.define",
-        &json!({ "agent_id": "agent:configured", "tag_id": "asset:equity" }),
+        &json!({ "tag_id": "asset:equity" }),
     );
     assert!(response.get("error").is_none(), "must be a tool error");
     assert_eq!(response["result"]["isError"], true);
@@ -334,11 +354,30 @@ fn below_learning_submit_is_a_tool_error() {
 
 #[test]
 fn unknown_agent_is_a_tool_error() {
-    let mut server = write_server();
+    // Build a runtime bound to "agent:ghost" — not in the stub resolver → unknown.
+    let runtime = block(async {
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        let graph = Arc::new(InMemoryGraphEngine::default());
+        graph
+            .upsert_nodes(vec![node("instrument:AAPL")])
+            .await
+            .unwrap_or_else(|error| panic!("seed node: {error}"));
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(Arc::new(SharedGraph(graph.clone())))
+            .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
+            .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
+            .with_adaptivity_resolver(stub_resolver())
+            .with_agent_id("agent:ghost")
+            .with_operator_authority(false);
+        Arc::new(runtime)
+    });
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
     let response = call(
         &mut server,
         "tdw.tags.define",
-        &json!({ "agent_id": "agent:ghost", "tag_id": "asset:equity" }),
+        &json!({ "tag_id": "asset:equity" }),
     );
     assert!(response.get("error").is_none(), "must be a tool error");
     assert_eq!(response["result"]["isError"], true);
@@ -360,7 +399,7 @@ fn write_tool_without_surface_is_a_tool_error_not_protocol() {
     let response = call(
         &mut server,
         "tdw.tags.define",
-        &json!({ "agent_id": "agent:learning", "tag_id": "asset:equity" }),
+        &json!({ "tag_id": "asset:equity" }),
     );
     assert!(
         response.get("error").is_none(),
@@ -384,7 +423,7 @@ fn reject_path_is_terminal() {
     let submitted = call(
         &mut server,
         "tdw.kg.annotate",
-        &json!({ "agent_id": "agent:learning", "entity_id": "instrument:AAPL", "note": "a note" }),
+        &json!({ "entity_id": "instrument:AAPL", "note": "a note" }),
     );
     let proposal_id = submitted["result"]["structuredContent"]["proposal_id"]
         .as_str()
@@ -423,6 +462,112 @@ fn reject_path_is_terminal() {
     assert_eq!(approve["result"]["isError"], true);
 }
 
+/// B9 security: the submit tool schemas must NOT expose an `agent_id` field —
+/// identity is host-bound, not caller-supplied.
+#[test]
+fn submit_tools_do_not_accept_agent_id_argument() {
+    let mut server = write_server();
+    let listed = decode(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+    );
+    let tools = listed["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools array"));
+
+    let submit_names = ["tdw.tags.define", "tdw.tags.assign", "tdw.kg.annotate"];
+    for name in submit_names {
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name} must be listed"));
+        let props = &tool["inputSchema"]["properties"];
+        assert!(
+            props.get("agent_id").is_none(),
+            "{name} schema must not have agent_id field — identity is host-bound: {tool}"
+        );
+        let required = tool["inputSchema"]["required"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        assert!(
+            !required.contains(&"agent_id"),
+            "{name} must not require agent_id: {tool}"
+        );
+    }
+}
+
+/// B9 security: the write tools are ABSENT when the runtime has proposals+resolver
+/// but NO bound agent id — the gate requires all three conditions.
+#[test]
+fn write_surface_absent_without_bound_identity() {
+    let runtime = block(async {
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        let graph = Arc::new(InMemoryGraphEngine::default());
+        // proposals + resolver attached, but NO with_agent_id call
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(Arc::new(SharedGraph(graph.clone())))
+            .with_tags(Arc::new(GraphTagEngine::new(SharedGraph(graph.clone()))))
+            .with_proposals(Arc::new(tokio::sync::Mutex::new(ProposalQueue::default())))
+            .with_adaptivity_resolver(stub_resolver());
+        Arc::new(runtime)
+    });
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let names = listed_tool_names(&mut server);
+    for name in WRITE_TOOLS {
+        assert!(
+            !names.contains(&name.to_string()),
+            "{name} must be absent without a bound agent id"
+        );
+    }
+}
+
+/// B9 pagination: list with no limit returns at most LIST_PAGE_DEFAULT proposals;
+/// limit=1 returns exactly 1 with correct total.
+#[test]
+fn list_returns_bounded_page_with_total() {
+    let mut server = write_server();
+
+    // Submit 3 proposals.
+    for i in 0..3_u8 {
+        let r = call(
+            &mut server,
+            "tdw.tags.define",
+            &json!({ "tag_id": format!("asset:tag{i}") }),
+        );
+        assert_eq!(r["result"]["isError"], false, "submit {i}: {r}");
+    }
+
+    // List with no limit — all 3 returned, total == 3.
+    let listed = call(
+        &mut server,
+        "tdw.kg.proposals",
+        &json!({ "action": "list" }),
+    );
+    assert_eq!(listed["result"]["isError"], false);
+    let sc = &listed["result"]["structuredContent"];
+    let proposals = sc["proposals"]
+        .as_array()
+        .unwrap_or_else(|| panic!("proposals array: {listed}"));
+    assert_eq!(proposals.len(), 3, "3 proposals returned by default: {listed}");
+    assert_eq!(sc["total"], 3, "total == 3: {listed}");
+
+    // List with limit=1 — 1 returned, total still 3.
+    let limited = call(
+        &mut server,
+        "tdw.kg.proposals",
+        &json!({ "action": "list", "limit": 1 }),
+    );
+    assert_eq!(limited["result"]["isError"], false);
+    let sc2 = &limited["result"]["structuredContent"];
+    let page = sc2["proposals"]
+        .as_array()
+        .unwrap_or_else(|| panic!("proposals array: {limited}"));
+    assert_eq!(page.len(), 1, "limit=1 returns 1 proposal: {limited}");
+    assert_eq!(sc2["total"], 3, "total still 3 with limit=1: {limited}");
+}
+
 /// B9 security review B1: an AGENT-FACING runtime (no operator authority)
 /// rejects approve / reject / materialize, so an agent cannot land its own
 /// proposals — submit and list still work.
@@ -436,7 +581,7 @@ fn operator_actions_require_operator_authority() {
     let submit = call(
         &mut server,
         "tdw.tags.define",
-        &json!({ "agent_id": "agent:learning", "tag_id": "asset:equity" }),
+        &json!({ "tag_id": "asset:equity" }),
     );
     assert_ne!(submit["result"]["isError"], true, "submit: {submit}");
 

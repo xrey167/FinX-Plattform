@@ -571,11 +571,13 @@ impl McpServer {
     }
 
     /// True when the attached knowledge runtime exposes the gated WRITE surface
-    /// (knowledge-system B9): it has BOTH a proposal queue and an adaptivity
-    /// resolver attached. A read-only knowledge runtime returns `false`.
+    /// (knowledge-system B9): it has a proposal queue, an adaptivity resolver,
+    /// AND a bound agent identity. A read-only knowledge runtime returns `false`.
     fn knowledge_writes_available(&self) -> bool {
         self.knowledge.as_ref().is_some_and(|runtime| {
-            runtime.proposals().is_some() && runtime.adaptivity_resolver().is_some()
+            runtime.proposals().is_some()
+                && runtime.adaptivity_resolver().is_some()
+                && runtime.bound_agent_id().is_some()
         })
     }
 

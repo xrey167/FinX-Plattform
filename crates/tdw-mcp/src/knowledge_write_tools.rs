@@ -5,8 +5,12 @@
 //! graph/tag engines directly. `tdw.kg.proposals` lists proposals and runs the
 //! operator actions (approve / reject / materialize). The whole surface is
 //! exposed only when a [`KnowledgeRuntime`] is attached WITH a proposal queue
-//! AND an adaptivity resolver (the admission gate's input); otherwise the write
+//! AND an adaptivity resolver AND a bound agent identity; otherwise the write
 //! tools are absent from `tools/list`.
+//!
+//! Agent identity is HOST-BOUND: it is set on the [`KnowledgeRuntime`] at
+//! construction time and never accepted as a tool argument. Remote callers
+//! cannot assert a different identity via the MCP surface.
 //!
 //! Every failure here is a tool error ([`ToolFailure::Execution`]), never a
 //! protocol error, exactly like the B8 read tools. The queue's `submit` /
@@ -37,9 +41,10 @@ pub fn owns(name: &str) -> bool {
 }
 
 /// Descriptors for the write tools, appended to `tools/list` only when the
-/// runtime has the proposal queue + adaptivity resolver attached (gated at the
-/// `lib.rs` seam). The three submit tools and `tdw.kg.proposals` are all
-/// mutating (`readOnlyHint: false`, `idempotentHint: false`).
+/// runtime has the proposal queue + adaptivity resolver + bound agent id
+/// attached (gated at the `lib.rs` seam). The three submit tools and
+/// `tdw.kg.proposals` are all mutating (`readOnlyHint: false`,
+/// `idempotentHint: false`).
 #[must_use]
 pub fn descriptors() -> Vec<ToolDescriptor> {
     vec![
@@ -63,15 +68,14 @@ fn define_descriptor() -> ToolDescriptor {
         "ENQUEUE a proposal to define a new taxonomy tag (the agent's adaptivity must be at \
          least Learning to be admitted). Does NOT write the taxonomy directly — it returns the \
          proposal id + status; the tag only lands after the proposal reaches Ready (via eval \
-         promotion or operator approval) and is materialized.",
+         promotion or operator approval) and is materialized. Agent identity is host-bound.",
         json!({
             "type": "object",
             "properties": {
-                "agent_id": { "type": "string", "description": "The proposing agent's id (its adaptivity is resolved for admission)." },
                 "tag_id": { "type": "string", "description": "The new tag id, e.g. asset:equity:tech." },
                 "parent": { "type": "string", "description": "Optional parent tag id (must already be defined)." }
             },
-            "required": ["agent_id", "tag_id"],
+            "required": ["tag_id"],
             "additionalProperties": false
         }),
     )
@@ -83,15 +87,15 @@ fn assign_descriptor() -> ToolDescriptor {
         "Propose Tag Assignment",
         "ENQUEUE a proposal to assign a DEFINED tag to an existing entity (agent adaptivity must \
          be at least Learning). Does NOT write directly — returns the proposal id + status; the \
-         assignment only lands once the proposal is Ready and materialized.",
+         assignment only lands once the proposal is Ready and materialized. Agent identity is \
+         host-bound.",
         json!({
             "type": "object",
             "properties": {
-                "agent_id": { "type": "string", "description": "The proposing agent's id." },
                 "entity_id": { "type": "string", "description": "The entity to tag (must exist)." },
                 "tag_id": { "type": "string", "description": "The tag to assign (must already be defined)." }
             },
-            "required": ["agent_id", "entity_id", "tag_id"],
+            "required": ["entity_id", "tag_id"],
             "additionalProperties": false
         }),
     )
@@ -103,15 +107,15 @@ fn annotate_descriptor() -> ToolDescriptor {
         "Propose Entity Annotation",
         "ENQUEUE a proposal to attach a free-text note to an existing entity (agent adaptivity \
          must be at least Learning). Does NOT write directly — returns the proposal id + status; \
-         the annotation node + edge only land once the proposal is Ready and materialized.",
+         the annotation node + edge only land once the proposal is Ready and materialized. Agent \
+         identity is host-bound.",
         json!({
             "type": "object",
             "properties": {
-                "agent_id": { "type": "string", "description": "The proposing agent's id." },
                 "entity_id": { "type": "string", "description": "The entity to annotate (must exist)." },
                 "note": { "type": "string", "description": "The note (non-empty, bounded length, no control characters)." }
             },
-            "required": ["agent_id", "entity_id", "note"],
+            "required": ["entity_id", "note"],
             "additionalProperties": false
         }),
     )
@@ -121,19 +125,22 @@ fn proposals_descriptor() -> ToolDescriptor {
     write_tool(
         "tdw.kg.proposals",
         "Manage Gated Proposals",
-        "List or act on gated write proposals. action=list returns serialized proposals \
-         (filtered by agent_id when given) and is available to anyone. action=approve / \
-         action=reject / action=materialize are OPERATOR actions: they run ONLY on a runtime \
-         granted operator authority, so an agent cannot approve or materialize its own \
-         proposals. approve/reject require proposal_id (approve also takes approved_by; reject a \
-         reason); materialize writes every Ready proposal into the engines, RE-VALIDATING each \
-         at write time, and returns the report. Reads (tdw.kg.* / tdw.tags.query) exclude \
-         pending facts because only materialized facts exist in the engines.",
+        "List or act on gated write proposals. action=list returns a bounded page of proposals \
+         (default 100, max 256) with `total` (all matching) and `proposals` (the page). Filtered \
+         by `agent_id` when given; `limit` caps the page. action=approve / action=reject / \
+         action=materialize are OPERATOR actions: they run ONLY on a runtime granted operator \
+         authority, so an agent cannot approve or materialize its own proposals — the whole \
+         point of the gate (B9 security review). approve/reject require proposal_id (approve \
+         also takes approved_by; reject a reason); materialize writes every Ready proposal into \
+         the engines, RE-VALIDATING each at write time, and returns the report. Reads \
+         (tdw.kg.* / tdw.tags.query) exclude pending facts because only materialized facts \
+         exist in the engines.",
         json!({
             "type": "object",
             "properties": {
                 "action": { "type": "string", "enum": ["list", "approve", "reject", "materialize"], "description": "The proposal action." },
                 "agent_id": { "type": "string", "description": "list: filter to this agent's proposals." },
+                "limit": { "type": "integer", "description": "list: page size (default 100, max 256)." },
                 "proposal_id": { "type": "string", "description": "approve/reject: the target proposal id." },
                 "approved_by": { "type": "string", "description": "approve: the operator id (audit trail)." },
                 "reason": { "type": "string", "description": "reject: the rejection reason (audit trail)." }
@@ -188,14 +195,6 @@ fn require_operator(runtime: &KnowledgeRuntime, action: &str) -> Result<(), Tool
 
 /// Resolve the calling agent's [`Adaptivity`] via the runtime's resolver. A
 /// missing resolver OR an unknown agent is a tool error (writes unavailable).
-///
-/// IDENTITY TRUST MODEL (B9 security review): `agent_id` is currently a
-/// caller-asserted tool argument — nothing here proves the caller IS that
-/// agent. The resolver is the enforcement boundary (only known agent ids map
-/// to an adaptivity; the queue-wide cap bounds abuse). Binding `agent_id` to
-/// an authenticated session principal is a HARD precondition for exposing
-/// this surface over a non-local transport, and is F1-cutover scope; until
-/// then the write surface is constructed only for trusted/local callers.
 fn resolve_adaptivity(
     runtime: &KnowledgeRuntime,
     agent_id: &str,
@@ -227,6 +226,16 @@ fn write_context(runtime: &KnowledgeRuntime) -> Result<WriteContext<'_>, ToolFai
     Ok((graph, tags, proposals))
 }
 
+/// Obtain the host-bound agent identity, validating its grammar.
+fn bound_agent_id(runtime: &KnowledgeRuntime) -> Result<&str, ToolFailure> {
+    let agent_id = runtime
+        .bound_agent_id()
+        .ok_or_else(|| execution("no agent identity bound to this write surface".to_string()))?;
+    tdw_knowledge::proposals::validate_agent_id(agent_id)
+        .map_err(|error| execution(error.to_string()))?;
+    Ok(agent_id)
+}
+
 /// Submit one proposal through the gate, returning `{ proposal_id, status }`.
 fn submit(
     runtime: &KnowledgeRuntime,
@@ -253,7 +262,7 @@ fn submit_define(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
-    let agent_id = require_str(arguments, "agent_id")?;
+    let agent_id = bound_agent_id(runtime)?;
     let tag_id = require_str(arguments, "tag_id")?;
     let parent = optional_str(arguments, "parent").map(ToString::to_string);
     submit(
@@ -270,7 +279,7 @@ fn submit_assign(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
-    let agent_id = require_str(arguments, "agent_id")?;
+    let agent_id = bound_agent_id(runtime)?;
     let entity_id = require_str(arguments, "entity_id")?;
     let tag_id = require_str(arguments, "tag_id")?;
     submit(
@@ -287,7 +296,7 @@ fn submit_annotate(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
-    let agent_id = require_str(arguments, "agent_id")?;
+    let agent_id = bound_agent_id(runtime)?;
     let entity_id = require_str(arguments, "entity_id")?;
     let note = require_str(arguments, "note")?;
     submit(
@@ -310,12 +319,18 @@ fn proposals(
     match action {
         "list" => {
             let agent_id = optional_str(arguments, "agent_id");
-            let listed = block_on(async {
+            let limit = arguments
+                .get("limit")
+                .and_then(serde_json::Value::as_u64)
+                .map(|n| n as usize);
+            let (proposals_val, total) = block_on(async {
                 let queue = queue.lock().await;
-                serde_json::to_value(queue.list(agent_id))
+                let page = queue.list(agent_id, limit);
+                let val = serde_json::to_value(page.proposals).map(|v| (v, page.total));
+                val
             })
             .map_err(|error| serde_failure(&error))?;
-            Ok(structured(json!({ "proposals": listed })))
+            Ok(structured(json!({ "proposals": proposals_val, "total": total })))
         }
         "approve" => {
             require_operator(runtime, "approve")?;

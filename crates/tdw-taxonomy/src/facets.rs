@@ -47,12 +47,12 @@ pub enum ValidationStatus {
     Ready,
 }
 
+// Moved here from `tdw-agent` (B9): the writeback gate's admission check lives
+// in `tdw-knowledge`, which must not pull the agent crate's filesystem/
+// validation dependencies. `tdw-agent` re-exports this type, so existing
+// imports keep compiling (the A1 shim pattern). The doc comment below is kept
+// to the original one-liner so the generated agent JSON schemas are unchanged.
 /// Ordinal degree to which an entity changes itself over time.
-///
-/// Moved here from `tdw-agent` (B9): the writeback gate's admission check
-/// lives in `tdw-knowledge`, which must not pull the agent crate's
-/// filesystem/validation dependencies. `tdw-agent` re-exports this type, so
-/// existing imports keep compiling (the A1 shim pattern).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]

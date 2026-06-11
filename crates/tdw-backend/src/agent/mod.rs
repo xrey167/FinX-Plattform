@@ -72,7 +72,7 @@ pub struct AgentBackend {
     ///
     /// Held behind a [`tokio::sync::Mutex`] (the same handle the MCP write tools
     /// and the [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime)
-    /// share); `run_eval_at` is sync, so it takes the lock with `try_lock`
+    /// share); `run_eval_at` is sync, so it takes the lock with `blocking_lock`
     /// (`promote_for_agent` is itself sync — no await is needed under the guard).
     proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
 }
@@ -314,20 +314,26 @@ impl AgentBackend {
         }
 
         // Writeback gate promotion (knowledge-system B9): a passing eval grants
-        // the evaluated agent's `Validated` proposals the right to LAND. The
-        // queue is shared (tokio::sync::Mutex) with the MCP write surface, but
-        // this path is SYNC and `promote_for_agent` is itself sync, so we take
-        // the lock with `try_lock` (no await under the guard). A contended lock
-        // is skipped rather than blocking the eval; the next eval re-attempts.
-        if let Some(pass_rate) = pass_rate
-            && let Some(proposals) = self.proposals.as_ref()
-            && let Ok(mut queue) = proposals.try_lock()
-        {
-            // The gate stamps history with a YYYY-MM-DD date (the MCP write
-            // tools use today's date); `now` here is an RFC 3339 datetime, so
-            // pass only its date part to keep the audit trail uniform.
-            let date = now.split('T').next().unwrap_or(now);
-            queue.promote_for_agent(&agent_id, pass_rate, date);
+        // the evaluated agent's `Validated` proposals the right to LAND.
+        // `promote_for_agent` requires at least MIN_EVAL_CASES — extract the
+        // case_count from the metrics so a vacuous eval (0 cases, pass_rate 1.0)
+        // does not promote.
+        let case_count = outcome
+            .metrics
+            .iter()
+            .find(|metric| metric.metric_name == "case_count")
+            .map(|metric| metric.metric_value as usize)
+            .unwrap_or(0);
+
+        if let Some(pass_rate) = pass_rate {
+            if let Some(proposals) = self.proposals.as_ref() {
+                // The queue is shared (tokio::sync::Mutex) with the MCP write
+                // surface. `run_eval_at` is sync; use `blocking_lock` so the
+                // promotion is never silently skipped on a contended lock.
+                let date = now.split('T').next().unwrap_or(now);
+                let mut queue = proposals.blocking_lock();
+                let _ = queue.promote_for_agent(&agent_id, pass_rate, case_count, date);
+            }
         }
 
         outcome
@@ -816,29 +822,33 @@ mod tests {
         let proposals = Arc::new(tokio::sync::Mutex::new(queue));
         backend.set_proposals(Arc::clone(&proposals));
 
+        // Run 5 cases (MIN_EVAL_CASES = 5) so the floor guard passes.
+        let cases = (1_u8..=5)
+            .map(|i| EvalCase {
+                case_id: format!("case-{i}"),
+                prompt: format!("Summarize AAPL ({i})"),
+                expected_refs: vec![ContentRef {
+                    uri: "tdw://docs/research-template".to_string(),
+                    kind: ContentKind::Prompt,
+                    checksum: None,
+                    tags: Vec::new(),
+                }],
+            })
+            .collect();
         let outcome = backend.run_eval_at(
             EvalRunRequest {
                 run_id: "eval-b9".to_string(),
                 agent_id: "market-researcher".to_string(),
                 dataset_id: "golden-market-notes".to_string(),
-                cases: vec![EvalCase {
-                    case_id: "case-1".to_string(),
-                    prompt: "Summarize AAPL".to_string(),
-                    expected_refs: vec![ContentRef {
-                        uri: "tdw://docs/research-template".to_string(),
-                        kind: ContentKind::Prompt,
-                        checksum: None,
-                        tags: Vec::new(),
-                    }],
-                }],
+                cases,
             },
             "2026-05-31T00:00:00+00:00",
         );
         assert_eq!(outcome.status, "success");
 
-        // The passing eval promoted the agent's Validated proposal to Ready.
+        // The passing eval with >= MIN_EVAL_CASES promoted the Validated proposal to Ready.
         let status = {
-            let queue = proposals.try_lock().expect("queue uncontended");
+            let queue = proposals.blocking_lock();
             queue.get("p1").expect("proposal present").status
         };
         assert_eq!(status, tdw_agent::ValidationStatus::Ready);
@@ -1310,6 +1320,109 @@ mod tests {
         );
         // The surfaces field is left at its default by the transport builder.
         assert_eq!(config.surfaces, Surfaces::Both);
+    }
+
+    /// B9 eval-floor: a single-case eval (below MIN_EVAL_CASES=5) must NOT promote
+    /// `Validated` proposals to `Ready`, even when pass_rate == 1.0.
+    #[test]
+    fn run_eval_under_floor_does_not_promote() {
+        use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        use tdw_knowledge::proposals::ProposalQueue;
+
+        let (dir, mut backend) = backend_with_search_tool();
+
+        let card = AgentCard {
+            meta: EntityMeta::new(
+                "market-researcher",
+                "market-researcher",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::Learning,
+                true,
+            )
+            .with_title("Market Researcher")
+            .with_description("Generates evidence-backed notes."),
+            skills: vec![AgentSkill {
+                meta: EntityMeta::new(
+                    "research.note",
+                    "research.note",
+                    "0.1.0",
+                    Origin {
+                        tier: Tier::Domain,
+                        source: Source::Internal,
+                    },
+                    Adaptivity::Learning,
+                    false,
+                )
+                .with_title("research.note")
+                .with_description("A skill."),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: serde_json::json!({"type": "object"}),
+                quality: None,
+            }],
+            content_refs: vec![ContentRef {
+                uri: "tdw://docs/research-template".to_string(),
+                kind: ContentKind::Prompt,
+                checksum: None,
+                tags: Vec::new(),
+            }],
+            endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
+        };
+        backend.upsert_agent(card);
+
+        let queue: ProposalQueue = serde_json::from_value(serde_json::json!({
+            "proposals": {
+                "p1": {
+                    "id": "p1",
+                    "kind": { "kind": "tag_define", "tag_id": "asset:equity", "parent": null },
+                    "agent_id": "market-researcher",
+                    "status": "validated",
+                    "history": ["2026-05-31 validated"],
+                }
+            },
+            "next_id": 1,
+        }))
+        .expect("queue deserializes");
+        let proposals = Arc::new(tokio::sync::Mutex::new(queue));
+        backend.set_proposals(Arc::clone(&proposals));
+
+        // Only 1 case — below MIN_EVAL_CASES=5; pass_rate will be 1.0 but the floor guard fires.
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "eval-floor".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden-market-notes".to_string(),
+                cases: vec![EvalCase {
+                    case_id: "case-1".to_string(),
+                    prompt: "Summarize AAPL".to_string(),
+                    expected_refs: vec![ContentRef {
+                        uri: "tdw://docs/research-template".to_string(),
+                        kind: ContentKind::Prompt,
+                        checksum: None,
+                        tags: Vec::new(),
+                    }],
+                }],
+            },
+            "2026-05-31T00:00:00+00:00",
+        );
+        assert_eq!(outcome.status, "success");
+
+        // The proposal must remain Validated — the floor guard blocked promotion.
+        let status = {
+            let queue = proposals.blocking_lock();
+            queue.get("p1").expect("proposal present").status
+        };
+        assert_eq!(
+            status,
+            tdw_agent::ValidationStatus::Validated,
+            "under-floor eval must not promote proposal"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -65,6 +65,11 @@ pub struct KnowledgeRuntime {
     /// operator use opts in explicitly via
     /// [`with_operator_authority`](Self::with_operator_authority).
     operator_authority: bool,
+    /// The host-bound agent identity for the write surface. Set at construction
+    /// by the operator; absent means write tools are not attached. Identity must
+    /// not be supplied as a tool argument — it is bound here so remote callers
+    /// cannot assert a different identity.
+    bound_agent_id: Option<String>,
 }
 
 impl KnowledgeRuntime {
@@ -85,6 +90,7 @@ impl KnowledgeRuntime {
             proposals: None,
             adaptivity_resolver: None,
             operator_authority: false,
+            bound_agent_id: None,
         }
     }
 
@@ -199,6 +205,21 @@ impl KnowledgeRuntime {
     pub const fn operator_authority(&self) -> bool {
         self.operator_authority
     }
+
+    /// Bind the agent identity for the write surface. The write tools use this
+    /// identity; callers cannot override it via tool arguments. If no identity
+    /// is bound, the write tools are not attached (gated in [`crate`]).
+    #[must_use]
+    pub fn with_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.bound_agent_id = Some(agent_id.into());
+        self
+    }
+
+    /// The bound agent identity, when set.
+    #[must_use]
+    pub fn bound_agent_id(&self) -> Option<&str> {
+        self.bound_agent_id.as_deref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -211,6 +232,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("proposals", &self.proposals.is_some())
             .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
             .field("operator_authority", &self.operator_authority)
+            .field("bound_agent_id", &self.bound_agent_id.is_some())
             .finish_non_exhaustive()
     }
 }

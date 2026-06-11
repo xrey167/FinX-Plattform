@@ -10,12 +10,28 @@
 //!    fact, per-agent pending cap). A validator failure rejects loudly.
 //! 3. **`Validated -> Ready`** — eval-driven: `promote_for_agent` promotes
 //!    the agent's validated proposals iff its eval `pass_rate` meets the
-//!    ready threshold (default 0.8). Human approval (`approve`) is the
-//!    alternative path. `SelfModifying` agents are exempt from HUMAN review
-//!    only — never from evals.
+//!    ready threshold (default 0.8) AND at least [`MIN_EVAL_CASES`] were
+//!    executed. Human approval (`approve`) is the alternative path.
+//!    `SelfModifying` agents are exempt from HUMAN review only — never from
+//!    evals.
 //! 4. **Materialization** — only `Ready` proposals write into the graph/tag
 //!    engines, with provenance `agent:<id>;proposal:<pid>` (edges carry
 //!    [`Provenance::Agent`] with `gated: true`).
+//!
+//! **Agent-id grammar**: allowed characters are `[A-Za-z0-9:._-]`; control
+//! characters, semicolons, and whitespace are all rejected. Semicolons are
+//! reserved as field separators in the provenance string
+//! `agent:<id>;proposal:<pid>`. Ids are bounded to [`MAX_AGENT_ID_LEN`] bytes.
+//! Empty ids are rejected. Call [`validate_agent_id`] before storing any
+//! agent-derived id.
+//!
+//! **Eval-evidence floor**: a vacuous eval (0 cases) has a vacuously perfect
+//! pass rate and MUST NOT promote — [`MIN_EVAL_CASES`] is the mandatory floor
+//! that closes this B9 bypass.
+//!
+//! **Proposal-id collision guarantee**: ids are `p<monotone_u64>`. The
+//! `next_id` counter is persisted in serde, so round-trips preserve uniqueness.
+//! The counter is never reset; ids therefore never alias across restarts.
 //!
 //! Net: `Learning` grants the right to PROPOSE; passing evals (or a human)
 //! grants the right to LAND.
@@ -38,9 +54,57 @@ pub const PER_AGENT_PENDING_CAP: usize = 32;
 ///
 /// Because the caller supplies `agent_id`, the per-agent cap alone is evadable
 /// by rotating ids; this bounds the queue regardless of identity (B9 review).
-pub const MAX_TOTAL_PENDING: usize = 4096;
+pub const MAX_TOTAL_PENDING: usize = 1024;
 /// Annotation note ceiling (notes flow into graph props and agent context).
 pub const MAX_NOTE_CHARS: usize = 4096;
+/// Maximum byte length of an agent id (prevents oversized provenance strings).
+pub const MAX_AGENT_ID_LEN: usize = 128;
+/// Maximum proposals returned by [`ProposalQueue::list`] per page.
+pub const LIST_PAGE_MAX: usize = 256;
+/// Default page size for [`ProposalQueue::list`] when no limit is supplied.
+pub const LIST_PAGE_DEFAULT: usize = 100;
+/// Minimum number of eval cases that must have been executed for
+/// `promote_for_agent` to grant promotion. A vacuous eval (0 cases) has a
+/// vacuously perfect pass rate and MUST NOT promote — this floor is the B9
+/// evidence guard. Authorship/provenance integrity of the cases themselves
+/// is B11 scope.
+pub const MIN_EVAL_CASES: usize = 5;
+
+/// Validate an agent id against the graph-id grammar plus the additional
+/// constraint that semicolons are forbidden (they are used as field separators
+/// in provenance strings of the form `agent:<id>;proposal:<pid>`).
+///
+/// Allowed characters: `[A-Za-z0-9:._-]`. Control characters, semicolons,
+/// whitespace, and empty strings are all rejected. Ids longer than
+/// [`MAX_AGENT_ID_LEN`] bytes are also rejected.
+///
+/// # Errors
+///
+/// Returns [`KnowledgeError::Storage`] with a descriptive message when the id
+/// is invalid.
+pub fn validate_agent_id(agent_id: &str) -> Result<()> {
+    if agent_id.is_empty() {
+        return Err(KnowledgeError::Storage(
+            "agent id must not be empty".to_string(),
+        ));
+    }
+    if agent_id.len() > MAX_AGENT_ID_LEN {
+        return Err(KnowledgeError::Storage(format!(
+            "agent id is too long ({} bytes, max {MAX_AGENT_ID_LEN})",
+            agent_id.len()
+        )));
+    }
+    if let Some(bad) = agent_id
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
+    {
+        return Err(KnowledgeError::Storage(format!(
+            "agent id {:?} contains invalid character {:?} — only [A-Za-z0-9:._-] allowed",
+            agent_id, bad
+        )));
+    }
+    Ok(())
+}
 
 /// What an agent wants to write.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +130,7 @@ pub enum ProposalKind {
 
 /// One gated write request.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Proposal {
     /// Queue-assigned id (`p<seq>`).
     pub id: String,
@@ -89,6 +154,23 @@ impl Proposal {
     pub const fn is_pending(&self) -> bool {
         !self.materialized && self.rejected.is_none()
     }
+
+    fn validate_restored(&self) -> Result<()> {
+        if self.id.is_empty() || !self.id.starts_with('p') || self.id.len() < 2 {
+            return Err(KnowledgeError::Storage(format!(
+                "restored proposal has malformed id {:?}",
+                self.id
+            )));
+        }
+        validate_agent_id(&self.agent_id)?;
+        if self.materialized && self.rejected.is_some() {
+            return Err(KnowledgeError::Storage(format!(
+                "restored proposal {:?} is both materialized and rejected",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Report of one materialization sweep.
@@ -101,6 +183,15 @@ pub struct MaterializeReport {
     /// are rejected, not written, so a stale proposal can never clobber a
     /// fact asserted in the meantime.
     pub rejected_at_materialize: Vec<(String, String)>,
+}
+
+/// A bounded page of proposals returned by [`ProposalQueue::list`].
+#[derive(Debug)]
+pub struct ProposalPage<'a> {
+    /// The proposals in this page (at most the requested limit).
+    pub proposals: Vec<&'a Proposal>,
+    /// Total matching proposals before the page limit was applied.
+    pub total: usize,
 }
 
 /// The gated proposal queue.
@@ -140,6 +231,18 @@ impl ProposalQueue {
         self.pending_cap.unwrap_or(PER_AGENT_PENDING_CAP)
     }
 
+    /// Validate structural invariants for a queue deserialized from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Storage`] for any structural violation.
+    pub fn validate_restored(&self) -> Result<()> {
+        for proposal in self.proposals.values() {
+            proposal.validate_restored()?;
+        }
+        Ok(())
+    }
+
     /// Submit a proposal through the FULL gate: admission (`Adaptivity >=
     /// Learning`), per-agent pending cap, and the automated validators.
     /// Success leaves the proposal `Validated`; any failure is a loud error
@@ -158,9 +261,8 @@ impl ProposalQueue {
         tags: &Arc<dyn TagEngine>,
         now: &str,
     ) -> Result<Proposal> {
-        if agent_id.trim().is_empty() || agent_id.chars().any(char::is_control) {
-            return Err(KnowledgeError::Storage("invalid agent id".to_string()));
-        }
+        // 0. Agent-id grammar validation (B9 Finding 3).
+        validate_agent_id(agent_id)?;
         // 1. Admission: below Learning never writes (mirrors run_eval_at's
         // feedback gate).
         if adaptivity < Adaptivity::Learning {
@@ -217,11 +319,19 @@ impl ProposalQueue {
     }
 
     /// Eval-driven promotion: every `Validated` proposal by `agent_id` moves
-    /// to `Ready` iff `pass_rate` meets the threshold. Returns the promoted
-    /// ids (empty when the rate falls short — that is not an error; the
-    /// proposals simply wait).
-    pub fn promote_for_agent(&mut self, agent_id: &str, pass_rate: f64, now: &str) -> Vec<String> {
-        if pass_rate < self.threshold() {
+    /// to `Ready` iff `pass_rate` meets the threshold AND `cases_executed`
+    /// meets the [`MIN_EVAL_CASES`] floor. Returns the promoted ids (empty
+    /// when either condition falls short — that is not an error; the proposals
+    /// simply wait).
+    #[must_use]
+    pub fn promote_for_agent(
+        &mut self,
+        agent_id: &str,
+        pass_rate: f64,
+        cases_executed: usize,
+        now: &str,
+    ) -> Vec<String> {
+        if pass_rate < self.threshold() || cases_executed < MIN_EVAL_CASES {
             return Vec::new();
         }
         let mut promoted = Vec::new();
@@ -231,9 +341,9 @@ impl ProposalQueue {
                 && proposal.is_pending()
             {
                 proposal.status = ValidationStatus::Ready;
-                proposal
-                    .history
-                    .push(format!("{now} ready (eval pass_rate {pass_rate:.2})"));
+                proposal.history.push(format!(
+                    "{now} ready (eval pass_rate {pass_rate:.2}, cases {cases_executed})"
+                ));
                 promoted.push(proposal.id.clone());
             }
         }
@@ -266,7 +376,9 @@ impl ProposalQueue {
     ///
     /// # Errors
     ///
-    /// Returns an error for unknown ids or already-materialized proposals.
+    /// Returns an error for unknown ids, already-materialized proposals, or
+    /// already-rejected proposals (rejection is terminal — a second rejection
+    /// would silently overwrite the first reason in the audit trail).
     pub fn reject(&mut self, proposal_id: &str, reason: &str, now: &str) -> Result<()> {
         let proposal = self
             .proposals
@@ -275,6 +387,11 @@ impl ProposalQueue {
         if proposal.materialized {
             return Err(KnowledgeError::Storage(format!(
                 "proposal {proposal_id:?} is already materialized"
+            )));
+        }
+        if proposal.rejected.is_some() {
+            return Err(KnowledgeError::Storage(format!(
+                "proposal {proposal_id:?} is already rejected — rejection is terminal"
             )));
         }
         proposal.rejected = Some(reason.to_string());
@@ -334,13 +451,20 @@ impl ProposalQueue {
         Ok(report)
     }
 
-    /// Proposals, optionally filtered by agent. Sorted by id.
+    /// Proposals, optionally filtered by agent. Returns a bounded
+    /// [`ProposalPage`] (default [`LIST_PAGE_DEFAULT`], max [`LIST_PAGE_MAX`])
+    /// with the total matching count.
     #[must_use]
-    pub fn list(&self, agent_id: Option<&str>) -> Vec<&Proposal> {
-        self.proposals
+    pub fn list(&self, agent_id: Option<&str>, limit: Option<usize>) -> ProposalPage<'_> {
+        let effective_limit = limit.unwrap_or(LIST_PAGE_DEFAULT).min(LIST_PAGE_MAX);
+        let all: Vec<&Proposal> = self
+            .proposals
             .values()
             .filter(|proposal| agent_id.is_none_or(|agent| proposal.agent_id == agent))
-            .collect()
+            .collect();
+        let total = all.len();
+        let proposals = all.into_iter().take(effective_limit).collect();
+        ProposalPage { proposals, total }
     }
 
     /// One proposal by id.
