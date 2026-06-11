@@ -12,8 +12,10 @@
 //! - **VWAP**: cumulative `Σ(typicalPrice·volume)/Σ(volume)`, typical price
 //!   `(high+low+close)/3` (running, session-anchored at the first bar).
 
-use crate::params::LengthParams;
+use crate::params::{AdoscParams, LengthParams};
 use crate::{Bar, Result, require_period};
+
+use super::moving_average::ema;
 
 #[allow(clippy::cast_precision_loss)]
 const fn len_f64(n: usize) -> f64 {
@@ -122,10 +124,38 @@ pub fn vwap(bars: &[Bar]) -> Vec<Option<f64>> {
     out
 }
 
+/// Chaikin Accumulation/Distribution Oscillator over the bar slice.
+///
+/// `ADOSC = EMA(AD, fast) − EMA(AD, slow)` where `AD` is the Chaikin
+/// accumulation/distribution line (reusing [`ad`]). Both EMAs are SMA-seeded
+/// over the AD line, so the oscillator first becomes defined once the slow EMA
+/// is defined (at index `slow − 1`).
+///
+/// # Errors
+///
+/// Returns [`crate::IndicatorError::InvalidPeriod`] when either span is `0`.
+pub fn adosc(bars: &[Bar], params: AdoscParams) -> Result<Vec<Option<f64>>> {
+    require_period(params.fast)?;
+    require_period(params.slow)?;
+    // The A/D line is defined at every bar, so unwrap to a dense f64 column.
+    let ad_line: Vec<f64> = ad(bars).into_iter().map(|v| v.unwrap_or(0.0)).collect();
+    let fast = ema(&ad_line, LengthParams::new(params.fast))?;
+    let slow = ema(&ad_line, LengthParams::new(params.slow))?;
+    Ok(fast
+        .iter()
+        .zip(slow.iter())
+        .map(|(f, s)| match (f, s) {
+            (Some(f), Some(s)) => Some(f - s),
+            _ => None,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::fixture::series;
+    use crate::params::AdoscParams;
 
     #[test]
     fn true_range_first_bar_is_high_minus_low() {
@@ -163,5 +193,41 @@ mod tests {
     fn ad_defined_everywhere() {
         let out = ad(&series());
         assert!(out.iter().all(Option::is_some));
+    }
+
+    fn adosc_fixture() -> Vec<Bar> {
+        // Three bars engineered for an easy hand calculation. Each spans
+        // high=2, low=0 so the money-flow multiplier is (2*close - 2)/2.
+        //  A: close=2 ⇒ mfv = +1*10 = +10  ⇒ AD = 10
+        //  B: close=0 ⇒ mfv = -1*10 = -10  ⇒ AD = 0
+        //  C: close=1 ⇒ mfv =  0*10 =   0  ⇒ AD = 0
+        let mut bars = series()[..3].to_vec();
+        let rows = [(2.0, 2.0), (0.0, 0.0), (2.0, 1.0)];
+        for (bar, &(high_close_top, close)) in bars.iter_mut().zip(rows.iter()) {
+            bar.high = 2.0;
+            bar.low = 0.0;
+            bar.open = high_close_top; // unused by AD; keep OHLC nesting sane
+            bar.close = close;
+            bar.volume = 10.0;
+        }
+        bars
+    }
+
+    #[test]
+    fn adosc_known_vector() {
+        // AD line = [10, 0, 0]. fast=1 ⇒ EMA = AD itself = [10, 0, 0].
+        // slow=2 ⇒ seed = mean(10,0) = 5 at idx1; α = 2/3 ⇒
+        //   idx2 = (2/3)*0 + (1/3)*5 = 5/3.
+        // ADOSC = fast − slow ⇒ [None, 0-5 = -5, 0 - 5/3 = -5/3].
+        let out = adosc(&adosc_fixture(), AdoscParams { fast: 1, slow: 2 }).expect("adosc");
+        assert_eq!(out[0], None);
+        assert!((out[1].expect("idx1") - (-5.0)).abs() < 1e-12);
+        assert!((out[2].expect("idx2") - (-5.0 / 3.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adosc_zero_span_is_invalid() {
+        assert!(adosc(&series(), AdoscParams { fast: 0, slow: 10 }).is_err());
+        assert!(adosc(&series(), AdoscParams { fast: 3, slow: 0 }).is_err());
     }
 }

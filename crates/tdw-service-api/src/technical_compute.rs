@@ -25,8 +25,9 @@ use tdw_domain::{MarketDataBar, TimeGranularity};
 
 use tdw_analytics_technical::indicators::{bands, moving_average, oscillators, trend, volume};
 use tdw_analytics_technical::params::{
-    AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams, HmaParams,
-    KeltnerParams, LengthParams, MacdParams, RocParams, StochasticParams,
+    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams,
+    HmaParams, IchimokuParams, KeltnerParams, LengthParams, MacdParams, RocParams,
+    StochasticParams, SupertrendParams,
 };
 
 /// A compute implementation: parse the route's typed params from `params`, run
@@ -61,6 +62,11 @@ pub fn compute_registry() -> BTreeMap<&'static str, ComputeFn> {
     registry.insert("technical/fisher", compute_fisher);
     registry.insert("technical/roc", compute_roc);
     registry.insert("technical/momentum", compute_momentum);
+    registry.insert("technical/ichimoku", compute_ichimoku);
+    registry.insert("technical/zlma", compute_zlma);
+    registry.insert("technical/adosc", compute_adosc);
+    registry.insert("technical/vortex", compute_vortex);
+    registry.insert("technical/supertrend", compute_supertrend);
     registry
 }
 
@@ -289,6 +295,31 @@ fn compute_roc(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Err
 fn compute_momentum(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
     let p: RocParams = parse_params(params)?;
     rows_scalar(&oscillators::momentum(&closes(bars), p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_ichimoku(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: IchimokuParams = parse_params(params)?;
+    rows_struct(&trend::ichimoku(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_zlma(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: LengthParams = parse_params(params)?;
+    rows_scalar(&moving_average::zlma(&closes(bars), p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_adosc(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: AdoscParams = parse_params(params)?;
+    rows_scalar(&volume::adosc(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_vortex(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: LengthParams = parse_params(params)?;
+    rows_struct(&trend::vortex(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_supertrend(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: SupertrendParams = parse_params(params)?;
+    rows_struct(&trend::supertrend(bars, p).map_err(|e| map_period_err(&e))?)
 }
 
 #[cfg(test)]

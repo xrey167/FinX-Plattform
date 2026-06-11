@@ -33,8 +33,14 @@ const fn d25() -> usize {
 const fn d26() -> usize {
     26
 }
+const fn d52() -> usize {
+    52
+}
 const fn f2() -> f64 {
     2.0
+}
+const fn f3() -> f64 {
+    3.0
 }
 const fn f0_015() -> f64 {
     0.015
@@ -282,6 +288,80 @@ impl Default for HmaParams {
     }
 }
 
+/// Ichimoku Cloud parameters: the conversion, base, lagging, and span-B
+/// windows.
+///
+/// Standard (Hosoda) defaults: conversion 9 (tenkan-sen), base 26 (kijun-sen),
+/// lagging 26 (chikou-span shift), span-B 52 (senkou span B window).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct IchimokuParams {
+    /// Conversion-line (tenkan-sen) window.
+    #[serde(default = "d9")]
+    pub conversion: usize,
+    /// Base-line (kijun-sen) window.
+    #[serde(default = "d26")]
+    pub base: usize,
+    /// Lagging-span (chikou) back-shift in bars.
+    #[serde(default = "d26")]
+    pub lagging: usize,
+    /// Senkou span-B window.
+    #[serde(default = "d52")]
+    pub span_b: usize,
+}
+
+impl Default for IchimokuParams {
+    fn default() -> Self {
+        Self {
+            conversion: 9,
+            base: 26,
+            lagging: 26,
+            span_b: 52,
+        }
+    }
+}
+
+/// Chaikin Accumulation/Distribution Oscillator parameters: the fast and slow
+/// EMA spans applied to the A/D line.
+///
+/// Standard (Chaikin) defaults: fast 3, slow 10.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AdoscParams {
+    /// Fast EMA span over the A/D line.
+    #[serde(default = "d3")]
+    pub fast: usize,
+    /// Slow EMA span over the A/D line.
+    #[serde(default = "d10")]
+    pub slow: usize,
+}
+
+impl Default for AdoscParams {
+    fn default() -> Self {
+        Self { fast: 3, slow: 10 }
+    }
+}
+
+/// `SuperTrend` parameters: the ATR window and the band multiplier.
+///
+/// Common defaults: length 10, multiplier 3.0.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SupertrendParams {
+    /// ATR window for the band half-width.
+    #[serde(default = "d10")]
+    pub length: usize,
+    /// ATR multiplier for the upper/lower bands.
+    #[serde(default = "f3")]
+    pub multiplier: f64,
+}
+
+impl Default for SupertrendParams {
+    fn default() -> Self {
+        Self {
+            length: 10,
+            multiplier: 3.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +386,28 @@ mod tests {
         let parsed: BollingerParams = serde_json::from_str("{}").expect("deserializes");
         assert_eq!(parsed.length, 20);
         assert!((parsed.std - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ichimoku_defaults_match_standard() {
+        let parsed: IchimokuParams = serde_json::from_str("{}").expect("deserializes");
+        assert_eq!(parsed.conversion, 9);
+        assert_eq!(parsed.base, 26);
+        assert_eq!(parsed.lagging, 26);
+        assert_eq!(parsed.span_b, 52);
+    }
+
+    #[test]
+    fn adosc_defaults_match_standard() {
+        let parsed: AdoscParams = serde_json::from_str("{}").expect("deserializes");
+        assert_eq!(parsed.fast, 3);
+        assert_eq!(parsed.slow, 10);
+    }
+
+    #[test]
+    fn supertrend_defaults_match_standard() {
+        let parsed: SupertrendParams = serde_json::from_str("{}").expect("deserializes");
+        assert_eq!(parsed.length, 10);
+        assert!((parsed.multiplier - 3.0).abs() < f64::EPSILON);
     }
 }

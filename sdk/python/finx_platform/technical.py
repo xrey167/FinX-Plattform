@@ -38,6 +38,32 @@ class TechnicalNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def adosc(
+        self,
+        *,
+        fast: int | None = None,
+        slow: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Chaikin Accumulation/Distribution Oscillator (EMA fast - EMA slow of A/D).
+
+        Route: ``technical/adosc``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            fast: Fast EMA span over the A/D line.
+            slow: Slow EMA span over the A/D line.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/adosc' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def adx(
         self,
         *,
@@ -258,6 +284,36 @@ class TechnicalNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def ichimoku(
+        self,
+        *,
+        base: int | None = None,
+        conversion: int | None = None,
+        lagging: int | None = None,
+        span_b: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Ichimoku Cloud (conversion, base, leading spans A/B, lagging span).
+
+        Route: ``technical/ichimoku``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            base: Base-line (kijun-sen) window.
+            conversion: Conversion-line (tenkan-sen) window.
+            lagging: Lagging-span (chikou) back-shift in bars.
+            span_b: Senkou span-B window.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/ichimoku' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def keltner(
         self,
         *,
@@ -462,6 +518,56 @@ class TechnicalNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def supertrend(
+        self,
+        *,
+        length: int | None = None,
+        multiplier: float | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """SuperTrend ATR trailing-stop line and trend direction.
+
+        Route: ``technical/supertrend``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            length: ATR window for the band half-width.
+            multiplier: ATR multiplier for the upper/lower bands.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/supertrend' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def vortex(
+        self,
+        *,
+        length: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Vortex Indicator (VI+ and VI- directional movement lines).
+
+        Route: ``technical/vortex``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            length: Lookback window in bars.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/vortex' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def vwap(
         self,
         *,
@@ -507,5 +613,29 @@ class TechnicalNamespace:
         """
         raise NotImplementedError(
             "compute route 'technical/wma' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def zlma(
+        self,
+        *,
+        length: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Zero-Lag Exponential Moving Average over the close series.
+
+        Route: ``technical/zlma``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            length: Lookback window in bars.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/zlma' is not exposed over REST; "
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
