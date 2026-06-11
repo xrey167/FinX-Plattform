@@ -29,6 +29,7 @@ pub mod fetch_policy;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
 mod policy;
+mod portfolio_compute;
 mod provider_resolve;
 mod quant_compute;
 #[cfg(feature = "rest-api-route")]
