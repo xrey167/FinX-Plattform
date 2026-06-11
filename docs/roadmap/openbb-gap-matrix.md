@@ -344,7 +344,7 @@ slice; none blocks the delivered surface.
 
 | # | Deferred task | Why deferred | Status |
 |---|---|---|---|
-| D1 | `tdw-provider-famafrench` (Ken French factors + portfolio returns) | Data ships as zipped CSV → needs a new `zip`/CSV dep; the codebase is deliberately zero-native-dep | todo (deferred) |
+| D1 | `tdw-provider-famafrench` (Ken French factors) | — | **DONE** (P2W6, route `economy/factors/famafrench`; pure-Rust zip/miniz_oxide, no C). Portfolio-returns variant still deferred. |
 | D2 | `tdw-provider-{stockgrid,wsj,biztoc}` (short_volume / etf-discovery / news-world) | Niche providers whose exact public API shapes cannot be verified clean-room without vendor-doc access — building blind risks invented endpoints | todo (deferred) |
 | D3 | `tdw-provider-intrinio` (options unusual/snapshots/surface, reported_financials) | Paid key; lower priority than the keyless surface | todo (deferred) |
 | D4 | `tdw-provider-{imf,econdb,finviz}` (W5 remainder: SDMX macro / gdp+indicators / screener+price_target) | Net-new niche crates; macro breadth already broad via FRED (32 routes) | todo (deferred) |

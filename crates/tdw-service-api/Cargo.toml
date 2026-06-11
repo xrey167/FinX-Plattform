@@ -128,6 +128,10 @@ provider-federal-reserve = [
     "dep:tdw-provider-federal-reserve",
     "tdw-provider-federal-reserve/http",
 ]
+provider-famafrench = [
+    "dep:tdw-provider-famafrench",
+    "tdw-provider-famafrench/http",
+]
 provider-finra = ["dep:tdw-provider-finra", "tdw-provider-finra/http"]
 provider-finnhub = ["dep:tdw-provider-finnhub", "tdw-provider-finnhub/http"]
 provider-fmp = ["dep:tdw-provider-fmp", "tdw-provider-fmp/http"]
@@ -227,6 +231,7 @@ all-http-providers = [
     "provider-deribit",
     "provider-ecb",
     "provider-eia",
+    "provider-famafrench",
     "provider-federal-reserve",
     "provider-finra",
     "provider-finnhub",
@@ -312,6 +317,7 @@ tdw-provider-databento = { path = "../tdw-provider-databento", optional = true }
 tdw-provider-deribit = { path = "../tdw-provider-deribit", optional = true }
 tdw-provider-ecb = { path = "../tdw-provider-ecb", optional = true }
 tdw-provider-eia = { path = "../tdw-provider-eia", optional = true }
+tdw-provider-famafrench = { path = "../tdw-provider-famafrench", optional = true }
 tdw-provider-federal-reserve = { path = "../tdw-provider-federal-reserve", optional = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 tdw-provider-finra = { path = "../tdw-provider-finra", optional = true }

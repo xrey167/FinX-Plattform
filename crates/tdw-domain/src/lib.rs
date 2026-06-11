@@ -6,9 +6,9 @@ pub mod models;
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
     CalendarEvent, CommitmentOfTraders, CommodityReportRow, Estimate, EtfHolding, EtfSectorWeight,
-    FinancialStatement, FomcDocument, FuturesCurvePoint, KeyMetrics, MacroSeries, NewsArticle,
-    OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios, ScreenerRow,
-    SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice,
+    FactorReturn, FinancialStatement, FomcDocument, FuturesCurvePoint, KeyMetrics, MacroSeries,
+    NewsArticle, OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios,
+    ScreenerRow, SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice,
     YieldCurvePoint,
 };
 

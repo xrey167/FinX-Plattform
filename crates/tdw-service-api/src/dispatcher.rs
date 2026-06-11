@@ -1466,6 +1466,11 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_sec_government_fetch_bindings(&mut table);
     #[cfg(feature = "provider-government-us")]
     insert_government_us_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-famafrench")]
+    table.insert(
+        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
+    );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
@@ -2625,6 +2630,11 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_sec_government_ingest_bindings(&mut table);
     #[cfg(feature = "provider-government-us")]
     insert_government_us_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-famafrench")]
+    table.insert(
+        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
+        binding::<crate::FamaFrenchHttpFetcher, _, _>("raw.factor_return"),
+    );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
@@ -4346,6 +4356,55 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "cftc candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ Ken French `ENDPOINTS` sync (OpenBB-parity **P2W6**): the
+    /// standardized `economy/factors/famafrench` command has a catalog route
+    /// whose `famafrench` candidate endpoint is the route's `'/'→'_'` form and is
+    /// dispatchable in both tables under `provider-famafrench`.
+    #[cfg(feature = "provider-famafrench")]
+    #[test]
+    fn famafrench_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_famafrench::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!(
+                    "famafrench command {} has no catalog route",
+                    endpoint.command
+                )
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "famafrench")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no famafrench candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} famafrench endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "famafrench candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "famafrench candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command

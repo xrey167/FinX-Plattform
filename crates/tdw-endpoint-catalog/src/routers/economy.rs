@@ -2,7 +2,10 @@
 //!
 //! The macro cluster (gap-matrix item **L2.3**) is FRED-backed: each route
 //! standardizes one `OpenBB` economy command onto a FRED series, normalized to
-//! [`tdw_domain::MacroSeries`]. The single candidate per route is
+//! [`tdw_domain::MacroSeries`]. The namespace also carries two keyless
+//! non-FRED routes: the Federal Reserve H.6 money-measures table and the Ken
+//! French Data Library research factors (`economy/factors/famafrench` →
+//! [`tdw_domain::FactorReturn`], OpenBB-parity **P2W6**). The single candidate per route is
 //! `(provider="fred", endpoint=<route with '/'→'_'>)` — the exact key the
 //! runtime ingest/fetch dispatch table registers under the `provider-fred`
 //! feature. Clean-room facts (the route↔series mapping lives in
@@ -12,7 +15,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{MacroSeries, SeriesSearchResult};
+use tdw_domain::{FactorReturn, MacroSeries, SeriesSearchResult};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -43,6 +46,13 @@ const ECONOMY_INFLATION_EXPECTATIONS: &[ProviderCandidate] = &[ProviderCandidate
     "economy_survey_inflation_expectations",
 )];
 const ECONOMY_FRED_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fred", "fred_search")];
+/// Keyless Ken French Data Library candidate for the research-factor route
+/// (OpenBB-parity **P2W6**). The endpoint key is the route's `'/'→'_'` form,
+/// matching `endpoint_key_for_route` and the `famafrench` dispatch binding.
+const ECONOMY_FACTORS_FAMAFRENCH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "famafrench",
+    "economy_factors_famafrench",
+)];
 /// Keyless Federal Reserve candidate for the full H.6 money-measures table
 /// (gap-matrix item **L3.1**) — distinct from the FRED-backed single-series
 /// `economy/money_measures/{m1,m2}` routes above.
@@ -61,6 +71,10 @@ fn macro_series() -> Schema {
 
 fn series_search_result() -> Schema {
     schema_for!(SeriesSearchResult)
+}
+
+fn factor_return() -> Schema {
+    schema_for!(FactorReturn)
 }
 
 /// One FRED macro-series catalog entry (`economy/*` → [`MacroSeries`]).
@@ -148,6 +162,17 @@ pub fn entries() -> Vec<CatalogEntry> {
             bronze_table: Some("raw.series_search_result"),
             doc: "Search FRED series metadata by free text (discovery, no observations).",
             chartable: false,
+        },
+        CatalogEntry {
+            route: "economy/factors/famafrench",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: factor_return,
+            candidates: ECONOMY_FACTORS_FAMAFRENCH,
+            bronze_table: Some("raw.factor_return"),
+            doc: "Ken French Data Library research factors \
+                  (3-factor / 5-factor / momentum, daily or monthly; keyless).",
+            chartable: true,
         },
     ]
 }

@@ -62,6 +62,11 @@ futures-util = { version = "0.3.31", default-features = false }
 # Pure-Rust JSON5 parser. Comment-friendly authoring format for the agent registry;
 # the MCP wire stays strict JSON via the mcp adapter.
 json5 = "1"
+# In-memory ZIP reader for the Ken French Data Library research-factor archives
+# (tdw-provider-famafrench). `default-features = false` drops every compression
+# backend except `deflate`, which selects `flate2` with the pure-Rust
+# `miniz_oxide` backend — NO `libz-sys` / system zlib / C toolchain dependency.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # JWT verification (signature + standard claim checks) for the OIDC ingress
 # boundary. `rust_crypto` selects the pure-Rust crypto backend (rsa/p256/p384/
 # hmac/sha2 crates); no C / CMake / aws-lc-sys build dependency.

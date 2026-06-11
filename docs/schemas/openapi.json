@@ -541,6 +541,78 @@
         "title": "EtfHolding",
         "type": "object"
       },
+      "FactorReturn": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single research-factor return observation.\n\nStandardizes the Ken French Data Library research factors\n(`economy/factors/famafrench`): one row = one (date) observation of the\nfactor set the requested dataset provides. The 3-factor dataset populates\n`mkt_rf`/`smb`/`hml`/`rf`; the 5-factor dataset adds `rmw`/`cma`; the\nmomentum dataset populates only `mom`. Every factor is [`Option`] since each\ndataset reports a different subset, and values are decimal returns (the\nsource publishes percent — the fetcher converts percent → fraction). The\n`date` is the bare calendar date the row covers (`YYYY-MM-DD` for daily,\n`YYYY-MM` for monthly).",
+        "properties": {
+          "cma": {
+            "description": "Conservative-minus-aggressive investment factor (`CMA`, 5-factor only).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "date": {
+            "description": "Observation date: `YYYY-MM-DD` (daily) or `YYYY-MM` (monthly).",
+            "minLength": 1,
+            "type": "string"
+          },
+          "hml": {
+            "description": "High-minus-low value factor (`HML`), as a decimal fraction.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mkt_rf": {
+            "description": "Excess return on the market (`Mkt-RF`), as a decimal fraction.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mom": {
+            "description": "Momentum factor (`Mom`, momentum dataset only), as a decimal fraction.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rf": {
+            "description": "Risk-free rate (`RF`), as a decimal fraction.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "rmw": {
+            "description": "Robust-minus-weak profitability factor (`RMW`, 5-factor only).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "smb": {
+            "description": "Small-minus-big size factor (`SMB`), as a decimal fraction.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "date"
+        ],
+        "title": "FactorReturn",
+        "type": "object"
+      },
       "FinancialStatement": {
         "$defs": {
           "StatementKind": {
@@ -2860,6 +2932,115 @@
           }
         },
         "summary": "Consumer Price Index (headline CPI-U), FRED-backed macro series.",
+        "tags": [
+          "economy"
+        ]
+      }
+    },
+    "/api/v1/economy/factors/famafrench": {
+      "get": {
+        "operationId": "economy_factors_famafrench",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FactorReturn"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Ken French Data Library research factors (3-factor / 5-factor / momentum, daily or monthly; keyless).",
         "tags": [
           "economy"
         ]

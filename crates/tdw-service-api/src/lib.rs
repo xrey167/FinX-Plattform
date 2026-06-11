@@ -151,6 +151,8 @@ use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
 use tdw_provider_eia::{
     EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
 };
+#[cfg(feature = "provider-famafrench")]
+use tdw_provider_famafrench::FamaFrenchHttpFetcher;
 #[cfg(feature = "provider-federal-reserve")]
 use tdw_provider_federal_reserve::{FedFomcDocumentsHttpFetcher, FedMacroSeriesHttpFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
@@ -400,6 +402,8 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(GovUsTreasuryAuctionsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-government-us")]
     registry.register(GovUsTreasuryPricesHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-famafrench")]
+    registry.register(FamaFrenchHttpFetcher::registry_entry())?;
     register_extended_providers(&mut registry)?;
     Ok(registry)
 }
@@ -724,6 +728,11 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         ("government_us", "treasury_prices") => {
             dispatch!(GovUsTreasuryPricesHttpFetcher::default())
         }
+        // FamaFrenchHttpFetcher
+        #[cfg(feature = "provider-famafrench")]
+        ("famafrench", "economy_factors_famafrench") => {
+            dispatch!(FamaFrenchHttpFetcher::default())
+        }
         // SeekingAlphaArticlesHttpFetcher (PROVIDER_ID = "seeking-alpha")
         #[cfg(feature = "provider-seeking-alpha")]
         ("seeking-alpha", "articles") => dispatch!(SeekingAlphaArticlesHttpFetcher::default()),
@@ -898,6 +907,8 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
         target!("government_us", "treasury_auctions");
         target!("government_us", "treasury_prices");
     }
+    #[cfg(feature = "provider-famafrench")]
+    target!("famafrench", "economy_factors_famafrench");
     #[cfg(feature = "provider-seeking-alpha")]
     {
         target!("seeking-alpha", "articles");
