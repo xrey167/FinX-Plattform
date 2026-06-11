@@ -13,7 +13,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tdw_core::{Credentials, Error, OBBject, ProviderKind, ProviderRegistry, RegistryEntry};
+use tdw_core::{
+    Credentials, Error, ErrorCode, OBBject, ProviderKind, ProviderRegistry, RegistryEntry,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 struct Row {
@@ -192,4 +194,120 @@ fn obbject_round_trips_an_empty_collection() {
     assert_eq!(decoded.rows.len(), 0);
     assert_eq!(decoded.provider, "fileset");
     assert_eq!(decoded.endpoint, "empty");
+}
+
+// ── G008 CORE1: stable error codes + source chains ───────────────────────────
+
+/// Each variant maps to exactly one stable `ErrorCode`; the code string is the
+/// canonical value documented in [`ErrorCode::as_str`].
+#[test]
+fn error_code_is_stable_for_every_variant() {
+    let cases: &[(Error, ErrorCode, &str)] = &[
+        (
+            Error::InvalidQuery("x".to_string()),
+            ErrorCode::InvalidQuery,
+            "IQ_001",
+        ),
+        (
+            Error::Provider("x".to_string()),
+            ErrorCode::Provider,
+            "PV_001",
+        ),
+        (
+            Error::Storage("x".to_string()),
+            ErrorCode::Storage,
+            "ST_001",
+        ),
+        (
+            Error::Registry("x".to_string()),
+            ErrorCode::Registry,
+            "RG_001",
+        ),
+    ];
+    for (err, expected_code, expected_str) in cases {
+        let code = err.code();
+        assert_eq!(
+            code, *expected_code,
+            "wrong code for {err:?}: got {code:?}"
+        );
+        assert_eq!(
+            code.as_str(),
+            *expected_str,
+            "wrong code string for {err:?}: got {}",
+            code.as_str()
+        );
+        // `Display` of the code must equal `as_str`.
+        assert_eq!(
+            code.to_string(),
+            *expected_str,
+            "Display != as_str for {code:?}"
+        );
+    }
+}
+
+/// The existing Display output must be unchanged — this test mirrors the
+/// `error_display_includes_payload_for_each_variant` assertion but is
+/// explicit about the *full* rendered string so regressions are caught.
+#[test]
+fn error_display_is_unchanged_after_enrichment() {
+    let cases: &[(Error, &str)] = &[
+        (
+            Error::InvalidQuery("missing field".to_string()),
+            "invalid query: missing field",
+        ),
+        (
+            Error::Provider("transient outage".to_string()),
+            "provider error: transient outage",
+        ),
+        (
+            Error::Storage("disk full".to_string()),
+            "storage error: disk full",
+        ),
+        (
+            Error::Registry("duplicate provider".to_string()),
+            "registry error: duplicate provider",
+        ),
+    ];
+    for (err, expected_display) in cases {
+        let rendered = err.to_string();
+        assert_eq!(
+            rendered, *expected_display,
+            "Display changed for variant {err:?}"
+        );
+    }
+}
+
+/// Variants without a structured source return `None` from
+/// `std::error::Error::source`.
+#[test]
+fn error_string_variants_have_no_source() {
+    use std::error::Error as StdError;
+
+    let variants: &[Error] = &[
+        Error::InvalidQuery("q".to_string()),
+        Error::Provider("p".to_string()),
+        Error::Storage("s".to_string()),
+        Error::Registry("r".to_string()),
+    ];
+    for err in variants {
+        assert!(
+            err.source().is_none(),
+            "string variant {err:?} should have no source"
+        );
+    }
+}
+
+/// `ErrorCode` is `Copy` + `PartialEq` + `Hash` — required for use in metrics
+/// labels and `HashMap` keys without cloning.
+#[test]
+fn error_code_is_copy_and_eq() {
+    let code = ErrorCode::Storage;
+    let copy = code;
+    assert_eq!(code, copy);
+
+    // Hash contract: equal values must hash identically.
+    use std::collections::HashMap;
+    let mut map: HashMap<ErrorCode, u32> = HashMap::new();
+    map.insert(ErrorCode::Storage, 1);
+    assert_eq!(map[&ErrorCode::Storage], 1);
 }
