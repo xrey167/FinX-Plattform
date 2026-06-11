@@ -14,7 +14,11 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 # Unique target name so this `examples/basic.rs` does not collide with the other
 # storage crates' `basic` example in the shared workspace target directory.
