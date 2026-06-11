@@ -579,7 +579,7 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "wasmi")))]
 fn set_allow_fixture_execution_for_test(allow: bool) {
     ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.set(allow));
 }

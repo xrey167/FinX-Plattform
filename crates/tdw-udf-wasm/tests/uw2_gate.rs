@@ -10,6 +10,11 @@
 //! ```
 //!
 //! When `TDW_ALLOW_FIXTURE_EXECUTION` is not set the tests skip gracefully.
+//!
+//! When the `wasmi` feature is enabled the fixture path is unreachable (the
+//! real wasmi backend is used instead); this entire file is compiled out in
+//! that configuration to avoid dead-code warnings.
+#![cfg(not(feature = "wasmi"))]
 
 use tdw_udf_wasm::{WasmUdfError, WasmUdfRuntime};
 
