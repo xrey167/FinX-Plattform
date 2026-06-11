@@ -5578,6 +5578,7 @@ dependencies = [
  "tdw-config",
  "tdw-core",
  "tdw-embed-local",
+ "tdw-endpoint-catalog",
  "tdw-kg",
  "tdw-knowledge",
  "tdw-protocol",
