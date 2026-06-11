@@ -38,6 +38,9 @@ pub trait TagEngine: Send + Sync {
     async fn active_tags(&self, entity_id: &str, as_of: &str) -> Result<Vec<String>, TagError>;
     /// All transitive descendants of `tag_id`, sorted; empty for leaves.
     async fn descendants(&self, tag_id: &str) -> Result<Vec<String>, TagError>;
+    /// Whether `tag_id` has a definition (the writeback gate's existence
+    /// probe, knowledge-system B9).
+    async fn is_defined(&self, tag_id: &str) -> Result<bool, TagError>;
     /// Entities holding `tag_id` active at `as_of`, deduplicated and sorted.
     async fn entities_with_tag(&self, tag_id: &str, as_of: &str) -> Result<Vec<String>, TagError>;
 }
@@ -76,6 +79,10 @@ impl TagEngine for InMemoryTagEngine {
 
     async fn descendants(&self, tag_id: &str) -> Result<Vec<String>, TagError> {
         Ok(self.lock()?.descendants(tag_id))
+    }
+
+    async fn is_defined(&self, tag_id: &str) -> Result<bool, TagError> {
+        Ok(self.lock()?.is_defined(tag_id))
     }
 
     async fn entities_with_tag(&self, tag_id: &str, as_of: &str) -> Result<Vec<String>, TagError> {

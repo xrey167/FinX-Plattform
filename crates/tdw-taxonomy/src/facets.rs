@@ -47,6 +47,26 @@ pub enum ValidationStatus {
     Ready,
 }
 
+/// Ordinal degree to which an entity changes itself over time.
+///
+/// Moved here from `tdw-agent` (B9): the writeback gate's admission check
+/// lives in `tdw-knowledge`, which must not pull the agent crate's
+/// filesystem/validation dependencies. `tdw-agent` re-exports this type, so
+/// existing imports keep compiling (the A1 shim pattern).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+pub enum Adaptivity {
+    /// Static.
+    None,
+    /// Parameterized but not self-changing.
+    Configured,
+    /// Learns/updates from feedback or data.
+    Learning,
+    /// Rewrites its own structure (e.g. memory consolidation).
+    SelfModifying,
+}
+
 /// Result of validating a data/content entity (the data-prep gate).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
 #[serde(rename_all = "camelCase")]

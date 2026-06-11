@@ -17,6 +17,7 @@ use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
 pub(crate) mod knowledge_tools;
+pub(crate) mod knowledge_write_tools;
 pub mod ops;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -315,6 +316,12 @@ impl McpServer {
         if self.knowledge.is_some() {
             descriptors.extend(knowledge_tools::descriptors());
         }
+        // The knowledge WRITE tools (knowledge-system B9) are appended ONLY when the
+        // runtime ALSO has the proposal queue + adaptivity resolver attached — the
+        // gate's inputs. A read-only knowledge runtime never exposes the write surface.
+        if self.knowledge_writes_available() {
+            descriptors.extend(knowledge_write_tools::descriptors());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -469,6 +476,10 @@ impl McpServer {
             return messages;
         }
 
+        if let Some(messages) = self.dispatch_knowledge_write_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
             return messages;
         }
@@ -544,6 +555,57 @@ impl McpServer {
         // `call_tool` already validated `arguments` is an object.
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
         let messages = match knowledge_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
+    }
+
+    /// True when the attached knowledge runtime exposes the gated WRITE surface
+    /// (knowledge-system B9): it has BOTH a proposal queue and an adaptivity
+    /// resolver attached. A read-only knowledge runtime returns `false`.
+    fn knowledge_writes_available(&self) -> bool {
+        self.knowledge.as_ref().is_some_and(|runtime| {
+            runtime.proposals().is_some() && runtime.adaptivity_resolver().is_some()
+        })
+    }
+
+    /// Dispatch a knowledge write tool (`tdw.tags.define` / `tdw.tags.assign` /
+    /// `tdw.kg.annotate` / `tdw.kg.proposals`, knowledge-system B9).
+    ///
+    /// Returns `Some(messages)` when `name` is a write tool — a tool error (never
+    /// a protocol error) when the write surface is unavailable (no runtime, or no
+    /// proposal queue + resolver), otherwise the [`knowledge_write_tools::execute`]
+    /// result. Returns `None` when `name` is not a write tool so the caller falls
+    /// through to the read/registry/built-in dispatch paths.
+    fn dispatch_knowledge_write_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_write_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_writes_available() {
+            // No runtime, or a read-only runtime: a write name is a tool error.
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge write surface not attached"),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_write_tools::execute(runtime, name, &arguments_object) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }

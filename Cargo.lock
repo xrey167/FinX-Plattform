@@ -5485,6 +5485,7 @@ dependencies = [
 name = "tdw-knowledge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "tdw-core",
@@ -5498,6 +5499,7 @@ dependencies = [
  "tdw-storage-qdrant",
  "tdw-tag-rules",
  "tdw-tags",
+ "tdw-taxonomy",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -5550,6 +5552,7 @@ name = "tdw-mcp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "subtle",

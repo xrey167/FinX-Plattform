@@ -14,6 +14,16 @@ use tdw_core::{GraphEngine, LexicalEngine, VectorEngine};
 use tdw_embed::EmbeddingProvider;
 use tdw_retrieve::Retriever;
 use tdw_tags::TagEngine;
+use tdw_taxonomy::Adaptivity;
+
+use crate::proposals::ProposalQueue;
+
+/// Resolves a calling agent's [`Adaptivity`] for the writeback gate's admission.
+///
+/// The MCP write layer threads each tool's `agent_id` through this; an unknown
+/// agent (`None`) is a tool error, and absence of the resolver entirely means
+/// writes are unavailable.
+pub type AdaptivityResolver = Arc<dyn Fn(&str) -> Option<Adaptivity> + Send + Sync>;
 
 /// The versions stamped onto every `tdw.kg.search` response.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +49,14 @@ pub struct KnowledgeRuntime {
     graph: Option<Arc<dyn GraphEngine>>,
     tags: Option<Arc<dyn TagEngine>>,
     versions: KnowledgeVersions,
+    /// The gated write queue (knowledge-system B9). Behind a
+    /// [`tokio::sync::Mutex`] so the async MCP write tools can hold it across
+    /// the `submit`/`materialize_ready` awaits. `None` keeps the write surface
+    /// off — descriptors are gated on this plus the resolver and the engines.
+    proposals: Option<Arc<tokio::sync::Mutex<ProposalQueue>>>,
+    /// Resolves the calling agent's [`Adaptivity`] for admission. `None` (or a
+    /// resolver returning `None`) means writes are unavailable for that agent.
+    adaptivity_resolver: Option<AdaptivityResolver>,
 }
 
 impl KnowledgeRuntime {
@@ -56,6 +74,8 @@ impl KnowledgeRuntime {
             graph: None,
             tags: None,
             versions,
+            proposals: None,
+            adaptivity_resolver: None,
         }
     }
 
@@ -123,6 +143,38 @@ impl KnowledgeRuntime {
     pub const fn versions(&self) -> &KnowledgeVersions {
         &self.versions
     }
+
+    /// Attach the gated [`ProposalQueue`] (knowledge-system B9) — enables the
+    /// MCP write tools (`tdw.tags.define` / `tdw.tags.assign` / `tdw.kg.annotate`
+    /// / `tdw.kg.proposals`). The write surface is exposed only when this AND an
+    /// [`adaptivity resolver`](Self::with_adaptivity_resolver) AND the graph/tag
+    /// engines are all attached.
+    #[must_use]
+    pub fn with_proposals(mut self, proposals: Arc<tokio::sync::Mutex<ProposalQueue>>) -> Self {
+        self.proposals = Some(proposals);
+        self
+    }
+
+    /// The gated proposal queue, when attached.
+    #[must_use]
+    pub const fn proposals(&self) -> Option<&Arc<tokio::sync::Mutex<ProposalQueue>>> {
+        self.proposals.as_ref()
+    }
+
+    /// Attach the [`Adaptivity`] resolver the write tools consult for admission.
+    /// The MCP layer resolves the calling agent's adaptivity through it; absence
+    /// (here or for a given agent) means writes are unavailable.
+    #[must_use]
+    pub fn with_adaptivity_resolver(mut self, resolver: AdaptivityResolver) -> Self {
+        self.adaptivity_resolver = Some(resolver);
+        self
+    }
+
+    /// The adaptivity resolver, when attached.
+    #[must_use]
+    pub fn adaptivity_resolver(&self) -> Option<&AdaptivityResolver> {
+        self.adaptivity_resolver.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -132,6 +184,8 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("versions", &self.versions)
             .field("graph", &self.graph.is_some())
             .field("tags", &self.tags.is_some())
+            .field("proposals", &self.proposals.is_some())
+            .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
             .finish_non_exhaustive()
     }
 }
