@@ -339,9 +339,14 @@ impl AgentBackend {
             || std::env::var("TDW_ALLOW_STUB_FEEDBACK").as_deref() == Ok("1")
             || {
                 #[cfg(test)]
-                { ALLOW_STUB_FEEDBACK_FOR_TEST.with(|cell| cell.get()) }
+                {
+                    #[allow(clippy::redundant_closure_for_method_calls)] // Cell::get requires an import; closure form is clearer here
+                    ALLOW_STUB_FEEDBACK_FOR_TEST.with(|cell| cell.get())
+                }
                 #[cfg(not(test))]
-                { false }
+                {
+                    false
+                }
             };
 
         if !feedback_allowed {
@@ -769,7 +774,10 @@ mod tests {
                 name,
                 name,
                 "0.1.0",
-                Origin { tier: Tier::Domain, source: Source::Internal },
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                 Adaptivity::Learning,
                 false,
             )
@@ -781,7 +789,10 @@ mod tests {
                 "market-researcher",
                 "market-researcher",
                 "0.1.0",
-                Origin { tier: Tier::Domain, source: Source::Internal },
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                 Adaptivity::Learning,
                 true,
             )
@@ -851,7 +862,10 @@ mod tests {
                 "market-researcher",
                 "market-researcher",
                 "0.1.0",
-                Origin { tier: Tier::Domain, source: Source::Internal },
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                 Adaptivity::Learning,
                 true,
             )
@@ -862,7 +876,10 @@ mod tests {
                     "research.note",
                     "research.note",
                     "0.1.0",
-                    Origin { tier: Tier::Domain, source: Source::Internal },
+                    Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                     Adaptivity::Learning,
                     false,
                 )
@@ -940,6 +957,7 @@ mod tests {
     // G008/ER3 F1 regression: with the bypass active (thread-local), a passing
     // 5-case eval DOES promote the Validated proposal to Ready.
     #[test]
+    #[allow(clippy::unnecessary_literal_bound)] // assert_eq!(String, &str) is idiomatic in tests
     fn bypass_enabled_passing_eval_promotes_proposals() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
         use tdw_knowledge::proposals::ProposalQueue;
@@ -952,7 +970,10 @@ mod tests {
                 "market-researcher",
                 "market-researcher",
                 "0.1.0",
-                Origin { tier: Tier::Domain, source: Source::Internal },
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                 Adaptivity::Learning,
                 true,
             )
@@ -963,7 +984,10 @@ mod tests {
                     "research.note",
                     "research.note",
                     "0.1.0",
-                    Origin { tier: Tier::Domain, source: Source::Internal },
+                    Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
                     Adaptivity::Learning,
                     false,
                 )
@@ -1040,6 +1064,7 @@ mod tests {
     // G008/ER3 F3: a novel unnamed model that does not override
     // is_production_grade() must default to false (fail-safe).
     #[test]
+    #[allow(clippy::items_after_statements)] // local struct must follow the use import; reordering would obscure intent
     fn novel_unknown_model_defaults_to_not_production_grade() {
         use tdw_llm::{ChatRequest, ChatResponse, MessageRole, ChatMessage, Usage};
         struct NovelModel;

@@ -1,4 +1,5 @@
 //! Integration tests for G008 theme 10 — UDF1: unimplemented-runtime gate.
+#![allow(clippy::doc_markdown)] // gate/env-var names in backtick spans are intentional prose
 //!
 //! These tests verify both paths of the gate:
 //! - **Gate fires** (TDW_ALLOW_FIXTURE_UDF absent): covered by the

@@ -203,6 +203,7 @@ impl WasmUdfRuntime {
         // unconditionally so a future code path change cannot silently bypass it.
         let env_allow = std::env::var("TDW_ALLOW_FIXTURE_EXECUTION").as_deref() == Ok("1");
         #[cfg(test)]
+        #[allow(clippy::redundant_closure_for_method_calls)] // Cell::get requires an import; closure form is clearer here
         let test_allow = ALLOW_FIXTURE_EXECUTION_FOR_TEST.with(|c| c.get());
         #[cfg(not(test))]
         let test_allow = false;
@@ -242,10 +243,9 @@ impl WasmUdfRuntime {
                 return Err(WasmUdfError::HardenedRuntimeNotCompiled);
             }
             eprintln!(
-                "tdw-udf-wasm: TDW_ALLOW_FIXTURE_EXECUTION=1 — executing {:?} via \
+                "tdw-udf-wasm: TDW_ALLOW_FIXTURE_EXECUTION=1 — executing {func:?} via \
                  name-keyed fixture (module bytes ignored). Enable the `wasmi` \
-                 cargo feature for real execution.",
-                func
+                 cargo feature for real execution."
             );
             fixture_dispatch(func, arg)
         }

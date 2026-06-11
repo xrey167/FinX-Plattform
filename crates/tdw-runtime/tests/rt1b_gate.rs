@@ -1,4 +1,5 @@
 //! Integration tests for G008 theme 10 — RT1b: fake-streaming gate.
+#![allow(clippy::doc_markdown)] // gate/env-var names in backtick spans are intentional prose
 //!
 //! **Gate-closed path** (no env var): covered by the
 //! `run_streaming_refuses_without_builder_opt_in` unit test in `lib.rs`.
@@ -139,8 +140,7 @@ fn run_streaming_allowed_via_env_var() {
     loop {
         match stream.as_mut().poll_next(&mut cx) {
             Poll::Ready(Some(item)) => items.push(item),
-            Poll::Ready(None) => break,
-            Poll::Pending => break,
+            Poll::Ready(None) | Poll::Pending => break,
         }
     }
     assert_eq!(items.len(), 3, "expected 2 Progress + 1 Done: got {}", items.len());
