@@ -10,9 +10,10 @@
 
 #![cfg(feature = "rest-api-route")]
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use tdw_app_server::{CancellationToken, serve_rest_http};
+use tdw_app_server::{CancellationToken, KnowledgeStatusHandler, serve_rest_http};
 use tdw_service_api::{AppState, RestApiState};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -30,7 +31,57 @@ where
     let cancel = CancellationToken::new();
     let cancel_srv = cancel.clone();
     let server = tokio::spawn(async move {
-        serve_rest_http(listener, handler, cancel_srv).await.ok();
+        serve_rest_http(listener, handler, None, cancel_srv)
+            .await
+            .ok();
+    });
+
+    body(addr).await;
+
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), server).await;
+}
+
+/// Stub `KnowledgeStatusHandler` that returns a canned JSON snapshot.
+struct StubKnowledgeStatus;
+
+#[async_trait::async_trait]
+impl KnowledgeStatusHandler for StubKnowledgeStatus {
+    async fn knowledge_status(&self) -> Result<serde_json::Value, String> {
+        Ok(serde_json::json!({
+            "vector_collection": "tdw_knowledge__local_hash_8",
+            "embedder_model": "local-hash-8",
+            "document_count_note": "VectorEngine has no count()",
+            "taxonomy_kind_count": 51,
+            "graph_health": null,
+            "versions": {
+                "embedder_model": "local-hash-8",
+                "rules_version": null,
+                "infer_version": null
+            },
+            "proposals": null,
+            "language_model_grade": "stub — eval feedback and auto-materialization disabled"
+        }))
+    }
+}
+
+/// Spin up a REST listener with a stub `KnowledgeStatusHandler` and run `body(addr)`.
+async fn with_status_server<F, Fut>(body: F)
+where
+    F: FnOnce(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let state = AppState::in_memory_for_tests().await;
+    let handler = RestApiState::new(state).into_handler();
+    let ks: Arc<dyn KnowledgeStatusHandler> = Arc::new(StubKnowledgeStatus);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let cancel = CancellationToken::new();
+    let cancel_srv = cancel.clone();
+    let server = tokio::spawn(async move {
+        serve_rest_http(listener, handler, Some(ks), cancel_srv)
+            .await
+            .ok();
     });
 
     body(addr).await;
@@ -188,6 +239,66 @@ async fn non_catalog_path_returns_404() {
     with_server(|addr| async move {
         let resp = raw_get(addr, "/not/the/api").await;
         assert_eq!(response_status(&resp), 404);
+    })
+    .await;
+}
+
+// --- K-E2: knowledge status REST endpoint ---
+
+/// K-E2: `GET /api/v1/knowledge/status` returns 200 with a parseable JSON
+/// snapshot when a `KnowledgeStatusHandler` is attached to the server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn knowledge_status_returns_200_with_snapshot() {
+    with_status_server(|addr| async move {
+        let resp = raw_get(addr, "/api/v1/knowledge/status").await;
+        assert_eq!(
+            response_status(&resp),
+            200,
+            "response: {}",
+            String::from_utf8_lossy(&resp)
+        );
+        let body = response_body_json(&resp);
+        // Every top-level field from the stub snapshot must be present.
+        assert!(
+            body["vector_collection"].is_string(),
+            "vector_collection: {body}"
+        );
+        assert!(body["embedder_model"].is_string(), "embedder_model: {body}");
+        assert!(
+            body["document_count_note"].is_string(),
+            "document_count_note: {body}"
+        );
+        assert!(
+            body["taxonomy_kind_count"].as_u64().is_some(),
+            "taxonomy_kind_count numeric: {body}"
+        );
+        assert!(body["versions"].is_object(), "versions: {body}");
+        assert!(
+            body["language_model_grade"].is_string(),
+            "language_model_grade: {body}"
+        );
+    })
+    .await;
+}
+
+/// K-E2: `GET /api/v1/knowledge/status` returns 404 when no
+/// `KnowledgeStatusHandler` is attached (knowledge runtime absent).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn knowledge_status_without_handler_returns_404() {
+    with_server(|addr| async move {
+        let resp = raw_get(addr, "/api/v1/knowledge/status").await;
+        assert_eq!(
+            response_status(&resp),
+            404,
+            "response: {}",
+            String::from_utf8_lossy(&resp)
+        );
+        let body = response_body_json(&resp);
+        let error = body["error"].as_str().expect("error message");
+        assert!(
+            error.contains("knowledge runtime not attached"),
+            "got: {error}"
+        );
     })
     .await;
 }

@@ -318,7 +318,7 @@ async fn spawn_daemon_rest(
     eprintln!("tdw-backend: REST listener on http://{bind} (/api/v1/<route> /openapi.json)");
     let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
     Some(tokio::spawn(async move {
-        tdw_app_server::serve_rest_http(listener, handler, cancel).await
+        tdw_app_server::serve_rest_http(listener, handler, None, cancel).await
     }))
 }
 

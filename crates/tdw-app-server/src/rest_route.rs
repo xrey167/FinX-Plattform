@@ -5,10 +5,18 @@
 //! hand-rolled HTTP/1.1 pattern of [`super::transport_http`] /
 //! [`super::functions_route`] (plain `tokio::net::TcpStream`, no axum/hyper).
 //!
-//! | Method | Path                          | Action                              |
-//! |--------|-------------------------------|-------------------------------------|
-//! | `GET`  | `/api/v1/{route...}?<params>` | Resolve a catalog route + fetch     |
-//! | `GET`  | `/openapi.json`               | Serve the generated `OpenAPI` doc   |
+//! | Method | Path                             | Action                              |
+//! |--------|----------------------------------|-------------------------------------|
+//! | `GET`  | `/api/v1/{route...}?<params>`    | Resolve a catalog route + fetch     |
+//! | `GET`  | `/api/v1/knowledge/status`       | Knowledge system observability (K-E2)|
+//! | `GET`  | `/openapi.json`                  | Serve the generated `OpenAPI` doc   |
+//!
+//! The `knowledge/status` route is **not** in the endpoint catalog (it is an
+//! observability endpoint, not a data-fetch route). It is handled via the
+//! [`KnowledgeStatusHandler`] trait, following the same transport-decoupling
+//! pattern as [`RestApiHandler`]: callers implement the trait on a wrapper
+//! around their state and pass it to [`serve_rest_http`]. `None` keeps the
+//! `/knowledge/status` route absent (404).
 //!
 //! # Transport-layer decoupling
 //!
@@ -96,11 +104,36 @@ pub trait RestApiHandler: Send + Sync {
     async fn fetch_route(&self, route: &str, params: Value) -> Result<Value, RestError>;
 }
 
+/// Abstract interface for the `GET /api/v1/knowledge/status` observability
+/// endpoint (K-E2). Implemented by the crate that holds the
+/// `KnowledgeRuntime` to avoid a dependency cycle — `tdw-app-server` has no
+/// dependency on `tdw-knowledge`.
+///
+/// Returning `None` from [`knowledge_status`] signals "not attached" and the
+/// transport responds `404`.
+#[async_trait::async_trait]
+pub trait KnowledgeStatusHandler: Send + Sync {
+    /// Collect and return the knowledge-system status snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive string when the runtime is attached but the
+    /// status collection fails (e.g. a serialization error). Maps to HTTP 502.
+    async fn knowledge_status(&self) -> Result<Value, String>;
+}
+
+/// The fixed path for the knowledge-system observability endpoint (K-E2).
+const KNOWLEDGE_STATUS_PATH: &str = "/api/v1/knowledge/status";
+
 /// Spawn an HTTP/1.1 listener serving the catalog-derived REST family.
 ///
-/// - `GET /openapi.json`          → the embedded `OpenAPI` 3.1 document.
-/// - `GET /api/v1/{route...}?...` → resolve + fetch via `handler`.
-/// - anything else                → `404`.
+/// - `GET /openapi.json`               → the embedded `OpenAPI` 3.1 document.
+/// - `GET /api/v1/knowledge/status`    → knowledge observability snapshot (K-E2).
+/// - `GET /api/v1/{route...}?...`      → resolve + fetch via `handler`.
+/// - anything else                     → `404`.
+///
+/// Pass `knowledge_status` as `Some(handler)` to enable the
+/// `/api/v1/knowledge/status` endpoint; `None` returns 404 for that path.
 ///
 /// Cancellation: returns when `cancel.cancelled()`.
 ///
@@ -110,6 +143,7 @@ pub trait RestApiHandler: Send + Sync {
 pub async fn serve_rest_http(
     listener: TcpListener,
     handler: Arc<dyn RestApiHandler>,
+    knowledge_status: Option<Arc<dyn KnowledgeStatusHandler>>,
     cancel: CancellationToken,
 ) -> std::io::Result<()> {
     loop {
@@ -119,7 +153,8 @@ pub async fn serve_rest_http(
             accept = listener.accept() => {
                 let (stream, _peer) = accept?;
                 let h = Arc::clone(&handler);
-                tokio::spawn(handle_rest_conn(stream, h));
+                let ks = knowledge_status.as_ref().map(Arc::clone);
+                tokio::spawn(handle_rest_conn(stream, h, ks));
             }
         }
     }
@@ -127,7 +162,11 @@ pub async fn serve_rest_http(
 }
 
 /// Handle a single connection that matched the REST route family.
-pub(super) async fn handle_rest_conn(mut stream: TcpStream, handler: Arc<dyn RestApiHandler>) {
+pub(super) async fn handle_rest_conn(
+    mut stream: TcpStream,
+    handler: Arc<dyn RestApiHandler>,
+    knowledge_status: Option<Arc<dyn KnowledgeStatusHandler>>,
+) {
     let mut header_buf = vec![0u8; MAX_HEADER_BYTES];
     let mut filled = 0usize;
 
@@ -182,6 +221,25 @@ pub(super) async fn handle_rest_conn(mut stream: TcpStream, handler: Arc<dyn Res
 
     if path == "/openapi.json" {
         write_json_str_200(&mut stream, OPENAPI_JSON).await;
+        return;
+    }
+
+    // K-E2: knowledge-system observability endpoint — not in the catalog.
+    if path == KNOWLEDGE_STATUS_PATH {
+        match knowledge_status.as_ref() {
+            None => {
+                write_error(
+                    &mut stream,
+                    404,
+                    "knowledge runtime not attached; /api/v1/knowledge/status is unavailable",
+                )
+                .await;
+            }
+            Some(ks_handler) => match ks_handler.knowledge_status().await {
+                Ok(body) => write_json_value_200(&mut stream, &body).await,
+                Err(message) => write_error(&mut stream, 502, &message).await,
+            },
+        }
         return;
     }
 

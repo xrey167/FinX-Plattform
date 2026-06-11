@@ -1,15 +1,21 @@
-//! The five MCP knowledge READ tools (knowledge-system B8).
+//! The six MCP knowledge READ tools (knowledge-system B8 + K-E2).
 //!
-//! `tdw.kg.search`, `tdw.kg.entity`, `tdw.kg.traverse`, `tdw.kg.path`, and
-//! `tdw.tags.query` are exposed by [`McpServer`](crate::McpServer) only when a
-//! [`KnowledgeRuntime`] is attached. Every failure here — a missing engine, a
-//! malformed argument, an out-of-range hop budget — is a tool error
-//! ([`ToolFailure::Execution`]), never a protocol error: the plan requires the
-//! knowledge surface to fail honestly inside the tool result.
+//! `tdw.kg.search`, `tdw.kg.entity`, `tdw.kg.traverse`, `tdw.kg.path`,
+//! `tdw.tags.query`, and `tdw.kg.status` are exposed by
+//! [`McpServer`](crate::McpServer) only when a [`KnowledgeRuntime`] is
+//! attached. Every failure here — a missing engine, a malformed argument, an
+//! out-of-range hop budget — is a tool error ([`ToolFailure::Execution`]),
+//! never a protocol error: the plan requires the knowledge surface to fail
+//! honestly inside the tool result.
 //!
 //! The retriever and the graph/tag engines are async while `execute_tool` is
 //! sync, so each tool bridges through a tiny current-thread `tokio` runtime
 //! exactly as the daemon ops surface does (`ops.rs`).
+//!
+//! `tdw.kg.status` (K-E2) is a zero-argument read tool: it calls
+//! [`KnowledgeRuntime::status`] and returns the full [`KgStatus`] snapshot as
+//! structured content. No engine call can fail the tool at the protocol level —
+//! individual probe errors are captured inside the snapshot.
 
 use std::sync::Arc;
 
@@ -24,13 +30,14 @@ use crate::{ToolDescriptor, ToolExecution, ToolFailure, structured, tool};
 
 /// The names this module owns. `tdw.tags.query` lives here too (a read tool over
 /// the tag engine), so the dispatch layer can route the whole set by prefix-free
-/// membership.
+/// membership. `tdw.kg.status` (K-E2) is the sixth read tool.
 pub const TOOL_NAMES: &[&str] = &[
     "tdw.kg.search",
     "tdw.kg.entity",
     "tdw.kg.traverse",
     "tdw.kg.path",
     "tdw.tags.query",
+    "tdw.kg.status",
 ];
 
 /// Whether `name` is one of the knowledge read tools.
@@ -39,7 +46,7 @@ pub fn owns(name: &str) -> bool {
     TOOL_NAMES.contains(&name)
 }
 
-/// Descriptors for the five read tools, appended to `tools/list` only when a
+/// Descriptors for the six read tools, appended to `tools/list` only when a
 /// runtime is attached. All are `readOnlyHint: true`, `idempotentHint: true`.
 #[must_use]
 pub fn descriptors() -> Vec<ToolDescriptor> {
@@ -49,6 +56,7 @@ pub fn descriptors() -> Vec<ToolDescriptor> {
         traverse_descriptor(),
         path_descriptor(),
         tags_query_descriptor(),
+        status_descriptor(),
     ]
 }
 
@@ -184,8 +192,39 @@ pub fn execute(
         "tdw.kg.traverse" => traverse(runtime, arguments),
         "tdw.kg.path" => path(runtime, arguments),
         "tdw.tags.query" => tags_query(runtime, arguments),
+        "tdw.kg.status" => kg_status(runtime),
         other => Err(execution(format!("unknown knowledge tool: {other}"))),
     }
+}
+
+fn status_descriptor() -> ToolDescriptor {
+    tool(
+        "tdw.kg.status",
+        "Knowledge System Status",
+        "Returns a full observability snapshot for the attached knowledge runtime: \
+         vector collection name and embedder model, taxonomy kind count, graph backend \
+         health (reachability probe), version triple (embedder_model / rules_version / \
+         infer_version), pending proposal counts by state (Draft/Validated/Ready) and \
+         operator-authority flag, and language-model grade (stub vs production — \
+         autonomy-gap#5 visibility). Zero arguments. Read-only. \
+         Honest notes are included where the engine trait does not expose a cheap count.",
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }),
+    )
+}
+
+/// Call [`KnowledgeRuntime::status`] and return the snapshot as structured content.
+///
+/// The async `status()` call is bridged through the same sync→async helper the
+/// other knowledge tools use. Individual engine-probe failures are captured
+/// inside the snapshot fields — this function is infallible at the tool level.
+fn kg_status(runtime: &KnowledgeRuntime) -> Result<ToolExecution, ToolFailure> {
+    let snapshot = block_on(runtime.status());
+    let value = serde_json::to_value(&snapshot).map_err(|error| serde_failure(&error))?;
+    Ok(structured(value))
 }
 
 /// Query-string ceiling: tool arguments are attacker-controlled, and API
