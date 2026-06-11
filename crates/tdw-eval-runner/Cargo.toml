@@ -14,12 +14,29 @@ doctest = false
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
+tdw-core = { workspace = true }
+tdw-embed = { path = "../tdw-embed" }
+tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
+tdw-retrieve = { path = "../tdw-retrieve" }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+
+[features]
+# Activates the live local-BERT embedder leg in retrieval-eval integration
+# tests. Requires TDW_LOCAL_MODEL_DIR to point at a real model directory.
+# Not enabled in CI; enable manually with:
+#   cargo test -p tdw-eval-runner --features local-model -- local_model_leg
+local-model = ["tdw-embed-local/model"]
 
 [dev-dependencies]
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-kg = { path = "../tdw-kg" }
 tdw-llm-anthropic = { workspace = true }
+tokio = { workspace = true }
 
 # Unique example binary name (the workspace builds examples into one shared
 # target dir, where a bare `basic` would collide across crates).
