@@ -28,19 +28,33 @@ tdw-agent = { path = "../tdw-agent" }
 tdw-app-client = { workspace = true }
 tdw-app-server = { workspace = true }
 tdw-config = { workspace = true }
+tdw-core = { workspace = true }
+tdw-knowledge = { workspace = true }
 tdw-protocol = { workspace = true }
+tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-service-api = { path = "../tdw-service-api" }
+tdw-tags = { path = "../tdw-tags" }
+tdw-taxonomy = { workspace = true }
 tdw-tool-exec = { path = "../tdw-tool-exec" }
 # Read-only widget-catalog tools project the OpenBB Workspace widgets.json /
 # apps.json contract; the contract test also asserts every widget `mcp_tool.tool_id`
 # resolves to a tool in this server's catalog.
 tdw-widgets = { workspace = true }
-# Used only by the ops surface: a tiny current-thread runtime drives the
-# graceful-shutdown signal handler (the MCP serve loop itself is plain std).
+# Used by the ops surface (a tiny current-thread runtime drives the
+# graceful-shutdown signal handler) and by the knowledge read tools' sync→async
+# bridge; the MCP serve loop itself is plain std.
 tokio = { workspace = true, features = ["rt", "signal"] }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tdw-app-server = { workspace = true, features = ["transport-http"] }
+# Knowledge-tool tests build a KnowledgeRuntime over in-memory engines (hash
+# embedder + in-process graph/tags/vector/lexical) and index a few documents.
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-kg = { path = "../tdw-kg" }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 
 [[example]]

@@ -16,6 +16,7 @@ use tdw_app_server::{DaemonEndpoint, DaemonTransport};
 use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
+pub(crate) mod knowledge_tools;
 pub mod ops;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -157,6 +158,11 @@ pub struct McpServer {
     /// with data tools; hidden tools remain callable via `tools/call` so the
     /// packaged smokes keep working.
     expose_sample_tools: bool,
+    /// Optional knowledge runtime (hybrid retriever + graph/tag engines + version
+    /// info). When attached, the `tdw.kg.*` / `tdw.tags.query` read tools
+    /// (knowledge-system B8) are appended to `tools/list` and dispatched in
+    /// `call_tool`; `None` keeps the knowledge surface off entirely.
+    knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
 }
 
 impl Default for McpServer {
@@ -171,6 +177,7 @@ impl Default for McpServer {
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
             expose_sample_tools: sample_tools_enabled(),
+            knowledge: None,
         }
     }
 }
@@ -193,6 +200,7 @@ impl McpServer {
             registry_descriptors: Vec::new(),
             executor: tdw_tool_exec::ToolExecutor::new(),
             expose_sample_tools: sample_tools_enabled(),
+            knowledge: None,
         }
     }
 
@@ -226,6 +234,20 @@ impl McpServer {
     #[must_use]
     pub fn with_executor(mut self, executor: tdw_tool_exec::ToolExecutor) -> Self {
         self.executor = executor;
+        self
+    }
+
+    /// Attach a [`tdw_knowledge::runtime::KnowledgeRuntime`]; its `tdw.kg.*` and
+    /// `tdw.tags.query` read tools (knowledge-system B8) are exposed via
+    /// `tools/list` in addition to the built-in tools and dispatched in
+    /// `tools/call`. `None` keeps the knowledge surface off. Consumes and
+    /// returns `self` for builder use.
+    #[must_use]
+    pub fn with_knowledge(
+        mut self,
+        runtime: Arc<tdw_knowledge::runtime::KnowledgeRuntime>,
+    ) -> Self {
+        self.knowledge = Some(runtime);
         self
     }
 
@@ -286,6 +308,12 @@ impl McpServer {
             // by default (still callable) so the catalog leads with the real
             // data and daemon tools.
             descriptors.retain(|tool| !tool.name.ends_with(".sample"));
+        }
+        // The knowledge read tools (knowledge-system B8) are appended ONLY when a
+        // runtime is attached — exactly like the registry descriptors, conditional on
+        // the optional handle.
+        if self.knowledge.is_some() {
+            descriptors.extend(knowledge_tools::descriptors());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -437,6 +465,10 @@ impl McpServer {
 
         let progress_token = progress_token(params);
 
+        if let Some(messages) = self.dispatch_knowledge_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
             return messages;
         }
@@ -484,6 +516,47 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// Dispatch a knowledge read tool (`tdw.kg.*` / `tdw.tags.query`, knowledge-system B8).
+    ///
+    /// Returns `Some(messages)` when `name` is a knowledge tool — the resolved response
+    /// whether the runtime is attached (route to [`knowledge_tools::execute`]) or not
+    /// (a tool error, never a protocol error, per the plan). Returns `None` when `name`
+    /// is not a knowledge tool so the caller falls through to the registry and built-in
+    /// dispatch paths.
+    fn dispatch_knowledge_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            // Attached = false + a knowledge name is a tool error, not a protocol error.
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        // `call_tool` already validated `arguments` is an object.
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
     }
 
     /// Dispatch a listed registry tool (not a built-in) through the tool-execution backend.

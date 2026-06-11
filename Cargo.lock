@@ -5525,6 +5525,7 @@ dependencies = [
 name = "tdw-mcp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "subtle",
@@ -5532,8 +5533,18 @@ dependencies = [
  "tdw-app-client",
  "tdw-app-server",
  "tdw-config",
+ "tdw-core",
+ "tdw-embed-local",
+ "tdw-kg",
+ "tdw-knowledge",
  "tdw-protocol",
+ "tdw-retrieve",
  "tdw-service-api",
+ "tdw-storage-graph",
+ "tdw-storage-meilisearch",
+ "tdw-storage-qdrant",
+ "tdw-tags",
+ "tdw-taxonomy",
  "tdw-tool-exec",
  "tdw-widgets",
  "tokio",

@@ -515,7 +515,9 @@ impl Backend {
     /// path (vector + in-process graph/tags). Rules, lexical co-index,
     /// durable-graph stamping, and manifest idempotency live on
     /// `tdw_knowledge::indexer::KnowledgeIndexer`, which is not yet hosted by
-    /// the daemon (wiring planned with the B8 knowledge runtime). Validation
+    /// the daemon (B8 delivered the `KnowledgeRuntime` read seam; daemon
+    /// hosting of the indexer lands with the B9 write side / F1 cutover
+    /// engine wiring). Validation
     /// is all-or-nothing up front; the index mutex is held for the duration
     /// of the batch, so [`Backend::knowledge_search`] never observes a
     /// half-applied batch.
