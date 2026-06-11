@@ -24,6 +24,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY rust-toolchain.toml ./
 COPY crates ./crates
 COPY xtask ./xtask
+# examples/workspace/* are workspace members (since #330); without them the
+# manifest does not resolve inside the container and every cargo command fails.
+COPY examples ./examples
 
 RUN cargo build --release -p tdw-bootstrap
 
