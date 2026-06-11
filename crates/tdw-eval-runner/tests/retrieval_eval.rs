@@ -218,6 +218,7 @@ async fn local_model_leg_scores_fixed_case_set() -> Result<(), Box<dyn std::erro
         return Ok(());
     };
 
+    use tdw_embed::EmbeddingProvider as _;
     use tdw_embed_local::LocalModelEmbeddingProvider;
 
     let provider = LocalModelEmbeddingProvider::from_dir(&model_dir)?;

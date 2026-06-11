@@ -167,9 +167,12 @@ pub fn reciprocal_rank(ranked: &[String], expected: &BTreeSet<String>, k: usize)
 
 /// nDCG\@k under binary relevance.
 ///
-/// DCG gain = `1 / log₂(rank + 1)` (1-based rank). The ideal DCG packs
-/// `min(|relevant|, k)` hits at the top. Returns `0.0` when the gold set is
-/// empty (no ideal exists, no division by zero).
+/// Each relevant hit at 1-based rank `r` contributes `1 / log₂(r + 1)` to
+/// the DCG (implemented as `1 / log₂(i + 2)` where `i` is the 0-based
+/// position — the two forms are identical). The ideal DCG is the DCG of a
+/// perfect ranking that places `min(|relevant|, k)` relevant documents at
+/// ranks 1 … min(|relevant|, k). Returns `0.0` when the gold set is empty
+/// (ideal DCG is zero; no division-by-zero).
 #[must_use]
 pub fn ndcg_at_k(ranked: &[String], expected: &BTreeSet<String>, k: usize) -> f64 {
     let ideal_hits = expected.len().min(k);

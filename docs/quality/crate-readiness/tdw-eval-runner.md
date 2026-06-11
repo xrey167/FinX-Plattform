@@ -11,7 +11,7 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 - Dev dependencies: tdw-embed-local, tdw-kg, tdw-llm-anthropic, tokio
 - Reverse local dependencies: tdw-backend, tdw-service-api
 - Feature flags: `local-model` (activates `tdw-embed-local/model` for live BERT retrieval-eval leg; not enabled in CI)
-- Test attributes detected: 19 unit + 3 integration (always-run) + 1 env-gated integration (local-model feature)
+- Test attributes detected: 19 unit + 3 integration (always-run) + 1 compile-gated integration (local-model feature; compile-verified, runtime execution env-gated on TDW_LOCAL_MODEL_DIR, not CI-live-verified — B6 precedent)
 - tests/ directory: yes (retrieval_eval.rs, live_real_model.rs)
 - README: no
 - Examples directory: yes
@@ -24,7 +24,7 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 - [x] Feature flags reviewed: `local-model` gates the live BERT embedder leg; default CI path is fully offline.
 - [x] Public API and error contracts reviewed: `retrieval_eval` module exports `RetrievalEvalCase`, `DriftKey`, `CaseScore`, `RetrievalEvalReport`, `recall_at_k`, `reciprocal_rank`, `ndcg_at_k`, `score_case`, `build_in_memory_retriever`, `run_retrieval_eval`.
 - [x] Runtime behavior reviewed: `run_retrieval_eval` errors loudly on malformed cases; no silent fallback; temporal leakage structurally impossible via retriever's as_of filter.
-- [x] Tests and coverage evidence recorded: 19 unit tests cover all metric functions with hand-computed values; 3 integration tests cover determinism, temporal-leakage regression, and serde round-trip; env-gated local-model leg documented.
+- [x] Tests and coverage evidence recorded: 19 unit tests cover all metric functions with hand-computed values; 3 integration tests cover determinism, temporal-leakage regression, and serde round-trip; local-model leg compile-verified under `--features local-model`, runtime execution env-gated on TDW_LOCAL_MODEL_DIR and not CI-live-verified (B6 precedent).
 - [x] Docs and examples reviewed: module-level docstring covers CI-vs-env-gated distinction, drift tracking, and leakage safety contract.
 - [x] Surface wiring reviewed: existing EvalRunner tests continue to pass; no regressions.
 - [x] Scaffold, dead-code, and fallback signals classified: none.
@@ -39,10 +39,11 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 
 ## Verification
 
-- B11 knowledge-system check: `cargo test -p tdw-eval-runner --target-dir target` → 19 unit + 4 integration tests passed, 0 failed.
-- Clippy: `cargo clippy -p tdw-eval-runner --all-targets --target-dir target -- -D warnings` → 0 warnings, 0 errors.
+- Always-run path: `cargo test -p tdw-eval-runner --target-dir target` → 19 unit + 4 integration tests passed, 0 failed.
+- Local-model compile gate: `cargo test -p tdw-eval-runner --features local-model --no-run --target-dir target` → compiles clean (runtime execution not CI-live-verified; self-skips when TDW_LOCAL_MODEL_DIR is unset — B6 precedent).
+- Clippy (default + feature): `cargo clippy -p tdw-eval-runner --all-targets --target-dir target -- -D warnings` → 0 warnings, 0 errors.
 - Fmt: `cargo fmt -p tdw-eval-runner --check` → clean.
 
 ## Verdict
 
-Ready with follow-ups. B11 retrieval-eval harness complete; no blockers.
+Ready with follow-ups. B11 retrieval-eval harness complete; local-model leg compile-verified; no blockers.
