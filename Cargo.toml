@@ -104,6 +104,7 @@ tdw-acp = { path = "crates/tdw-acp" }
 tdw-analytics-technical = { path = "crates/tdw-analytics-technical" }
 tdw-analytics-quant = { path = "crates/tdw-analytics-quant" }
 tdw-analytics-econometrics = { path = "crates/tdw-analytics-econometrics" }
+tdw-analytics-portfolio = { path = "crates/tdw-analytics-portfolio" }
 tdw-charting = { path = "crates/tdw-charting" }
 tdw-core = { path = "crates/tdw-core" }
 tdw-domain = { path = "crates/tdw-domain" }

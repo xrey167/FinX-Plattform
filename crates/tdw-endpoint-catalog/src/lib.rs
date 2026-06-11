@@ -120,6 +120,7 @@ pub fn catalog() -> Vec<CatalogEntry> {
     entries.extend(routers::technical::entries());
     entries.extend(routers::quantitative::entries());
     entries.extend(routers::econometrics::entries());
+    entries.extend(routers::portfolio::entries());
     entries
 }
 
@@ -283,7 +284,7 @@ mod tests {
             }
         }
         // The non-technical analytics Compute routes are not chartable.
-        for namespace in ["quantitative/", "econometrics/"] {
+        for namespace in ["quantitative/", "econometrics/", "portfolio/"] {
             for entry in catalog() {
                 if entry.route.starts_with(namespace) {
                     assert!(
