@@ -117,6 +117,7 @@ provider-alpha-vantage = [
 provider-benzinga = ["dep:tdw-provider-benzinga", "tdw-provider-benzinga/http"]
 provider-bls = ["dep:tdw-provider-bls", "tdw-provider-bls/http"]
 provider-cboe = ["dep:tdw-provider-cboe", "tdw-provider-cboe/http"]
+provider-cftc = ["dep:tdw-provider-cftc", "tdw-provider-cftc/http"]
 provider-ccdata = ["dep:tdw-provider-ccdata", "tdw-provider-ccdata/http"]
 provider-coingecko = ["dep:tdw-provider-coingecko", "tdw-provider-coingecko/http"]
 provider-databento = ["dep:tdw-provider-databento", "tdw-provider-databento/http"]
@@ -219,6 +220,7 @@ all-http-providers = [
     "provider-benzinga",
     "provider-bls",
     "provider-cboe",
+    "provider-cftc",
     "provider-ccdata",
     "provider-coingecko",
     "provider-databento",
@@ -303,6 +305,7 @@ tdw-provider-benzinga = { path = "../tdw-provider-benzinga", optional = true }
 tdw-provider-binance = { path = "../tdw-provider-binance" }
 tdw-provider-bls = { path = "../tdw-provider-bls", optional = true }
 tdw-provider-cboe = { path = "../tdw-provider-cboe", optional = true }
+tdw-provider-cftc = { path = "../tdw-provider-cftc", optional = true }
 tdw-provider-ccdata = { path = "../tdw-provider-ccdata", optional = true }
 tdw-provider-coingecko = { path = "../tdw-provider-coingecko", optional = true }
 tdw-provider-databento = { path = "../tdw-provider-databento", optional = true }

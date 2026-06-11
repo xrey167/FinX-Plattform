@@ -97,6 +97,100 @@
         "title": "CalendarEvent",
         "type": "object"
       },
+      "CommitmentOfTraders": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single CFTC Commitments of Traders (COT) report row.\n\nStandardizes `regulators/cftc/cot` (CFTC legacy futures-only COT report). One\nrow = one (market, report date) observation. The CFTC Socrata dataset reports\nopen interest plus the long/short breakdown across the trader categories\n(noncommercial, commercial, total reportable, nonreportable). Every position\ncount is [`Option`] since the dataset occasionally omits a column for a given\nmarket/week; only the market identity and report date are required anchors.",
+        "properties": {
+          "commercial_long": {
+            "description": "Commercial (hedger) long positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "commercial_short": {
+            "description": "Commercial (hedger) short positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market": {
+            "description": "Market and exchange name, e.g.\n`\"WHEAT-SRW - CHICAGO BOARD OF TRADE\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "noncommercial_long": {
+            "description": "Noncommercial (speculative) long positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "noncommercial_short": {
+            "description": "Noncommercial (speculative) short positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "nonreportable_long": {
+            "description": "Nonreportable long positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "nonreportable_short": {
+            "description": "Nonreportable short positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "open_interest": {
+            "description": "Total open interest across all traders.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "report_date": {
+            "description": "Report date in `YYYY-MM-DD` form (the as-of Tuesday of the report week).",
+            "minLength": 1,
+            "type": "string"
+          },
+          "total_reportable_long": {
+            "description": "Total reportable long positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "total_reportable_short": {
+            "description": "Total reportable short positions.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "market",
+          "report_date"
+        ],
+        "title": "CommitmentOfTraders",
+        "type": "object"
+      },
       "CommodityReportRow": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A single row from an energy / commodity statistical report.\n\nStandardizes the EIA report cluster — `commodity/petroleum_status_report`\n(the Weekly Petroleum Status Report) and `commodity/short_term_energy_outlook`\n(STEO). One row = one (report, series, period) observation. EIA v2 returns a\n`period` (the observation date/label), a series identifier and human-readable\ndescription, the numeric value, and a units label; coverage of the optional\ndescriptive fields varies by series, so they are [`Option`].",
@@ -9744,6 +9838,224 @@
         "summary": "General market / world news articles, no symbol filter (benzinga).",
         "tags": [
           "news"
+        ]
+      }
+    },
+    "/api/v1/regulators/cftc/cot": {
+      "get": {
+        "operationId": "regulators_cftc_cot",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitmentOfTraders"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "CFTC legacy futures-only Commitments of Traders report (Socrata, keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/cftc/cot_search": {
+      "get": {
+        "operationId": "regulators_cftc_cot_search",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeriesSearchResult"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Distinct CFTC COT market-and-exchange names for discovery (Socrata, keyless).",
+        "tags": [
+          "regulators"
         ]
       }
     },
