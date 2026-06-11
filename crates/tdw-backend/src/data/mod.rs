@@ -61,13 +61,25 @@ struct DaemonHandle {
 pub struct Backend {
     state: AppState,
     runner: CommandRunner,
-    /// The embedding provider shared between the knowledge index, the runtime
-    /// retriever, and the indexer (so all three use the same dimensions/model).
+    /// The embedding provider shared between the knowledge indexer, the runtime
+    /// retriever, and search (so all three use the same dimensions/model).
     embedder: Arc<dyn EmbeddingProvider>,
-    /// The async knowledge index. Held behind a [`tokio::sync::Mutex`] because
-    /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
-    /// guard is acquired per-call and never held across unrelated awaits.
-    index: Arc<Mutex<KnowledgeIndex>>,
+    /// The daemon-hosted knowledge indexer (knowledge-system K-E3).
+    ///
+    /// The [`KnowledgeIndexer`] wraps a [`KnowledgeIndex`] and adds the full
+    /// B5 write-side pipeline: content-hash idempotency manifest, rule-driven
+    /// auto-tagging, lexical co-indexing, and durable graph stamping. All
+    /// three engines (`embedder`, `graph`, `lexical`) are the same `Arc`
+    /// handles used by the retriever and the MCP read tools, so a doc written
+    /// through this indexer is immediately visible to searches on the same
+    /// process. The guard is acquired per-call and never held across unrelated
+    /// awaits.
+    ///
+    /// **Multi-tenancy note:** collection names and storage keys are derived
+    /// from the configured embedder model id (via [`tdw_knowledge::collection_name`])
+    /// — no new global singletons are introduced. Future graph namespacing
+    /// can be layered onto the same seam without a public-API change.
+    indexer: Arc<Mutex<KnowledgeIndexer>>,
     /// The agent memory store (Phase B). Held behind a [`tokio::sync::Mutex`] so
     /// the live consolidation scheduler and the [`upsert_memory`](Self::upsert_memory)
     /// / [`consolidate_now`](Self::consolidate_now) surface methods share one store.
@@ -84,11 +96,12 @@ pub struct Backend {
     /// [`Backend::with_feedback_store`] so both facades share one instance —
     /// this is host wiring, not cross-facade state sharing.
     feedback: Arc<Mutex<RetrievalFeedbackStore>>,
-    /// The graph engine backing the knowledge runtime (knowledge-system F1).
-    /// Config-driven: `knowledge.graph.backend = bolt` → `BoltGraphEngine`
-    /// (requires the `bolt` feature); `in-memory` → `InMemoryGraphEngine`.
-    /// Exposed via [`knowledge_runtime_handle`](Self::knowledge_runtime_handle)
-    /// so the MCP layer can attach it.
+    /// The graph engine backing both the knowledge indexer and the knowledge
+    /// runtime (knowledge-system K-E3/F1). Config-driven: `knowledge.graph.backend
+    /// = bolt` → `BoltGraphEngine` (requires the `bolt` feature); `in-memory` →
+    /// `InMemoryGraphEngine`. Shared via `Arc` with the indexer and the runtime so
+    /// document nodes, `described_by` edges, and `mentions` edges written at ingest
+    /// time are immediately visible to graph traversals on the read side.
     graph: Arc<dyn GraphEngine>,
     /// The full knowledge runtime (hybrid retriever + graph/tag handles).
     /// Constructed from the daemon's graph engine, vector engine, lexical
@@ -141,14 +154,19 @@ impl Backend {
         // Build the graph engine from config. NO silent fallback: bolt
         // unreachable → hard Init error.
         let graph: Arc<dyn GraphEngine> = build_graph_engine(&graph_cfg).await?;
-        let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            Arc::clone(&embedder),
-            state.vector.clone(),
-        )));
+        // Build the hosted KnowledgeIndexer (K-E3 seam). It owns a KnowledgeIndex
+        // plus the B5 write-side pipeline (manifest, rules, lexical co-index, durable
+        // graph). All engine Arcs are shared with the runtime below.
+        let collection = tdw_knowledge::collection_name(embedder.model_id());
+        let inner_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
+        let indexer = Arc::new(Mutex::new(
+            KnowledgeIndexer::new(inner_index)
+                .with_lexical(Arc::clone(&state.lexical), collection.clone())
+                .with_graph(Arc::clone(&graph)),
+        ));
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
-        let collection = tdw_knowledge::collection_name(embedder.model_id());
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
@@ -158,7 +176,7 @@ impl Backend {
             state,
             runner,
             embedder,
-            index,
+            indexer,
             memory: Arc::new(Mutex::new(build_memory_store())),
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             graph,
@@ -175,12 +193,14 @@ impl Backend {
         // materialises the full result before emitting synthetic progress events.
         let runner = CommandRunner::default().allow_fake_streaming();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
-        let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            Arc::clone(&embedder),
-            state.vector.clone(),
-        )));
         let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
         let collection = tdw_knowledge::collection_name(embedder.model_id());
+        let inner_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
+        let indexer = Arc::new(Mutex::new(
+            KnowledgeIndexer::new(inner_index)
+                .with_lexical(Arc::clone(&state.lexical), collection.clone())
+                .with_graph(Arc::clone(&graph)),
+        ));
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
@@ -190,7 +210,7 @@ impl Backend {
             state,
             runner,
             embedder,
-            index,
+            indexer,
             memory: Arc::new(Mutex::new(build_memory_store())),
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             graph,
@@ -463,23 +483,17 @@ impl Backend {
         Arc::clone(&self.runtime)
     }
 
-    /// Build a [`KnowledgeIndexer`] backed by the daemon's graph engine and
-    /// lexical engine. Callers own the returned indexer; the daemon's
-    /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
+    /// The daemon-hosted knowledge indexer handle (knowledge-system K-E3).
     ///
-    /// **Deferral note (F1)**: this is a host-facing seam for future
-    /// daemon-hosted ingestion. The daemon's own ingestion methods
+    /// Pass this to [`tdw_mcp::McpServer::with_indexer`] to expose the
+    /// `tdw.kg.ingest` tool to connected agents. The `Arc<Mutex<KnowledgeIndexer>>`
+    /// is shared between the MCP surface and the daemon's own ingestion methods
     /// ([`knowledge_index_at`](Self::knowledge_index_at),
-    /// [`knowledge_ingest_at`](Self::knowledge_ingest_at)) still use the
-    /// internal [`KnowledgeIndex`] field directly; routing them through
-    /// this indexer is a deferred follow-up.
+    /// [`knowledge_ingest_at`](Self::knowledge_ingest_at)) so the manifest and
+    /// in-process state are always consistent.
     #[must_use]
-    pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
-        let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
-        let collection = tdw_knowledge::collection_name(self.embedder.model_id());
-        KnowledgeIndexer::new(index)
-            .with_lexical(Arc::clone(&self.state.lexical), collection)
-            .with_graph(Arc::clone(&self.graph))
+    pub fn knowledge_indexer_handle(&self) -> Arc<Mutex<KnowledgeIndexer>> {
+        Arc::clone(&self.indexer)
     }
 
     /// Upsert a [`Memory`] into the store, stamping the current time as its
@@ -764,67 +778,86 @@ impl Backend {
         Ok(object)
     }
 
-    // --- Knowledge index (async, behind a per-call mutex) ------------------
+    // --- Knowledge ingestion (async, through the hosted KnowledgeIndexer) ---
 
-    /// Index a [`KnowledgeDocument`] effective `now` (a `YYYY-MM-DD` date) into
-    /// the embedded knowledge index — the deterministic, injected-clock seam
-    /// (knowledge-system B3).
+    /// Index one [`KnowledgeDocument`] effective `now` (`YYYY-MM-DD`) through the
+    /// daemon-hosted [`KnowledgeIndexer`] (knowledge-system K-E3).
     ///
-    /// The index mutex is acquired, the single async `index_document_at` call is
+    /// The full B5 write pipeline applies: content-hash idempotency check →
+    /// auto-tagging rules → vector + in-process graph/tags → lexical co-index →
+    /// durable graph stamping → manifest record. A document whose content hash
+    /// is already recorded in the manifest is returned as
+    /// [`IndexOutcome::SkippedUnchanged`] with no further writes.
+    ///
+    /// The indexer mutex is acquired, the single async `index_at` call is
     /// awaited, and the guard is dropped — it is never held across unrelated
     /// awaits.
     ///
     /// # Errors
     ///
-    /// Returns [`BackendError::Knowledge`] if the document is invalid or an
-    /// embedding/storage/tag step fails.
+    /// Returns [`BackendError::Knowledge`] if the document is invalid or any
+    /// embedding/storage/tag/graph step fails.
     pub async fn knowledge_index_at(&self, doc: KnowledgeDocument, now: &str) -> BackendResult<()> {
-        let mut index = self.index.lock().await;
-        index.index_document_at(doc, now).await?;
-        drop(index);
+        let mut indexer = self.indexer.lock().await;
+        indexer.index_at(doc, now).await?;
+        drop(indexer);
         Ok(())
     }
 
-    /// Wall-clock convenience over [`Backend::knowledge_index_at`]: stamps tag
-    /// assignments with today's UTC date. Only this live edge reads the clock,
+    /// Wall-clock convenience over [`Backend::knowledge_index_at`]: stamps the
+    /// index pass with today's UTC date. Only this live edge reads the clock,
     /// mirroring the consolidation-scheduler precedent.
     ///
     /// # Errors
     ///
-    /// Returns [`BackendError::Knowledge`] if the document is invalid or an
-    /// embedding/storage/tag step fails.
+    /// Returns [`BackendError::Knowledge`] if the document is invalid or any
+    /// embedding/storage/tag/graph step fails.
     pub async fn knowledge_index(&self, doc: KnowledgeDocument) -> BackendResult<()> {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         self.knowledge_index_at(doc, &today).await
     }
 
-    /// Batch-index documents effective `now` (knowledge-system B5). One
-    /// `embed_batch` round-trip embeds the whole batch (native batch
-    /// endpoints on API embedders), then each document indexes through the
-    /// same write path as [`Backend::knowledge_index_at`] — the BARE index
-    /// path (vector + in-process graph/tags). Rules, lexical co-index,
-    /// durable-graph stamping, and manifest idempotency live on
-    /// `tdw_knowledge::indexer::KnowledgeIndexer`, which is not yet hosted by
-    /// the daemon (B8 delivered the `KnowledgeRuntime` read seam; daemon
-    /// hosting of the indexer lands with the B9 write side / F1 cutover
-    /// engine wiring). Validation
-    /// is all-or-nothing up front; the index mutex is held for the duration
-    /// of the batch, so [`Backend::knowledge_search`] never observes a
-    /// half-applied batch.
+    /// Batch-index documents effective `now` (knowledge-system B5/K-E3). Each
+    /// document runs the full B5 write pipeline: content-hash idempotency,
+    /// auto-tagging rules, lexical co-index, and durable graph stamping.
+    /// Validation is all-or-nothing up front; after that, each document indexes
+    /// independently — already-indexed documents stay recorded in the manifest
+    /// and the first write failure aborts the remainder.
+    ///
+    /// The indexer mutex is held for the duration of the batch, so
+    /// [`Backend::knowledge_search`] never observes a half-applied batch.
     ///
     /// # Errors
     ///
-    /// Returns [`BackendError::Knowledge`] if any document is invalid or an
-    /// embedding/storage/tag step fails.
+    /// Returns [`BackendError::Knowledge`] if any document is invalid or any
+    /// embedding/storage/tag/graph step fails.
     pub async fn knowledge_ingest_at(
         &self,
         docs: Vec<KnowledgeDocument>,
         now: &str,
     ) -> BackendResult<()> {
-        let mut index = self.index.lock().await;
-        index.index_documents_at(docs, now).await?;
-        drop(index);
+        let mut indexer = self.indexer.lock().await;
+        indexer.index_batch_at(docs, now).await?;
+        drop(indexer);
         Ok(())
+    }
+
+    /// Build a fresh [`KnowledgeIndexer`] backed by the daemon's graph engine
+    /// and lexical engine. Callers own the returned indexer; the daemon's
+    /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
+    ///
+    /// Use this to construct an offline or caller-scoped indexer with its own
+    /// manifest (e.g. the `tdw kg reindex` offline command). For live daemon
+    /// ingestion use [`knowledge_index_at`](Self::knowledge_index_at) or
+    /// [`knowledge_ingest_at`](Self::knowledge_ingest_at), which route through
+    /// the daemon-hosted indexer with the shared manifest.
+    #[must_use]
+    pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
+        let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
+        let collection = tdw_knowledge::collection_name(self.embedder.model_id());
+        KnowledgeIndexer::new(index)
+            .with_lexical(Arc::clone(&self.state.lexical), collection)
+            .with_graph(Arc::clone(&self.graph))
     }
 
     /// Search the embedded knowledge index for the `top_k` nearest hits to
@@ -839,8 +872,8 @@ impl Backend {
         query: &str,
         top_k: usize,
     ) -> BackendResult<Vec<KnowledgeHit>> {
-        let index = self.index.lock().await;
-        Ok(index.search(query, top_k).await?)
+        let indexer = self.indexer.lock().await;
+        Ok(indexer.index().search(query, top_k).await?)
     }
 }
 
