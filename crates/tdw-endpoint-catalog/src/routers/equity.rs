@@ -4,7 +4,8 @@ use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
     CalendarEvent, CompanyProfile, CorporateAction, EquityHistoricalData, Estimate,
-    FinancialStatement, KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
+    FinancialStatement, Instrument, KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot,
+    Ratios, ScreenerRow,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -64,8 +65,31 @@ const EQUITY_FUNDAMENTAL_METRICS: &[ProviderCandidate] =
 const EQUITY_PRICE_QUOTE: &[ProviderCandidate] = &[ProviderCandidate::new("yahoo", "equity_quote")];
 const EQUITY_PRICE_PERFORMANCE: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "price_performance")];
-const EQUITY_FUNDAMENTAL_DIVIDENDS: &[ProviderCandidate] =
-    &[ProviderCandidate::new("yahoo", "dividends")];
+/// `equity/fundamental/dividends` candidates: keyless Yahoo leads (resolves
+/// network-free in the offline default build), then the keyed FMP `dividends`
+/// fetcher (P2W2 FMP fundamentals completion).
+const EQUITY_FUNDAMENTAL_DIVIDENDS: &[ProviderCandidate] = &[
+    ProviderCandidate::new("yahoo", "dividends"),
+    ProviderCandidate::new("fmp", "dividends"),
+];
+
+// FMP fundamentals completion (P2W2). Corporate-action splits, historical EPS,
+// and company peers are each their own FMP fetcher keyed by its `ENDPOINT`
+// const. The three discovery routes share one FMP movers fetcher (the
+// `direction` discriminator is injected per dispatch binding), so each gets a
+// distinct dispatch endpoint key — `discovery_<direction>` — to avoid a
+// dispatch-key collision (the NASDAQ-calendar pattern). All keyed (FMP only).
+const EQUITY_FUNDAMENTAL_SPLITS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "splits")];
+const EQUITY_ESTIMATES_HISTORICAL_EPS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "historical_eps")];
+const EQUITY_COMPARE_PEERS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "peers")];
+const EQUITY_DISCOVERY_GAINERS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "discovery_gainers")];
+const EQUITY_DISCOVERY_LOSERS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "discovery_losers")];
+const EQUITY_DISCOVERY_ACTIVE: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "discovery_active")];
+const EQUITY_SCREENER: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "screener")];
 const EQUITY_OWNERSHIP_SHARE_STATISTICS: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "share_statistics")];
 const EQUITY_ESTIMATES_CONSENSUS: &[ProviderCandidate] =
@@ -131,6 +155,14 @@ fn key_metrics() -> Schema {
 
 fn ratios() -> Schema {
     schema_for!(Ratios)
+}
+
+fn instrument() -> Schema {
+    schema_for!(Instrument)
+}
+
+fn screener_row() -> Schema {
+    schema_for!(ScreenerRow)
 }
 
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
@@ -251,7 +283,7 @@ pub fn entries() -> Vec<CatalogEntry> {
             corporate_action,
             EQUITY_FUNDAMENTAL_DIVIDENDS,
             "raw.corporate_action",
-            "Historical cash dividends for an equity symbol, Yahoo-backed.",
+            "Historical cash dividends for an equity symbol; Yahoo (keyless) then FMP candidate.",
         ),
         flat_entry(
             "equity/ownership/share_statistics",
@@ -290,5 +322,65 @@ pub fn entries() -> Vec<CatalogEntry> {
         ),
     ];
     entries.extend(fundamental_entries());
+    entries.extend(completion_entries());
     entries
+}
+
+/// FMP fundamentals-completion entries (openbb-parity P2W2): corporate-action
+/// splits, historical EPS, company peers, the three market-movers discovery
+/// routes, and the equity screener. Split out of [`entries`] to keep each
+/// function compact; appended in declaration order.
+fn completion_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/splits",
+            corporate_action,
+            EQUITY_FUNDAMENTAL_SPLITS,
+            "raw.corporate_action",
+            "Historical stock splits for an equity symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/historical_eps",
+            estimate,
+            EQUITY_ESTIMATES_HISTORICAL_EPS,
+            "raw.estimate",
+            "Historical reported vs estimated EPS per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/compare/peers",
+            instrument,
+            EQUITY_COMPARE_PEERS,
+            "raw.instrument",
+            "Comparable peer tickers for an equity symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/discovery/gainers",
+            price_quote,
+            EQUITY_DISCOVERY_GAINERS,
+            "raw.price_quote",
+            "Top market gainers snapshot (price, change, % change), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/discovery/losers",
+            price_quote,
+            EQUITY_DISCOVERY_LOSERS,
+            "raw.price_quote",
+            "Top market losers snapshot (price, change, % change), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/discovery/active",
+            price_quote,
+            EQUITY_DISCOVERY_ACTIVE,
+            "raw.price_quote",
+            "Most-active equities snapshot (price, change, % change), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/screener",
+            screener_row,
+            EQUITY_SCREENER,
+            "raw.screener_row",
+            "Equity screener results filtered by market cap, sector, industry, and exchange, \
+             FMP-backed.",
+        ),
+    ]
 }

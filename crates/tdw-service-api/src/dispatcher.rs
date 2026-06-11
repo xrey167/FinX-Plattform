@@ -1321,6 +1321,82 @@ fn insert_fmp_fundamentals_fetch_bindings(
     );
 }
 
+/// Build a [`FetchBinding`] for the FMP market-movers discovery fetcher that
+/// injects a fixed `direction` discriminator (gainers / losers / actives) into
+/// the caller's params, so one fetcher type serves all three discovery routes
+/// while the dispatch key stays per-direction. Mirrors
+/// [`fmp_statement_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_discovery_fetch_binding(direction: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert(
+                    "direction".to_string(),
+                    Value::String(direction.to_string()),
+                );
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpDiscoveryFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the FMP fundamentals-completion fetch bindings (P2W2): corporate
+/// actions (dividends, splits), historical EPS, peers, the three market-movers
+/// discovery routes (one shared fetcher, the `direction` discriminator injected
+/// per binding), and the equity screener. Each is keyed by its catalog candidate
+/// endpoint. Mirrors [`insert_fmp_completion_ingest_bindings`] so the fetch and
+/// ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_completion_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpDividendsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpDividendsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSplitsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEarningsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEarningsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpPeersFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", "discovery_gainers"),
+        fmp_discovery_fetch_binding("gainers"),
+    );
+    table.insert(
+        ("fmp", "discovery_losers"),
+        fmp_discovery_fetch_binding("losers"),
+    );
+    table.insert(
+        ("fmp", "discovery_active"),
+        fmp_discovery_fetch_binding("actives"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpScreenerFetcher, _, _>(),
+    );
+}
+
 /// The no-persist fetch dispatch table for this build.
 ///
 /// Keyed identically to [`ingest_dispatch_table`] — every feature-enabled
@@ -1404,6 +1480,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_fetch_bindings(&mut table);
     table
 }
 
@@ -2486,6 +2564,10 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_ingest_bindings(&mut table);
+    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
+    // discovery, screener).
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_ingest_bindings(&mut table);
     table
 }
 
@@ -2551,6 +2633,79 @@ fn insert_fmp_fundamentals_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         binding::<crate::FmpHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
+}
+
+/// Build an [`IngestBinding`] for the FMP market-movers discovery fetcher that
+/// injects a fixed `direction` discriminator (gainers / losers / actives) into
+/// the caller's params before the shared fetcher fetches one batch and persists
+/// it into `table`. Mirrors [`fmp_discovery_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_discovery_ingest_binding(direction: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert(
+                        "direction".to_string(),
+                        Value::String(direction.to_string()),
+                    );
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpDiscoveryFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the FMP fundamentals-completion ingest bindings (P2W2), keyed by each
+/// route's catalog candidate endpoint and bound to its bronze landing table.
+/// Mirrors [`insert_fmp_completion_fetch_bindings`] so the fetch and ingest paths
+/// stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_completion_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpDividendsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpDividendsFetcher, _, _>("raw.corporate_action"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSplitsFetcher, _, _>("raw.corporate_action"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEarningsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEarningsFetcher, _, _>("raw.estimate"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),
+        binding::<crate::FmpHttpPeersFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", "discovery_gainers"),
+        fmp_discovery_ingest_binding("gainers", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", "discovery_losers"),
+        fmp_discovery_ingest_binding("losers", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", "discovery_active"),
+        fmp_discovery_ingest_binding("actives", "raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
+        binding::<crate::FmpHttpScreenerFetcher, _, _>("raw.screener_row"),
     );
 }
 

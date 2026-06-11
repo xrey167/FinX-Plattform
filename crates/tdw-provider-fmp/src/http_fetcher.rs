@@ -16,6 +16,8 @@
 //!   - [`FmpHttpDividendsFetcher`] — historical dividends (`/historical-price-full/stock_dividend`)
 //!   - [`FmpHttpSplitsFetcher`] — historical splits (`/historical-price-full/stock_split`)
 //!   - [`FmpHttpEarningsFetcher`] — historical EPS (`/historical/earning_calendar`)
+//!   - [`FmpHttpDiscoveryFetcher`] — market movers (`/stock_market/{gainers,losers,actives}`)
+//!   - [`FmpHttpScreenerFetcher`] — equity screener (`/stock-screener`)
 //!
 //! Live calls require `TDW_FMP_API_KEY`. The live integration test is
 //! additionally gated by `TDW_FMP_LIVE=1` so unattended CI stays offline.
@@ -29,12 +31,13 @@ use serde_json::Map;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
     CompanyProfile, CorporateAction, Estimate, FinancialStatement, Instrument, KeyMetrics,
-    MarketDataBar, Ohlcv, QuoteSnapshot, Ratios, StatementKind, TimeGranularity,
+    MarketDataBar, Ohlcv, QuoteSnapshot, Ratios, ScreenerRow, StatementKind, TimeGranularity,
 };
 
 use crate::{
-    API_KEY_ENV, BASE_URL, FmpError, FmpFundamentalQuery, FmpFundamentalsQuery, FmpHistoricalQuery,
-    FmpIncomeRow, FmpQuoteQuery, FmpStatement, FmpStatementQuery, FmpSymbolQuery,
+    API_KEY_ENV, BASE_URL, FmpDiscoveryDirection, FmpDiscoveryQuery, FmpError, FmpFundamentalQuery,
+    FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow, FmpQuoteQuery, FmpScreenerQuery,
+    FmpStatement, FmpStatementQuery, FmpSymbolQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -1094,6 +1097,205 @@ impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpEarningsFetcher {
             })
             .collect();
         Ok(estimates)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpDiscoveryFetcher — /stock_market/{gainers,losers,actives} → QuoteSnapshot
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP market-movers fetcher.
+    ///
+    /// Calls `/stock_market/{gainers|losers|actives}` (the direction is selected
+    /// per query) and normalizes each mover row to a [`QuoteSnapshot`]: `price`
+    /// → `current_price`, the absolute `change`, and the percentage move. The
+    /// movers feed carries no previous close or timestamp, so `prev_close` and
+    /// `ts_ms` default to zero.
+    pub FmpHttpDiscoveryFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/stock_market/{gainers|losers|actives}` row.
+#[derive(Deserialize)]
+struct FmpMoverRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    price: f64,
+    #[serde(default)]
+    change: f64,
+    #[serde(rename = "changesPercentage", default)]
+    changes_percentage: f64,
+}
+
+#[async_trait]
+impl Fetcher<FmpDiscoveryQuery, QuoteSnapshot> for FmpHttpDiscoveryFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "discovery";
+
+    fn transform_query(params: Value) -> Result<FmpDiscoveryQuery> {
+        let direction =
+            FmpDiscoveryDirection::from_param(params.get("direction").and_then(Value::as_str));
+        Ok(FmpDiscoveryQuery::new(direction))
+    }
+
+    async fn extract_data(&self, query: &FmpDiscoveryQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/stock_market/{}",
+            self.base_url().trim_end_matches('/'),
+            query.direction.as_path_segment(),
+        );
+        fmp_get(&url, &[], "fmp discovery").await
+    }
+
+    fn transform_data(&self, query: &FmpDiscoveryQuery, raw: Bytes) -> Result<Vec<QuoteSnapshot>> {
+        let entries: Vec<FmpMoverRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp discovery parse_json: {e}")))?;
+        let snapshots = entries
+            .into_iter()
+            .filter_map(|entry| {
+                entry.symbol.map(|symbol| QuoteSnapshot {
+                    symbol,
+                    current_price: entry.price,
+                    change: entry.change,
+                    change_percent: entry.changes_percentage,
+                    prev_close: 0.0,
+                    ts_ms: 0,
+                })
+            })
+            .collect();
+        let _ = query;
+        Ok(snapshots)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpScreenerFetcher — /stock-screener → ScreenerRow
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP equity-screener fetcher, normalized to [`ScreenerRow`].
+    ///
+    /// Calls `/stock-screener` with the caller's optional filters
+    /// (`marketCapMoreThan`, `sector`, `industry`, `exchange`, `limit`, …) and
+    /// maps each result company to a [`ScreenerRow`].
+    pub FmpHttpScreenerFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/stock-screener` result row.
+#[derive(Deserialize)]
+struct FmpScreenerRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "companyName", default)]
+    company_name: Option<String>,
+    #[serde(rename = "marketCap", default)]
+    market_cap: Option<f64>,
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(default)]
+    industry: Option<String>,
+    #[serde(default)]
+    beta: Option<f64>,
+    #[serde(default)]
+    price: Option<f64>,
+    #[serde(rename = "lastAnnualDividend", default)]
+    last_annual_dividend: Option<f64>,
+    #[serde(default)]
+    volume: Option<f64>,
+    #[serde(default)]
+    exchange: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(rename = "isEtf", default)]
+    is_etf: Option<bool>,
+    #[serde(rename = "isActivelyTrading", default)]
+    is_actively_trading: Option<bool>,
+}
+
+#[async_trait]
+impl Fetcher<FmpScreenerQuery, ScreenerRow> for FmpHttpScreenerFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "screener";
+
+    fn transform_query(params: Value) -> Result<FmpScreenerQuery> {
+        let string_param = |key: &str| {
+            params
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(ToString::to_string)
+        };
+        let limit = params
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|e| Error::InvalidQuery(format!("fmp screener limit too large: {e}")))?;
+        Ok(FmpScreenerQuery {
+            market_cap_more_than: params.get("market_cap_more_than").and_then(Value::as_f64),
+            market_cap_lower_than: params.get("market_cap_lower_than").and_then(Value::as_f64),
+            sector: string_param("sector"),
+            industry: string_param("industry"),
+            exchange: string_param("exchange"),
+            limit,
+        })
+    }
+
+    async fn extract_data(&self, query: &FmpScreenerQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/stock-screener", self.base_url().trim_end_matches('/'));
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(value) = query.market_cap_more_than {
+            params.push(("marketCapMoreThan", value.to_string()));
+        }
+        if let Some(value) = query.market_cap_lower_than {
+            params.push(("marketCapLowerThan", value.to_string()));
+        }
+        if let Some(sector) = &query.sector {
+            params.push(("sector", sector.clone()));
+        }
+        if let Some(industry) = &query.industry {
+            params.push(("industry", industry.clone()));
+        }
+        if let Some(exchange) = &query.exchange {
+            params.push(("exchange", exchange.clone()));
+        }
+        if let Some(limit) = query.limit {
+            params.push(("limit", limit.to_string()));
+        }
+        fmp_get(&url, &params, "fmp screener").await
+    }
+
+    fn transform_data(&self, query: &FmpScreenerQuery, raw: Bytes) -> Result<Vec<ScreenerRow>> {
+        let entries: Vec<FmpScreenerRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp screener parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                entry.symbol.map(|symbol| ScreenerRow {
+                    symbol,
+                    company_name: entry.company_name,
+                    market_cap: entry.market_cap,
+                    sector: entry.sector,
+                    industry: entry.industry,
+                    beta: entry.beta,
+                    price: entry.price,
+                    last_annual_dividend: entry.last_annual_dividend,
+                    volume: entry.volume,
+                    exchange: entry.exchange,
+                    exchange_short_name: entry.exchange_short_name,
+                    country: entry.country,
+                    is_etf: entry.is_etf,
+                    is_actively_trading: entry.is_actively_trading,
+                })
+            })
+            .collect();
+        let _ = query;
+        Ok(rows)
     }
 }
 

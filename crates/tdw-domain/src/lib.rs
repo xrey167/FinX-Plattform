@@ -7,8 +7,8 @@ pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
     CalendarEvent, CommodityReportRow, Estimate, EtfHolding, EtfSectorWeight, FinancialStatement,
     FomcDocument, FuturesCurvePoint, KeyMetrics, MacroSeries, NewsArticle, OptionContract,
-    OwnershipRecord, PricePerformance, RateObservation, Ratios, SeriesSearchResult, StatementKind,
-    SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
+    OwnershipRecord, PricePerformance, RateObservation, Ratios, ScreenerRow, SeriesSearchResult,
+    StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

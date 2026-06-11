@@ -5,10 +5,10 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher,
-    FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpProfileFetcher,
-    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpSplitsFetcher,
-    FmpHttpStatementFetcher,
+    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
 };
 
 use schemars::JsonSchema;
@@ -215,6 +215,68 @@ impl FmpSymbolQuery {
             symbol: normalize_symbol(symbol)?,
         })
     }
+}
+
+/// Direction of the FMP stock-market discovery endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FmpDiscoveryDirection {
+    /// Largest gainers (`/stock_market/gainers`).
+    Gainers,
+    /// Largest losers (`/stock_market/losers`).
+    Losers,
+    /// Most active by volume (`/stock_market/actives`).
+    Actives,
+}
+
+impl FmpDiscoveryDirection {
+    /// Return the FMP `/stock_market/{segment}` path segment for this direction.
+    #[must_use]
+    pub const fn as_path_segment(self) -> &'static str {
+        match self {
+            Self::Gainers => "gainers",
+            Self::Losers => "losers",
+            Self::Actives => "actives",
+        }
+    }
+
+    /// Parse a discovery direction, defaulting unknown/missing to gainers.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        match value {
+            Some("losers") => Self::Losers,
+            Some("actives" | "active") => Self::Actives,
+            _ => Self::Gainers,
+        }
+    }
+}
+
+/// Query for an FMP stock-market discovery list (gainers / losers / actives).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpDiscoveryQuery {
+    pub direction: FmpDiscoveryDirection,
+}
+
+impl FmpDiscoveryQuery {
+    /// Construct a discovery query for `direction`.
+    #[must_use]
+    pub const fn new(direction: FmpDiscoveryDirection) -> Self {
+        Self { direction }
+    }
+}
+
+/// Query for the FMP stock screener (`/stock-screener`).
+///
+/// Every filter is optional; an empty query returns the screener's unfiltered
+/// default page. `limit` caps the row count when set.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpScreenerQuery {
+    pub market_cap_more_than: Option<f64>,
+    pub market_cap_lower_than: Option<f64>,
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+    pub exchange: Option<String>,
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
