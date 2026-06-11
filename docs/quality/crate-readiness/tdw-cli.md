@@ -32,9 +32,30 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 
 ## Findings
 
-- Binary delegates provider fetch and client-event evidence to `tdw-service-api`; it does not carry independent business logic.
+- Binary delegates provider fetch and client-event evidence to the daemon; it does not carry independent business logic.
 - Error handling exits non-zero on service failure and reports optional client-event sample failures to stderr.
 - Scan signals are intentional sample/error-output calls; no stub, copied FinX-XR, OpenBB, or hidden fallback path was found.
+
+## WS4 / G013 update (OpenBB CLI command-tree parity)
+
+The CLI gained a **catalog-derived command tree** (gap-matrix **L5.3**), so its
+facts changed materially:
+
+- Dependencies now include `clap` (pure-Rust workspace dep, default features),
+  `tdw-endpoint-catalog`, `tdw-protocol`, `tdw-core`, and `tdw-domain` —
+  read-only consumption of the catalog/protocol; no `tdw-service-api`,
+  `tdw-endpoint-catalog`, or `tdw-protocol` types were modified.
+- New modules: `tree` (catalog → clap command tree; schema → args), `params`
+  (pure `ArgMatches` → `Op::FetchData` params builder), `render` (aligned table /
+  JSON / CSV export + RFC-4180 escaping), `routine` (local-file event-spine
+  record/run/list under `.tdw/routines/<name>.jsonl`).
+- In-crate unit tests now exist (27 total) covering tree generation, schema→arg
+  mapping, table/CSV rendering, and routine round trips; the live daemon
+  end-to-end remains covered by the offline `--smoke` path (no daemon in CI).
+- Legacy entrypoints (`run-query`, `--smoke`, `kg reindex`, the default shutdown
+  probe) are dispatched ahead of clap and are unchanged.
+- Quickstart documented at `docs/products/cli.md`.
+- Export scope is CSV + JSON only; XLSX/Parquet stay with L5.4.
 
 ## Verification
 

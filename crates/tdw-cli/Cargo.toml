@@ -6,8 +6,11 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+clap = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
+tdw-domain = { path = "../tdw-domain" }
+tdw-endpoint-catalog = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 tdw-embed-google = { path = "../tdw-embed-google", optional = true }
 tdw-embed-local = { path = "../tdw-embed-local" }
