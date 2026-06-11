@@ -87,7 +87,10 @@ pub fn build_client(user_agent: &str, ctx: &str) -> Result<Client> {
         .timeout(std::time::Duration::from_secs(30))
         .user_agent(user_agent)
         .build()
-        .map_err(|error| Error::Provider(format!("{ctx}: {error}")))
+        .map_err(|source| Error::HttpClient {
+            message: format!("{ctx}: {source}"),
+            source,
+        })
 }
 
 /// Resolve a raw env-var value (already fetched or synthesised) into a
