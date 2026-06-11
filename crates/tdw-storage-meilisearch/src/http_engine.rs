@@ -29,7 +29,7 @@ const TASK_POLL_MAX_ATTEMPTS: u32 = 60;
 /// Cap on connection establishment so a stalled/black-holed Meilisearch
 /// endpoint fails fast instead of hanging the calling op (ME2/IO1).
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// Per-request timeout — bounds any single index/search/wait_for_task request
+/// Per-request timeout — bounds any single index/search/`wait_for_task` request
 /// so one hung poll cannot exceed the logical task-poll budget (ME2/IO1).
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 

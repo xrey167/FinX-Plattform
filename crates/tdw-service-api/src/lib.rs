@@ -499,6 +499,7 @@ pub fn fetch_equity_historical(
 /// Returns [`Error::Registry`] for an unknown `(provider, endpoint)` pair, or
 /// the fetcher's own error (network, parse, …) on a failed run. A serialization
 /// failure surfaces as [`Error::Provider`].
+#[allow(clippy::too_many_lines)] // flat provider dispatch table; splitting adds no clarity
 pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Result<Value> {
     let runner = CommandRunner::new(default_registry()?);
 
@@ -727,6 +728,7 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
 /// arms above, so the MCP layer can advertise an honest tool description
 /// reflecting only what is actually compiled in.
 #[must_use]
+#[allow(clippy::too_many_lines)] // flat provider target list mirrors dispatch table; splitting adds no clarity
 pub fn provider_fetch_targets() -> Vec<(String, String)> {
     // `targets` is only mutated, and `target!` is only invoked, when at least
     // one provider feature is enabled; both are unused under the default

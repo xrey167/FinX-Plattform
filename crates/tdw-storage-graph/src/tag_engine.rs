@@ -204,6 +204,9 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
     }
 
     async fn descendants(&self, tag_id: &str) -> Result<Vec<String>, TagError> {
+        // Node-count guard, not a depth cap: loud error on a (corrupted)
+        // store instead of silent truncation.
+        const MAX_TAXONOMY_NODES: usize = 100_000;
         // Children point AT their parent, so descendants are the transitive
         // INCOMING subtag_of closure. Iterative per-level hops rather than
         // expand(): the trait promises ALL transitive descendants, and the
@@ -216,9 +219,6 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
             max_hops: 1,
             ..TraversalFilter::default()
         };
-        // Node-count guard, not a depth cap: loud error on a (corrupted)
-        // store instead of silent truncation.
-        const MAX_TAXONOMY_NODES: usize = 100_000;
         let mut found = std::collections::BTreeSet::new();
         let mut frontier = vec![tag_id.to_string()];
         while let Some(current) = frontier.pop() {

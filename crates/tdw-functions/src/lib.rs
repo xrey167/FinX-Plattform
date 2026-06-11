@@ -1015,7 +1015,7 @@ mod event_wiring_tests {
         let mut queue = InMemoryWorkerQueue::default();
 
         let outcomes = router
-            .dispatch(&mut queue, "unknown.event", json!({}), "seed", 0)
+            .dispatch(&mut queue, "unknown.event", &json!({}), "seed", 0)
             .expect("dispatch");
         assert!(
             outcomes.is_empty(),
@@ -1036,7 +1036,7 @@ mod event_wiring_tests {
         let mut queue = InMemoryWorkerQueue::default();
 
         let outcomes = router
-            .dispatch(&mut queue, "data.arrived", json!({"key": "v"}), "evt-1", 0)
+            .dispatch(&mut queue, "data.arrived", &json!({"key": "v"}), "evt-1", 0)
             .expect("dispatch");
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes.iter().all(|o| o.inserted));
@@ -1052,7 +1052,7 @@ mod event_wiring_tests {
         let mut queue = InMemoryWorkerQueue::default();
 
         let outcomes = router
-            .dispatch(&mut queue, "ev", json!({}), "my-seed", 0)
+            .dispatch(&mut queue, "ev", &json!({}), "my-seed", 0)
             .expect("dispatch");
         assert_eq!(outcomes.len(), 1);
         // job_id = run_id = "my-seed:fn-x"

@@ -622,6 +622,7 @@ mod tests {
     const NOW: i64 = 1_700_000_000_000;
 
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: mock Arc outlives guard block intentionally
     async fn welcome_dispatch_sends_one_email() {
         let mock = Arc::new(MockMailer::default());
         let mut reg = FunctionRegistry::new();
@@ -636,13 +637,16 @@ mod tests {
 
         assert_eq!(result, json!({"sent": true, "to": "a@b.com"}));
 
-        let sent = mock.sent.lock().expect("lock");
-        assert_eq!(sent.len(), 1, "exactly one email sent");
-        assert_eq!(sent[0].0, "a@b.com");
-        assert!(!sent[0].1.is_empty(), "body must be non-empty");
+        {
+            let sent = mock.sent.lock().expect("lock");
+            assert_eq!(sent.len(), 1, "exactly one email sent");
+            assert_eq!(sent[0].0, "a@b.com");
+            assert!(!sent[0].1.is_empty(), "body must be non-empty");
+        }
     }
 
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: mock Arc outlives guard block intentionally
     async fn welcome_uses_display_name_when_present() {
         let mock = Arc::new(MockMailer::default());
         let def = welcome_function(Arc::clone(&mock) as Arc<dyn WelcomeMailer>);
@@ -659,13 +663,15 @@ mod tests {
             .await
             .expect("invoke");
 
-        let sent = mock.sent.lock().expect("lock");
-        assert_eq!(sent.len(), 1);
-        assert!(
-            sent[0].1.contains("Carol"),
-            "body should greet the display name: {}",
-            sent[0].1
-        );
+        {
+            let sent = mock.sent.lock().expect("lock");
+            assert_eq!(sent.len(), 1);
+            assert!(
+                sent[0].1.contains("Carol"),
+                "body should greet the display name: {}",
+                sent[0].1
+            );
+        }
     }
 
     #[tokio::test]
@@ -782,6 +788,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: store/mailer outlive the guard block intentionally
     async fn reengagement_emails_only_dormant_not_recently_reengaged() {
         let store = Arc::new(InMemoryUserStore::new());
 

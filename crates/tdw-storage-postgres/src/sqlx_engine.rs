@@ -43,7 +43,7 @@ impl PgEngine {
         let pool = PgPoolOptions::new()
             .max_connections(8)
             .acquire_timeout(Duration::from_secs(10))
-            .idle_timeout(Duration::from_secs(600))
+            .idle_timeout(Duration::from_mins(10))
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
                     conn.execute("SET statement_timeout = '30s'").await?;

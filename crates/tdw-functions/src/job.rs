@@ -214,8 +214,7 @@ impl JobHandler for FunctionJobHandler {
         // Clock boundary: only place in this crate where SystemTime is read.
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
 
         let result = match func_job.mode {
             JobMode::Invoke => {

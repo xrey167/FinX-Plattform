@@ -901,7 +901,7 @@ mod tests {
             high: 101.0,
             low: 99.0,
             close: 100.0,
-            ..inverted_bar.clone()
+            ..inverted_bar
         };
         assert!(
             open_above_high.validate().is_err(),

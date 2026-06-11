@@ -30,7 +30,7 @@ const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Generous overall request timeout — analytical queries can legitimately run
 /// for minutes, so this is only a backstop against a truly wedged connection,
 /// not a query-latency budget (CHH1).
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Default cap on a `query_json` response body (256 MiB). Bounds memory so a
 /// huge result set cannot OOM the process; tune via
@@ -181,7 +181,7 @@ impl OlapEngine for ClickHouseHttpEngine {
 /// Whether appending `incoming` bytes to an already-buffered `current` would
 /// exceed `max`. Uses a saturating add so a malicious/huge `incoming` cannot
 /// wrap and bypass the cap.
-fn would_exceed_cap(current: usize, incoming: usize, max: usize) -> bool {
+const fn would_exceed_cap(current: usize, incoming: usize, max: usize) -> bool {
     current.saturating_add(incoming) > max
 }
 
