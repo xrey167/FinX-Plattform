@@ -261,6 +261,11 @@ impl WasmUdfRuntime {
 /// Public so callers that explicitly want fixture dispatch (e.g. `tdw-sandbox`
 /// when the source is not a real wasm module) can call it directly, bypassing
 /// the `execute` gate that guards the fixture path from implicit use.
+///
+/// # Errors
+///
+/// Returns [`WasmUdfError::UnknownExport`] if `func` does not match any
+/// registered fixture name.
 pub fn fixture_dispatch(func: &str, arg: &str) -> Result<String, WasmUdfError> {
     match func {
         "upper" => Ok(arg.to_ascii_uppercase()),
