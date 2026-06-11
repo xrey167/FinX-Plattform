@@ -12,6 +12,8 @@
 //! `GET /api/v1/knowledge/status` REST endpoint, and the `tdw kg status` CLI
 //! subcommand all present. Honest notes are inlined where the underlying
 //! engine trait offers no cheap query (e.g. `VectorEngine` has no `count`).
+//! K-X6 adds the user-identity and finding-indexer seams for the first-class
+//! research-findings surface.
 
 use std::sync::{Arc, RwLock};
 
@@ -22,6 +24,7 @@ use tdw_retrieve::Retriever;
 use tdw_tags::TagEngine;
 use tdw_taxonomy::{Adaptivity, EntityKind};
 
+use crate::indexer::KnowledgeIndexer;
 use crate::proposals::ProposalQueue;
 
 /// Resolves a calling agent's [`Adaptivity`] for the writeback gate's admission.
@@ -87,6 +90,17 @@ pub struct KnowledgeRuntime {
     /// not be supplied as a tool argument — it is bound here so remote callers
     /// cannot assert a different identity.
     bound_agent_id: Option<String>,
+    /// The host-bound user identity for the finding surface (knowledge-system
+    /// K-X6). Absent means the finding tools are not attached. Identity must
+    /// not be supplied as a tool argument — it is bound here so remote callers
+    /// cannot assert a different identity.
+    bound_user_id: Option<String>,
+    /// The finding indexer for hybrid search indexing of user-authored findings
+    /// (knowledge-system K-X6). Behind a `std::sync::Mutex` so the sync MCP
+    /// dispatch can hold the lock across the `index_at` await via `block_on`.
+    /// `None` means findings are written to the graph but NOT indexed for
+    /// retrieval — valid for write-only surfaces or graph-only deployments.
+    finding_indexer: Option<Arc<std::sync::Mutex<KnowledgeIndexer>>>,
 }
 
 impl KnowledgeRuntime {
@@ -109,6 +123,8 @@ impl KnowledgeRuntime {
             adaptivity_resolver: None,
             operator_authority: false,
             bound_agent_id: None,
+            bound_user_id: None,
+            finding_indexer: None,
         }
     }
 
@@ -270,6 +286,41 @@ impl KnowledgeRuntime {
     pub fn bound_agent_id(&self) -> Option<&str> {
         self.bound_agent_id.as_deref()
     }
+
+    /// Bind the user identity for the finding surface (knowledge-system K-X6).
+    /// The finding tools use this identity; callers cannot override it via tool
+    /// arguments. If no user identity is bound, the finding tools are not
+    /// attached (gated in [`crate`]).
+    #[must_use]
+    pub fn with_user_id(mut self, user_id: impl Into<String>) -> Self {
+        self.bound_user_id = Some(user_id.into());
+        self
+    }
+
+    /// The bound user identity, when set.
+    #[must_use]
+    pub fn bound_user_id(&self) -> Option<&str> {
+        self.bound_user_id.as_deref()
+    }
+
+    /// Attach a [`KnowledgeIndexer`] for hybrid search indexing of
+    /// user-authored findings (knowledge-system K-X6). When absent, findings
+    /// are written to the graph but are NOT retrievable via `tdw.kg.search`
+    /// until a full re-index is run.
+    #[must_use]
+    pub fn with_finding_indexer(
+        mut self,
+        indexer: Arc<std::sync::Mutex<KnowledgeIndexer>>,
+    ) -> Self {
+        self.finding_indexer = Some(indexer);
+        self
+    }
+
+    /// The finding indexer, when attached.
+    #[must_use]
+    pub const fn finding_indexer(&self) -> Option<&Arc<std::sync::Mutex<KnowledgeIndexer>>> {
+        self.finding_indexer.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -284,6 +335,8 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
             .field("operator_authority", &self.operator_authority)
             .field("bound_agent_id", &self.bound_agent_id.is_some())
+            .field("bound_user_id", &self.bound_user_id.is_some())
+            .field("finding_indexer", &self.finding_indexer.is_some())
             .finish_non_exhaustive()
     }
 }

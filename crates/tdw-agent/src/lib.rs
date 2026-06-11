@@ -1368,7 +1368,10 @@ fn spec_schema_for(kind: EntityKind) -> Option<Value> {
         | EntityKind::Provider
         | EntityKind::Symbol
         | EntityKind::Venue
-        | EntityKind::Tag => return None,
+        | EntityKind::Tag
+        // Finding is a first-class knowledge kind (K-X6) with no dedicated
+        // Rust spec type yet; schema will land with a future spec crate.
+        | EntityKind::Finding => return None,
         EntityKind::Agent => schema_json::<AgentCard>(),
         EntityKind::Skill => schema_json::<AgentSkill>(),
         EntityKind::Tool => schema_json::<Tool>(),
@@ -1815,12 +1818,16 @@ mod tests {
 
         // kinds with a concrete Rust spec type carry their schema; the warehouse
         // `domain` kinds are `candidate` kinds carrying `None` until their spec
-        // types land (knowledge-system A3).
+        // types land (knowledge-system A3). `Finding` (K-X6) is a knowledge-group
+        // kind that likewise has no spec type yet — it carries `None` until a
+        // dedicated spec crate lands.
         assert!(find(EntityKind::Agent).spec_schema.is_some());
         assert!(
             resource_definitions()
                 .iter()
-                .all(|d| d.spec_schema.is_some() || d.kind.group() == Group::Domain)
+                .all(|d| d.spec_schema.is_some()
+                    || d.kind.group() == Group::Domain
+                    || d.kind == EntityKind::Finding)
         );
         assert!(find(EntityKind::Instrument).spec_schema.is_none());
         // facet flags come straight from the kind registry.
