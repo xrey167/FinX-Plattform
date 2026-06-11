@@ -10,12 +10,14 @@ free client you can read top to bottom.
 
 Run it (manual, end to end):
 
-1. Start the daemon's REST surface, e.g. from the workspace root::
+1. Start the daemon's REST surface, e.g. from the workspace root (the listener
+   is env-gated on ``TDW_DAEMON_REST_BIND`` and compiled behind the daemon's
+   ``rest-api-route`` feature)::
 
-       cargo run -p tdw-cli --features rest-api-route -- serve-rest --bind 127.0.0.1:7879
+       TDW_DAEMON_REST_BIND=127.0.0.1:7879 cargo run -p tdw-backend --features rest-api-route --target-dir target
 
-   (Any bind works; point the SDK at it with ``FINX_BASE_URL``.) The default
-   REST bind ``http://127.0.0.1:7879`` is what the SDK falls back to.
+   (Any bind works; point the SDK at it with ``FINX_BASE_URL``.) The loopback
+   bind ``http://127.0.0.1:7879`` is what the SDK falls back to.
 
 2. Run this script::
 
