@@ -104,14 +104,8 @@ struct ParsedObservation {
     realtime_end: String,
 }
 
-/// Read the required FRED API key from the environment, byte-identical to the
-/// inline form used by the original observations fetcher.
 fn fred_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| Error::Provider(format!("fred api key env {API_KEY_ENV} must be set")))
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "fred")
 }
 
 /// Perform a FRED `series/observations` GET for `series_id`, mapping the shared

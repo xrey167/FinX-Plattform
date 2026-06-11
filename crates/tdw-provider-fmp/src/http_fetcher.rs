@@ -105,16 +105,8 @@ fn fmp_client() -> std::result::Result<Client, FmpError> {
         .map_err(|e| FmpError::Provider(format!("fmp client build: {e}")))
 }
 
-fn api_key() -> std::result::Result<String, FmpError> {
-    let key = std::env::var(API_KEY_ENV)
-        .map_err(|_| FmpError::Provider(format!("{API_KEY_ENV} not set")))?;
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        return Err(FmpError::Provider(format!(
-            "{API_KEY_ENV} must not be empty"
-        )));
-    }
-    Ok(key)
+fn api_key() -> Result<String> {
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "fmp")
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +138,7 @@ impl Fetcher<FmpHistoricalQuery, MarketDataBar> for FmpHttpHistoricalFetcher {
         query: &FmpHistoricalQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!(
             "{}/historical-price-full/{}",
             self.base_url().trim_end_matches('/'),
@@ -245,7 +237,7 @@ impl Fetcher<FmpFundamentalsQuery, FmpIncomeRow> for FmpHttpIncomeFetcher {
         query: &FmpFundamentalsQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let path_segment = query.statement.as_path_segment();
         let url = format!(
             "{}/{}/{}",
@@ -351,7 +343,7 @@ impl Fetcher<FmpQuoteQuery, QuoteSnapshot> for FmpHttpQuoteSnapshotFetcher {
     }
 
     async fn extract_data(&self, query: &FmpQuoteQuery, _creds: &Credentials) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!(
             "{}/quote/{}",
             self.base_url.trim_end_matches('/'),
@@ -407,7 +399,7 @@ impl Fetcher<FmpQuoteQuery, QuoteSnapshot> for FmpHttpQuoteSnapshotFetcher {
 /// transport / non-2xx responses to [`Error::Provider`] using `ctx` as the
 /// error-text prefix. Returns the raw response body bytes.
 async fn fmp_get(url: &str, params: &[(&str, String)], ctx: &str) -> Result<Bytes> {
-    let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+    let api_key = api_key()?;
     let client = fmp_client().map_err(|e| Error::Provider(e.to_string()))?;
     let mut request = client.get(url).query(&[("apikey", api_key.as_str())]);
     for (key, value) in params {

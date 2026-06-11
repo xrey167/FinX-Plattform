@@ -46,13 +46,7 @@ async fn get_bytes(url: &str, api_key: &str) -> Result<Bytes> {
 }
 
 fn read_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            Error::Provider(format!("velodata: {API_KEY_ENV} must be set and non-empty"))
-        })
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "velodata")
 }
 
 // ---------------------------------------------------------------------------

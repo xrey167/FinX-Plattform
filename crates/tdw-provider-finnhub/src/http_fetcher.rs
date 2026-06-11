@@ -115,16 +115,8 @@ fn finnhub_client() -> std::result::Result<Client, FinnhubError> {
         .map_err(|e| FinnhubError::Provider(format!("finnhub client build: {e}")))
 }
 
-fn api_key() -> std::result::Result<String, FinnhubError> {
-    let key = std::env::var(API_KEY_ENV)
-        .map_err(|_| FinnhubError::Provider(format!("{API_KEY_ENV} not set")))?;
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        return Err(FinnhubError::Provider(format!(
-            "{API_KEY_ENV} must not be empty"
-        )));
-    }
-    Ok(key)
+fn api_key() -> Result<String> {
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "finnhub")
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +148,7 @@ impl Fetcher<FinnhubProfileQuery, CompanyProfile> for FinnhubHttpProfileFetcher 
         query: &FinnhubProfileQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!("{}/stock/profile2", self.base_url().trim_end_matches('/'),);
         let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
@@ -236,7 +228,7 @@ impl Fetcher<FinnhubQuoteQuery, QuoteSnapshot> for FinnhubHttpQuoteSnapshotFetch
     }
 
     async fn extract_data(&self, query: &FinnhubQuoteQuery, _creds: &Credentials) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!("{}/quote", self.base_url().trim_end_matches('/'));
         let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
@@ -310,7 +302,7 @@ impl Fetcher<FinnhubSearchQuery, SymbolMatch> for FinnhubHttpSymbolSearchFetcher
         query: &FinnhubSearchQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!("{}/search", self.base_url().trim_end_matches('/'));
         let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
@@ -389,7 +381,7 @@ impl Fetcher<FinnhubCompanyNewsQuery, CompanyNewsItem> for FinnhubHttpCompanyNew
         query: &FinnhubCompanyNewsQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let api_key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let api_key = api_key()?;
         let url = format!("{}/company-news", self.base_url().trim_end_matches('/'));
         let client = finnhub_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client

@@ -12,7 +12,7 @@ use tdw_core::http_support::prelude::*;
 
 use crate::{
     BASE_URL, RAPIDAPI_HOST, RAPIDAPI_KEY_ENV, SeekingAlphaArticle, SeekingAlphaArticlesQuery,
-    SeekingAlphaProviderError, SeekingAlphaRatings, SeekingAlphaRatingsQuery,
+    SeekingAlphaRatings, SeekingAlphaRatingsQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-seeking-alpha/0.1";
@@ -77,11 +77,7 @@ struct WireRatingsEnvelope {
 // ---------------------------------------------------------------------------
 
 fn read_api_key() -> Result<String> {
-    std::env::var(RAPIDAPI_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Provider(SeekingAlphaProviderError::MissingApiKey.to_string()))
+    tdw_core::http_support::read_required_key(RAPIDAPI_KEY_ENV, "seeking-alpha")
 }
 
 fn map_article(wire: WireArticle) -> SeekingAlphaArticle {
