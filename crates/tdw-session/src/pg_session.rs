@@ -149,7 +149,8 @@ impl PgSessionStore {
              VALUES ($1, $2, $3, $4) \
              ON CONFLICT (session_id) DO UPDATE SET \
                 status = EXCLUDED.status, \
-                updated_at = EXCLUDED.updated_at",
+                updated_at = EXCLUDED.updated_at \
+             WHERE {table}.status NOT IN ('Completed', 'Failed')",
             table = self.table
         );
         self.engine
