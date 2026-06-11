@@ -257,10 +257,11 @@ impl WasmUdfRuntime {
 ///
 /// Maps export names to pure-Rust transforms. This proves the runtime is
 /// callable and produces reproducible output — the requirement for Fact 21.
-/// Only reachable when the `wasmi` feature is absent; gated accordingly so the
-/// compiler does not emit a dead-code warning when `wasmi` is compiled in.
-#[cfg(not(feature = "wasmi"))]
-fn fixture_dispatch(func: &str, arg: &str) -> Result<String, WasmUdfError> {
+///
+/// Public so callers that explicitly want fixture dispatch (e.g. `tdw-sandbox`
+/// when the source is not a real wasm module) can call it directly, bypassing
+/// the `execute` gate that guards the fixture path from implicit use.
+pub fn fixture_dispatch(func: &str, arg: &str) -> Result<String, WasmUdfError> {
     match func {
         "upper" => Ok(arg.to_ascii_uppercase()),
         "lower" => Ok(arg.to_ascii_lowercase()),
