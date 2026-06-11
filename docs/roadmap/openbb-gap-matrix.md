@@ -72,7 +72,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | price/quote + price/performance | HAVE | quote + performance standardized via yahoo (keyless, L2.4); also quote via tradier/cboe/fmp | done |
 | search / profile / market_snapshots / historical_market_cap | PARTIAL | `profile` standardized via yahoo (keyless, L2.4); sec/fmp search exist; `market_snapshots`, `historical_market_cap` MISSING | in-progress |
 | screener | MISSING | no finviz/fmp screener endpoint | todo |
-| fundamentals (balance/income/cash/ratios/metrics) | PARTIAL | fmp has many endpoints wired but not normalized to the 4 statements + ratios cluster; intrinio/polygon variants MISSING | todo |
+| fundamentals (balance/income/cash/ratios/metrics) | HAVE | fmp income/balance/cash → FinancialStatement, ratios → Ratios, metrics → KeyMetrics, projected into catalog routes equity/fundamental/{income,balance,cash,ratios,metrics} (G011); intrinio/polygon variants MISSING | done |
 | fundamentals growth (balance/income/cash growth) | MISSING | fmp growth endpoints not wired | todo |
 | fundamentals extras (dividends, splits, eps history, employees, esg, mgmt, transcript, segments) | PARTIAL | sec/fmp raw; standardized cluster MISSING | todo |
 | estimates (price_target, consensus, forward_*) | PARTIAL | **`equity/estimates/consensus` HAVE** (standardized, G004); benzinga/seeking-alpha raw; price_target/forward_* still MISSING | in-progress |
@@ -127,7 +127,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| price/historical | HAVE | catalog route `index/price/historical` landed (G004); cboe/polygon bars | done |
+| price/historical | HAVE | catalog route `index/price/historical` landed (G004); cboe/polygon bars; polygon aggregates `I:` ticker-prefix candidate added (G011) | done |
 | constituents / available / search / snapshots / sectors | PARTIAL | **`index/snapshots` HAVE** (CBOE, G004); constituents/available/search/sectors still need cboe/fmp/tmx index endpoints | in-progress |
 | sp500_multiples (Shiller PE) | MISSING | needs nasdaq | todo |
 
@@ -135,14 +135,14 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| price/historical | HAVE | coingecko, ccdata, binance, geckoterminal | done |
+| price/historical | HAVE | coingecko, ccdata, binance, geckoterminal, polygon (`X:` ticker prefix, G011) | done |
 | search | PARTIAL | provider-specific; standardized crypto search MISSING | todo |
 
 ### 8. currency (6 cmds)
 
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
-| price/historical / snapshots / search | MISSING | no FX OHLCV cluster (fmp/polygon/tiingo) | todo |
+| price/historical / snapshots / search | PARTIAL | `currency/price/historical` standardized via polygon aggregates (`C:` ticker prefix, G011); snapshots/search + fmp/tiingo FX MISSING | in-progress |
 | reference_rates (ECB) | HAVE | catalog route `currency/reference_rates` landed (ECB-backed, keyless, G004); tdw-provider-ecb HAVE (SDW) | done |
 
 ### 9. commodity (8 cmds)
@@ -219,11 +219,11 @@ Clean-room: add endpoints from each vendor's *own* public API docs, normalize to
 
 | # | Task | Size | Status |
 |---|---|---|---|
-| L2.1 | **tdw-provider-fmp** · expand to fundamentals cluster (balance/income/cash + *_growth, metrics, ratios, dividends, splits, eps history, peers, profile). Highest leverage: fmp alone serves ~25 OpenBB cmds. Gates: fmt+clippy+live-gated. Done-when: 4 statements + ratios + peers normalized to L1.4. | L | todo |
-| L2.2 | **tdw-provider-fmp** · discovery + calendar (active/gainers/losers, dividend/earnings/ipo/splits calendars, price/performance, screener). Gates: live-gated. Done-when: 8 endpoints return standardized lists. | M | todo |
+| L2.1 | **tdw-provider-fmp** · expand to fundamentals cluster (balance/income/cash + *_growth, metrics, ratios, dividends, splits, eps history, peers, profile). Highest leverage: fmp alone serves ~25 OpenBB cmds. Gates: fmt+clippy+live-gated. Done-when: 4 statements + ratios + peers normalized to L1.4. | L | done (G011: fmp statement/ratios/metrics fetchers projected into catalog routes equity/fundamental/{income,balance,cash,ratios,metrics}; profile added as 2nd candidate on equity/profile; dividends/splits/eps/peers fetchers exist at provider level) |
+| L2.2 | **tdw-provider-fmp** · discovery + calendar (active/gainers/losers, dividend/earnings/ipo/splits calendars, price/performance, screener). Gates: live-gated. Done-when: 8 endpoints return standardized lists. | M | todo (G011 trim: screener needs a new ScreenerRow model + fetcher; discovery/calendar FMP fetchers not yet built — out of the keyed-projection scope) |
 | L2.3 | **tdw-provider-fred** · macro + rate + spread + fixedincome cluster (cpi/pce/gdp/unemployment via series IDs, sofr/effr/estr/ecb/sonia, tcm spreads, yield_curve, bond/mortgage indices, fred_search/release/regional). fred serves ~40 OpenBB cmds. Gates: live-gated. Done-when: ≥15 fred-backed endpoints standardized. | L | todo |
 | L2.4 | **tdw-provider-yahoo** · profile, quote, discovery, dividends, share_statistics, consensus, futures/historical+curve, options/chains. yahoo (no key) serves ~15 cmds. Gates: live-gated. Done-when: ≥8 endpoints standardized. | M | todo |
-| L2.5 | **tdw-provider-polygon** · fundamentals (balance/income/cash), market_snapshots, FX + crypto historical, index historical. Gates: live-gated. Done-when: ≥5 endpoints. | M | todo |
+| L2.5 | **tdw-provider-polygon** · fundamentals (balance/income/cash), market_snapshots, FX + crypto historical, index historical. Gates: live-gated. Done-when: ≥5 endpoints. | M | partial (G011: the single polygon `aggregates` fetcher reused as a candidate on currency/price/historical [`C:` prefix], crypto/price/historical [`X:`], and index/price/historical [`I:`] — caller supplies the prefixed ticker; polygon fundamentals + market_snapshots still todo) |
 | L2.6 | **tdw-provider-sec** · cik_map/symbol_map, filings index, form_13f, company_facts, fails_to_deliver, N-PORT, MD&A, latest_financial_reports. Gates: unit (public). Done-when: cik/symbol map + 13f + FTD standardized. | M | done |
 | L2.7 | **tdw-provider-cboe** · index (price/constituents/available/search/snapshots), options/chains normalize, futures/curve. Gates: live-gated. Done-when: index cluster standardized. | M | todo |
 | L2.8 | **tdw-provider-eia** · petroleum_status_report, short_term_energy_outlook, psd_data/psd_report. Gates: live-gated. Done-when: 3 report endpoints. | S | todo |

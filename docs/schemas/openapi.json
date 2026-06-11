@@ -447,6 +447,99 @@
         "title": "EtfHolding",
         "type": "object"
       },
+      "FinancialStatement": {
+        "$defs": {
+          "StatementKind": {
+            "description": "Which financial statement a [`FinancialStatement`] represents.",
+            "oneOf": [
+              {
+                "const": "balance",
+                "description": "Balance sheet (`equity/fundamental/balance`).",
+                "type": "string"
+              },
+              {
+                "const": "income",
+                "description": "Income statement (`equity/fundamental/income`).",
+                "type": "string"
+              },
+              {
+                "const": "cash",
+                "description": "Cash-flow statement (`equity/fundamental/cash`).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Standardized financial statement covering the balance / income / cash variants.\n\nStandardizes: `equity/fundamental/balance`, `equity/fundamental/income`,\n`equity/fundamental/cash` (and, via [`StatementKind`], their growth-rate siblings\n`*_growth`). The common period header is typed; the many provider-variable\nstatement lines live in `line_items` keyed by a normalized `snake_case` name\n(e.g. `total_assets`, `net_income`, `operating_cash_flow`).",
+        "properties": {
+          "currency": {
+            "description": "Reporting currency (ISO 4217), provider-variable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "description": "Period end date (statement date).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filing_date": {
+            "description": "Date the statement was filed/accepted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fiscal_period": {
+            "description": "Fiscal period label, e.g. `\"FY\"`, `\"Q1\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fiscal_year": {
+            "description": "Fiscal year the statement covers.",
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "line_items": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "default": {},
+            "description": "Standardized statement line items keyed by normalized name.",
+            "type": "object"
+          },
+          "period": {
+            "description": "Reporting period label, e.g. `\"annual\"` or `\"quarter\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "statement": {
+            "$ref": "#/$defs/StatementKind",
+            "description": "Which statement this row represents."
+          },
+          "symbol": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "statement",
+          "period"
+        ],
+        "title": "FinancialStatement",
+        "type": "object"
+      },
       "FomcDocument": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "An FOMC document index entry.\n\nStandardizes `regulators/fed/fomc_documents` (Federal Reserve FOMC document\nlisting). One row = one published FOMC document (statement, minutes,\nprojection, transcript). `url` and `date` are optional because the listing\nsurfaces a variable subset per document type.",
@@ -519,6 +612,121 @@
           "contract_symbol"
         ],
         "title": "FuturesCurvePoint",
+        "type": "object"
+      },
+      "KeyMetrics": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Key financial metrics (per-share and valuation).\n\nStandardizes: `equity/fundamental/metrics`. Per the docs this is a wide,\nprovider-variable cluster (finviz/fmp/intrinio/yfinance), so all metrics are\noptional.",
+        "properties": {
+          "book_value_per_share": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "date": {
+            "description": "Period end date.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dividend_yield": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "earnings_per_share": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "enterprise_value": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "ev_to_ebitda": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "extra_metrics": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "default": {},
+            "description": "Additional provider-specific metrics keyed by normalized name.",
+            "type": "object"
+          },
+          "free_cash_flow_per_share": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "market_cap": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "pe_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "period": {
+            "description": "Reporting period the metrics describe.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "price_to_book": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "price_to_sales": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "revenue_per_share": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "symbol": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "KeyMetrics",
         "type": "object"
       },
       "MacroSeries": {
@@ -1014,6 +1222,112 @@
           "date"
         ],
         "title": "RateObservation",
+        "type": "object"
+      },
+      "Ratios": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Financial ratios (liquidity, profitability, leverage, efficiency).\n\nStandardizes: `equity/fundamental/ratios`. All ratios optional (fmp/intrinio\nsupply differing subsets).",
+        "properties": {
+          "asset_turnover": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "debt_to_equity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "extra_ratios": {
+            "additionalProperties": {
+              "format": "double",
+              "type": "number"
+            },
+            "default": {},
+            "description": "Additional provider-specific ratios keyed by normalized name.",
+            "type": "object"
+          },
+          "gross_margin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "interest_coverage": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "net_profit_margin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "operating_margin": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "period": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quick_ratio": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "return_on_assets": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "return_on_equity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "symbol": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "Ratios",
         "type": "object"
       },
       "SeriesSearchResult": {
@@ -1600,6 +1914,115 @@
         "summary": "Historical OHLCV bars for a crypto trading pair.",
         "tags": [
           "crypto"
+        ]
+      }
+    },
+    "/api/v1/currency/price/historical": {
+      "get": {
+        "operationId": "currency_price_historical",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketDataBar"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Historical OHLCV bars for an FX pair (Polygon `C:` ticker prefix).",
+        "tags": [
+          "currency"
         ]
       }
     },
@@ -3783,6 +4206,224 @@
         ]
       }
     },
+    "/api/v1/equity/fundamental/balance": {
+      "get": {
+        "operationId": "equity_fundamental_balance",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialStatement"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Balance sheet (assets, liabilities, equity) per period, FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/cash": {
+      "get": {
+        "operationId": "equity_fundamental_cash",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialStatement"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Cash-flow statement (operating/investing/financing) per period, FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/fundamental/dividends": {
       "get": {
         "operationId": "equity_fundamental_dividends",
@@ -3887,6 +4528,333 @@
           }
         },
         "summary": "Historical cash dividends for an equity symbol, Yahoo-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/income": {
+      "get": {
+        "operationId": "equity_fundamental_income",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialStatement"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Income statement (revenue, margins, net income) per period, FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/metrics": {
+      "get": {
+        "operationId": "equity_fundamental_metrics",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyMetrics"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Key metrics (per-share and valuation), FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/ratios": {
+      "get": {
+        "operationId": "equity_fundamental_ratios",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ratios"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Financial ratios (liquidity, profitability, leverage), FMP-backed.",
         "tags": [
           "equity"
         ]
@@ -4540,7 +5508,7 @@
             "description": "Every candidate provider failed."
           }
         },
-        "summary": "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
+        "summary": "Company profile (name, exchange, currency, market cap); Yahoo (keyless) then FMP candidate.",
         "tags": [
           "equity"
         ]
