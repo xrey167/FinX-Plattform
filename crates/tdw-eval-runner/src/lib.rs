@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![deny(clippy::pedantic, clippy::nursery)]
 
 //! The evaluation runner: execute each [`EvalCase`] through a [`LanguageModel`] and
 //! score it deterministically.
@@ -10,8 +11,12 @@
 //! (see [`score_case`]). Aggregated `case_count`/`passed`/`pass_rate` metrics drive the
 //! run `status`. The feedback-to-skill-quality mutation is a later phase; this phase only
 //! produces real metrics.
+//!
+//! The [`retrieval_eval`] module extends this crate with the knowledge-system B11
+//! retrieval-quality harness: fixed [`retrieval_eval::RetrievalEvalCase`] sets scored
+//! with recall\@k, MRR, and nDCG\@k, stamped with a [`retrieval_eval::DriftKey`].
 
-#![deny(clippy::pedantic, clippy::nursery)]
+pub mod retrieval_eval;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};

@@ -5355,10 +5355,20 @@ name = "tdw-eval-runner"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-core",
+ "tdw-embed",
+ "tdw-embed-local",
+ "tdw-kg",
+ "tdw-knowledge",
  "tdw-llm",
  "tdw-llm-anthropic",
+ "tdw-retrieve",
+ "tdw-storage-meilisearch",
+ "tdw-storage-qdrant",
+ "tokio",
 ]
 
 [[package]]
