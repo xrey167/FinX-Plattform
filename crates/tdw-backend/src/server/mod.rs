@@ -1017,7 +1017,7 @@ mod tests {
         assert_eq!(config.profile, expected_profile);
     }
 
-    /// K-E1 review finding 1: TDW_CONFIG_CONTENT is the mechanism compose/production
+    /// K-E1 review finding 1: `TDW_CONFIG_CONTENT` is the mechanism compose/production
     /// profiles use to pin knowledge.graph.backend = "bolt". This test proves the
     /// layer-merge path works by calling `apply_inline_content_layer` directly —
     /// the pure helper extracted from `load_config` — without mutating the process

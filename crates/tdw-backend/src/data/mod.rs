@@ -1886,7 +1886,7 @@ mod tests {
     /// When the bolt feature IS compiled, `build_graph_engine` builds the error as:
     ///   `BackendError::Init(format!("bolt graph connect ({uri}): {connect_err}. Remediation: ..."))`
     /// We verify the static remediation fragment (everything after the dynamic
-    /// connect_err) contains both required signals by constructing the same
+    /// `connect_err`) contains both required signals by constructing the same
     /// `BackendError::Init` wrapper around a synthetic connect error string.
     /// This covers the message template regardless of whether Memgraph is reachable.
     #[test]
