@@ -1,17 +1,97 @@
 # LLM And Knowledge Intelligence
 
-G006 keeps the model and retrieval layer deliberately small:
+The knowledge-system (stories A1–F1) ships a fully integrated retrieval and
+inference layer. The key crates are:
 
-- `tdw-llm` owns the in-house `LanguageModel` trait, chat request/response
-  types, usage accounting, and config-derived model selection.
-- `tdw-llm-anthropic` and `tdw-llm-openai-compat` provide deterministic adapter
-  contracts for Anthropic Messages-style and OpenAI-compatible providers. They
-  do not perform network calls in tests.
-- `tdw-knowledge` indexes documents through the existing local embedding
-  provider, in-memory Qdrant-compatible vector engine, KG, and tag store.
-- `tdw-knowledge::summarize_syntax` provides the first syntactic context summary
-  for schemas and code without taking a dependency on an LSP or large agent
-  framework.
+## Language model layer
 
-`tdw-service-api::llm_knowledge_sample` wires the model adapter, retrieval
-index, active tags, and syntax summary into one service-facing evidence path.
+- `tdw-llm`: the in-house `LanguageModel` trait, chat request/response types,
+  usage accounting, and config-derived model selection. The `StubLanguageModel`
+  provides deterministic offline responses for eval and tests.
+- `tdw-llm-anthropic`: adapter for Anthropic Messages-style providers.
+- `tdw-llm-openai-compat`: adapter for OpenAI-compatible providers.
+  Neither adapter makes network calls in tests.
+
+## Embedding layer
+
+- `tdw-embed`: `EmbeddingProvider` trait and `Embedding` type.
+- `tdw-embed-local`: `HashEmbeddingProvider` (deterministic, offline; the
+  default for dev/test) and the optional `candle`-based local BERT stack
+  (behind the `model` feature).
+- `tdw-embed-openai`: real OpenAI HTTP embedder (behind the `openai` feature).
+- `tdw-embed-google`: real Google/Gemini HTTP embedder (behind the `google`
+  feature).
+
+Provider selection is config-driven via `[knowledge.embedding]` in the daemon
+TOML. No silent fallback: a requested provider without its key is a hard `Init`
+error at daemon startup (B6 posture).
+
+## Knowledge and retrieval layer
+
+- `tdw-knowledge`: `KnowledgeRuntime` (hybrid Retriever + graph/tag handles +
+  version triple) and `KnowledgeIndexer` (content-hash idempotency,
+  rule-driven auto-tagging, lexical + graph co-index, semantic dedup via
+  embedding similarity). `collection_name(model_id)` derives the stable Qdrant
+  collection name from the active embedder.
+- `tdw-retrieve`: hybrid `Retriever` combining vector (Qdrant), lexical
+  (Meilisearch), and graph (BFS neighborhood) results with configurable weights.
+  Wired into `KnowledgeRuntime` so all three lenses are queried on every
+  `search` call.
+- `tdw-infer`: inference rules and version stamps (`KnowledgeVersions`).
+- `tdw-storage-graph`: `GraphEngine` trait, `InMemoryGraphEngine` (always
+  compiled), and `BoltGraphEngine` (behind the `bolt` feature; targets
+  Memgraph/Neo4j over the Bolt protocol).
+
+## Eval harness
+
+- `tdw-eval-runner`: runs eval cases through a `LanguageModel`. The daemon
+  injects `StubLanguageModel` by default so `run_eval` never hits the network
+  in CI. Real model injection is possible by building `tdw-backend` with the
+  `openai` or `google` feature and setting the appropriate API key environment
+  variable.
+
+## Unified daemon wiring (F1)
+
+`tdw-backend::data::Backend` hosts the full knowledge system:
+
+- `KnowledgeRuntime` with the hybrid Retriever, graph engine, and lexical
+  engine — all sharing the same `EmbeddingProvider` and `VectorEngine` as the
+  daemon composition root.
+- `KnowledgeIndexer` exposed as a host-facing seam via
+  `Backend::knowledge_indexer()` (shares the same `Arc`s — no duplication of
+  large state). **Deferral note**: the daemon's own ingestion paths
+  (`knowledge_index_at`, `knowledge_ingest_at`) still use the internal
+  `KnowledgeIndex` field directly; daemon-hosted `KnowledgeIndexer` ingestion
+  is a deferred follow-up to this story.
+- `RetrievalFeedbackStore` for the write-back loop.
+- Graph engine selected at startup from `[knowledge.graph]` config: `bolt`
+  (production) or `in-memory` (dev/test). Hard `Init` error on unreachable
+  Bolt — no silent fallback.
+
+In `Surfaces::Both` mode the `KnowledgeRuntime` and `RetrievalFeedbackStore`
+handles are injected directly into the embedded MCP server via
+`McpServer::with_knowledge` / `McpServer::with_feedback_store`, so knowledge
+read/write tools operate without a loopback round-trip to the daemon.
+
+## MCP tools
+
+The following MCP tools are live when a `KnowledgeRuntime` is attached
+(`tdw-mcp/src/knowledge_tools.rs`):
+
+| Tool | Description |
+|---|---|
+| `tdw.kg.search` | Hybrid semantic + lexical + graph-neighborhood search. |
+| `tdw.kg.entity` | Retrieve a single entity by ID with its tag set. |
+| `tdw.kg.traverse` | BFS neighbourhood traversal from an entity (hop cap: 3). |
+| `tdw.kg.path` | Shortest path between two entities. |
+| `tdw.tags.query` | Tag queries: active tags for an entity, entities matching a tag, or tag hierarchy. |
+
+The feedback write tool (`tdw-mcp/src/knowledge_feedback_tools.rs`) is live
+when a `RetrievalFeedbackStore` is also attached:
+
+| Tool | Description |
+|---|---|
+| `tdw.kg.feedback` | Record retrieval feedback signal (append-only). Gated by feedback-store attachment — absent on agent surfaces where no store is injected. |
+
+There is no inference MCP tool; `tdw-infer` is a library crate whose rules
+fire as part of `KnowledgeRuntime` internals, not as a standalone tool.

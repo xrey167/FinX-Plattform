@@ -463,6 +463,30 @@ jobs:
           TDW_MEILISEARCH_TEST_URL: http://127.0.0.1:7700
         run: cargo test -p tdw-storage-meilisearch --features meilisearch --test http_engine -- --nocapture
 
+      # knowledge-system F1 — Bolt/Memgraph conformance
+      # Starts Memgraph 2.22.1, runs the tdw-storage-graph conformance suite
+      # against the live instance, then tears it down. Kept in the integration
+      # job so it shares the pull-images warm-up step.
+      - name: Start Memgraph for Bolt conformance test
+        run: docker run -d --name memgraph -p 7687:7687 memgraph/memgraph:2.22.1
+
+      - name: Wait for Memgraph Bolt port
+        run: |
+          for i in $(seq 1 30); do
+            if nc -z 127.0.0.1 7687; then break; fi
+            sleep 1
+          done
+          nc -z 127.0.0.1 7687 || { echo "memgraph failed to become ready"; exit 1; }
+
+      - name: Run tdw-storage-graph Bolt conformance test
+        env:
+          TDW_BOLT_TEST_URL: bolt://127.0.0.1:7687
+        run: cargo test -p tdw-storage-graph --features bolt --test conformance --target-dir target -- --nocapture
+
+      - name: Stop Memgraph
+        if: always()
+        run: docker rm -f memgraph || true
+
       - name: Tear down G010 storage containers
         if: always()
         run: docker compose --profile full down -v

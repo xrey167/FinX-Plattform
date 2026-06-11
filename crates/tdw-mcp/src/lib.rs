@@ -892,6 +892,60 @@ pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32
     0
 }
 
+/// Run the blocking stdio JSON-RPC loop with an explicit daemon config **and**
+/// pre-built knowledge handles (knowledge-system F1).
+///
+/// Used by the unified `tdw-backend` binary when running in `Both` (or
+/// `McpOnly`) mode: the in-process `Backend` has already constructed a
+/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime) and a
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore); passing
+/// them here injects them into the embedded MCP server so the knowledge read
+/// tools and the `tdw.kg.feedback` write tool are live on the stdio surface.
+///
+/// When `knowledge` or `feedback` are `None` the server behaves identically to
+/// [`run_stdio_json_rpc_with_daemon`] for those surfaces.
+#[must_use]
+pub fn run_stdio_json_rpc_with_knowledge(
+    daemon: Option<DaemonClientConfig>,
+    knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
+    feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+) -> i32 {
+    let stdin = std::io::stdin();
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
+    let base = if let Some(rt) = knowledge {
+        base.with_knowledge(rt)
+    } else {
+        base
+    };
+    let base = if let Some(store) = feedback {
+        base.with_feedback_store(store)
+    } else {
+        base
+    };
+    let mut server = match attach_env_registry(base) {
+        Ok(server) => server,
+        Err(error) => {
+            eprintln!("tdw-mcp registry configuration error: {error}");
+            return 2;
+        }
+    };
+    for line in stdin.lock().lines() {
+        match line {
+            Ok(line) if line.trim().is_empty() => {}
+            Ok(line) => {
+                for message in server.handle_json_rpc_line(&line) {
+                    println!("{message}");
+                }
+            }
+            Err(error) => {
+                eprintln!("tdw-mcp JSON-RPC read error: {error}");
+                return 1;
+            }
+        }
+    }
+    0
+}
+
 pub fn handle_json_rpc_lines<I, S>(lines: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -1313,6 +1367,111 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
 
     // Optional ops surface (/health, /ready, /metrics), env-gated and off by
     // default; bound on TDW_MCP_OPS_BIND on its own thread.
+    let ops_thread = spawn_mcp_ops(&server, daemon_tcp_addr, shutdown.clone());
+
+    let config = Arc::new(streamable_http_config_from_env());
+    let exit_code = loop {
+        if shutdown.is_triggered() {
+            break 0;
+        }
+        match listener.accept() {
+            Ok((stream, _peer)) => {
+                let server = Arc::clone(&server);
+                let config = Arc::clone(&config);
+                if let Err(error) = std::thread::Builder::new()
+                    .name("tdw-mcp-http".to_string())
+                    .spawn(move || {
+                        if let Err(error) =
+                            handle_streamable_http_connection(stream, &server, &config)
+                        {
+                            eprintln!("tdw-mcp Streamable HTTP connection error: {error}");
+                        }
+                    })
+                {
+                    eprintln!("tdw-mcp Streamable HTTP worker spawn failed: {error}");
+                    break 1;
+                }
+            }
+            Err(ref error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => {
+                eprintln!("tdw-mcp Streamable HTTP accept failed: {error}");
+                break 1;
+            }
+        }
+    };
+
+    shutdown.trigger();
+    if let Some(thread) = ops_thread {
+        let _ = thread.join();
+    }
+    exit_code
+}
+
+/// Run the blocking Streamable HTTP loop with an explicit daemon config **and**
+/// pre-built knowledge handles (knowledge-system F1).
+///
+/// Used by the unified `tdw-backend` binary when running in `Both`/`McpOnly`
+/// mode with an HTTP MCP transport: injects a co-resident
+/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime) and
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore) into the
+/// embedded MCP server so the knowledge read tools and `tdw.kg.feedback` are
+/// live on the Streamable HTTP surface without another loopback hop.
+///
+/// When `knowledge` or `feedback` are `None` the server behaves identically to
+/// [`run_streamable_http_with_daemon`] for those surfaces.
+#[must_use]
+pub fn run_streamable_http_with_knowledge(
+    bind: &str,
+    daemon: Option<DaemonClientConfig>,
+    knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
+    feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+) -> i32 {
+    if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
+        eprintln!(
+            "tdw-mcp refusing non-loopback bind {bind}; set TDW_MCP_HTTP_TOKEN to enable authenticated remote binding"
+        );
+        return 2;
+    }
+
+    let listener = match TcpListener::bind(bind) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("tdw-mcp Streamable HTTP bind failed on {bind}: {error}");
+            return 1;
+        }
+    };
+    if let Err(error) = listener.set_nonblocking(true) {
+        eprintln!("tdw-mcp Streamable HTTP set_nonblocking failed: {error}");
+        return 1;
+    }
+    eprintln!("tdw-mcp Streamable HTTP listening on http://{bind}{STREAMABLE_HTTP_PATH}");
+
+    let daemon_tcp_addr = daemon_tcp_addr_for_readiness(daemon.as_ref());
+
+    let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
+    let base = if let Some(rt) = knowledge {
+        base.with_knowledge(rt)
+    } else {
+        base
+    };
+    let base = if let Some(store) = feedback {
+        base.with_feedback_store(store)
+    } else {
+        base
+    };
+    let server = match attach_env_registry(base) {
+        Ok(server) => Arc::new(Mutex::new(server)),
+        Err(error) => {
+            eprintln!("tdw-mcp registry configuration error: {error}");
+            return 2;
+        }
+    };
+
+    let shutdown = ops::Shutdown::new();
+    ops::install_signal_handler(shutdown.clone());
+
     let ops_thread = spawn_mcp_ops(&server, daemon_tcp_addr, shutdown.clone());
 
     let config = Arc::new(streamable_http_config_from_env());

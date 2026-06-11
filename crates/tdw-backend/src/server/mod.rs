@@ -621,21 +621,37 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
 /// bound TCP address. This is the **real mechanism**, and it avoids any
 /// `std::env::set_var` (forbidden here under `forbid(unsafe_code)` on Rust
 /// 2024): a [`DaemonClientConfig::tcp`] is threaded into the `tdw-mcp` loop via
-/// [`tdw_mcp::run_stdio_json_rpc_with_daemon`] /
-/// [`tdw_mcp::run_streamable_http_with_daemon`], which build the server with
+/// [`tdw_mcp::run_stdio_json_rpc_with_knowledge`] /
+/// [`tdw_mcp::run_streamable_http_with_knowledge`], which build the server with
 /// [`McpServer::with_daemon_config`](tdw_mcp::McpServer::with_daemon_config). When
-/// `None`, the loop falls back to the env-derived daemon config (identical to
-/// `tdw-mcp`'s standalone entrypoints).
+/// `daemon_addr` is `None`, the loop falls back to the env-derived daemon config
+/// (identical to `tdw-mcp`'s standalone entrypoints).
+///
+/// `knowledge` and `feedback` are the co-resident handles from `Backend`
+/// (knowledge-system F1): when `Some` they are injected into the MCP server so
+/// the knowledge read tools and `tdw.kg.feedback` write tool are live on the
+/// embedded surface without a loopback round-trip to the daemon. When `None`
+/// (standalone `McpOnly` surface without a co-resident `Backend`) the server
+/// omits those tools, exactly as the `tdw-mcp` standalone binary does.
 ///
 /// Returns the process exit code from the underlying loop.
-fn run_mcp_loop(transport: &McpTransport, daemon_addr: Option<&str>) -> i32 {
+fn run_mcp_loop(
+    transport: &McpTransport,
+    daemon_addr: Option<&str>,
+    knowledge: Option<std::sync::Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
+    feedback: Option<std::sync::Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
             .with_timeout(std::time::Duration::from_secs(2))
     });
     match transport {
-        McpTransport::Stdio => tdw_mcp::run_stdio_json_rpc_with_daemon(daemon),
-        McpTransport::Http(bind) => tdw_mcp::run_streamable_http_with_daemon(bind, daemon),
+        McpTransport::Stdio => {
+            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback)
+        }
+        McpTransport::Http(bind) => {
+            tdw_mcp::run_streamable_http_with_knowledge(bind, daemon, knowledge, feedback)
+        }
     }
 }
 
@@ -663,8 +679,11 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
         Surfaces::McpOnly => {
             // No async daemon — run the blocking loop on this thread directly.
             // `spawn_blocking` is intentionally NOT used for the long-lived loop.
+            // No co-resident Backend in McpOnly mode: knowledge/feedback are None
+            // (the standalone surface reaches knowledge via the daemon's loopback
+            // transport, not in-process injection).
             let transport = cfg.mcp_transport.clone();
-            let code = tokio::task::block_in_place(|| run_mcp_loop(&transport, None));
+            let code = tokio::task::block_in_place(|| run_mcp_loop(&transport, None, None, None));
             exit_code_to_result(code)
         }
 
@@ -682,10 +701,15 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
         .map(str::to_string)
         .ok_or_else(|| BackendError::Init("daemon did not expose a bound address".to_string()))?;
 
+    // Inject the co-resident knowledge runtime and feedback store into the
+    // embedded MCP server (knowledge-system F1). Both are cheap Arc clones.
+    let knowledge = Some(backend.knowledge_runtime_handle());
+    let feedback = Some(backend.feedback_store_handle());
+
     let transport = cfg.mcp_transport.clone();
     let mcp_thread = std::thread::Builder::new()
         .name("tdw-backend-mcp".to_string())
-        .spawn(move || run_mcp_loop(&transport, Some(&daemon_addr)))
+        .spawn(move || run_mcp_loop(&transport, Some(&daemon_addr), knowledge, feedback))
         .map_err(BackendError::Io)?;
 
     // Wait for the MCP loop to finish on a blocking thread so we do not stall
@@ -1013,6 +1037,10 @@ mod tests {
             .join("tdw-rollout-r18-a.jsonl")
             .to_string_lossy()
             .into_owned();
+        // F1: the default graph backend is "bolt" but test builds lack the
+        // `bolt` feature (and have no Memgraph available). Force in-memory so
+        // `Backend::from_config` / `build_graph_engine` succeeds in CI.
+        config.knowledge.graph.backend = "in-memory".to_string();
         config
     }
 

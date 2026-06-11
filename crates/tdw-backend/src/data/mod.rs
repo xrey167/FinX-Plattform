@@ -16,17 +16,20 @@ use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
 use tdw_core::{
-    BlobEngine, DataModel, Fetcher, LexicalEngine, OBBject, OlapEngine, ProgressStream,
-    ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
+    BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
+    ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
 };
 use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
+use tdw_knowledge::indexer::KnowledgeIndexer;
+use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
 use tdw_service_api::{AppState, fetch_equity_historical};
+use tdw_storage_graph::InMemoryGraphEngine;
 use tokio::sync::Mutex;
 
 use crate::config::BackendConfig;
@@ -58,6 +61,9 @@ struct DaemonHandle {
 pub struct Backend {
     state: AppState,
     runner: CommandRunner,
+    /// The embedding provider shared between the knowledge index, the runtime
+    /// retriever, and the indexer (so all three use the same dimensions/model).
+    embedder: Arc<dyn EmbeddingProvider>,
     /// The async knowledge index. Held behind a [`tokio::sync::Mutex`] because
     /// [`KnowledgeIndex::index_document`] takes `&mut self` and is async; the
     /// guard is acquired per-call and never held across unrelated awaits.
@@ -76,10 +82,19 @@ pub struct Backend {
     /// [`AgentBackend`](crate::agent::AgentBackend) in the same process, it
     /// passes `AgentBackend::feedback_store_handle()` into
     /// [`Backend::with_feedback_store`] so both facades share one instance —
-    /// this is host wiring, not cross-facade state sharing. Standalone
-    /// `tdw-mcp` processes have no `Backend` co-resident; bridging those
-    /// entrypoints to a running daemon's consolidation loop is F1 work.
+    /// this is host wiring, not cross-facade state sharing.
     feedback: Arc<Mutex<RetrievalFeedbackStore>>,
+    /// The graph engine backing the knowledge runtime (knowledge-system F1).
+    /// Config-driven: `knowledge.graph.backend = bolt` → `BoltGraphEngine`
+    /// (requires the `bolt` feature); `in-memory` → `InMemoryGraphEngine`.
+    /// Exposed via [`knowledge_runtime_handle`](Self::knowledge_runtime_handle)
+    /// so the MCP layer can attach it.
+    graph: Arc<dyn GraphEngine>,
+    /// The full knowledge runtime (hybrid retriever + graph/tag handles).
+    /// Constructed from the daemon's graph engine, vector engine, lexical
+    /// engine and embedder in `from_config` (knowledge-system F1). Shared with
+    /// the MCP server via [`knowledge_runtime_handle`](Self::knowledge_runtime_handle).
+    runtime: Arc<KnowledgeRuntime>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -100,6 +115,7 @@ impl Backend {
     /// constructed from `config`.
     pub async fn from_config(config: TdwConfig) -> BackendResult<Self> {
         let embedding = config.knowledge.embedding.clone();
+        let graph_cfg = config.knowledge.graph.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -122,16 +138,31 @@ impl Backend {
                 )));
             }
         }
+        // Build the graph engine from config. NO silent fallback: bolt
+        // unreachable → hard Init error.
+        let graph: Arc<dyn GraphEngine> = build_graph_engine(&graph_cfg).await?;
         let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            embedder,
+            Arc::clone(&embedder),
             state.vector.clone(),
         )));
+        // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
+        // tag channels). The runtime is attached to the MCP server so agents
+        // can search/traverse the graph via the read tools (B8 surface).
+        let collection = tdw_knowledge::collection_name(embedder.model_id());
+        let runtime = Arc::new(
+            KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
+                .with_lexical(Arc::clone(&state.lexical), collection)
+                .with_graph(Arc::clone(&graph)),
+        );
         Ok(Self {
             state,
             runner,
+            embedder,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
+            graph,
+            runtime,
             daemon: None,
         })
     }
@@ -140,16 +171,27 @@ impl Backend {
     pub async fn in_memory_for_tests() -> Self {
         let state = AppState::in_memory_for_tests().await;
         let runner = CommandRunner::default();
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
         let index = Arc::new(Mutex::new(KnowledgeIndex::new(
-            Arc::new(HashEmbeddingProvider::default()),
+            Arc::clone(&embedder),
             state.vector.clone(),
         )));
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let collection = tdw_knowledge::collection_name(embedder.model_id());
+        let runtime = Arc::new(
+            KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
+                .with_lexical(Arc::clone(&state.lexical), collection)
+                .with_graph(Arc::clone(&graph)),
+        );
         Self {
             state,
             runner,
+            embedder,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
+            graph,
+            runtime,
             daemon: None,
         }
     }
@@ -399,6 +441,42 @@ impl Backend {
     pub fn with_feedback_store(mut self, store: Arc<Mutex<RetrievalFeedbackStore>>) -> Self {
         self.feedback = store;
         self
+    }
+
+    // --- Knowledge runtime (F1) ---------------------------------------------
+
+    /// The graph engine handle (cloned `Arc`). Backed by the engine selected
+    /// at construction time (`bolt` or `in-memory`).
+    #[must_use]
+    pub fn graph_engine(&self) -> Arc<dyn GraphEngine> {
+        Arc::clone(&self.graph)
+    }
+
+    /// The full knowledge runtime handle (hybrid retriever + graph/tag handles).
+    /// Pass this to [`tdw_mcp::McpServer::with_knowledge`] to expose the
+    /// `tdw.kg.*` / `tdw.tags.query` tools to connected agents.
+    #[must_use]
+    pub fn knowledge_runtime_handle(&self) -> Arc<KnowledgeRuntime> {
+        Arc::clone(&self.runtime)
+    }
+
+    /// Build a [`KnowledgeIndexer`] backed by the daemon's graph engine and
+    /// lexical engine. Callers own the returned indexer; the daemon's
+    /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
+    ///
+    /// **Deferral note (F1)**: this is a host-facing seam for future
+    /// daemon-hosted ingestion. The daemon's own ingestion methods
+    /// ([`knowledge_index_at`](Self::knowledge_index_at),
+    /// [`knowledge_ingest_at`](Self::knowledge_ingest_at)) still use the
+    /// internal [`KnowledgeIndex`] field directly; routing them through
+    /// this indexer is a deferred follow-up.
+    #[must_use]
+    pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
+        let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
+        let collection = tdw_knowledge::collection_name(self.embedder.model_id());
+        KnowledgeIndexer::new(index)
+            .with_lexical(Arc::clone(&self.state.lexical), collection)
+            .with_graph(Arc::clone(&self.graph))
     }
 
     /// Upsert a [`Memory`] into the store, stamping the current time as its
@@ -946,6 +1024,74 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
         .filter(|secs| *secs > 0)
         .unwrap_or(DEFAULT_SECS);
     std::time::Duration::from_secs(secs)
+}
+
+/// Build the graph engine from `knowledge.graph` config (knowledge-system F1).
+///
+/// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled).
+/// `backend = "bolt"` → [`BoltGraphEngine`] (requires the `bolt` feature; hard
+/// [`BackendError::Init`] if unreachable — NO silent fallback).
+///
+/// # Errors
+///
+/// Returns [`BackendError::Init`] for unknown backends, missing bolt URI, missing
+/// `bolt` build feature, or a Bolt connection error.
+/// Build the graph engine from `knowledge.graph` config (knowledge-system F1).
+///
+/// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled).
+/// `backend = "bolt"` → [`BoltGraphEngine`] (requires the `bolt` feature; hard
+/// [`BackendError::Init`] if unreachable — NO silent fallback).
+///
+/// # Errors
+///
+/// Returns [`BackendError::Init`] for unknown backends, missing bolt URI, missing
+/// `bolt` build feature, or a Bolt connection error.
+#[cfg(feature = "bolt")]
+async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<dyn GraphEngine>> {
+    match cfg.backend.as_str() {
+        "in-memory" => Ok(Arc::new(InMemoryGraphEngine::default())),
+        "bolt" => {
+            let uri = cfg
+                .bolt_uri
+                .as_deref()
+                .filter(|uri| !uri.trim().is_empty())
+                .ok_or_else(|| {
+                    BackendError::Init(
+                        "knowledge.graph.backend = bolt requires knowledge.graph.bolt_uri"
+                            .to_string(),
+                    )
+                })?;
+            let password = std::env::var(&cfg.bolt_password_env).unwrap_or_default();
+            tdw_storage_graph::BoltGraphEngine::connect(uri, &cfg.bolt_user, &password)
+                .await
+                .map(|engine| -> Arc<dyn GraphEngine> { Arc::new(engine) })
+                .map_err(|error| BackendError::Init(format!("bolt graph connect ({uri}): {error}")))
+        }
+        other => Err(BackendError::Init(format!(
+            "unknown knowledge.graph.backend {other:?}; valid values: bolt | in-memory"
+        ))),
+    }
+}
+
+/// Non-bolt build: only `in-memory` is available; `bolt` is a hard error.
+///
+/// The `async` keyword is kept so this matches the bolt-feature signature and
+/// callers do not need cfg-gated call sites.
+#[cfg(not(feature = "bolt"))]
+#[allow(clippy::unused_async)]
+async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<dyn GraphEngine>> {
+    match cfg.backend.as_str() {
+        "in-memory" => Ok(Arc::new(InMemoryGraphEngine::default())),
+        "bolt" => Err(BackendError::Init(
+            "knowledge.graph.backend = bolt requires the `bolt` build feature \
+             (compile tdw-backend with --features bolt) — refusing to silently \
+             fall back to the in-memory engine"
+                .to_string(),
+        )),
+        other => Err(BackendError::Init(format!(
+            "unknown knowledge.graph.backend {other:?}; valid values: bolt | in-memory"
+        ))),
+    }
 }
 
 #[cfg(test)]
