@@ -31,16 +31,134 @@ pub use query_params::{Date, Interval, MAX_LIMIT, Period, StandardParams};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Stable, machine-readable discriminant for every [`Error`] variant.
+///
+/// # Stability promise
+///
+/// Once a code is assigned it will never be renamed or removed within a major
+/// version of `tdw-core`. Callers may hard-code these strings in metrics,
+/// alerting rules, and structured-log filters. New variants receive new codes;
+/// existing codes are never recycled.
+///
+/// # Assignment convention
+///
+/// Codes follow the pattern `<LAYER>_<SEQUENCE>` where `<LAYER>` is a
+/// two-letter prefix for the subsystem (`IQ` = invalid query, `PV` = provider,
+/// `ST` = storage, `RG` = registry, `HC` = HTTP client) and `<SEQUENCE>` is a
+/// zero-padded decimal counter starting at `001`.  Reserve `000` for future
+/// "unknown / not yet classified" use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    /// `IQ_001` — the request parameters failed validation before dispatch.
+    InvalidQuery,
+    /// `PV_001` — a provider-level failure (network, upstream API, decode).
+    Provider,
+    /// `ST_001` — a storage-layer failure (read/write, SQL, path validation).
+    Storage,
+    /// `RG_001` — a provider-registry violation (e.g. duplicate registration).
+    Registry,
+    /// `HC_001` — an HTTP-client construction failure (feature `http` only).
+    HttpClient,
+}
+
+impl ErrorCode {
+    /// The stable string representation of this code suitable for use in
+    /// metrics labels, structured logs, and wire protocols.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidQuery => "IQ_001",
+            Self::Provider => "PV_001",
+            Self::Storage => "ST_001",
+            Self::Registry => "RG_001",
+            Self::HttpClient => "HC_001",
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Core error type for the `tdw` platform.
+///
+/// # Error codes
+///
+/// Every variant exposes a [`ErrorCode`] via [`Error::code`].  Codes are
+/// stable across releases — see [`ErrorCode`] for the assignment convention
+/// and stability promise.
+///
+/// # Source chains
+///
+/// Variants that carry a structured underlying error implement the standard
+/// [`std::error::Error::source`] chain via `thiserror`'s `#[source]` attribute.
+/// The `#[source]` field is always **additive**: the `Display` text of the
+/// wrapping variant is unchanged so existing log/test assertions continue to
+/// match, while callers that need to inspect the root cause can call
+/// `.source()` and downcast.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
+    /// A request failed parameter validation before it reached the provider.
+    ///
+    /// Code: [`ErrorCode::InvalidQuery`] (`IQ_001`).
     #[error("invalid query: {0}")]
     InvalidQuery(String),
+    /// A provider-level failure (network, upstream API, decode, missing key).
+    ///
+    /// Code: [`ErrorCode::Provider`] (`PV_001`).
     #[error("provider error: {0}")]
     Provider(String),
+    /// A storage-layer failure (read/write, SQL execution, path validation).
+    ///
+    /// Code: [`ErrorCode::Storage`] (`ST_001`).
     #[error("storage error: {0}")]
     Storage(String),
+    /// A provider-registry violation (e.g. duplicate registration).
+    ///
+    /// Code: [`ErrorCode::Registry`] (`RG_001`).
     #[error("registry error: {0}")]
     Registry(String),
+    /// An HTTP-client construction failure with a preserved source chain.
+    ///
+    /// The `message` field carries the human-readable context prefix (e.g.
+    /// `"polygon: ..."`) so the `Display` output is byte-identical to what
+    /// `Error::Provider(format!("{ctx}: {error}"))` would have produced.
+    /// The `source` field holds the original `reqwest::Error` so callers can
+    /// downcast without string-parsing.
+    ///
+    /// Code: [`ErrorCode::HttpClient`] (`HC_001`).
+    /// Only constructed by [`crate::http_support::build_client`] (feature `http`).
+    #[cfg(feature = "http")]
+    #[error("{message}")]
+    HttpClient {
+        /// Human-readable context, formatted as `"{ctx}: {source}"`.
+        message: String,
+        /// The underlying `reqwest` builder error.
+        #[source]
+        source: reqwest::Error,
+    },
+}
+
+impl Error {
+    /// Return the stable [`ErrorCode`] for this error variant.
+    ///
+    /// The code is suitable for use in metrics labels, structured logs, and
+    /// alerting rules.  See [`ErrorCode`] for the stability promise.
+    #[must_use]
+    pub const fn code(&self) -> ErrorCode {
+        match self {
+            Self::InvalidQuery(_) => ErrorCode::InvalidQuery,
+            Self::Provider(_) => ErrorCode::Provider,
+            Self::Storage(_) => ErrorCode::Storage,
+            Self::Registry(_) => ErrorCode::Registry,
+            #[cfg(feature = "http")]
+            Self::HttpClient { .. } => ErrorCode::HttpClient,
+        }
+    }
 }
 
 /// Validate a SQL identifier (e.g. a table name) that must be interpolated
