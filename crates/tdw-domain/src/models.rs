@@ -340,6 +340,38 @@ pub struct CommitmentOfTraders {
     pub nonreportable_short: Option<f64>,
 }
 
+/// A single research-factor return observation.
+///
+/// Standardizes the Ken French Data Library research factors
+/// (`economy/factors/famafrench`): one row = one (date) observation of the
+/// factor set the requested dataset provides. The 3-factor dataset populates
+/// `mkt_rf`/`smb`/`hml`/`rf`; the 5-factor dataset adds `rmw`/`cma`; the
+/// momentum dataset populates only `mom`. Every factor is [`Option`] since each
+/// dataset reports a different subset, and values are decimal returns (the
+/// source publishes percent — the fetcher converts percent → fraction). The
+/// `date` is the bare calendar date the row covers (`YYYY-MM-DD` for daily,
+/// `YYYY-MM` for monthly).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FactorReturn {
+    /// Observation date: `YYYY-MM-DD` (daily) or `YYYY-MM` (monthly).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Excess return on the market (`Mkt-RF`), as a decimal fraction.
+    pub mkt_rf: Option<f64>,
+    /// Small-minus-big size factor (`SMB`), as a decimal fraction.
+    pub smb: Option<f64>,
+    /// High-minus-low value factor (`HML`), as a decimal fraction.
+    pub hml: Option<f64>,
+    /// Robust-minus-weak profitability factor (`RMW`, 5-factor only).
+    pub rmw: Option<f64>,
+    /// Conservative-minus-aggressive investment factor (`CMA`, 5-factor only).
+    pub cma: Option<f64>,
+    /// Momentum factor (`Mom`, momentum dataset only), as a decimal fraction.
+    pub mom: Option<f64>,
+    /// Risk-free rate (`RF`), as a decimal fraction.
+    pub rf: Option<f64>,
+}
+
 /// A scheduled corporate-calendar event (dividend, earnings, or IPO).
 ///
 /// Standardizes the NASDAQ calendar cluster — `equity/calendar/dividends`,
