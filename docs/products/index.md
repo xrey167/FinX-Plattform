@@ -7,8 +7,8 @@ front door.
 
 ```
 ┌──────────────┐   MCP (stdio / HTTP)   ┌─────────┐   live APIs   ┌───────────────┐
-│ Claude / any │ ─────────────────────► │ tdw-mcp │ ────────────► │ 34 providers   │
-│  MCP client  │ ◄───────────────────── │         │ ◄──────────── │ 51 endpoints   │
+│ Claude / any │ ─────────────────────► │ tdw-mcp │ ────────────► │ 79 providers   │
+│  MCP client  │ ◄───────────────────── │         │ ◄──────────── │ 103 routes     │
 └──────────────┘    structured rows     └─────────┘               └───────────────┘
 ```
 
@@ -54,5 +54,5 @@ fixings, BTC OHLC, and Apple's filings through two tools.
 | `tdw-backend` | Embeddable Rust facade (roadmap: crates.io) | [architecture](../architecture.md) |
 
 Releases ship Linux/macOS/Windows binaries and GHCR images with build
-provenance attestations — see [release notes](../release/v1.2.0-notes.md) and
+provenance attestations — see [release notes](../release/v1.3.0-notes.md) and
 the [CHANGELOG](../../CHANGELOG.md).
