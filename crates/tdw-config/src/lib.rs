@@ -626,9 +626,11 @@ const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
     // --- eia ---
     CredentialEntry {
         provider: "eia",
-        env_var: "EIA_API_KEY",
+        env_var: "TDW_EIA_API_KEY",
         config_key: Some("eia_api_key"),
-        doc: "U.S. Energy Information Administration API key (free registration).",
+        doc: "U.S. Energy Information Administration API key (free registration). \
+              The provider crate reads TDW_EIA_API_KEY; EIA_API_KEY is the \
+              OpenBB-parity name (documentation only — not read by any crate today).",
     },
     // --- finnhub ---
     CredentialEntry {
@@ -642,9 +644,10 @@ const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
         provider: "fmp",
         env_var: "TDW_FMP_API_KEY",
         config_key: Some("fmp_api_key"),
-        doc: "Financial Modeling Prep API key. The provider crate reads \
-              TDW_FMP_API_KEY (authoritative); FMP_API_KEY is the OpenBB-parity \
-              alias — both names are accepted via the provider's own alias logic.",
+        doc: "Financial Modeling Prep API key. The provider crate reads only \
+              TDW_FMP_API_KEY — there is no runtime alias fallback. FMP_API_KEY \
+              is the OpenBB-parity name recorded here for documentation purposes \
+              only; it is not read by the provider today.",
     },
     // --- fred ---
     CredentialEntry {
@@ -956,8 +959,10 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         assert_eq!(fred.env_var, "FRED_API_KEY");
         assert_eq!(fred.config_key, Some("fred_api_key"));
 
+        // EIA: authoritative env var is TDW_EIA_API_KEY (what the provider crate
+        // actually reads); EIA_API_KEY is the OpenBB-parity name (doc only).
         let eia = credential_for_provider("eia").expect("eia credential registered");
-        assert_eq!(eia.env_var, "EIA_API_KEY");
+        assert_eq!(eia.env_var, "TDW_EIA_API_KEY");
         assert_eq!(eia.config_key, Some("eia_api_key"));
 
         assert!(credential_for_provider("yahoo").is_none());
