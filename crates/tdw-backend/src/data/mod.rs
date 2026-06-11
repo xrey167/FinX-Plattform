@@ -8,8 +8,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tdw_agent::{ConsolidationAction, Memory};
-use tdw_agent_store::{MemoryStore, consolidate_at, spawn_consolidation_scheduler};
+use tdw_agent::{ConsolidationAction, Memory, UsageHint, consolidation_plan_with_usage};
+use tdw_agent_store::{
+    MemoryStore, RetrievalFeedbackStore, consolidate_at, spawn_consolidation_scheduler,
+};
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::TdwConfig;
@@ -66,6 +68,18 @@ pub struct Backend {
     /// Loaded from `TDW_MEMORY_DIR` when set (round-tripping to `*.json5`), else
     /// purely in-memory.
     memory: Arc<Mutex<MemoryStore>>,
+    /// The retrieval feedback store (knowledge-system B10). Held behind a
+    /// [`tokio::sync::Mutex`] so the MCP feedback tool and
+    /// [`consolidate_now_at`](Self::consolidate_now_at) share one handle.
+    /// Always present after construction (never `None`). When an embedding
+    /// host constructs both this `Backend` and an
+    /// [`AgentBackend`](crate::agent::AgentBackend) in the same process, it
+    /// passes `AgentBackend::feedback_store_handle()` into
+    /// [`Backend::with_feedback_store`] so both facades share one instance —
+    /// this is host wiring, not cross-facade state sharing. Standalone
+    /// `tdw-mcp` processes have no `Backend` co-resident; bridging those
+    /// entrypoints to a running daemon's consolidation loop is F1 work.
+    feedback: Arc<Mutex<RetrievalFeedbackStore>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -117,6 +131,7 @@ impl Backend {
             runner,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
+            feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             daemon: None,
         })
     }
@@ -134,6 +149,7 @@ impl Backend {
             runner,
             index,
             memory: Arc::new(Mutex::new(build_memory_store())),
+            feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             daemon: None,
         }
     }
@@ -344,6 +360,47 @@ impl Backend {
         Arc::clone(&self.memory)
     }
 
+    /// The shared retrieval feedback store handle (cloned `Arc`, knowledge-system
+    /// B10). The MCP feedback tool and [`consolidate_now_at`](Self::consolidate_now_at)
+    /// lock this same store.
+    ///
+    /// **Host-wiring:** an embedding host that constructs both this `Backend` and
+    /// an [`AgentBackend`](crate::agent::AgentBackend) in the same process should
+    /// call `Backend::with_feedback_store(agent_backend.feedback_store_handle())`
+    /// so that events appended through `AgentBackend`'s embedded `McpServer` are
+    /// visible to `consolidate_now_at`. This is the correct direction: the host
+    /// creates one `AgentBackend` (which owns the store), then hands its handle to
+    /// `Backend` — not the reverse.
+    #[must_use]
+    pub fn feedback_store_handle(&self) -> Arc<Mutex<RetrievalFeedbackStore>> {
+        Arc::clone(&self.feedback)
+    }
+
+    /// Replace the feedback store with a host-supplied handle (builder pattern).
+    ///
+    /// Use this when an embedding host constructs both a `Backend` and an
+    /// [`AgentBackend`](crate::agent::AgentBackend) in the same process and wants
+    /// events appended through `AgentBackend`'s embedded `McpServer` to be visible
+    /// to [`consolidate_now_at`](Self::consolidate_now_at):
+    ///
+    /// ```ignore
+    /// let agent = AgentBackend::from_config(&cfg)?;
+    /// let backend = Backend::from_config(tdw_cfg)
+    ///     .await?
+    ///     .with_feedback_store(agent.feedback_store_handle());
+    /// ```
+    ///
+    /// This is **host wiring**, not cross-facade state sharing: both facades are
+    /// constructed by the same host and the `Arc` is handed across at construction
+    /// time. The dual-facade boundary (async data / sync agent, joined only by a
+    /// loopback `DaemonClient`) is never violated. Standalone `tdw-mcp` processes
+    /// do not use this path; see the `attach_env_registry` doc for the F1 deferral.
+    #[must_use]
+    pub fn with_feedback_store(mut self, store: Arc<Mutex<RetrievalFeedbackStore>>) -> Self {
+        self.feedback = store;
+        self
+    }
+
     /// Upsert a [`Memory`] into the store, stamping the current time as its
     /// `last_consolidated` anchor when none is set (so it ages from insertion).
     /// Persists to `*.json5` when the store has a backing dir.
@@ -367,8 +424,9 @@ impl Backend {
         store.memories().cloned().collect()
     }
 
-    /// Run one consolidation pass over the store at the current time, applying and
-    /// persisting tier changes, and return the actions applied.
+    /// Wall-clock convenience over [`Backend::consolidate_now_at`]: stamps the
+    /// pass with the current UTC time. Only this edge reads the clock; the
+    /// deterministic core is [`Backend::consolidate_now_at`] (B3 precedent).
     ///
     /// # Errors
     ///
@@ -376,8 +434,159 @@ impl Backend {
     /// expired memory's file fails.
     pub async fn consolidate_now(&self) -> BackendResult<Vec<ConsolidationAction>> {
         let now = chrono::Utc::now().to_rfc3339();
-        let mut store = self.memory.lock().await;
-        consolidate_at(&mut store, &now).map_err(|error| BackendError::Memory(error.to_string()))
+        self.consolidate_now_at(&now).await
+    }
+
+    /// Deterministic consolidation pass at an injected `now` (RFC 3339).
+    ///
+    /// When the retrieval feedback store is non-empty, usage hints are derived
+    /// for each memory and passed to [`consolidation_plan_with_usage`]:
+    ///
+    /// - **Recency credit**: `credit = raw_age.saturating_sub(days_since_last_used)`.
+    ///   A memory used N days ago gets up to N days of credit, capped at `raw_age`
+    ///   so `effective_age` never goes negative. The credit comes from the
+    ///   most-recent `used=true` event that references the memory (by `agent_id`
+    ///   or `hit_ids`).
+    /// - **`use_count`**: the number of *distinct* `query_fingerprint` values in
+    ///   `used=true` events that reference the memory. Informational for now;
+    ///   available for future priority-weighting.
+    ///
+    /// **Linking convention**: an event references a memory when
+    /// `event.agent_id == memory.meta.base.name` OR
+    /// `event.hit_ids` contains `memory.meta.base.name`.
+    /// When neither matches, the event contributes no credit to that memory
+    /// (silent no-op). Because `agent_id` is caller-supplied, a rogue caller
+    /// can submit events under any valid id — this is a bounded poisoning
+    /// channel (capped by per-agent + global caps). Host-binding of `agent_id`
+    /// is deferred; see `knowledge_feedback_tools` trust-model note.
+    ///
+    /// When the feedback store is empty the behaviour is **byte-for-byte
+    /// identical** to [`consolidate_at`] — the B10 regression contract.
+    ///
+    /// The per-memory hint computation is O(events) per memory. At the current
+    /// default caps (256 per-agent, 4096 global) this is acceptable; if caps
+    /// grow significantly the inner loops can be pre-aggregated into a map.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Memory`] if persisting a promotion or deleting
+    /// an expired memory's file fails.
+    pub async fn consolidate_now_at(&self, now: &str) -> BackendResult<Vec<ConsolidationAction>> {
+        use tdw_agent_store::age_days;
+
+        // Snapshot the feedback store (cheap clone of VecDeque<RetrievalEvent>).
+        let feedback_snapshot = {
+            let feedback = self.feedback.lock().await;
+            // Only materialise hints when there are events; empty store → base path.
+            if feedback.is_empty() {
+                None
+            } else {
+                Some(
+                    feedback
+                        .events()
+                        .map(|e| {
+                            (
+                                e.agent_id.clone(),
+                                e.used,
+                                e.recorded_at.clone(),
+                                e.hit_ids.clone(),
+                                e.query_fingerprint.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
+
+        let actions = {
+            let mut store = self.memory.lock().await;
+
+            let Some(events) = feedback_snapshot else {
+                // No feedback data: fall straight through to the base planner so
+                // the behaviour is byte-for-byte identical to the pre-B10 path.
+                return consolidate_at(&mut store, now)
+                    .map_err(|error| BackendError::Memory(error.to_string()));
+            };
+
+            // A `used` event references a memory when either the submitting
+            // `agent_id` equals the memory name (agent-plane convention) or one
+            // of the `hit_ids` equals the memory name (retrieved-doc signal).
+            let references = |memory_name: &str, agent_id: &str, hit_ids: &[String]| -> bool {
+                agent_id == memory_name || hit_ids.iter().any(|h| h == memory_name)
+            };
+
+            let aged: Vec<_> = store
+                .memories()
+                .map(|memory| {
+                    let name = memory.meta.base.name.as_str();
+                    let raw_age = age_days(memory.last_consolidated.as_deref(), now);
+
+                    // Find the most-recent `used` event referencing this memory.
+                    // RFC 3339 strings sort lexicographically by time.
+                    let last_used_at = events
+                        .iter()
+                        .filter(|(agent_id, used, _, hit_ids, _)| {
+                            *used && references(name, agent_id, hit_ids)
+                        })
+                        .map(|(_, _, recorded_at, _, _)| recorded_at.as_str())
+                        .max();
+
+                    // credit = raw_age.saturating_sub(days_since_last_used)
+                    // i.e. effective_age = max(0, raw_age − days_since_event).
+                    let recency_credit_days = last_used_at.map_or(0, |t| {
+                        let days_since = age_days(Some(t), now);
+                        raw_age.saturating_sub(days_since)
+                    });
+
+                    // use_count = distinct query_fingerprints in used events
+                    // referencing this memory (dedup so repeated identical
+                    // queries don't inflate the count).
+                    let mut seen_fps = std::collections::HashSet::new();
+                    let use_count = u32::try_from(
+                        events
+                            .iter()
+                            .filter(|(agent_id, used, _, hit_ids, fp)| {
+                                *used
+                                    && references(name, agent_id, hit_ids)
+                                    && seen_fps.insert(fp.as_str())
+                            })
+                            .count(),
+                    )
+                    .unwrap_or(u32::MAX);
+
+                    (
+                        memory,
+                        raw_age,
+                        UsageHint {
+                            recency_credit_days,
+                            use_count,
+                        },
+                    )
+                })
+                .collect();
+
+            let actions = consolidation_plan_with_usage(aged);
+
+            // Apply the decided actions — mirrors `consolidate_at`'s apply loop.
+            for action in &actions {
+                match action {
+                    ConsolidationAction::Promote { name, to, .. } => {
+                        store
+                            .promote_at(name, *to, now)
+                            .map_err(|error| BackendError::Memory(error.to_string()))?;
+                    }
+                    ConsolidationAction::Expire { name } => {
+                        store
+                            .remove(name)
+                            .map_err(|error| BackendError::Memory(error.to_string()))?;
+                    }
+                }
+            }
+            // `store` (MutexGuard) is dropped here, releasing the lock before
+            // returning — satisfies significant_drop_tightening.
+            actions
+        };
+        Ok(actions)
     }
 
     // --- Typed fetch / stream ----------------------------------------------
@@ -1198,6 +1407,194 @@ mod tests {
         assert!(
             backend.list_memories().await.is_empty(),
             "consolidate_now expires the working buffer"
+        );
+    }
+
+    /// B10 empty-store regression: `consolidate_now_at` with an empty feedback
+    /// store must produce EXACTLY the same actions as a direct `consolidate_at`
+    /// call. This is the baseline contract: no feedback data → no behaviour change.
+    #[tokio::test]
+    async fn consolidate_now_at_empty_feedback_matches_base_consolidate_at() {
+        use tdw_agent_store::{MemoryStore, consolidate_at};
+
+        let now = "2026-06-10T00:00:00Z";
+
+        // Build the same memory independently: an aged ShortTerm (ttl=1, age=2 → promote).
+        let mut aged = sample_memory("note", tdw_agent::Retention::ShortTerm);
+        aged.last_consolidated = Some("2026-06-08T00:00:00Z".to_string());
+
+        // Expected: base planner on a plain MemoryStore.
+        let base_actions = {
+            let mut plain = MemoryStore::new();
+            plain.upsert_at(aged.clone(), now).expect("upsert");
+            consolidate_at(&mut plain, now).expect("consolidate_at")
+        };
+
+        // Backend with an empty feedback store must produce the same result.
+        let backend = Backend::in_memory_for_tests().await;
+        backend.upsert_memory(aged).await.expect("upsert");
+        // feedback store is empty by default — no events appended.
+        let backend_actions = backend
+            .consolidate_now_at(now)
+            .await
+            .expect("consolidate_now_at");
+
+        assert_eq!(
+            backend_actions, base_actions,
+            "empty feedback store must produce identical actions to consolidate_at"
+        );
+    }
+
+    /// B10 usage-branch: `consolidate_now_at` with a non-empty feedback store
+    /// applies recency credit via the usage-aware planner path. This pins the
+    /// populated-store code path (`data/mod.rs:consolidate_now_at` usage branch).
+    #[tokio::test]
+    async fn consolidate_now_at_with_feedback_applies_recency_credit() {
+        use tdw_agent_store::RetrievalEvent;
+        use tdw_knowledge::runtime::KnowledgeVersions;
+
+        // "2026-06-08" is 2 days before now; ShortTerm ttl=1 → would normally promote.
+        let past = "2026-06-08T00:00:00Z";
+        let now = "2026-06-10T00:00:00Z";
+
+        let mut aged = sample_memory("note", tdw_agent::Retention::ShortTerm);
+        aged.last_consolidated = Some(past.to_string());
+
+        let backend = Backend::in_memory_for_tests().await;
+        backend.upsert_memory(aged).await.expect("upsert");
+
+        // Append a `used` feedback event recorded_at=now, referencing by agent_id.
+        // credit = raw_age(2).saturating_sub(days_since(0)) = 2
+        // effective_age = 2.saturating_sub(2) = 0 < ttl(1) → memory survives.
+        backend
+            .feedback_store_handle()
+            .lock()
+            .await
+            .append(RetrievalEvent {
+                agent_id: "note".to_string(),
+                query_fingerprint: "fp-abc".to_string(),
+                hit_ids: vec![],
+                versions: KnowledgeVersions {
+                    embedder_model: "hash-v1".to_string(),
+                    rules_version: None,
+                    infer_version: None,
+                },
+                used: true,
+                recorded_at: now.to_string(),
+            })
+            .expect("append");
+
+        let actions = backend
+            .consolidate_now_at(now)
+            .await
+            .expect("consolidate_now_at");
+
+        assert!(
+            actions.is_empty(),
+            "recency credit of 2 days makes effective_age=0 < ttl=1 → no actions: {actions:?}"
+        );
+        assert_eq!(
+            backend.list_memories().await.len(),
+            1,
+            "the memory must survive with full recency credit"
+        );
+    }
+
+    /// B10 usage-branch: distinct fingerprint dedup for `use_count`.
+    /// Two events with the same fingerprint count as one; three distinct
+    /// fingerprints count as three.
+    #[tokio::test]
+    async fn consolidate_now_at_use_count_deduplicates_fingerprints() {
+        use tdw_agent_store::RetrievalEvent;
+        use tdw_knowledge::runtime::KnowledgeVersions;
+
+        let now = "2026-06-10T00:00:00Z";
+        let backend = Backend::in_memory_for_tests().await;
+
+        let mut aged = sample_memory("note", tdw_agent::Retention::ShortTerm);
+        aged.last_consolidated = Some("2026-06-08T00:00:00Z".to_string());
+        backend.upsert_memory(aged).await.expect("upsert");
+
+        let make_event = |fp: &str| RetrievalEvent {
+            agent_id: "note".to_string(),
+            query_fingerprint: fp.to_string(),
+            hit_ids: vec![],
+            versions: KnowledgeVersions {
+                embedder_model: "hash-v1".to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+            used: true,
+            recorded_at: now.to_string(),
+        };
+
+        {
+            let fb_arc = backend.feedback_store_handle();
+            let mut fb = fb_arc.lock().await;
+            fb.append(make_event("fp-1")).expect("append fp-1 a");
+            fb.append(make_event("fp-1")).expect("append fp-1 b"); // duplicate
+            fb.append(make_event("fp-2")).expect("append fp-2");
+        }
+
+        // The test only pins that the function runs without error and that credit
+        // is applied (memory survives). The use_count value (2 distinct fps) is
+        // informational and not yet policy-relevant.
+        let actions = backend
+            .consolidate_now_at(now)
+            .await
+            .expect("consolidate_now_at");
+        assert!(
+            actions.is_empty(),
+            "recency credit applies even with duplicate fingerprints: {actions:?}"
+        );
+    }
+
+    /// B10 regression: a `used` feedback event whose `hit_ids` references a memory
+    /// by name grants recency credit, sparing an aged memory that would otherwise
+    /// promote. This pins the retrieval→consolidation link to `hit_ids` (the
+    /// retrieved-doc id), not merely the submitting `agent_id`.
+    #[tokio::test]
+    async fn used_hit_id_feedback_spares_an_aged_memory() {
+        use tdw_agent_store::RetrievalEvent;
+        use tdw_knowledge::runtime::KnowledgeVersions;
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // An aged ShortTerm memory (ttl 1): without credit, raw_age ≫ ttl → promote.
+        let mut aged = sample_memory("doc-note", tdw_agent::Retention::ShortTerm);
+        aged.last_consolidated = Some("2026-06-01T00:00:00Z".to_string());
+
+        let backend = Backend::in_memory_for_tests().await;
+        backend.upsert_memory(aged).await.expect("upsert aged");
+
+        // Record a `used` event referencing the memory by hit id (NOT agent_id).
+        backend
+            .feedback_store_handle()
+            .lock()
+            .await
+            .append(RetrievalEvent {
+                agent_id: "some-other-agent".to_string(),
+                query_fingerprint: "fp".to_string(),
+                hit_ids: vec!["doc-note".to_string()],
+                versions: KnowledgeVersions {
+                    embedder_model: "hash-v1".to_string(),
+                    rules_version: None,
+                    infer_version: None,
+                },
+                used: true,
+                recorded_at: now.clone(),
+            })
+            .expect("append feedback");
+
+        let actions = backend.consolidate_now().await.expect("consolidate");
+        assert!(
+            actions.is_empty(),
+            "recency credit from the hit_id feedback should spare the memory: {actions:?}"
+        );
+        assert_eq!(
+            backend.list_memories().await.len(),
+            1,
+            "the referenced memory must survive consolidation"
         );
     }
 

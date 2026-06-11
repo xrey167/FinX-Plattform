@@ -4964,6 +4964,7 @@ dependencies = [
  "serde_json",
  "tdw-agent",
  "tdw-core",
+ "tdw-knowledge",
  "tokio",
  "tokio-util",
 ]
@@ -5355,10 +5356,20 @@ name = "tdw-eval-runner"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tdw-agent",
  "tdw-agent-store",
+ "tdw-core",
+ "tdw-embed",
+ "tdw-embed-local",
+ "tdw-kg",
+ "tdw-knowledge",
  "tdw-llm",
  "tdw-llm-anthropic",
+ "tdw-retrieve",
+ "tdw-storage-meilisearch",
+ "tdw-storage-qdrant",
+ "tokio",
 ]
 
 [[package]]
@@ -5485,6 +5496,7 @@ dependencies = [
 name = "tdw-knowledge"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "tdw-core",
@@ -5498,6 +5510,7 @@ dependencies = [
  "tdw-storage-qdrant",
  "tdw-tag-rules",
  "tdw-tags",
+ "tdw-taxonomy",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -5550,10 +5563,12 @@ name = "tdw-mcp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "subtle",
  "tdw-agent",
+ "tdw-agent-store",
  "tdw-app-client",
  "tdw-app-server",
  "tdw-config",

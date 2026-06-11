@@ -592,7 +592,7 @@ fn is_date(value: &str) -> bool {
 /// within a runtime") — a remote crash per tool call (B8 security review).
 /// Reuse the ambient handle in that case; otherwise build the tiny per-call
 /// runtime the ops surface uses.
-fn block_on<F>(future: F) -> F::Output
+pub fn block_on<F>(future: F) -> F::Output
 where
     F: std::future::Future + Send,
     F::Output: Send,

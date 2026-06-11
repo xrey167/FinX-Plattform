@@ -2,6 +2,7 @@
 #![deny(clippy::pedantic, clippy::nursery)]
 
 pub mod indexer;
+pub mod proposals;
 pub mod reindex;
 pub mod runtime;
 

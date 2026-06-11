@@ -16,7 +16,9 @@ use tdw_app_server::{DaemonEndpoint, DaemonTransport};
 use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
+pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_tools;
+pub(crate) mod knowledge_write_tools;
 pub mod ops;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -163,6 +165,10 @@ pub struct McpServer {
     /// (knowledge-system B8) are appended to `tools/list` and dispatched in
     /// `call_tool`; `None` keeps the knowledge surface off entirely.
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
+    /// Optional retrieval feedback store (knowledge-system B10). When attached
+    /// AND a knowledge runtime is present, the `tdw.kg.feedback` tool is exposed.
+    /// `None` keeps the feedback surface off entirely.
+    feedback_store: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
 }
 
 impl Default for McpServer {
@@ -178,6 +184,7 @@ impl Default for McpServer {
             executor: tdw_tool_exec::ToolExecutor::new(),
             expose_sample_tools: sample_tools_enabled(),
             knowledge: None,
+            feedback_store: None,
         }
     }
 }
@@ -201,6 +208,7 @@ impl McpServer {
             executor: tdw_tool_exec::ToolExecutor::new(),
             expose_sample_tools: sample_tools_enabled(),
             knowledge: None,
+            feedback_store: None,
         }
     }
 
@@ -249,6 +257,28 @@ impl McpServer {
     ) -> Self {
         self.knowledge = Some(runtime);
         self
+    }
+
+    /// Attach a [`tdw_agent_store::RetrievalFeedbackStore`] (knowledge-system B10).
+    /// When attached AND a knowledge runtime is present, `tdw.kg.feedback` appears in
+    /// `tools/list` and is dispatched in `tools/call`. Consumes and returns `self` for
+    /// builder use.
+    #[must_use]
+    pub fn with_feedback_store(
+        mut self,
+        store: Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>,
+    ) -> Self {
+        self.feedback_store = Some(store);
+        self
+    }
+
+    /// Set (or replace) the attached feedback store in place — the same seam
+    /// that [`AgentBackend::set_proposals`] uses for the write queue in B9.
+    pub fn set_feedback_store(
+        &mut self,
+        store: Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>,
+    ) {
+        self.feedback_store = Some(store);
     }
 
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
@@ -314,6 +344,17 @@ impl McpServer {
         // the optional handle.
         if self.knowledge.is_some() {
             descriptors.extend(knowledge_tools::descriptors());
+        }
+        // The knowledge WRITE tools (knowledge-system B9) are appended ONLY when the
+        // runtime ALSO has the proposal queue + adaptivity resolver attached — the
+        // gate's inputs. A read-only knowledge runtime never exposes the write surface.
+        if self.knowledge_writes_available() {
+            descriptors.extend(knowledge_write_tools::descriptors());
+        }
+        // The knowledge FEEDBACK tool (knowledge-system B10) is appended ONLY when the
+        // runtime is present AND a feedback store handle is attached. Absent either → off.
+        if self.knowledge_feedback_available() {
+            descriptors.push(knowledge_feedback_tools::descriptor());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -469,6 +510,14 @@ impl McpServer {
             return messages;
         }
 
+        if let Some(messages) = self.dispatch_knowledge_write_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_feedback_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
             return messages;
         }
@@ -556,6 +605,106 @@ impl McpServer {
                     .with_data(json!({ "tool": name })),
             )],
         };
+        Some(messages)
+    }
+
+    /// True when the attached knowledge runtime exposes the gated WRITE surface
+    /// (knowledge-system B9): it has a proposal queue, an adaptivity resolver,
+    /// AND a bound agent identity. A read-only knowledge runtime returns `false`.
+    fn knowledge_writes_available(&self) -> bool {
+        self.knowledge.as_ref().is_some_and(|runtime| {
+            runtime.proposals().is_some()
+                && runtime.adaptivity_resolver().is_some()
+                && runtime.bound_agent_id().is_some()
+        })
+    }
+
+    /// Dispatch a knowledge write tool (`tdw.tags.define` / `tdw.tags.assign` /
+    /// `tdw.kg.annotate` / `tdw.kg.proposals`, knowledge-system B9).
+    ///
+    /// Returns `Some(messages)` when `name` is a write tool — a tool error (never
+    /// a protocol error) when the write surface is unavailable (no runtime, or no
+    /// proposal queue + resolver), otherwise the [`knowledge_write_tools::execute`]
+    /// result. Returns `None` when `name` is not a write tool so the caller falls
+    /// through to the read/registry/built-in dispatch paths.
+    fn dispatch_knowledge_write_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_write_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_writes_available() {
+            // No runtime, or a read-only runtime: a write name is a tool error.
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge write surface not attached"),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_write_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
+    }
+
+    /// True when the feedback surface is available (knowledge-system B10): a
+    /// knowledge runtime is attached AND a feedback store handle is attached.
+    const fn knowledge_feedback_available(&self) -> bool {
+        self.knowledge.is_some() && self.feedback_store.is_some()
+    }
+
+    /// Dispatch the knowledge feedback tool (`tdw.kg.feedback`, knowledge-system B10).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.kg.feedback` — a tool error
+    /// (never a protocol error) when the feedback surface is unavailable (no runtime
+    /// or no store), otherwise the [`knowledge_feedback_tools::execute`] result.
+    /// Returns `None` when `name` is not the feedback tool.
+    fn dispatch_knowledge_feedback_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_feedback_tools::owns(name) {
+            return None;
+        }
+        let (Some(runtime), Some(store)) = (self.knowledge.as_ref(), self.feedback_store.as_ref())
+        else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge feedback surface not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().to_rfc3339();
+        let messages =
+            match knowledge_feedback_tools::execute(runtime, store, &arguments_object, &now) {
+                Ok(crate::ToolExecution { structured, .. }) => {
+                    vec![success_message(id, &tool_result(&structured))]
+                }
+                Err(ToolFailure::Execution(message)) => {
+                    vec![success_message(id, &tool_error_result(&message))]
+                }
+                Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                    problem
+                        .with_id(id.clone())
+                        .with_data(json!({ "tool": name })),
+                )],
+            };
         Some(messages)
     }
 
@@ -863,6 +1012,16 @@ pub fn registry_from_env() -> Result<Option<Registry>, RegistryConfigError> {
 /// On success returns `server` unchanged when the variable is unset, or with the loaded
 /// registry attached when it is set. Used by every server-construction entrypoint so the
 /// registry→MCP `tools/list` surface is reachable from a running server.
+///
+/// **Scope cut — feedback store (F1):** this function does **not** attach a
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore). The
+/// standalone `tdw-mcp` entrypoints (stdio, Streamable HTTP) have no
+/// co-resident [`tdw_backend::data::Backend`] to bridge to; wiring those live
+/// paths to a daemon's consolidation loop is deferred to F1, the same
+/// deferral B8/B9 made for [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime)
+/// daemon hosting. In-process embedding hosts that construct both facades
+/// inject the shared handle via [`McpServer::with_feedback_store`] directly —
+/// see [`tdw_agent_store::feedback`] module doc for the host-wiring protocol.
 ///
 /// # Errors
 ///

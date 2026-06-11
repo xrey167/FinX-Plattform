@@ -1,7 +1,12 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
+mod feedback;
 mod memory;
 
+pub use feedback::{
+    AgentUsageSummary, DEFAULT_GLOBAL_CAP, DEFAULT_PER_AGENT_CAP, MAX_HIT_IDS, RetrievalEvent,
+    RetrievalFeedbackStore,
+};
 pub use memory::{
     MemoryStore, MemoryStoreError, age_days, consolidate_at, spawn_consolidation_scheduler,
 };

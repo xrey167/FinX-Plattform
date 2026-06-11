@@ -242,6 +242,10 @@ impl<G: GraphEngine> TagEngine for GraphTagEngine<G> {
         Ok(found.into_iter().collect())
     }
 
+    async fn is_defined(&self, tag_id: &str) -> Result<bool, TagError> {
+        Ok(self.tag_node(tag_id).await?.is_some())
+    }
+
     async fn entities_with_tag(&self, tag_id: &str, as_of: &str) -> Result<Vec<String>, TagError> {
         let filter = TraversalFilter {
             rels: Some(vec!["tagged".to_string()]),
