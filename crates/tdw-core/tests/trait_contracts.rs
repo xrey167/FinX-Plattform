@@ -226,10 +226,7 @@ fn error_code_is_stable_for_every_variant() {
     ];
     for (err, expected_code, expected_str) in cases {
         let code = err.code();
-        assert_eq!(
-            code, *expected_code,
-            "wrong code for {err:?}: got {code:?}"
-        );
+        assert_eq!(code, *expected_code, "wrong code for {err:?}: got {code:?}");
         assert_eq!(
             code.as_str(),
             *expected_str,
