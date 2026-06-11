@@ -135,6 +135,8 @@ use tdw_provider_cboe::{
 };
 #[cfg(feature = "provider-ccdata")]
 use tdw_provider_ccdata::CCDataHttpFetcher;
+#[cfg(feature = "provider-cftc")]
+use tdw_provider_cftc::{CftcHttpCotFetcher, CftcHttpCotSearchFetcher};
 #[cfg(feature = "provider-coingecko")]
 use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
 #[cfg(feature = "provider-databento")]
@@ -312,6 +314,11 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CboeHttpIndexSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
     registry.register(CboeHttpOptionsChainFetcher::registry_entry())?;
+    // Catalog-facing CFTC Commitments-of-Traders fetchers (OpenBB-parity P2W5).
+    #[cfg(feature = "provider-cftc")]
+    registry.register(CftcHttpCotFetcher::registry_entry())?;
+    #[cfg(feature = "provider-cftc")]
+    registry.register(CftcHttpCotSearchFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
@@ -597,6 +604,14 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // CboeHttpOptionsFetcher
         #[cfg(feature = "provider-cboe")]
         ("cboe", "options") => dispatch!(CboeHttpOptionsFetcher::default()),
+        // CftcHttpCotFetcher
+        #[cfg(feature = "provider-cftc")]
+        ("cftc", "regulators_cftc_cot") => dispatch!(CftcHttpCotFetcher::default()),
+        // CftcHttpCotSearchFetcher
+        #[cfg(feature = "provider-cftc")]
+        ("cftc", "regulators_cftc_cot_search") => {
+            dispatch!(CftcHttpCotSearchFetcher::default())
+        }
         // CCDataHttpFetcher
         #[cfg(feature = "provider-ccdata")]
         ("ccdata", "crypto_ohlcv") => dispatch!(CCDataHttpFetcher::default()),

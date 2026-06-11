@@ -10,7 +10,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{FomcDocument, SymbolMapping};
+use tdw_domain::{CommitmentOfTraders, FomcDocument, SeriesSearchResult, SymbolMapping};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -19,6 +19,9 @@ const FED_FOMC_DOCUMENTS: &[ProviderCandidate] = &[ProviderCandidate::new(
     "federal_reserve",
     "regulators_fed_fomc_documents",
 )];
+const CFTC_COT: &[ProviderCandidate] = &[ProviderCandidate::new("cftc", "regulators_cftc_cot")];
+const CFTC_COT_SEARCH: &[ProviderCandidate] =
+    &[ProviderCandidate::new("cftc", "regulators_cftc_cot_search")];
 
 fn standard_params() -> Schema {
     schema_for!(StandardParams)
@@ -30,6 +33,14 @@ fn symbol_mapping() -> Schema {
 
 fn fomc_document() -> Schema {
     schema_for!(FomcDocument)
+}
+
+fn commitment_of_traders() -> Schema {
+    schema_for!(CommitmentOfTraders)
+}
+
+fn series_search_result() -> Schema {
+    schema_for!(SeriesSearchResult)
 }
 
 /// The `regulators` namespace's catalog entries, in declaration order.
@@ -53,6 +64,26 @@ pub fn entries() -> Vec<CatalogEntry> {
             candidates: FED_FOMC_DOCUMENTS,
             bronze_table: Some("raw.fomc_document"),
             doc: "FOMC meeting documents index from the Federal Reserve (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/cftc/cot",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: commitment_of_traders,
+            candidates: CFTC_COT,
+            bronze_table: Some("raw.commitment_of_traders"),
+            doc: "CFTC legacy futures-only Commitments of Traders report (Socrata, keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/cftc/cot_search",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: series_search_result,
+            candidates: CFTC_COT_SEARCH,
+            bronze_table: Some("raw.series_search_result"),
+            doc: "Distinct CFTC COT market-and-exchange names for discovery (Socrata, keyless).",
             chartable: false,
         },
     ]

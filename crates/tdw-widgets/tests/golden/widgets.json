@@ -5832,6 +5832,204 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "regulators_cftc_cot": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "commercial_long",
+            "headerName": "Commercial Long"
+          },
+          {
+            "cellDataType": "number",
+            "field": "commercial_short",
+            "headerName": "Commercial Short"
+          },
+          {
+            "cellDataType": "text",
+            "field": "market",
+            "headerName": "Market"
+          },
+          {
+            "cellDataType": "number",
+            "field": "noncommercial_long",
+            "headerName": "Noncommercial Long"
+          },
+          {
+            "cellDataType": "number",
+            "field": "noncommercial_short",
+            "headerName": "Noncommercial Short"
+          },
+          {
+            "cellDataType": "number",
+            "field": "nonreportable_long",
+            "headerName": "Nonreportable Long"
+          },
+          {
+            "cellDataType": "number",
+            "field": "nonreportable_short",
+            "headerName": "Nonreportable Short"
+          },
+          {
+            "cellDataType": "number",
+            "field": "open_interest",
+            "headerName": "Open Interest"
+          },
+          {
+            "cellDataType": "text",
+            "field": "report_date",
+            "headerName": "Report Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "total_reportable_long",
+            "headerName": "Total Reportable Long"
+          },
+          {
+            "cellDataType": "number",
+            "field": "total_reportable_short",
+            "headerName": "Total Reportable Short"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "CFTC legacy futures-only Commitments of Traders report (Socrata, keyless).",
+    "endpoint": "/widget-data/regulators/cftc/cot",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_cftc_cot",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Cot",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_cftc_cot_search": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "frequency",
+            "headerName": "Frequency"
+          },
+          {
+            "cellDataType": "number",
+            "field": "popularity",
+            "headerName": "Popularity"
+          },
+          {
+            "cellDataType": "text",
+            "field": "series_id",
+            "headerName": "Series Id"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "units",
+            "headerName": "Units"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Distinct CFTC COT market-and-exchange names for discovery (Socrata, keyless).",
+    "endpoint": "/widget-data/regulators/cftc/cot_search",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_cftc_cot_search",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Cot Search",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "regulators_fed_fomc_documents": {
     "category": "regulators",
     "data": {
