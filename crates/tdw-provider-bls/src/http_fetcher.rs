@@ -87,10 +87,7 @@ impl ProviderSpec for BlsTimeSeriesSpec {
         query: &BlsSeriesQuery,
         client: &Client,
     ) -> Result<reqwest::RequestBuilder> {
-        let api_key = std::env::var(API_KEY_ENV)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
+        let api_key = tdw_core::http_support::read_optional_key(API_KEY_ENV);
 
         let endpoint = format!("{}/timeseries/data/", base_url.trim_end_matches('/'));
 

@@ -12,7 +12,7 @@ use bytes::Bytes;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tdw_core::{Error, Result};
+use tdw_core::{Error, Result, http_support::read_optional_key};
 use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{
@@ -145,10 +145,5 @@ impl ProviderSpec for HuggingFaceTextGenerationSpec {
 pub type HuggingFaceHttpTextGenerationFetcher = HttpFetcher<HuggingFaceTextGenerationSpec>;
 
 fn hf_token() -> Option<String> {
-    TOKEN_ENVS.iter().find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    })
+    TOKEN_ENVS.iter().find_map(|name| read_optional_key(name))
 }

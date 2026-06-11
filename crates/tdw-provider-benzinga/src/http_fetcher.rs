@@ -14,7 +14,7 @@ use tdw_domain::NewsArticle;
 
 use crate::{
     API_KEY_ENV, BASE_URL, BenzingaEarningsItem, BenzingaEarningsQuery, BenzingaNewsItem,
-    BenzingaNewsQuery, BenzingaProviderError, BenzingaWorldNewsQuery,
+    BenzingaNewsQuery, BenzingaWorldNewsQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-benzinga/0.1";
@@ -71,11 +71,7 @@ struct WireEarningsEnvelope {
 // ---------------------------------------------------------------------------
 
 fn read_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Provider(BenzingaProviderError::MissingApiKey.to_string()))
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "benzinga")
 }
 
 fn map_news_item(wire: WireNewsItem) -> BenzingaNewsItem {

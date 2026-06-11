@@ -76,16 +76,8 @@ fn te_client() -> std::result::Result<Client, TradingEconomicsError> {
         .map_err(|e| TradingEconomicsError::Provider(format!("te client build: {e}")))
 }
 
-fn api_key() -> std::result::Result<String, TradingEconomicsError> {
-    let key = std::env::var(API_KEY_ENV)
-        .map_err(|_| TradingEconomicsError::Provider(format!("{API_KEY_ENV} not set")))?;
-    let key = key.trim().to_string();
-    if key.is_empty() {
-        return Err(TradingEconomicsError::Provider(format!(
-            "{API_KEY_ENV} must not be empty"
-        )));
-    }
-    Ok(key)
+fn api_key() -> Result<String> {
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "trading-economics")
 }
 
 // ---------------------------------------------------------------------------
@@ -120,7 +112,7 @@ impl Fetcher<TradingEconomicsCalendarQuery, TradingEconomicsCalendarEvent>
         _query: &TradingEconomicsCalendarQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let key = api_key()?;
         let url = format!("{}/calendar", self.base_url().trim_end_matches('/'));
         let client = te_client().map_err(|e| Error::Provider(e.to_string()))?;
         let response = client
@@ -206,7 +198,7 @@ impl Fetcher<TradingEconomicsIndicatorQuery, TradingEconomicsIndicatorRow>
         query: &TradingEconomicsIndicatorQuery,
         _creds: &Credentials,
     ) -> Result<Bytes> {
-        let key = api_key().map_err(|e| Error::Provider(e.to_string()))?;
+        let key = api_key()?;
         let url = format!(
             "{}/indicators/{}/{}",
             self.base_url().trim_end_matches('/'),

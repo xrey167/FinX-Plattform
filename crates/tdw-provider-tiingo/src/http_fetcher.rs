@@ -14,7 +14,7 @@ use tdw_core::{Error, Result};
 use tdw_domain::{MarketDataBar, Ohlcv, TimeGranularity};
 use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
-use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery, TiingoProviderError};
+use crate::{API_KEY_ENV, BASE_URL, TiingoHistoricalQuery, TiingoNewsQuery};
 
 const USER_AGENT: &str = "tdw-provider-tiingo/0.1";
 
@@ -202,13 +202,5 @@ pub type TiingoHttpNewsFetcher = HttpFetcher<TiingoNewsSpec>;
 // ---------------------------------------------------------------------------
 
 fn read_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| {
-            Error::Provider(
-                TiingoProviderError::Provider(format!("{API_KEY_ENV} not set")).to_string(),
-            )
-        })
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "tiingo")
 }

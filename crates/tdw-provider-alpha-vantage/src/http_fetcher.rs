@@ -15,16 +15,12 @@ use tdw_core::{Error, Result};
 use tdw_domain::{MarketDataBar, TimeGranularity};
 use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
-use crate::{API_KEY_ENV, AlphaVantageError, AlphaVantageFunction, AlphaVantageQuery, BASE_URL};
+use crate::{API_KEY_ENV, AlphaVantageFunction, AlphaVantageQuery, BASE_URL};
 
 const USER_AGENT: &str = "tdw-provider-alpha-vantage/0.1";
 
 fn read_api_key() -> Result<String> {
-    std::env::var(API_KEY_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| Error::Provider(AlphaVantageError::MissingApiKey.to_string()))
+    tdw_core::http_support::read_required_key(API_KEY_ENV, "alpha-vantage")
 }
 
 // ---------------------------------------------------------------------------
