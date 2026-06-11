@@ -14,6 +14,60 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-06-11
+
+The self-hosted warehouse release: Product ② (the ClickHouse/Qdrant/Meilisearch
+warehouse stack) reaches a production-ready baseline — hardened compose
+configuration, operator runbooks, OIDC IdP integration guide, cross-backend
+behavioral conformance tests, a verified warehouse-install walkthrough, and a
+nightly ingestion soak. See
+[`docs/release/v1.3.0-notes.md`](docs/release/v1.3.0-notes.md).
+
+### Added
+
+- **Warehouse install + 15-minute eval path** (#288):
+  `docs/products/warehouse-install.md` — compose `full` profile quickstart,
+  checkpoint-gated evaluation sequence (live data flowing in ≤15 min), and
+  honest caveats on what requires a keyed provider or additional setup.
+- **Backup/restore + upgrade runbooks** (#289):
+  `docs/release/backup-restore-runbook.md` and
+  `docs/release/upgrade-runbook.md` — xtask-grounded procedures including the
+  dry-run planner (`xtask migrate`), volume backup steps, and zero-downtime
+  rolling-upgrade guidance.
+- **OIDC IdP setup guide** (#290): `docs/release/oidc-idp-setup.md` — mapping
+  tables for Keycloak, Auth0, and Microsoft Entra; fail-closed drill checklist;
+  token-rotation runbook; claim values machine-verified against the auth
+  contract.
+- **Cross-backend conformance harness** (#283, #284, #285): parametrised
+  behavioural test suites run over every backend (in-memory, SQLite, PostgreSQL)
+  for the worker queue, outbox, and cost-ledger. Caught and fixed a real
+  duplicate-enqueue divergence between the in-memory and durable backends (#283)
+  — identical semantics are now an executable, CI-enforced guarantee.
+- **Nightly Binance→ClickHouse ingestion soak** (#293): bounded soak job in
+  `nightly.yml` that drives the live Binance websocket feed into ClickHouse and
+  asserts row counts. Geo-block-tolerant: a reachability probe gates the soak
+  steps and emits a structured skip summary rather than a hard failure when the
+  exchange is unreachable from the runner.
+- **Evaluation criteria for financial-data MCP servers** (#291):
+  `docs/products/evaluation-criteria.md` — falsifiable 10-criteria checklist
+  with every FinX cell repo-pinned; written as a durable evaluation framework,
+  not a claims document.
+- **Commercial support + SUPPORT.md** (#300): `SUPPORT.md` with community and
+  three commercial tiers; announcement pricing paragraph live. Closes D2.
+
+### Fixed
+
+- **Nightly geo-block tolerance + e2e compose token** (#294): live-smoke now
+  skips on Binance HTTP 451 (geo-block) rather than failing; the e2e-full job's
+  required `TDW_MCP_HTTP_TOKEN` is now set in the job environment.
+
+### Changed
+
+- **Compose `full` profile hardened** (#282): all images pinned with rationale
+  comments; healthcheck coverage expanded from 6 to 9 services, cross-matched
+  to CI wait-steps; named volumes replacing anonymous mounts; `.env.example`
+  fully covers every variable consumed by the stack.
+
 ## [1.2.0] - 2026-06-10
 
 The "live data, for real" release: the MCP financial-data server now serves
