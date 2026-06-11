@@ -195,6 +195,17 @@ pub struct GraphConfig {
     /// (Memgraph auth-disabled default).
     #[serde(default)]
     pub bolt_password_env: String,
+    /// Bolt database name. Memgraph's default is `"memgraph"`; Neo4j's is
+    /// `"neo4j"`. neo4rs defaults to `"neo4j"` when unset, which fails against
+    /// Memgraph — so we default explicitly to `"memgraph"` here.
+    #[serde(default = "GraphConfig::default_bolt_db")]
+    pub bolt_db: String,
+}
+
+impl GraphConfig {
+    fn default_bolt_db() -> String {
+        "memgraph".to_string()
+    }
 }
 
 impl Default for GraphConfig {
@@ -204,6 +215,7 @@ impl Default for GraphConfig {
             bolt_uri: Some("bolt://127.0.0.1:7687".to_string()),
             bolt_user: String::new(),
             bolt_password_env: "TDW_GRAPH_PASSWORD".to_string(),
+            bolt_db: Self::default_bolt_db(),
         }
     }
 }
