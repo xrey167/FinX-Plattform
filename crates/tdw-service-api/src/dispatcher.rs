@@ -1485,6 +1485,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -1654,6 +1656,63 @@ fn insert_cftc_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
             tdw_domain::SeriesSearchResult,
         >("regulators/cftc/cot_search"),
     );
+}
+
+/// Build a [`FetchBinding`] for an IMF catalog-backed fetcher that resolves a
+/// fixed `economy/imf/*` `command` to its SDMX database. The command is injected
+/// into the caller's params before the shared fetcher runs, so one fetcher type
+/// serves every IMF route while the dispatch key stays per-command. Mirrors
+/// [`cftc_command_fetch_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_command_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::ImfHttpMacroSeriesFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the IMF catalog fetch bindings (OpenBB-parity **P3W3**) into
+/// `table`, keyed by the route-derived endpoint key (`<route with '/'→'_'>`)
+/// resolved through the catalog so the dispatch key never drifts from the
+/// candidate. Each binding injects its route's `command`.
+#[cfg(feature = "provider-imf")]
+fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    for endpoint in tdw_provider_imf::ENDPOINTS {
+        let Some(key) = imf_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, imf_command_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an IMF `economy/imf/*` `command` to the `'static` `(provider,
+/// endpoint)` dispatch key declared for it in the endpoint catalog. Returns
+/// `None` only if an IMF command is missing its catalog route — a bug the
+/// conformance test catches. Mirrors [`fred_catalog_key`].
+#[cfg(feature = "provider-imf")]
+fn imf_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "imf")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
 }
 
 /// Build a [`FetchBinding`] for a Federal Reserve catalog-backed fetcher that
@@ -2649,6 +2708,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_ingest_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -2957,6 +3018,47 @@ fn insert_cftc_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
             tdw_domain::SeriesSearchResult,
         >("regulators/cftc/cot_search", "raw.series_search_result"),
     );
+}
+
+/// Build an [`IngestBinding`] for an IMF catalog-backed fetcher that injects a
+/// fixed `command` before fetching one batch and persisting it to the shared
+/// `raw.macro_series` bronze table. Mirrors [`cftc_command_ingest_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_command_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::ImfHttpMacroSeriesFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the IMF ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-imf")]
+fn insert_imf_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    for endpoint in tdw_provider_imf::ENDPOINTS {
+        let Some(key) = imf_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            imf_command_ingest_binding(endpoint.command, "raw.macro_series"),
+        );
+    }
 }
 
 /// Build an [`IngestBinding`] for a Federal Reserve catalog-backed fetcher that
@@ -3538,6 +3640,7 @@ mod tests {
         feature = "provider-eia",
         feature = "provider-finnhub",
         feature = "provider-fmp",
+        feature = "provider-imf",
         feature = "provider-nasdaq",
         feature = "provider-polygon",
         feature = "provider-sec",
@@ -4475,6 +4578,48 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "federal_reserve candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog <-> IMF `ENDPOINTS` sync (OpenBB-parity **P3W3**): every
+    /// standardized IMF command has a catalog route whose `imf` candidate
+    /// endpoint is the route's `'/'→'_'` form and is dispatchable in both tables
+    /// under `provider-imf`.
+    #[cfg(feature = "provider-imf")]
+    #[test]
+    fn imf_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_imf::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command)
+                .unwrap_or_else(|| panic!("imf command {} has no catalog route", endpoint.command));
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "imf")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no imf candidate", endpoint.command)
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} imf endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "imf candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "imf candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command

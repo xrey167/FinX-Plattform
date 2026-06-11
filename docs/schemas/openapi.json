@@ -3373,6 +3373,333 @@
         ]
       }
     },
+    "/api/v1/economy/imf/balance_of_payments": {
+      "get": {
+        "operationId": "economy_imf_balance_of_payments",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSeries"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "IMF Balance of Payments time series, SDMX-JSON macro series.",
+        "tags": [
+          "economy"
+        ]
+      }
+    },
+    "/api/v1/economy/imf/direction_of_trade": {
+      "get": {
+        "operationId": "economy_imf_direction_of_trade",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSeries"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "IMF Direction of Trade Statistics time series, SDMX-JSON macro series.",
+        "tags": [
+          "economy"
+        ]
+      }
+    },
+    "/api/v1/economy/imf/international_financial_statistics": {
+      "get": {
+        "operationId": "economy_imf_international_financial_statistics",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSeries"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "IMF International Financial Statistics time series, SDMX-JSON macro series.",
+        "tags": [
+          "economy"
+        ]
+      }
+    },
     "/api/v1/economy/money_measures": {
       "get": {
         "operationId": "economy_money_measures",
