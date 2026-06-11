@@ -10,9 +10,24 @@
 //!
 //! The store is attached at the [`tdw_mcp::McpServer`] level via
 //! [`McpServer::with_feedback_store`] (builder) or
-//! [`McpServer::set_feedback_store`] (in-place setter). The same `Arc` handle is
-//! held by [`tdw_backend::data::Backend`] so `consolidate_now` and the MCP tool
-//! share one store instance.
+//! [`McpServer::set_feedback_store`] (in-place setter).
+//!
+//! **Host-injected bridging (in-process embedding only):** when an embedding
+//! host constructs both [`tdw_backend::agent::AgentBackend`] and
+//! [`tdw_backend::data::Backend`] in the same process, it passes the *same*
+//! `Arc` handle to both — `AgentBackend` owns the store and exposes it via
+//! `feedback_store_handle()`; `Backend` accepts it via
+//! `Backend::with_feedback_store(handle)`. This is **host wiring, not
+//! cross-facade state sharing**; the dual-facade boundary (async data / sync
+//! agent, joined only by a loopback `DaemonClient`) is never violated.
+//!
+//! **Standalone `tdw-mcp` processes** (stdio, Streamable HTTP) have no
+//! co-resident `Backend` to bridge to. Live bridging from those entrypoints
+//! to a running daemon's consolidation loop is F1 work — the same deferral
+//! B8/B9 made for `KnowledgeRuntime` daemon hosting. Until F1 the tool
+//! surface, store, and consolidation logic are all present and verified by
+//! in-process tests; there is simply no production path where events appended
+//! through a standalone `tdw-mcp` process reach `Backend::consolidate_now_at`.
 //!
 //! ## Bound / eviction policy
 //!

@@ -69,11 +69,16 @@ pub struct Backend {
     /// purely in-memory.
     memory: Arc<Mutex<MemoryStore>>,
     /// The retrieval feedback store (knowledge-system B10). Held behind a
-    /// [`tokio::sync::Mutex`] so the MCP feedback tool and [`consolidate_now`]
-    /// share one handle. Always present after construction (never absent).
-    /// Expose via [`Backend::feedback_store_handle`] to wire it into an
-    /// `AgentBackend`'s embedded [`McpServer`] so tool appends and
-    /// `consolidate_now` share one instance.
+    /// [`tokio::sync::Mutex`] so the MCP feedback tool and
+    /// [`consolidate_now_at`](Self::consolidate_now_at) share one handle.
+    /// Always present after construction (never `None`). When an embedding
+    /// host constructs both this `Backend` and an
+    /// [`AgentBackend`](crate::agent::AgentBackend) in the same process, it
+    /// passes `AgentBackend::feedback_store_handle()` into
+    /// [`Backend::with_feedback_store`] so both facades share one instance —
+    /// this is host wiring, not cross-facade state sharing. Standalone
+    /// `tdw-mcp` processes have no `Backend` co-resident; bridging those
+    /// entrypoints to a running daemon's consolidation loop is F1 work.
     feedback: Arc<Mutex<RetrievalFeedbackStore>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
@@ -356,11 +361,44 @@ impl Backend {
     }
 
     /// The shared retrieval feedback store handle (cloned `Arc`, knowledge-system
-    /// B10). The MCP feedback tool and [`consolidate_now`](Self::consolidate_now)
+    /// B10). The MCP feedback tool and [`consolidate_now_at`](Self::consolidate_now_at)
     /// lock this same store.
+    ///
+    /// **Host-wiring:** an embedding host that constructs both this `Backend` and
+    /// an [`AgentBackend`](crate::agent::AgentBackend) in the same process should
+    /// call `Backend::with_feedback_store(agent_backend.feedback_store_handle())`
+    /// so that events appended through `AgentBackend`'s embedded `McpServer` are
+    /// visible to `consolidate_now_at`. This is the correct direction: the host
+    /// creates one `AgentBackend` (which owns the store), then hands its handle to
+    /// `Backend` — not the reverse.
     #[must_use]
     pub fn feedback_store_handle(&self) -> Arc<Mutex<RetrievalFeedbackStore>> {
         Arc::clone(&self.feedback)
+    }
+
+    /// Replace the feedback store with a host-supplied handle (builder pattern).
+    ///
+    /// Use this when an embedding host constructs both a `Backend` and an
+    /// [`AgentBackend`](crate::agent::AgentBackend) in the same process and wants
+    /// events appended through `AgentBackend`'s embedded `McpServer` to be visible
+    /// to [`consolidate_now_at`](Self::consolidate_now_at):
+    ///
+    /// ```ignore
+    /// let agent = AgentBackend::from_config(&cfg)?;
+    /// let backend = Backend::from_config(tdw_cfg)
+    ///     .await?
+    ///     .with_feedback_store(agent.feedback_store_handle());
+    /// ```
+    ///
+    /// This is **host wiring**, not cross-facade state sharing: both facades are
+    /// constructed by the same host and the `Arc` is handed across at construction
+    /// time. The dual-facade boundary (async data / sync agent, joined only by a
+    /// loopback `DaemonClient`) is never violated. Standalone `tdw-mcp` processes
+    /// do not use this path; see the `attach_env_registry` doc for the F1 deferral.
+    #[must_use]
+    pub fn with_feedback_store(mut self, store: Arc<Mutex<RetrievalFeedbackStore>>) -> Self {
+        self.feedback = store;
+        self
     }
 
     /// Upsert a [`Memory`] into the store, stamping the current time as its

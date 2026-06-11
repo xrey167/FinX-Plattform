@@ -1013,6 +1013,16 @@ pub fn registry_from_env() -> Result<Option<Registry>, RegistryConfigError> {
 /// registry attached when it is set. Used by every server-construction entrypoint so the
 /// registry→MCP `tools/list` surface is reachable from a running server.
 ///
+/// **Scope cut — feedback store (F1):** this function does **not** attach a
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore). The
+/// standalone `tdw-mcp` entrypoints (stdio, Streamable HTTP) have no
+/// co-resident [`tdw_backend::data::Backend`] to bridge to; wiring those live
+/// paths to a daemon's consolidation loop is deferred to F1, the same
+/// deferral B8/B9 made for [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime)
+/// daemon hosting. In-process embedding hosts that construct both facades
+/// inject the shared handle via [`McpServer::with_feedback_store`] directly —
+/// see [`tdw_agent_store::feedback`] module doc for the host-wiring protocol.
+///
 /// # Errors
 ///
 /// Returns [`RegistryConfigError`] when the variable is set but the directory cannot be loaded.
