@@ -3,6 +3,21 @@ resolver = "3"
 members = [
     "crates/*",
     "xtask",
+    # The OpenBB-Workspace example suite (one member crate, many example bins +
+    # an integration test). It is a *member* so `cargo metadata` covers it and
+    # its CI tests run, but it is kept out of `default-members` below so a plain
+    # `cargo build` / `cargo test --workspace` default scope — and warm build
+    # time — is unchanged. Build/test it explicitly with
+    # `-p tdw-workspace-examples`.
+    "examples/workspace",
+]
+# Default scope for a bare `cargo build` / `cargo test` (no `-p` / `--workspace`):
+# everything except the example suite, so the examples never inflate the warm
+# build/test the rest of the workspace pays on every invocation. CI runs the
+# example tests explicitly via `-p tdw-workspace-examples`.
+default-members = [
+    "crates/*",
+    "xtask",
 ]
 # `fuzz/` is a standalone cargo-fuzz crate (nightly-only, libfuzzer-sys) and is
 # intentionally excluded so the stable workspace build and default `cargo test`

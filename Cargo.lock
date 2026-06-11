@@ -6818,6 +6818,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-workspace-examples"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tdw-app-server",
+ "tdw-charting",
+ "tdw-domain",
+ "tdw-eval-runner",
+ "tdw-openbb-agent",
+ "tdw-service-api",
+ "tdw-widgets",
+ "tokio",
+]
+
+[[package]]
 name = "terminfo"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

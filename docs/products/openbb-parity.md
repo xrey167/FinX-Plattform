@@ -49,6 +49,7 @@ of the typed catalog, never the internal model.
 | Drive FinX from an MCP agent (incl. `technical.*` tools) | [mcp-quickstart.md](./mcp-quickstart.md) |
 | Add FinX as an OpenBB Workspace **data backend** (`widgets.json`) | [openbb-workspace-backend.md](./openbb-workspace-backend.md) |
 | Add FinX as an OpenBB Workspace **copilot** (`agents.json`) | [openbb-workspace-agent.md](./openbb-workspace-agent.md) |
+| Learn the whole surface from runnable, offline examples | [examples/workspace](../../examples/workspace/README.md) |
 | Install / run the warehouse daemon | [warehouse-install.md](./warehouse-install.md) |
 
 All four surfaces are **off by default** and env-gated; each binds its own

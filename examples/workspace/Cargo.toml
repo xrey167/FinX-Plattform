@@ -1,0 +1,83 @@
+# A single workspace member that houses the whole progressive OpenBB-Workspace
+# example suite. It is a workspace *member* (so `cargo metadata` covers it and
+# the integration tests run in CI) but is intentionally kept OUT of
+# `default-members` (see the root `Cargo.toml`), so a plain `cargo build` /
+# `cargo test --workspace` default scope — and thus warm build time — is
+# unchanged. Build/test it explicitly with `-p tdw-workspace-examples`.
+#
+# Shape (documented in README.md): every example is a thin `main()` (a
+# per-example `[[bin]]` under its own `NN-name/` directory, alongside that
+# example's README.md + Dockerfile) over a small library function in `src/`.
+# The CI integration tests in `tests/` call those same library functions
+# directly and boot each Rust example's server path against the in-memory
+# daemon, asserting golden outputs offline.
+[package]
+name = "tdw-workspace-examples"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Progressive, offline-runnable examples teaching the FinX <-> OpenBB Workspace surface."
+
+[lib]
+doctest = false
+
+[dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }
+# The in-memory daemon, the catalog-derived REST/widget/agent transports, and
+# the offline agent bridge. `agent-route` implies `workspace-route` (which
+# implies `rest-api-route`), so this single feature pulls the whole P1+P2
+# surface every example needs.
+tdw-service-api = { workspace = true, features = ["agent-route"] }
+tdw-app-server = { workspace = true, features = ["agent-route"] }
+# Pure projections: the widgets.json / apps.json contract types + builders and
+# the agent SSE event vocabulary, used to author the hand-written and curated
+# documents and to drive the pure copilot sequencer in-process.
+tdw-widgets = { workspace = true }
+tdw-openbb-agent = { workspace = true }
+# The offline, deterministic StubLanguageModel that backs the copilot examples
+# with no network and no credentials. Pulled by relative path (it is not a
+# `workspace.dependencies` entry) — only this example crate consumes it directly.
+tdw-eval-runner = { path = "../../crates/tdw-eval-runner" }
+# Plotly figure-spec builders reused by the charts example.
+tdw-charting = { workspace = true }
+tdw-domain = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "io-util", "net"] }
+
+[lints]
+workspace = true
+
+# --- Example binaries: one thin main() per example, each in its own NN-name/
+# --- directory so its README.md and Dockerfile sit beside it. ---------------
+
+[[bin]]
+name = "ws-10-backend-minimal"
+path = "10-backend-minimal/main.rs"
+
+[[bin]]
+name = "ws-20-backend-derived"
+path = "20-backend-derived/main.rs"
+
+[[bin]]
+name = "ws-30-backend-app"
+path = "30-backend-app/main.rs"
+
+[[bin]]
+name = "ws-40-agent-echo"
+path = "40-agent-echo/main.rs"
+
+[[bin]]
+name = "ws-50-agent-reasoning-citations"
+path = "50-agent-reasoning-citations/main.rs"
+
+[[bin]]
+name = "ws-60-agent-widget-data"
+path = "60-agent-widget-data/main.rs"
+
+[[bin]]
+name = "ws-70-agent-charts-tables"
+path = "70-agent-charts-tables/main.rs"
