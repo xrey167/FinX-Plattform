@@ -1062,7 +1062,12 @@ async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<
                     )
                 })?;
             let password = std::env::var(&cfg.bolt_password_env).unwrap_or_default();
-            tdw_storage_graph::BoltGraphEngine::connect(uri, &cfg.bolt_user, &password, &cfg.bolt_db)
+            tdw_storage_graph::BoltGraphEngine::connect(
+                uri,
+                &cfg.bolt_user,
+                &password,
+                &cfg.bolt_db,
+            )
             .await
             .map(|engine| -> Arc<dyn GraphEngine> { Arc::new(engine) })
             .map_err(|error| BackendError::Init(format!("bolt graph connect ({uri}): {error}")))
