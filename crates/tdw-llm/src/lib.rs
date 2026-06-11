@@ -172,6 +172,31 @@ pub struct ChatResponse {
 
 pub trait LanguageModel: Send + Sync {
     fn model_id(&self) -> &str;
+
+    /// Whether this model is production-grade and safe to use for feedback that
+    /// mutates agent skills or other durable state.
+    ///
+    /// The default implementation returns **`false`** (fail-safe). Real,
+    /// network-backed provider implementations (`AnthropicMessagesModel`,
+    /// `OpenAiCompatibleModel`) override this to return `true`. Any test
+    /// double, fixture, or stub that does not override this inherits `false`
+    /// and will be blocked by the ER3 gate.
+    ///
+    /// # Why fail-safe (G008 theme 10 — ER3)
+    ///
+    /// A deny-list (`model_id != "stub-echo"`) fails open: a renamed or newly
+    /// added stub would pass the gate silently. Fail-safe inverts the policy —
+    /// only models that explicitly declare themselves production-grade may
+    /// mutate durable state. This makes the safe path the default, and every
+    /// real provider an explicit opt-in.
+    ///
+    /// To bypass in a controlled test set `TDW_ALLOW_STUB_FEEDBACK=1` in the
+    /// environment.
+    #[must_use]
+    fn is_production_grade(&self) -> bool {
+        false
+    }
+
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
@@ -270,6 +295,10 @@ pub fn split_into_chunks(text: &str, max_chunks: usize) -> Vec<String> {
 impl LanguageModel for std::sync::Arc<dyn LanguageModel> {
     fn model_id(&self) -> &str {
         (**self).model_id()
+    }
+
+    fn is_production_grade(&self) -> bool {
+        (**self).is_production_grade()
     }
 
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {

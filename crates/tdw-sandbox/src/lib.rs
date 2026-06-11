@@ -156,9 +156,12 @@ fn run_wasm(request: &UdfRequest) -> Result<UdfResponse> {
             .map_err(|error| SandboxError::Udf(error.to_string()));
     }
 
-    // Fixture fallback: minimal valid WASM header (magic + version).
-    let wasm_stub: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-    rt.execute(wasm_stub, func, &request.input)
+    // Fixture fallback: source is not a valid base64-wasm module, so dispatch
+    // by name using the deterministic fixture interpreter.  Call
+    // `fixture_dispatch` directly rather than routing through `rt.execute`
+    // (which, when the `wasmi` feature is active, attempts real wasm execution
+    // on the stub bytes and fails with an ABI-violation error).
+    tdw_udf_wasm::fixture_dispatch(func, &request.input)
         .map(|output| UdfResponse {
             runtime: UdfRuntime::Wasm,
             output,

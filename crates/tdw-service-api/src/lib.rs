@@ -923,7 +923,9 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
 ///
 /// Returns an error variant if the underlying operation fails.
 pub fn mcp_progress_sample(symbol: &str) -> Result<Vec<String>> {
-    let runner = CommandRunner::new(default_registry()?);
+    // G008/RT1b: this function uses the fetch-then-wrap path intentionally —
+    // it is a compatibility shim for MCP progress events, not real streaming.
+    let runner = CommandRunner::new(default_registry()?).allow_fake_streaming();
     let mut stream = block_on(
         runner.run_streaming(&FilesetEquityHistoricalFetcher, json!({ "symbol": symbol })),
     )?;
