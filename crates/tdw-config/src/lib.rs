@@ -463,10 +463,10 @@ pub struct CredentialEntry {
 /// The documented per-provider credential registry.
 ///
 /// Entries are in provider-key order so the table is deterministic for docs and
-/// snapshots. At least the FRED and EIA keyed providers are wired here; the
-/// remaining provider crates still read their own env vars directly (migrating
-/// every one is out of scope — this table is the single point new wiring should
-/// route through).
+/// snapshots. The FRED, EIA, FMP, and Polygon keyed providers are wired here;
+/// the remaining provider crates still read their own env vars directly
+/// (migrating every one is out of scope — this table is the single point new
+/// wiring should route through).
 const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
     CredentialEntry {
         provider: "eia",
@@ -475,10 +475,23 @@ const CREDENTIAL_REGISTRY: &[CredentialEntry] = &[
         doc: "U.S. Energy Information Administration API key (free registration).",
     },
     CredentialEntry {
+        provider: "fmp",
+        env_var: "FMP_API_KEY",
+        config_key: Some("fmp_api_key"),
+        doc: "Financial Modeling Prep API key (the tdw-provider-fmp crate currently \
+              reads TDW_FMP_API_KEY directly; this entry is the OpenBB-parity name).",
+    },
+    CredentialEntry {
         provider: "fred",
         env_var: "FRED_API_KEY",
         config_key: Some("fred_api_key"),
         doc: "FRED (St. Louis Fed) API key.",
+    },
+    CredentialEntry {
+        provider: "polygon",
+        env_var: "POLYGON_API_KEY",
+        config_key: Some("polygon_api_key"),
+        doc: "Polygon.io API key (used for FX / crypto / index aggregate bars).",
     },
 ];
 
@@ -713,6 +726,17 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         assert_eq!(eia.config_key, Some("eia_api_key"));
 
         assert!(credential_for_provider("yahoo").is_none());
+    }
+
+    #[test]
+    fn credential_registry_wires_fmp_and_polygon() {
+        let fmp = credential_for_provider("fmp").expect("fmp credential registered");
+        assert_eq!(fmp.env_var, "FMP_API_KEY");
+        assert_eq!(fmp.config_key, Some("fmp_api_key"));
+
+        let polygon = credential_for_provider("polygon").expect("polygon credential registered");
+        assert_eq!(polygon.env_var, "POLYGON_API_KEY");
+        assert_eq!(polygon.config_key, Some("polygon_api_key"));
     }
 
     #[test]

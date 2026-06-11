@@ -153,7 +153,9 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpStatementFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -253,6 +255,7 @@ pub struct ResearchIndexEvidence {
 /// # Errors
 ///
 /// Returns an error variant if the underlying operation fails.
+#[allow(clippy::too_many_lines)] // flat provider registration list mirrors the dispatch table; splitting adds no clarity
 pub fn default_registry() -> Result<ProviderRegistry> {
     let mut registry = ProviderRegistry::default();
     registry.register(FilesetEquityHistoricalFetcher::registry_entry())?;
@@ -339,6 +342,15 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpIncomeFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpQuoteSnapshotFetcher::registry_entry())?;
+    // FMP fundamentals breadth (G011): statement / ratios / key-metrics / profile.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpStatementFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpRatiosFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpKeyMetricsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpProfileFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]

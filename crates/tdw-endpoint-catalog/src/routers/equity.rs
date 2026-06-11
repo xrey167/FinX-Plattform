@@ -4,7 +4,7 @@ use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
     CalendarEvent, CompanyProfile, CorporateAction, EquityHistoricalData, Estimate,
-    OwnershipRecord, PricePerformance, QuoteSnapshot,
+    FinancialStatement, KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -38,7 +38,29 @@ const EQUITY_SHORTS_FAILS_TO_DELIVER: &[ProviderCandidate] =
 // endpoint key matches the Yahoo fetcher's `ENDPOINT` const, which is also the
 // runtime fetch/ingest dispatch-table key; a conformance test in tdw-service-api
 // keeps these rows and that table in sync.
-const EQUITY_PROFILE: &[ProviderCandidate] = &[ProviderCandidate::new("yahoo", "equity_profile")];
+/// Multi-provider `equity/profile` candidates: keyless Yahoo leads (resolves
+/// network-free in the offline default build), then the keyed FMP `profile`
+/// fetcher (gap-matrix item L2.x fmp). Order is keyless/offline-first, then keyed.
+const EQUITY_PROFILE: &[ProviderCandidate] = &[
+    ProviderCandidate::new("yahoo", "equity_profile"),
+    ProviderCandidate::new("fmp", "profile"),
+];
+
+// FMP fundamentals breadth (gap-matrix item L2.x fmp). The three statement
+// routes share one FMP `financial_statement` fetcher (the statement
+// discriminator is injected per dispatch binding), so each route gets a distinct
+// dispatch endpoint key — `financial_statement_<kind>` — to avoid a dispatch-key
+// collision (the NASDAQ-calendar pattern). Ratios and key-metrics are their own
+// FMP fetchers keyed by their `ENDPOINT` const. All keyed (FMP only).
+const EQUITY_FUNDAMENTAL_INCOME: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "financial_statement_income")];
+const EQUITY_FUNDAMENTAL_BALANCE: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "financial_statement_balance")];
+const EQUITY_FUNDAMENTAL_CASH: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "financial_statement_cash")];
+const EQUITY_FUNDAMENTAL_RATIOS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "ratios")];
+const EQUITY_FUNDAMENTAL_METRICS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "key_metrics")];
 const EQUITY_PRICE_QUOTE: &[ProviderCandidate] = &[ProviderCandidate::new("yahoo", "equity_quote")];
 const EQUITY_PRICE_PERFORMANCE: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "price_performance")];
@@ -99,6 +121,18 @@ fn calendar_event() -> Schema {
     schema_for!(CalendarEvent)
 }
 
+fn financial_statement() -> Schema {
+    schema_for!(FinancialStatement)
+}
+
+fn key_metrics() -> Schema {
+    schema_for!(KeyMetrics)
+}
+
+fn ratios() -> Schema {
+    schema_for!(Ratios)
+}
+
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
 /// every route in this router except `equity/price/historical`).
 fn flat_entry(
@@ -120,9 +154,52 @@ fn flat_entry(
     }
 }
 
+/// FMP fundamentals breadth entries (gap-matrix item L2.x fmp): the three
+/// financial-statement routes plus ratios and key-metrics. Split out of
+/// [`entries`] to keep each function compact; appended in declaration order.
+fn fundamental_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/income",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_INCOME,
+            "raw.financial_statement",
+            "Income statement (revenue, margins, net income) per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/balance",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_BALANCE,
+            "raw.financial_statement",
+            "Balance sheet (assets, liabilities, equity) per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/cash",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_CASH,
+            "raw.financial_statement",
+            "Cash-flow statement (operating/investing/financing) per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/ratios",
+            ratios,
+            EQUITY_FUNDAMENTAL_RATIOS,
+            "raw.ratios",
+            "Financial ratios (liquidity, profitability, leverage), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/metrics",
+            key_metrics,
+            EQUITY_FUNDAMENTAL_METRICS,
+            "raw.key_metrics",
+            "Key metrics (per-share and valuation), FMP-backed.",
+        ),
+    ]
+}
+
 /// The `equity` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
-    vec![
+    let mut entries = vec![
         CatalogEntry {
             route: "equity/price/historical",
             kind: EndpointKind::Fetch,
@@ -152,7 +229,8 @@ pub fn entries() -> Vec<CatalogEntry> {
             company_profile,
             EQUITY_PROFILE,
             "raw.company_profile",
-            "Company profile (name, exchange, currency, market cap), Yahoo-backed.",
+            "Company profile (name, exchange, currency, market cap); Yahoo (keyless) \
+             then FMP candidate.",
         ),
         flat_entry(
             "equity/price/quote",
@@ -210,5 +288,7 @@ pub fn entries() -> Vec<CatalogEntry> {
             "raw.calendar_event",
             "Upcoming IPO calendar (price, shares, exchange), NASDAQ-backed.",
         ),
-    ]
+    ];
+    entries.extend(fundamental_entries());
+    entries
 }
