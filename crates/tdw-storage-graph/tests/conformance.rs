@@ -505,7 +505,10 @@ async fn bolt_engine_meets_the_graph_contract() {
     };
     let user = std::env::var("TDW_BOLT_TEST_USER").unwrap_or_default();
     let password = std::env::var("TDW_BOLT_TEST_PASSWORD").unwrap_or_default();
-    let engine = tdw_storage_graph::BoltGraphEngine::connect(&uri, &user, &password)
+    // Memgraph's default database is "memgraph"; Neo4j's is "neo4j".
+    // Override via TDW_BOLT_TEST_DB when targeting Neo4j.
+    let db = std::env::var("TDW_BOLT_TEST_DB").unwrap_or_else(|_| "memgraph".to_string());
+    let engine = tdw_storage_graph::BoltGraphEngine::connect(&uri, &user, &password, &db)
         .await
         .unwrap_or_else(|error| panic!("bolt connect must succeed: {error}"));
     engine

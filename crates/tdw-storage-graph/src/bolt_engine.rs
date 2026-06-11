@@ -27,7 +27,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use async_trait::async_trait;
-use neo4rs::{Graph, Row, query};
+use neo4rs::{ConfigBuilder, Graph, Row, query};
 use tdw_core::{
     Direction, Error, GraphEdge, GraphEngine, GraphNode, MergeDecision, MergeReport, Provenance,
     Result, Subgraph, TraversalFilter, validate_graph_edge, validate_graph_node,
@@ -53,13 +53,21 @@ impl std::fmt::Debug for BoltGraphEngine {
 
 impl BoltGraphEngine {
     /// Connect to a Bolt endpoint (e.g. `bolt://127.0.0.1:7687`). Memgraph
-    /// without auth accepts empty credentials.
+    /// without auth accepts empty credentials. `db` is the target database
+    /// name: Memgraph's default is `"memgraph"`; Neo4j's default is `"neo4j"`.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Storage`] if the connection cannot be established.
-    pub async fn connect(uri: &str, user: &str, password: &str) -> Result<Self> {
-        let graph = Graph::new(uri, user, password)
+    pub async fn connect(uri: &str, user: &str, password: &str, db: &str) -> Result<Self> {
+        let config = ConfigBuilder::default()
+            .uri(uri)
+            .user(user)
+            .password(password)
+            .db(db)
+            .build()
+            .map_err(|error| Error::Storage(format!("bolt config: {error}")))?;
+        let graph = Graph::connect(config)
             .await
             .map_err(|error| Error::Storage(format!("bolt connect: {error}")))?;
         Ok(Self { graph })
