@@ -37,6 +37,11 @@ impl LanguageModel for AnthropicMessagesModel {
         &self.model_id
     }
 
+    /// Real Anthropic-backed client — production-grade for eval feedback.
+    fn is_production_grade(&self) -> bool {
+        true
+    }
+
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {
         let prompt = last_user_message(&request)?;
         Ok(ChatResponse {

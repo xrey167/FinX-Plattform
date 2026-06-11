@@ -46,6 +46,11 @@ impl LanguageModel for OpenAiCompatibleModel {
         &self.model_id
     }
 
+    /// Real OpenAI-compatible client — production-grade for eval feedback.
+    fn is_production_grade(&self) -> bool {
+        true
+    }
+
     fn complete(&self, request: ChatRequest) -> Result<ChatResponse> {
         let prompt = last_user_message(&request)?;
         Ok(ChatResponse {

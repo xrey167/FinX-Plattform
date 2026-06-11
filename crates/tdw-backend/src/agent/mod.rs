@@ -404,7 +404,12 @@ impl AgentBackend {
                 }
             });
 
-        if let Some(pass_rate) = pass_rate
+        // G008/ER3: gate proposal promotion on the same stub predicate as skill
+        // feedback. A stub-echo eval produces tautological pass_rates; promoting
+        // knowledge proposals on tautologies would silently advance unvalidated
+        // graph mutations into the durable store.
+        if feedback_allowed
+            && let Some(pass_rate) = pass_rate
             && let Some(proposals) = self.proposals.as_ref()
         {
             // The queue is shared (tokio::sync::Mutex) with the MCP write
@@ -828,6 +833,233 @@ mod tests {
             "stub feedback must not mutate skill quality without TDW_ALLOW_STUB_FEEDBACK=1"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // G008/ER3 F1 regression: stub eval that clears the MIN_EVAL_CASES floor
+    // and passes the 0.8 threshold must NOT promote proposals, because
+    // feedback_allowed is false for the stub model.
+    #[test]
+    fn stub_eval_passing_floor_does_not_promote_proposals() {
+        use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        use tdw_knowledge::proposals::ProposalQueue;
+        // Ensure the thread-local bypass is OFF — we want the gate to fire.
+        set_allow_stub_feedback_for_test(false);
+
+        let (dir, mut backend) = backend_with_search_tool();
+        let card = AgentCard {
+            meta: EntityMeta::new(
+                "market-researcher",
+                "market-researcher",
+                "0.1.0",
+                Origin { tier: Tier::Domain, source: Source::Internal },
+                Adaptivity::Learning,
+                true,
+            )
+            .with_title("Market Researcher")
+            .with_description("Generates evidence-backed notes."),
+            skills: vec![AgentSkill {
+                meta: EntityMeta::new(
+                    "research.note",
+                    "research.note",
+                    "0.1.0",
+                    Origin { tier: Tier::Domain, source: Source::Internal },
+                    Adaptivity::Learning,
+                    false,
+                )
+                .with_title("research.note")
+                .with_description("A skill."),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: serde_json::json!({"type": "object"}),
+                quality: None,
+            }],
+            content_refs: vec![ContentRef {
+                uri: "tdw://docs/research-template".to_string(),
+                kind: ContentKind::Prompt,
+                checksum: None,
+                tags: Vec::new(),
+            }],
+            endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
+        };
+        backend.upsert_agent(card);
+
+        let queue: ProposalQueue = serde_json::from_value(serde_json::json!({
+            "proposals": {
+                "p-stub": {
+                    "id": "p-stub",
+                    "kind": { "kind": "tag_define", "tag_id": "asset:equity", "parent": null },
+                    "agent_id": "market-researcher",
+                    "status": "validated",
+                    "history": ["2026-06-11 validated"],
+                }
+            },
+            "next_id": 1,
+        }))
+        .expect("queue deserializes");
+        let proposals = Arc::new(tokio::sync::Mutex::new(queue));
+        backend.set_proposals(Arc::clone(&proposals));
+
+        // 5 cases that all pass (pass_rate 1.0 >= 0.8, case_count 5 >= MIN_EVAL_CASES).
+        let cases = (1_u8..=5)
+            .map(|i| EvalCase {
+                case_id: format!("case-{i}"),
+                prompt: format!("Summarize AAPL ({i})"),
+                expected_refs: vec![ContentRef {
+                    uri: "tdw://docs/research-template".to_string(),
+                    kind: ContentKind::Prompt,
+                    checksum: None,
+                    tags: Vec::new(),
+                }],
+            })
+            .collect();
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "eval-stub-nopromote".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden".to_string(),
+                cases,
+            },
+            "2026-06-11T00:00:00+00:00",
+        );
+        assert_eq!(outcome.status, "success");
+
+        // Proposal must remain Validated — stub model gate blocked promotion.
+        let status = {
+            let queue = proposals.blocking_lock();
+            queue.get("p-stub").expect("proposal present").status
+        };
+        assert_eq!(
+            status,
+            tdw_agent::ValidationStatus::Validated,
+            "stub-model eval must not promote proposals even when floor+threshold pass"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // G008/ER3 F1 regression: with the bypass active (thread-local), a passing
+    // 5-case eval DOES promote the Validated proposal to Ready.
+    #[test]
+    fn bypass_enabled_passing_eval_promotes_proposals() {
+        use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        use tdw_knowledge::proposals::ProposalQueue;
+        // Enable the thread-local bypass so promotion is allowed.
+        set_allow_stub_feedback_for_test(true);
+
+        let (dir, mut backend) = backend_with_search_tool();
+        let card = AgentCard {
+            meta: EntityMeta::new(
+                "market-researcher",
+                "market-researcher",
+                "0.1.0",
+                Origin { tier: Tier::Domain, source: Source::Internal },
+                Adaptivity::Learning,
+                true,
+            )
+            .with_title("Market Researcher")
+            .with_description("Generates evidence-backed notes."),
+            skills: vec![AgentSkill {
+                meta: EntityMeta::new(
+                    "research.note",
+                    "research.note",
+                    "0.1.0",
+                    Origin { tier: Tier::Domain, source: Source::Internal },
+                    Adaptivity::Learning,
+                    false,
+                )
+                .with_title("research.note")
+                .with_description("A skill."),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: serde_json::json!({"type": "object"}),
+                quality: None,
+            }],
+            content_refs: vec![ContentRef {
+                uri: "tdw://docs/research-template".to_string(),
+                kind: ContentKind::Prompt,
+                checksum: None,
+                tags: Vec::new(),
+            }],
+            endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
+        };
+        backend.upsert_agent(card);
+
+        let queue: ProposalQueue = serde_json::from_value(serde_json::json!({
+            "proposals": {
+                "p-bypass": {
+                    "id": "p-bypass",
+                    "kind": { "kind": "tag_define", "tag_id": "asset:equity", "parent": null },
+                    "agent_id": "market-researcher",
+                    "status": "validated",
+                    "history": ["2026-06-11 validated"],
+                }
+            },
+            "next_id": 1,
+        }))
+        .expect("queue deserializes");
+        let proposals = Arc::new(tokio::sync::Mutex::new(queue));
+        backend.set_proposals(Arc::clone(&proposals));
+
+        let cases = (1_u8..=5)
+            .map(|i| EvalCase {
+                case_id: format!("case-{i}"),
+                prompt: format!("Summarize AAPL ({i})"),
+                expected_refs: vec![ContentRef {
+                    uri: "tdw://docs/research-template".to_string(),
+                    kind: ContentKind::Prompt,
+                    checksum: None,
+                    tags: Vec::new(),
+                }],
+            })
+            .collect();
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "eval-bypass-promote".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden".to_string(),
+                cases,
+            },
+            "2026-06-11T00:00:00+00:00",
+        );
+        assert_eq!(outcome.status, "success");
+
+        let status = {
+            let queue = proposals.blocking_lock();
+            queue.get("p-bypass").expect("proposal present").status
+        };
+        assert_eq!(
+            status,
+            tdw_agent::ValidationStatus::Ready,
+            "bypass-enabled passing eval must promote proposal to Ready"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        set_allow_stub_feedback_for_test(false);
+    }
+
+    // G008/ER3 F3: a novel unnamed model that does not override
+    // is_production_grade() must default to false (fail-safe).
+    #[test]
+    fn novel_unknown_model_defaults_to_not_production_grade() {
+        use tdw_llm::{ChatRequest, ChatResponse, MessageRole, ChatMessage, Usage};
+        struct NovelModel;
+        impl tdw_llm::LanguageModel for NovelModel {
+            fn model_id(&self) -> &str {
+                "some-future-model-v99"
+            }
+            fn complete(&self, _: ChatRequest) -> tdw_llm::Result<ChatResponse> {
+                Ok(ChatResponse {
+                    model_id: self.model_id().to_string(),
+                    message: ChatMessage { role: MessageRole::Assistant, content: String::new() },
+                    usage: Usage { input_tokens: 0, output_tokens: 0 },
+                })
+            }
+        }
+        // Does NOT override is_production_grade — must inherit the fail-safe default.
+        assert!(
+            !NovelModel.is_production_grade(),
+            "a model that does not override is_production_grade must default to false"
+        );
     }
 
     // G008/ER3: with TDW_ALLOW_STUB_FEEDBACK=1 the feedback path is reachable.
