@@ -4855,10 +4855,14 @@ mod tests {
         // the `upper` builtin uppercases its input. This drives the full udf.run
         // arm body — UdfRequest deserialization, sandbox.run, and the masked
         // response envelope (evidence/runtime/output).
+        //
+        // G008/UDF1: use `Wasm` runtime — it is the only runtime that passes
+        // the gate without TDW_ALLOW_FIXTURE_UDF=1. JavaScript/Python/External
+        // are gated; Wasm falls through to the name-keyed fixture path.
         let policy = udf_runner_policy();
         let arguments = json!({
             "name": "upper",
-            "runtime": "JavaScript",
+            "runtime": "Wasm",
             "source": "builtin",
             "input": "abc",
             "allow_network": false,
@@ -4876,7 +4880,7 @@ mod tests {
         // sandbox response. Empty mask_rules leave the payload unchanged.
         assert_eq!(value["evidence"]["principal"], "alice");
         assert_eq!(value["evidence"]["endpoint"], "tdw.udf.run");
-        assert_eq!(value["runtime"], "JavaScript");
+        assert_eq!(value["runtime"], "Wasm");
         assert_eq!(value["output"], "ABC");
     }
 

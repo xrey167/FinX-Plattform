@@ -172,6 +172,28 @@ pub struct ChatResponse {
 
 pub trait LanguageModel: Send + Sync {
     fn model_id(&self) -> &str;
+
+    /// Whether this model is production-grade and safe to use for feedback that
+    /// mutates agent skills or other durable state.
+    ///
+    /// The default implementation checks that [`Self::model_id`] is not one of
+    /// the known offline stub / echo ids (`"stub-echo"`). Override and return
+    /// `true` only for real, network-backed clients; override to return `false`
+    /// for any test double or fixture model you add.
+    ///
+    /// # Safety note (G008 theme 10 — ER3)
+    ///
+    /// Eval feedback and skill-mutation paths **must** call this before applying
+    /// results to durable state. A stub model echoes grounding context as its
+    /// answer, so its eval passes are tautological URI-containment checks, not
+    /// model-quality signals. Running feedback on a stub would tune agent skills
+    /// on noise, silently degrading quality. To bypass in a controlled test set
+    /// `TDW_ALLOW_STUB_FEEDBACK=1` in the environment.
+    #[must_use]
+    fn is_production_grade(&self) -> bool {
+        self.model_id() != "stub-echo"
+    }
+
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.

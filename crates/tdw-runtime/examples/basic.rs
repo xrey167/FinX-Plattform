@@ -67,7 +67,10 @@ fn main() -> Result<()> {
         MockFetcher::PROVIDER,
         MockFetcher::ENDPOINT,
     ))?;
-    let runner = CommandRunner::new(registry).with_credentials(Credentials::default());
+    // G008/RT1b: this example deliberately exercises the fetch-then-wrap path.
+    let runner = CommandRunner::new(registry)
+        .with_credentials(Credentials::default())
+        .allow_fake_streaming();
     println!(
         "registered providers: {}",
         runner.registered_providers().len()

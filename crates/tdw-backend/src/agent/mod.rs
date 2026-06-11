@@ -301,6 +301,23 @@ impl AgentBackend {
     /// skills whose adaptivity is `>= Learning` are updated; skills the gate rejects are
     /// skipped (not an error). The mutated card is re-upserted, and the stored run is
     /// re-recorded with the `updated_skills` backlink.
+    ///
+    /// # G008 theme 10 — ER3: stub-feedback gate
+    ///
+    /// Skill mutation is **refused** when the configured [`LanguageModel`] is not
+    /// production-grade (i.e. [`LanguageModel::is_production_grade`] returns `false`,
+    /// which is the default for the offline `StubLanguageModel`).  The stub echoes
+    /// grounding context verbatim, so its eval passes are pure URI-containment
+    /// tautologies — not model-quality signals.  Mutating agent skills on stub
+    /// results would silently tune them on noise.
+    ///
+    /// The gate only suppresses the *mutation* step; metrics are still computed and
+    /// the run is still recorded, so CI pass/fail counts remain meaningful.
+    ///
+    /// To bypass in a controlled context (e.g. an integration test that deliberately
+    /// exercises the feedback path with a stub) set `TDW_ALLOW_STUB_FEEDBACK=1` in
+    /// the environment.  The bypass is loud: a warning is printed to stderr so it is
+    /// never invisible in logs.
     pub fn run_eval_at(&mut self, request: EvalRunRequest, now: &str) -> EvalRunOutcome {
         // The runner consumes `request`; capture the evaluated agent id first for feedback.
         let agent_id = request.agent_id.clone();
@@ -313,7 +330,33 @@ impl AgentBackend {
             .find(|metric| metric.metric_name == "pass_rate")
             .map(|metric| metric.metric_value);
 
-        if let Some(pass_rate) = pass_rate
+        // G008/ER3: gate skill mutation on the model being production-grade.
+        // Stub models produce containment tautologies, not quality signals.
+        // In tests, `set_allow_stub_feedback_for_test(true)` may set the
+        // thread-local override so the feedback path is exercisable without
+        // unsafe env manipulation.
+        let feedback_allowed = self.language_model.is_production_grade()
+            || std::env::var("TDW_ALLOW_STUB_FEEDBACK").as_deref() == Ok("1")
+            || {
+                #[cfg(test)]
+                { ALLOW_STUB_FEEDBACK_FOR_TEST.with(|cell| cell.get()) }
+                #[cfg(not(test))]
+                { false }
+            };
+
+        if !feedback_allowed {
+            eprintln!(
+                "tdw-backend: eval feedback suppressed — model {:?} is not \
+                 production-grade (stub/echo). Metrics were recorded; skill \
+                 mutation was skipped to prevent tuning on tautological stub \
+                 results. Set TDW_ALLOW_STUB_FEEDBACK=1 to bypass (for \
+                 controlled testing only).",
+                self.language_model.model_id()
+            );
+        }
+
+        if feedback_allowed
+            && let Some(pass_rate) = pass_rate
             && let Some(mut card) = self.store.agent(&agent_id).cloned()
         {
             let mut updated_skills = Vec::new();
@@ -553,6 +596,27 @@ fn registry_dir_from_env() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+// Thread-local flag used only in unit tests (G008/ER3) to enable stub
+// feedback without `unsafe` env-var manipulation. The flag is checked by
+// `run_eval_at` alongside `TDW_ALLOW_STUB_FEEDBACK` only when `cfg(test)` is
+// active, so it has zero runtime cost in production builds.
+#[cfg(test)]
+thread_local! {
+    static ALLOW_STUB_FEEDBACK_FOR_TEST: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Set the per-thread stub-feedback override (test use only).
+///
+/// Pass `true` to allow `run_eval_at` to apply skill mutation even when
+/// the configured model is not production-grade; pass `false` to restore the
+/// default (gate applies). The flag is thread-local, so parallel tests do not
+/// interfere.
+#[cfg(test)]
+fn set_allow_stub_feedback_for_test(allow: bool) {
+    ALLOW_STUB_FEEDBACK_FOR_TEST.with(|cell| cell.set(allow));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,9 +750,92 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // G008/ER3: stub model must NOT mutate skills without TDW_ALLOW_STUB_FEEDBACK=1.
+    #[test]
+    fn stub_model_feedback_suppressed_without_opt_in() {
+        use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        // SAFETY: test-only, single-threaded context (cargo test default).
+        set_allow_stub_feedback_for_test(false);
+
+        let (dir, mut backend) = backend_with_search_tool();
+        // StubLanguageModel is default — is_production_grade() returns false.
+        let skill_meta = |name: &str| {
+            EntityMeta::new(
+                name,
+                name,
+                "0.1.0",
+                Origin { tier: Tier::Domain, source: Source::Internal },
+                Adaptivity::Learning,
+                false,
+            )
+            .with_title(name)
+            .with_description("A skill.")
+        };
+        let card = AgentCard {
+            meta: EntityMeta::new(
+                "market-researcher",
+                "market-researcher",
+                "0.1.0",
+                Origin { tier: Tier::Domain, source: Source::Internal },
+                Adaptivity::Learning,
+                true,
+            )
+            .with_title("Market Researcher")
+            .with_description("Generates evidence-backed notes."),
+            skills: vec![AgentSkill {
+                meta: skill_meta("research.note"),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: serde_json::json!({"type": "object"}),
+                quality: None,
+            }],
+            content_refs: vec![ContentRef {
+                uri: "tdw://docs/research-template".to_string(),
+                kind: ContentKind::Prompt,
+                checksum: None,
+                tags: Vec::new(),
+            }],
+            endpoint: Some("mcp://tdw/agents/market-researcher".to_string()),
+            tool_scope: Vec::new(),
+            runtime: None,
+        };
+        backend.upsert_agent(card);
+
+        let outcome = backend.run_eval_at(
+            EvalRunRequest {
+                run_id: "er3-gate".to_string(),
+                agent_id: "market-researcher".to_string(),
+                dataset_id: "golden".to_string(),
+                cases: vec![EvalCase {
+                    case_id: "case-1".to_string(),
+                    prompt: "Summarize AAPL".to_string(),
+                    expected_refs: vec![ContentRef {
+                        uri: "tdw://docs/research-template".to_string(),
+                        kind: ContentKind::Prompt,
+                        checksum: None,
+                        tags: Vec::new(),
+                    }],
+                }],
+            },
+            "2026-06-11T00:00:00+00:00",
+        );
+        // Metrics are still produced (CI use-case).
+        assert_eq!(outcome.status, "success");
+
+        // Skill quality must be None: stub feedback was suppressed.
+        let updated = backend.agent("market-researcher").expect("card present");
+        assert!(
+            updated.skills[0].quality.is_none(),
+            "stub feedback must not mutate skill quality without TDW_ALLOW_STUB_FEEDBACK=1"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // G008/ER3: with TDW_ALLOW_STUB_FEEDBACK=1 the feedback path is reachable.
     #[test]
     fn run_eval_applies_gated_feedback_to_learning_skill_only() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        // SAFETY: test-only, single-threaded context (cargo test default).
+        set_allow_stub_feedback_for_test(true);
 
         let (dir, mut backend) = backend_with_search_tool();
 
@@ -785,11 +932,18 @@ mod tests {
         assert!(configured.quality.is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: test-only cleanup.
+        set_allow_stub_feedback_for_test(false);
     }
 
     #[test]
     fn run_eval_promotes_attached_proposals_on_a_passing_eval() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
+        // G008/ER3: this test exercises the proposal-promotion path (not skill
+        // mutation), but the backend stub-feedback gate is also active, so set
+        // TDW_ALLOW_STUB_FEEDBACK=1 so skill feedback doesn't print a warning.
+        // SAFETY: test-only, single-threaded context (cargo test default).
+        set_allow_stub_feedback_for_test(true);
         use tdw_knowledge::proposals::ProposalQueue;
 
         let (dir, mut backend) = backend_with_search_tool();
@@ -890,6 +1044,8 @@ mod tests {
         assert_eq!(status, tdw_agent::ValidationStatus::Ready);
 
         let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: test-only cleanup.
+        set_allow_stub_feedback_for_test(false);
     }
 
     #[test]
@@ -1086,6 +1242,10 @@ mod tests {
         // Build a backend, install a language model via the builder, and prove the
         // injected model is the one the EvalRunner executes through by observing a
         // successful eval outcome (run_eval_at clones self.language_model into the runner).
+        // G008/ER3: StubLanguageModel is not production-grade; allow stub feedback
+        // so the run completes without a warning.
+        // SAFETY: test-only, single-threaded context (cargo test default).
+        set_allow_stub_feedback_for_test(true);
         let (dir, mut backend) = backend_with_search_tool();
         backend = backend.with_language_model(Arc::new(StubLanguageModel));
         backend.upsert_agent(sample_agent_card());
@@ -1105,6 +1265,8 @@ mod tests {
         assert_eq!(outcome.run_id, "eval-lm");
         assert_eq!(outcome.status, "success");
         let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: test-only cleanup.
+        set_allow_stub_feedback_for_test(false);
     }
 
     #[test]
@@ -1364,6 +1526,10 @@ mod tests {
     fn run_eval_under_floor_does_not_promote() {
         use tdw_agent::{AgentCard, AgentSkill, ContentKind, ContentRef};
         use tdw_knowledge::proposals::ProposalQueue;
+        // G008/ER3: set TDW_ALLOW_STUB_FEEDBACK=1 so the stub model's feedback
+        // path runs (this test checks proposal gate, not skill mutation).
+        // SAFETY: test-only, single-threaded context (cargo test default).
+        set_allow_stub_feedback_for_test(true);
 
         let (dir, mut backend) = backend_with_search_tool();
 
@@ -1459,6 +1625,8 @@ mod tests {
             "under-floor eval must not promote proposal"
         );
         let _ = std::fs::remove_dir_all(&dir);
+        // SAFETY: test-only cleanup.
+        set_allow_stub_feedback_for_test(false);
     }
 
     #[test]

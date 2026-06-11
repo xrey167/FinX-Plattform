@@ -155,7 +155,9 @@ fn run_propagates_invalid_query_from_fetcher_unconditionally() {
 
 #[test]
 fn run_streaming_short_circuits_when_underlying_fetch_errors() {
-    let runner = CommandRunner::default();
+    // G008/RT1b: opt in to fake-streaming so this test reaches the underlying
+    // fetch error (InvalidQuery) rather than the gate-refusal Provider error.
+    let runner = CommandRunner::default().allow_fake_streaming();
     match block_on(runner.run_streaming(&AlwaysFailingFetcher, json!({}))) {
         Err(err) => assert!(matches!(err, Error::InvalidQuery(_))),
         Ok(_) => panic!("underlying fetch must propagate"),
@@ -164,7 +166,10 @@ fn run_streaming_short_circuits_when_underlying_fetch_errors() {
 
 #[test]
 fn run_streaming_emits_progress_then_done_for_happy_path() {
-    let runner = CommandRunner::default();
+    // G008/RT1b: opt in to fake-streaming — this test exercises the
+    // fetch-then-wrap behaviour intentionally and acknowledges no real
+    // incremental streaming occurs.
+    let runner = CommandRunner::default().allow_fake_streaming();
     let mut stream = block_on(runner.run_streaming(&StrictFetcher, json!({ "symbol": "AAPL" })))
         .unwrap_or_else(|error| panic!("streaming run: {error}"));
 

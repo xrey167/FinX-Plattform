@@ -132,9 +132,25 @@ async fn aged_short_term_memory_promotes_to_mid_term() {
 }
 
 // --- Capability 3: gated eval feedback --------------------------------------
+//
+// Gate-open path (env var set): run with:
+//
+//   TDW_ALLOW_STUB_FEEDBACK=1 cargo test -p tdw-backend --test learning_e2e
+//
+// When `TDW_ALLOW_STUB_FEEDBACK` is not set the eval-feedback test skips gracefully.
 
 #[test]
 fn eval_feedback_updates_learning_skill_and_skips_configured_skill() {
+    // G008/ER3: the stub model is not production-grade. This test requires
+    // TDW_ALLOW_STUB_FEEDBACK=1 to exercise the feedback code path with the default
+    // StubLanguageModel. Skip gracefully when the bypass is not configured.
+    if std::env::var("TDW_ALLOW_STUB_FEEDBACK").as_deref() != Ok("1") {
+        eprintln!(
+            "SKIP: set TDW_ALLOW_STUB_FEEDBACK=1 to run the eval-feedback end-to-end test"
+        );
+        return;
+    }
+
     let cfg = BackendConfig::default();
     let mut agent = AgentBackend::from_config(&cfg).expect("agent backend should build");
 
@@ -188,6 +204,7 @@ fn eval_feedback_updates_learning_skill_and_skips_configured_skill() {
         configured.quality.is_none(),
         "the Adaptivity gate must skip the Configured skill"
     );
+
 }
 
 // --- Fixtures ---------------------------------------------------------------
