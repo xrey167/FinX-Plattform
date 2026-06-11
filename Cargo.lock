@@ -5230,6 +5230,7 @@ dependencies = [
 name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "serde_json",
  "tdw-core",
@@ -5239,8 +5240,10 @@ dependencies = [
  "tdw-embed-local",
  "tdw-embed-openai",
  "tdw-endpoint-catalog",
+ "tdw-kg",
  "tdw-knowledge",
  "tdw-protocol",
+ "tdw-storage-graph",
  "tdw-storage-meilisearch",
  "tdw-storage-qdrant",
  "tdw-test-utils",
