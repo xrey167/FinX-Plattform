@@ -234,6 +234,15 @@ pub struct ExtractionStage {
     /// Tokens consumed so far in the current day (reset via
     /// [`reset_daily_budget`](Self::reset_daily_budget)).
     tokens_used_today: u64,
+    /// Shared freshness cell (K-M1) read by `tdw.kg.status`. Attached by the
+    /// composition root via [`with_freshness_cell`](Self::with_freshness_cell)
+    /// so production reports REAL extraction state; `None` in unit fixtures that
+    /// don't assert on status. Updated after every [`extract_and_propose`] run.
+    freshness_cell: Option<Arc<std::sync::Mutex<crate::ExtractionFreshness>>>,
+    /// Whether the "model not production-grade, extraction inactive" warning has
+    /// already been emitted. Gates [`maybe_log_inactive_warning`] so the warning
+    /// fires exactly once, not on every ingest tick (MEDIUM: log spamming).
+    logged_inactive_warning: bool,
 }
 
 impl ExtractionStage {
@@ -272,7 +281,57 @@ impl ExtractionStage {
             tags,
             budget,
             tokens_used_today: 0,
+            freshness_cell: None,
+            logged_inactive_warning: false,
         })
+    }
+
+    /// Attach the shared freshness cell (K-M1 honesty gate).
+    ///
+    /// The composition root (`tdw-backend`) builds one
+    /// `Arc<std::sync::Mutex<ExtractionFreshness>>`, attaches it to the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) AND to this stage (write
+    /// side) so status reports the REAL extraction state rather than a stale
+    /// default.  Without this, `tdw.kg.status` would LIE about extraction
+    /// progress.
+    #[must_use]
+    pub fn with_freshness_cell(
+        mut self,
+        cell: Arc<std::sync::Mutex<crate::ExtractionFreshness>>,
+    ) -> Self {
+        self.freshness_cell = Some(cell);
+        self
+    }
+
+    /// Write `state` into the shared freshness cell, if attached.
+    ///
+    /// Recovers from a poisoned mutex (a panic in another holder must not wedge
+    /// the extraction stage — status honesty is best-effort and never blocks
+    /// ingestion).
+    fn publish_freshness(&self, state: crate::ExtractionFreshness) {
+        if let Some(cell) = &self.freshness_cell {
+            match cell.lock() {
+                Ok(mut guard) => *guard = state,
+                Err(poisoned) => *poisoned.into_inner() = state,
+            }
+        }
+    }
+
+    /// Log the "model not production-grade, extraction inactive" warning exactly
+    /// once (MEDIUM: log spamming when model inactive).
+    ///
+    /// Called from the stub-gate path on every ingest; the `logged_inactive_warning`
+    /// latch ensures only the first call emits the warning.
+    fn maybe_log_inactive_warning(&mut self) {
+        if !self.logged_inactive_warning {
+            self.logged_inactive_warning = true;
+            eprintln!(
+                "[tdw.kg.extraction] WARN model {model_id} not production-grade — \
+                 extraction stage inactive; deterministic ingestion path runs \
+                 unchanged (this warning is logged once)",
+                model_id = self.model.model_id(),
+            );
+        }
     }
 
     /// Whether the stage is currently operational: model is production-grade
@@ -324,19 +383,28 @@ impl ExtractionStage {
         text: &str,
         now: &str,
     ) -> Result<Option<ExtractionResult>> {
-        // Stub gate: is_production_grade() false → silent absent.
+        // Stub gate: is_production_grade() false → silent absent (no LLM call).
+        // Log the inactive warning exactly once and publish the Disabled state so
+        // status reports the gap honestly rather than a stale default.
         if !self.model.is_production_grade() {
+            self.maybe_log_inactive_warning();
+            self.publish_freshness(crate::ExtractionFreshness::Disabled {
+                reason: "stub model — is_production_grade() = false".to_string(),
+            });
             return Ok(None);
         }
-        // Budget gate: daily total exhausted → loud stop, return early.
+        // Budget gate: daily total exhausted → loud stop, set flag, publish state.
         if self.tokens_used_today >= self.budget.daily_token_budget {
             eprintln!(
-                "[tdw.kg.extraction] daily token budget exhausted \
+                "[tdw.kg.extraction] WARN daily token budget exhausted \
                  ({used}/{cap}); extraction stage stopped for today — \
                  deterministic ingestion unaffected",
                 used = self.tokens_used_today,
                 cap = self.budget.daily_token_budget,
             );
+            self.publish_freshness(crate::ExtractionFreshness::BudgetExhausted {
+                tokens_consumed: self.tokens_used_today,
+            });
             return Ok(Some(ExtractionResult {
                 budget_exhausted: true,
                 ..ExtractionResult::default()
@@ -353,10 +421,7 @@ impl ExtractionStage {
             max_output_tokens: self.budget.max_tokens_per_doc,
         };
 
-        let response = self
-            .model
-            .complete(request)
-            .map_err(|error| KnowledgeError::Storage(error.to_string()))?;
+        let response = self.run_model_call(request).await?;
 
         let tokens_this_call =
             u64::from(response.usage.input_tokens) + u64::from(response.usage.output_tokens);
@@ -370,6 +435,9 @@ impl ExtractionStage {
                     "[tdw.kg.extraction] doc {doc_id}: failed to parse LLM response \
                      ({reason}); skipping extraction — deterministic path unaffected"
                 );
+                self.publish_freshness(crate::ExtractionFreshness::Error {
+                    error: format!("doc {doc_id}: parse failure: {reason}"),
+                });
                 return Ok(Some(ExtractionResult {
                     tokens_consumed: tokens_this_call,
                     ..ExtractionResult::default()
@@ -386,29 +454,96 @@ impl ExtractionStage {
             ..ExtractionResult::default()
         };
 
-        let ctx = SubmitCtx {
-            agent_id: &agent_id,
-            doc_id,
-            now,
-            graph: &self.graph,
-            tags: &self.tags,
-        };
+        {
+            let ctx = SubmitCtx {
+                agent_id: &agent_id,
+                doc_id,
+                now,
+                graph: &self.graph,
+                tags: &self.tags,
+            };
 
-        let mut queue = self.proposals.lock().await;
-        process_entities(&mut queue, &ctx, payload.entities, &mut result).await;
-        process_relations(&mut queue, &ctx, payload.relations, &mut result).await;
+            let mut queue = self.proposals.lock().await;
+            process_entities(&mut queue, &ctx, payload.entities, &mut result).await;
+            process_relations(&mut queue, &ctx, payload.relations, &mut result).await;
+        }
 
-        // Check budget after processing.
+        self.publish_post_run_freshness(doc_id, tokens_this_call, &mut result);
+
+        Ok(Some(result))
+    }
+
+    /// Run the (synchronous, blocking) model call off the async path.
+    ///
+    /// RUNTIME HAZARD FIX (Gemini HIGH #1): `LanguageModel::complete` is a
+    /// synchronous, network-blocking call. Running it directly on the async path
+    /// would block a tokio runtime worker thread. This offloads it to the
+    /// blocking pool via `spawn_blocking` (the model is `Arc<dyn LanguageModel>`:
+    /// `Send + Sync`, so the clone moves cleanly into the closure). On any
+    /// failure the freshness cell is updated to `Error` before returning.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Storage`] if the model errors or the blocking
+    /// task panics/cancels.
+    async fn run_model_call(&self, request: ChatRequest) -> Result<tdw_llm::ChatResponse> {
+        let model = Arc::clone(&self.model);
+        match tokio::task::spawn_blocking(move || model.complete(request)).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
+                let error = error.to_string();
+                self.publish_freshness(crate::ExtractionFreshness::Error {
+                    error: error.clone(),
+                });
+                Err(KnowledgeError::Storage(error))
+            }
+            Err(join_error) => {
+                // The blocking task panicked or was cancelled — surface as a hard
+                // engine failure (the deterministic path has already run).
+                let error = format!("extraction model task failed: {join_error}");
+                self.publish_freshness(crate::ExtractionFreshness::Error {
+                    error: error.clone(),
+                });
+                Err(KnowledgeError::Storage(error))
+            }
+        }
+    }
+
+    /// Budget accounting AFTER processing one document.
+    ///
+    /// If this run pushed `tokens_used_today` at/over the daily budget, the cap
+    /// is now enforced LOUDLY (Gemini HIGH #2): the exhaustion flag is set on the
+    /// result so callers observe it without a second call, and `BudgetExhausted`
+    /// is published. Otherwise a normal `Ok` with remaining budget is published.
+    fn publish_post_run_freshness(
+        &self,
+        doc_id: &str,
+        tokens_this_call: u64,
+        result: &mut ExtractionResult,
+    ) {
         if self.tokens_used_today >= self.budget.daily_token_budget {
+            result.budget_exhausted = true;
             eprintln!(
-                "[tdw.kg.extraction] daily token budget reached after processing \
-                 doc {doc_id} ({used}/{cap}) — stage will stop on next call",
+                "[tdw.kg.extraction] WARN daily token budget reached after processing \
+                 doc {doc_id} ({used}/{cap}) — extraction stage will stop until reset",
                 used = self.tokens_used_today,
                 cap = self.budget.daily_token_budget,
             );
+            self.publish_freshness(crate::ExtractionFreshness::BudgetExhausted {
+                tokens_consumed: self.tokens_used_today,
+            });
+        } else {
+            self.publish_freshness(crate::ExtractionFreshness::Ok {
+                docs_processed: 1,
+                entities_enqueued: result.entities_enqueued,
+                relations_enqueued: result.relations_enqueued,
+                tokens_consumed: tokens_this_call,
+                budget_remaining: self
+                    .budget
+                    .daily_token_budget
+                    .saturating_sub(self.tokens_used_today),
+            });
         }
-
-        Ok(Some(result))
     }
 }
 
@@ -616,10 +751,45 @@ fn build_agent_id(model_id: &str, doc_id: &str) -> String {
     raw[..raw.len().min(MAX_AGENT_ID_LEN)].to_string()
 }
 
+/// Quote and escape a field value for the space/`=`-delimited note format.
+///
+/// The note format is `key=value key=value ...`; an unquoted value containing a
+/// space, `=`, or quote would corrupt the parse (and entity text from an LLM is
+/// untrusted).  This wraps the value in double quotes and backslash-escapes any
+/// embedded backslash or double-quote so the K-R6 aggregation parser can recover
+/// the exact field boundaries.  (Control characters are already rejected by
+/// [`validate_extracted_label`] upstream.)
+fn quote_field(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
+/// Clamp an LLM-provided confidence into `[0.0, 1.0]`.
+///
+/// LLM output is untrusted: a model may emit `1.7`, `-0.3`, or `NaN`. NaN maps
+/// to the neutral default; finite values are clamped to the unit interval before
+/// they are stamped into the note (and later consumed by K-R6 aggregation).
+const fn clamp_confidence(confidence: f64) -> f64 {
+    if confidence.is_nan() {
+        default_confidence()
+    } else {
+        confidence.clamp(0.0, 1.0)
+    }
+}
+
 /// Build the Annotation note for an extracted entity.
 ///
-/// Format is machine-parseable by K-R6 aggregation:
-/// `km1:entity label=<label> kind=<kind_hint|none> confidence=<conf> src=<doc_id>`
+/// Format is machine-parseable by K-R6 aggregation; fields are quoted/escaped so
+/// commas, spaces, `=`, or quotes in entity text cannot corrupt the note:
+/// `km1:entity label="<label>" kind="<kind|none>" confidence=<conf> src="<doc_id>"`
 fn build_entity_note(
     label: &str,
     kind_hint: Option<&str>,
@@ -627,14 +797,18 @@ fn build_entity_note(
     doc_id: &str,
 ) -> String {
     format!(
-        "km1:entity label={label} kind={kind} confidence={confidence:.4} src={doc_id}",
-        kind = kind_hint.unwrap_or("none"),
+        "km1:entity label={label} kind={kind} confidence={confidence:.4} src={src}",
+        label = quote_field(label),
+        kind = quote_field(kind_hint.unwrap_or("none")),
+        confidence = clamp_confidence(confidence),
+        src = quote_field(doc_id),
     )
 }
 
 /// Build the Annotation note for an extracted relation.
 ///
-/// Format: `km1:relation subject=<s> predicate=<p> object=<o> confidence=<c> src=<doc_id>`
+/// Format (quoted/escaped fields):
+/// `km1:relation subject="<s>" predicate="<p>" object="<o>" confidence=<c> src="<doc_id>"`
 fn build_relation_note(
     subject: &str,
     predicate: &str,
@@ -644,7 +818,12 @@ fn build_relation_note(
 ) -> String {
     format!(
         "km1:relation subject={subject} predicate={predicate} object={object} \
-         confidence={confidence:.4} src={doc_id}"
+         confidence={confidence:.4} src={src}",
+        subject = quote_field(subject),
+        predicate = quote_field(predicate),
+        object = quote_field(object),
+        confidence = clamp_confidence(confidence),
+        src = quote_field(doc_id),
     )
 }
 
@@ -931,17 +1110,19 @@ mod tests {
         )
         .expect("stage constructs");
 
-        // First call: tokens_used=0 < budget=1 → runs, consumes 80 tokens.
+        // First call: tokens_used=0 < budget=1 → runs, consumes 80 tokens. The
+        // run crosses the cap, so the exhaustion flag must be set LOUDLY on this
+        // result (cost cap enforced — Gemini HIGH #2), not silently deferred.
         let r1 = stage
             .extract_and_propose("doc-budget", "X is notable.", "2026-06-12")
             .await
             .expect("no error");
-        // After first call tokens_used=80 > budget=1 → next call must be exhausted.
         let r1 = r1.expect("returns Some");
         assert!(
-            !r1.budget_exhausted,
-            "first call runs (budget not yet checked at start)"
+            r1.budget_exhausted,
+            "first call crosses the cap → exhaustion flag set on this result"
         );
+        assert!(!stage.is_active(), "stage inactive after crossing the cap");
 
         // Second call: tokens_used=80 >= budget=1 → budget exhausted, early return.
         let r2 = stage
@@ -1035,6 +1216,160 @@ mod tests {
         let payload = parse_extraction_response("{}").expect("parses empty object");
         assert!(payload.entities.is_empty());
         assert!(payload.relations.is_empty());
+    }
+
+    // ── Note formatting: fields quoted/escaped, confidence clamped ─────────
+
+    #[test]
+    fn entity_note_quotes_fields_and_clamps_confidence() {
+        // A label with a space, `=`, and a double-quote — all of which would
+        // corrupt the unquoted space/`=`-delimited note format.
+        let note = build_entity_note(
+            r#"Acme = "Corp", Inc"#,
+            Some("organization"),
+            1.7, // out of range → must clamp to 1.0
+            "doc with space",
+        );
+        // Field is wrapped in quotes with the embedded quote backslash-escaped.
+        assert!(
+            note.contains(r#"label="Acme = \"Corp\", Inc""#),
+            "label must be quoted+escaped: {note}"
+        );
+        // Confidence clamped to 1.0000 (not 1.7000).
+        assert!(
+            note.contains("confidence=1.0000"),
+            "confidence must clamp to 1.0: {note}"
+        );
+        // src quoted so the trailing space in doc id can't be mis-parsed.
+        assert!(
+            note.contains(r#"src="doc with space""#),
+            "src must be quoted: {note}"
+        );
+    }
+
+    #[test]
+    fn relation_note_clamps_negative_and_nan_confidence() {
+        let neg = build_relation_note("a", "rel", "b", -0.5, "d");
+        assert!(
+            neg.contains("confidence=0.0000"),
+            "negative clamps to 0: {neg}"
+        );
+        let nan = build_relation_note("a", "rel", "b", f64::NAN, "d");
+        // NaN maps to the neutral default (0.5).
+        assert!(
+            nan.contains("confidence=0.5000"),
+            "NaN maps to default: {nan}"
+        );
+    }
+
+    #[test]
+    fn quote_field_escapes_backslash_and_quote() {
+        assert_eq!(quote_field("plain"), r#""plain""#);
+        assert_eq!(quote_field(r#"a"b"#), r#""a\"b""#);
+        assert_eq!(quote_field(r"a\b"), r#""a\\b""#);
+    }
+
+    #[test]
+    fn clamp_confidence_bounds_and_nan() {
+        assert!((clamp_confidence(0.42) - 0.42).abs() < f64::EPSILON);
+        assert!((clamp_confidence(2.0) - 1.0).abs() < f64::EPSILON);
+        assert!((clamp_confidence(-1.0) - 0.0).abs() < f64::EPSILON);
+        assert!((clamp_confidence(f64::NAN) - default_confidence()).abs() < f64::EPSILON);
+    }
+
+    // ── Freshness cell: production path publishes REAL state ───────────────
+
+    #[tokio::test]
+    async fn freshness_cell_updated_after_run() {
+        let golden_json = serde_json::json!({
+            "entities": [{"label": "Nvidia", "kind_hint": "organization", "confidence": 0.9}],
+            "relations": []
+        })
+        .to_string();
+
+        let (graph, tags) = make_engines();
+        let queue = make_queue();
+        {
+            use tdw_core::GraphNode;
+            use tdw_taxonomy::EntityKind;
+            graph
+                .upsert_nodes(vec![GraphNode {
+                    id: "document:doc-fresh".to_string(),
+                    kind: EntityKind::Document,
+                    label: "Freshness doc".to_string(),
+                    aliases: Vec::new(),
+                    props: serde_json::Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                }])
+                .await
+                .expect("seed");
+        }
+
+        let cell = Arc::new(std::sync::Mutex::new(ExtractionFreshness::Pending));
+        let mut stage = ExtractionStage::new(
+            Arc::new(FakeProductionModel {
+                response: golden_json,
+                input_tokens: 10,
+                output_tokens: 5,
+            }),
+            Arc::clone(&queue),
+            graph,
+            tags,
+            budget(512, 100_000),
+        )
+        .expect("stage constructs")
+        .with_freshness_cell(Arc::clone(&cell));
+
+        stage
+            .extract_and_propose("doc-fresh", "Nvidia makes GPUs.", "2026-06-12")
+            .await
+            .expect("no error");
+
+        // The cell must now report REAL Ok state, not a stale Pending — status
+        // would otherwise LIE about extraction progress (Gemini HIGH #3).
+        let freshness = cell.lock().expect("not poisoned").clone();
+        match freshness {
+            ExtractionFreshness::Ok {
+                docs_processed,
+                entities_enqueued,
+                tokens_consumed,
+                ..
+            } => {
+                assert_eq!(docs_processed, 1);
+                assert_eq!(entities_enqueued, 1);
+                assert_eq!(tokens_consumed, 15);
+            }
+            other => panic!("expected Ok freshness, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn freshness_cell_reports_disabled_for_stub_model() {
+        let (graph, tags) = make_engines();
+        let queue = make_queue();
+        let cell = Arc::new(std::sync::Mutex::new(ExtractionFreshness::Pending));
+        let mut stage = ExtractionStage::new(
+            Arc::new(StubModel),
+            Arc::clone(&queue),
+            graph,
+            tags,
+            budget(512, 100_000),
+        )
+        .expect("stage constructs")
+        .with_freshness_cell(Arc::clone(&cell));
+
+        let result = stage
+            .extract_and_propose("doc-stub", "text", "2026-06-12")
+            .await
+            .expect("no error");
+        assert!(result.is_none(), "stub gate returns None");
+        // Stub model → status must honestly report Disabled, not stale Pending.
+        let freshness = cell.lock().expect("not poisoned").clone();
+        assert!(
+            matches!(freshness, ExtractionFreshness::Disabled { .. }),
+            "stub model must publish Disabled freshness, got {freshness:?}"
+        );
     }
 
     // ── build_agent_id: sanitized, bounded ────────────────────────────────

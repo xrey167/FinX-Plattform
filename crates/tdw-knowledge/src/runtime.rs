@@ -506,6 +506,8 @@ impl KnowledgeRuntime {
         &self,
     ) -> Option<&Arc<std::sync::Mutex<QuestionsFreshness>>> {
         self.questions_freshness.as_ref()
+    }
+
     /// Attach the LLM extraction-freshness cell (K-M1).
     ///
     /// Pass an `Arc<std::sync::Mutex<ExtractionFreshness>>` constructed by the
@@ -1197,6 +1199,13 @@ impl KnowledgeRuntime {
         // Same `try_lock` discipline as watchlist — never block `status()`.
         let questions_status =
             self.questions_freshness
+                .as_ref()
+                .map(|cell| match cell.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
+                    Err(std::sync::TryLockError::WouldBlock) => QuestionsFreshness::default(),
+                });
+
         // Extraction freshness (K-M1): read the shared cell if wired, else None.
         // `try_lock` avoids blocking: if the indexer is mid-extraction we return
         // the last known state rather than deadlocking the status handler.
@@ -1206,7 +1215,6 @@ impl KnowledgeRuntime {
                 .map(|cell| match cell.try_lock() {
                     Ok(guard) => guard.clone(),
                     Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
-                    Err(std::sync::TryLockError::WouldBlock) => QuestionsFreshness::default(),
                     Err(std::sync::TryLockError::WouldBlock) => crate::ExtractionFreshness::Pending,
                 });
 

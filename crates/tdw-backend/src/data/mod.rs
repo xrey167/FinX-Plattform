@@ -18,7 +18,7 @@ use tdw_bus::EventBus;
 use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
-use tdw_config::{FeedsConfig, TdwConfig, WatchlistsConfig};
+use tdw_config::{ExtractionConfig, FeedsConfig, TdwConfig, WatchlistsConfig};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -33,6 +33,7 @@ use tdw_eval_runner::scheduled_eval::{
 };
 use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
+use tdw_knowledge::ExtractionFreshness;
 use tdw_knowledge::feeds::{FeedFreshness, FeedSource, FixtureFeedSource};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::QuestionsFreshness;
@@ -251,6 +252,14 @@ pub struct Backend {
     /// tick). Always present after construction; starts as
     /// [`QuestionsFreshness::default`].
     question_freshness: Arc<std::sync::Mutex<QuestionsFreshness>>,
+    /// Live LLM-extraction freshness cell (K-M1). Built in `from_config` with the
+    /// config-derived initial state (`Disabled` when extraction is off, `Pending`
+    /// when enabled) and attached to the [`KnowledgeRuntime`] (read side:
+    /// `tdw.kg.status`). The extraction stage shares this same cell via
+    /// `ExtractionStage::with_freshness_cell` (write side) so status reports the
+    /// REAL extraction state rather than a stale default. Always present after
+    /// construction.
+    extraction_freshness: Arc<std::sync::Mutex<ExtractionFreshness>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -293,6 +302,9 @@ impl Backend {
         let watchlists_cfg = config.knowledge.watchlists.clone();
         // K-X8: extract questions config before `config` is consumed.
         let questions_cfg = config.knowledge.questions.clone();
+        // K-M1: extract extraction config before `config` is consumed so the
+        // freshness cell can be seeded with the config-derived initial state.
+        let extraction_cfg = config.knowledge.extraction.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -454,6 +466,15 @@ impl Backend {
             Arc::new(std::sync::Mutex::new(QuestionsFreshness::default()));
         knowledge_runtime =
             knowledge_runtime.with_questions_freshness(Arc::clone(&question_freshness_cell));
+        // K-M1: build the LLM-extraction freshness cell and attach it to the
+        // runtime (read side: tdw.kg.status). The same Arc is shared with the
+        // extraction stage (write side) via `ExtractionStage::with_freshness_cell`
+        // so status reports the REAL extraction state, not a stale default —
+        // without this wiring status would LIE (Gemini HIGH #3, honesty gate).
+        // Initial state reflects config: Disabled (off, the default) or Pending.
+        let extraction_freshness_cell = build_extraction_freshness_cell(&extraction_cfg);
+        knowledge_runtime =
+            knowledge_runtime.with_extraction_freshness(Arc::clone(&extraction_freshness_cell));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -485,6 +506,7 @@ impl Backend {
             questions_cfg,
             question_store,
             question_freshness: question_freshness_cell,
+            extraction_freshness: extraction_freshness_cell,
             daemon: None,
         })
     }
@@ -516,6 +538,10 @@ impl Backend {
                 .with_graph(Arc::clone(&graph)),
         ));
         let consolidation_freshness_cell = build_consolidation_freshness_cell();
+        // K-M1: extraction is off in the test backend → Disabled cell, attached
+        // to the runtime so tdw.kg.status reports honestly here too.
+        let extraction_freshness_cell =
+            build_extraction_freshness_cell(&ExtractionConfig::default());
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
@@ -523,7 +549,8 @@ impl Backend {
                 .with_tags(Arc::clone(&tags_engine))
                 .with_user_id("test-user")
                 .with_finding_indexer(Arc::clone(&finding_indexer))
-                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell)),
+                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell))
+                .with_extraction_freshness(Arc::clone(&extraction_freshness_cell)),
         );
         Self {
             state,
@@ -550,6 +577,7 @@ impl Backend {
             questions_cfg: QuestionsConfig::default(),
             question_store: Arc::new(std::sync::Mutex::new(OpenQuestionStore::new())),
             question_freshness: Arc::new(std::sync::Mutex::new(QuestionsFreshness::default())),
+            extraction_freshness: extraction_freshness_cell,
             daemon: None,
         }
     }
@@ -927,6 +955,18 @@ impl Backend {
     #[must_use]
     pub fn consolidation_freshness_cell(&self) -> Arc<Mutex<ConsolidationFreshness>> {
         Arc::clone(&self.consolidation_freshness)
+    }
+
+    /// The shared LLM-extraction freshness cell (K-M1). Attached to the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`); the extraction stage
+    /// shares this same `Arc` (write side) via
+    /// `ExtractionStage::with_freshness_cell` so status reports the REAL
+    /// extraction state. Always present after construction; starts as
+    /// [`ExtractionFreshness::Disabled`] (off) or [`ExtractionFreshness::Pending`]
+    /// (enabled).
+    #[must_use]
+    pub fn extraction_freshness_cell(&self) -> Arc<std::sync::Mutex<ExtractionFreshness>> {
+        Arc::clone(&self.extraction_freshness)
     }
 
     /// The shared watchlist store (K-X5).
@@ -1903,6 +1943,34 @@ pub fn build_sweep_freshness_cell(
         return None;
     }
     Some(Arc::new(tokio::sync::Mutex::new(SweepFreshness::Pending)))
+}
+
+/// Build the LLM-extraction freshness shared cell (K-M1).
+///
+/// Returns an `Arc<std::sync::Mutex<ExtractionFreshness>>` seeded from the
+/// config-derived state:
+/// - [`ExtractionFreshness::Disabled`] when `extraction.enabled = false` (the
+///   default), so `tdw.kg.status` honestly reports the gap on keyless/off
+///   installs.
+/// - [`ExtractionFreshness::Pending`] when enabled (a production-grade model is
+///   expected; the stage will publish `Ok`/`BudgetExhausted` after its first run).
+///
+/// Always returns the cell (never `None`) — the runtime always attaches it so
+/// the `extraction_freshness` status field is explicit, never silently omitted.
+/// The same `Arc` is shared with the extraction stage (write side) via
+/// `ExtractionStage::with_freshness_cell` so status reflects REAL state.
+#[must_use]
+pub fn build_extraction_freshness_cell(
+    config: &ExtractionConfig,
+) -> Arc<std::sync::Mutex<ExtractionFreshness>> {
+    let initial = if config.enabled {
+        ExtractionFreshness::Pending
+    } else {
+        ExtractionFreshness::Disabled {
+            reason: "extraction.enabled = false".to_string(),
+        }
+    };
+    Arc::new(std::sync::Mutex::new(initial))
 }
 
 /// Spawn the K-L4 gated auto-materialization sweep task.
