@@ -1,0 +1,27 @@
+{
+  "k": 3,
+  "mean_recall_at_k": 1.0,
+  "mrr": 1.0,
+  "mean_ndcg_at_k": 1.0,
+  "cases": [
+    {
+      "case_id": "earnings",
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "ndcg_at_k": 1.0,
+      "ranked": ["doc-old"]
+    },
+    {
+      "case_id": "supply",
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "ndcg_at_k": 1.0,
+      "ranked": ["doc-mid"]
+    }
+  ],
+  "drift_key": {
+    "embedder_model": "local-hash-8",
+    "rules_version": 1,
+    "infer_version": 1
+  }
+}

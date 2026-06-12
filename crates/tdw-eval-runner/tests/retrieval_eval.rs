@@ -199,6 +199,107 @@ async fn hash_embedder_report_round_trips_json() {
     assert_eq!(report, restored);
 }
 
+// ── golden-split regression gate (nightly CI) ────────────────────────────────
+//
+// Runs only when `TDW_GOLDEN_SPLIT_CI=1` is set; self-skips otherwise so the
+// standard `cargo test` invocation stays fast and hermetic.
+//
+// The checked-in baseline lives at
+// `crates/tdw-eval-runner/baselines/golden-split-v1.json`.
+//
+// # Bless step (intentional baseline update)
+//
+// Never auto-overwrite the baseline.  When a metric change is intentional:
+//
+//   1. Run this test locally with `TDW_GOLDEN_SPLIT_CI=1` to produce a fresh
+//      report:  `cargo test -p tdw-eval-runner --test retrieval_eval -- golden_split_regression_gate`
+//   2. Copy the printed JSON over `baselines/golden-split-v1.json`.
+//   3. Open a PR with a description of why the baseline changed (embedder
+//      upgrade, split extension, intentional quality improvement, etc.).
+//
+// CI reads the baseline and fails on regression; it never writes back.
+#[tokio::test]
+async fn golden_split_regression_gate() {
+    let Ok(flag) = std::env::var("TDW_GOLDEN_SPLIT_CI") else {
+        eprintln!("TDW_GOLDEN_SPLIT_CI unset; skipping golden-split regression gate");
+        return;
+    };
+    if flag != "1" {
+        eprintln!("TDW_GOLDEN_SPLIT_CI={flag}; skipping golden-split regression gate");
+        return;
+    }
+
+    use tdw_eval_runner::baseline_comparator::{RegressionThresholds, compare_to_baseline};
+    use tdw_eval_runner::retrieval_eval::RetrievalEvalReport;
+
+    // ── load baseline ────────────────────────────────────────────────────────
+    let baseline_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/baselines/golden-split-v1.json"
+    );
+    let baseline_json =
+        std::fs::read_to_string(baseline_path).expect("baseline file must be readable");
+    let baseline: RetrievalEvalReport =
+        serde_json::from_str(&baseline_json).expect("baseline must be valid JSON");
+
+    // ── run current eval with HashEmbeddingProvider ──────────────────────────
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let retriever = build_in_memory_retriever(embedder, corpus())
+        .await
+        .expect("retriever builds");
+
+    let cases = vec![
+        RetrievalEvalCase {
+            case_id: "earnings".into(),
+            query: "acme earnings report strong cloud growth".into(),
+            expected_doc_ids: vec!["doc-old".into()],
+            as_of: None,
+            tags_any: Vec::new(),
+            fixed_split_id: Some("golden-split-v1".into()),
+        },
+        RetrievalEvalCase {
+            case_id: "supply".into(),
+            query: "beta supply chain components note".into(),
+            expected_doc_ids: vec!["doc-mid".into()],
+            as_of: None,
+            tags_any: Vec::new(),
+            fixed_split_id: Some("golden-split-v1".into()),
+        },
+    ];
+
+    let current = run_retrieval_eval(&retriever, &cases, 3, hash_drift_key())
+        .await
+        .expect("eval runs");
+
+    // ── emit fresh report for inspection / bless step ────────────────────────
+    let report_json = serde_json::to_string_pretty(&current).expect("serialize");
+    println!("=== fresh eval report (golden-split-v1) ===\n{report_json}\n===");
+
+    // ── compare against baseline with production defaults ────────────────────
+    let thresholds = RegressionThresholds::default();
+    let verdict = compare_to_baseline(&baseline, &current, &thresholds);
+
+    println!("=== verdict ===\n{}", verdict.summary);
+    for d in &verdict.deltas {
+        println!(
+            "  {}: baseline={:.4} current={:.4} delta={:+.4} regressed={}",
+            d.metric, d.baseline, d.current, d.delta, d.regressed
+        );
+    }
+
+    assert!(
+        !verdict.is_regression,
+        "GOLDEN-SPLIT REGRESSION DETECTED — CI gate failed.\n\
+         {}\n\n\
+         If this is an intentional quality change, bless the baseline:\n\
+           1. Inspect the fresh report printed above.\n\
+           2. Copy it over crates/tdw-eval-runner/baselines/golden-split-v1.json\n\
+           3. Open a PR documenting the intentional change.\n\
+         DO NOT auto-overwrite the baseline.",
+        verdict.summary
+    );
+}
+
 // ── env-gated local-model leg ────────────────────────────────────────────────
 //
 // Compiled only when this crate's `local-model` feature is enabled (which

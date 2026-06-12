@@ -315,6 +315,45 @@ jobs:
           print("\n".join(lines))
           PY
 
+  # K-L3: nightly golden-split retrieval-eval regression gate.
+  #
+  # Runs the fixed golden-split-v1 case set against the in-memory HashEmbedder
+  # (no external services required) and compares the result to the checked-in
+  # baseline at crates/tdw-eval-runner/baselines/golden-split-v1.json.
+  # Fails the job when any metric drops beyond the default threshold (5 pp).
+  #
+  # Bless step (intentional baseline update):
+  #   1. Run locally:
+  #      TDW_GOLDEN_SPLIT_CI=1 cargo test -p tdw-eval-runner --test retrieval_eval \
+  #        -- golden_split_regression_gate --nocapture
+  #   2. Inspect the printed JSON report.
+  #   3. Copy it over crates/tdw-eval-runner/baselines/golden-split-v1.json.
+  #   4. Open a PR documenting why the baseline changed.
+  #   CI never auto-overwrites the baseline.
+  retrieval-eval-ci:
+    name: Retrieval-eval regression gate (golden-split-v1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Run golden-split regression gate
+        env:
+          TDW_GOLDEN_SPLIT_CI: "1"
+        run: >
+          cargo test
+          -p tdw-eval-runner
+          --test retrieval_eval
+          --target-dir target
+          -- golden_split_regression_gate --nocapture
+      - name: Upload fresh eval report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-eval-report-${{ github.run_id }}
+          path: crates/tdw-eval-runner/baselines/golden-split-v1.json
+          if-no-files-found: warn
+
   # P1.5: prove the live data path nightly — env-gated provider live tests plus
   # a real MCP stdio session fetching live bars. These hit external public APIs,
   # so they run here (not in PR CI) and fail loudly on live regressions.
