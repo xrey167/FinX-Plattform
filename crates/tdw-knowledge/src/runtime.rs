@@ -20,13 +20,14 @@ use std::sync::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 use tdw_core::{GraphEngine, LexicalEngine, VectorEngine};
 use tdw_embed::EmbeddingProvider;
-use tdw_retrieve::Retriever;
+use tdw_retrieve::{Retriever, RrfKHandle};
 use tdw_tags::TagEngine;
 use tdw_taxonomy::{Adaptivity, EntityKind};
 
 use crate::feeds::FeedFreshness;
 use crate::indexer::KnowledgeIndexer;
 use crate::proposals::ProposalQueue;
+use crate::self_tune::{SelfTuneLog, TunableParam};
 
 /// Resolves a calling agent's [`Adaptivity`] for the writeback gate's admission.
 ///
@@ -139,6 +140,15 @@ pub struct KnowledgeRuntime {
     /// tick. `None` when skill lifecycle is not wired (status field omitted from
     /// JSON so the absence is explicit — loud by design).
     skill_counts: Option<Arc<std::sync::Mutex<crate::skills::SkillCounts>>>,
+    /// Live self-tuning audit log (K-R3). Shared with the spawned self-tuning
+    /// worker, which appends one [`crate::self_tune::TuneRecord`] per cycle.
+    /// `None` when self-tuning is not wired (status field omitted from JSON).
+    self_tune_log: Option<Arc<tokio::sync::Mutex<SelfTuneLog>>>,
+    /// The live, hot-applied RRF fusion constant handle (K-R3). Shared with the
+    /// retriever (so tunes take effect on the next search) and the self-tuning
+    /// worker (so it can read the incumbent and apply an accepted candidate).
+    /// `None` when self-tuning is not wired.
+    rrf_k_handle: Option<RrfKHandle>,
 }
 
 impl KnowledgeRuntime {
@@ -171,6 +181,8 @@ impl KnowledgeRuntime {
             questions_freshness: None,
             extraction_freshness: None,
             skill_counts: None,
+            self_tune_log: None,
+            rrf_k_handle: None,
         }
     }
 
@@ -568,6 +580,45 @@ impl KnowledgeRuntime {
     ) -> Option<&Arc<std::sync::Mutex<crate::skills::SkillCounts>>> {
         self.skill_counts.as_ref()
     }
+
+    /// Wire the self-tuning seam (K-R3).
+    ///
+    /// Attaches the shared self-tuning audit `log` cell and the live, hot-applied
+    /// RRF fusion-constant `handle`.  The handle is ALSO attached to the
+    /// retriever so an accepted tune takes effect on the very next search — this
+    /// is the real-runtime wiring, not dead storage.  Both are shared with the
+    /// self-tuning worker spawned by `tdw-backend`'s composition root.
+    ///
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_self_tune(
+        mut self,
+        log: Arc<tokio::sync::Mutex<SelfTuneLog>>,
+        handle: RrfKHandle,
+    ) -> Self {
+        self.retriever = self.retriever.with_rrf_k_handle(handle.clone());
+        self.self_tune_log = Some(log);
+        self.rrf_k_handle = Some(handle);
+        self
+    }
+
+    /// The self-tuning audit-log cell, when wired.
+    ///
+    /// The self-tuning worker in `tdw-backend` appends one record per cycle via
+    /// this handle; `status()` reads it to surface the last tuning decision.
+    #[must_use]
+    pub const fn self_tune_log_cell(&self) -> Option<&Arc<tokio::sync::Mutex<SelfTuneLog>>> {
+        self.self_tune_log.as_ref()
+    }
+
+    /// The live RRF fusion-constant handle, when wired.
+    ///
+    /// Shared with the retriever (read on every search) and the self-tuning
+    /// worker (writes an accepted candidate). `None` when self-tuning is off.
+    #[must_use]
+    pub const fn rrf_k_handle(&self) -> Option<&RrfKHandle> {
+        self.rrf_k_handle.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -928,6 +979,34 @@ pub struct KgContradictionCounts {
     pub conflicts: usize,
 }
 
+/// Self-tuning status surfaced additively by [`KgStatus`] (K-R3).
+///
+/// Reports the CURRENT live value of each tunable parameter and the LAST tuning
+/// decision (whether or not it changed anything).  Values are rendered to
+/// strings so the type stays `Eq` (the live `f64` knob is formatted, never
+/// embedded) — `tdw.kg.status` is a display surface, not a numeric API.
+///
+/// A parameter is reported here as its actual live value; the `last_decision`
+/// summary is the truthful audit line — it says "APPLIED" only when the gate
+/// actually promoted and applied the change.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelfTuneStatus {
+    /// Whether self-tuning is enabled (a worker is wired). When `false`, the
+    /// kill-switch is engaged and no parameter is ever modified.
+    pub enabled: bool,
+    /// The current live RRF fusion constant `k`, rendered (e.g. `"60.0000"`).
+    /// This is the value the retriever is using RIGHT NOW, read from the shared
+    /// hot handle — so it reflects any applied tune.
+    pub rrf_k_current: String,
+    /// One-line summary of the most recent tuning decision, or a "no decision
+    /// yet" notice. Truthful: "APPLIED" only when a change actually landed.
+    pub last_decision: String,
+    /// Total tuning cycles recorded since daemon start.
+    pub decisions_total: usize,
+    /// Count of cycles that ACTUALLY applied a change (the honest "tuned" count).
+    pub applied_total: usize,
+}
+
 /// "zero" from "not measured". Specifically:
 /// - `document_count`: the `VectorEngine` trait has no count method; this field
 ///   reflects what the collection name implies but is NOT a live engine count.
@@ -1085,6 +1164,16 @@ pub struct KgStatus {
     /// Surfaced ADDITIVELY: existing `tdw.kg.status` fields are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<crate::skills::SkillCounts>,
+
+    // --- System self-tuning within gates (K-R3) ---
+    /// Live self-tuning status: current tunable values + last gated decision.
+    ///
+    /// `None` when the self-tuning seam is not wired (field omitted from JSON so
+    /// absence is explicit — loud by design). When present, carries the live
+    /// RRF `k`, the truthful last-decision audit line, and the cumulative
+    /// decision / applied counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_tune: Option<SelfTuneStatus>,
 }
 
 impl KnowledgeRuntime {
@@ -1291,6 +1380,46 @@ impl KnowledgeRuntime {
                 Err(std::sync::TryLockError::WouldBlock) => crate::skills::SkillCounts::default(),
             });
 
+        // Self-tuning status (K-R3): present only when the seam is wired. The
+        // current RRF k is read from the LIVE hot handle (so it reflects any
+        // applied tune); the last decision is the truthful audit line from the
+        // shared log. `try_lock` avoids blocking the status handler when the
+        // tuning worker is mid-write — report the rendered current value with a
+        // "snapshot busy" notice rather than deadlocking.
+        let self_tune = self.rrf_k_handle.as_ref().map(|handle| {
+            let rrf_k_current = format!("{:.4}", handle.load());
+            let (last_decision, decisions_total, applied_total) = self
+                .self_tune_log
+                .as_ref()
+                .map_or_else(
+                    || ("no self-tuning log wired".to_string(), 0, 0),
+                    |cell| {
+                        cell.try_lock().map_or_else(
+                            |_| ("snapshot busy — worker mid-write".to_string(), 0, 0),
+                            |log| {
+                                let summary = log.last().map_or_else(
+                                    || {
+                                        format!(
+                                            "{}: no decision yet (first cycle pending)",
+                                            TunableParam::RrfK.id()
+                                        )
+                                    },
+                                    |record| record.summary.clone(),
+                                );
+                                (summary, log.len(), log.applied_count())
+                            },
+                        )
+                    },
+                );
+            SelfTuneStatus {
+                enabled: true,
+                rrf_k_current,
+                last_decision,
+                decisions_total,
+                applied_total,
+            }
+        });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1315,6 +1444,7 @@ impl KnowledgeRuntime {
             questions_status,
             extraction_freshness,
             skills,
+            self_tune,
         }
     }
 }

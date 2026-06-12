@@ -263,6 +263,28 @@ pub async fn build_in_memory_retriever(
     Ok(Retriever::new(embedder, vectors, collection).with_lexical(lexical, index))
 }
 
+/// Like [`build_in_memory_retriever`] but pins a specific RRF fusion constant
+/// `k` (knowledge-system K-R3).
+///
+/// The self-tuning worker uses this to evaluate a CANDIDATE `k` against the
+/// golden split out-of-sample: it builds one retriever at the incumbent `k` and
+/// one at the candidate `k`, runs the identical fixed case set through both, and
+/// compares the objective.  Pinning `k` here (rather than mutating a shared
+/// handle) keeps the eval deterministic and side-effect-free — the live
+/// retriever is never touched during evaluation.
+///
+/// # Errors
+///
+/// Returns a [`tdw_core::Error`] if embedding or upserting a document fails.
+pub async fn build_in_memory_retriever_with_rrf_k(
+    embedder: Arc<dyn EmbeddingProvider>,
+    documents: Vec<KnowledgeDocument>,
+    rrf_k: f64,
+) -> Result<Retriever> {
+    let retriever = build_in_memory_retriever(embedder, documents).await?;
+    Ok(retriever.with_rrf_k_handle(tdw_retrieve::RrfKHandle::new(rrf_k)))
+}
+
 // ── Eval runner ─────────────────────────────────────────────────────────────
 
 /// Run a fixed [`RetrievalEvalCase`] set through `retriever` at cutoff `k`,

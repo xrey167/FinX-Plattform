@@ -61,7 +61,7 @@ use tdw_embed::EmbeddingProvider;
 use tdw_tags::{TagEngine, date_to_timestamp};
 use tdw_taxonomy::EntityKind;
 
-pub use rrf::{Fused, RRF_K, RankedEntry, rrf_fuse};
+pub use rrf::{Fused, RRF_K, RankedEntry, RrfKHandle, rrf_fuse};
 
 /// Confidence ranking weight for hybrid retrieval.
 ///
@@ -452,6 +452,12 @@ pub struct Retriever {
     lexical: Option<(Arc<dyn LexicalEngine>, String)>,
     tags: Option<Arc<dyn TagEngine>>,
     graph: Option<Arc<dyn GraphEngine>>,
+    /// Hot-applied RRF fusion constant `k` (knowledge-system K-R3).
+    ///
+    /// `None` ⇒ the compile-time default [`RRF_K`].  When a self-tuning handle
+    /// is attached via [`Retriever::with_rrf_k_handle`], `search` reads it on
+    /// every query so an accepted tune takes effect on the next search.
+    rrf_k: Option<RrfKHandle>,
 }
 
 impl Retriever {
@@ -469,7 +475,28 @@ impl Retriever {
             lexical: None,
             tags: None,
             graph: None,
+            rrf_k: None,
         }
+    }
+
+    /// Attach a hot-applied RRF fusion-constant handle (knowledge-system K-R3).
+    ///
+    /// Once attached, every `search` reads `handle.load()` to obtain the live
+    /// `k`, so the self-tuning worker can change fusion behavior at runtime by
+    /// writing through the shared [`RrfKHandle`] — no retriever rebuild.  The
+    /// handle's value is clamped at the tuner source, so `search` applies it
+    /// verbatim.
+    #[must_use]
+    pub fn with_rrf_k_handle(mut self, handle: RrfKHandle) -> Self {
+        self.rrf_k = Some(handle);
+        self
+    }
+
+    /// The effective RRF `k` for the next fusion: the live handle value when a
+    /// self-tuning handle is attached, else the compile-time [`RRF_K`].
+    #[must_use]
+    fn effective_rrf_k(&self) -> f64 {
+        self.rrf_k.as_ref().map_or(RRF_K, RrfKHandle::load)
     }
 
     /// Attach the lexical channel.
@@ -521,7 +548,7 @@ impl Retriever {
 
         // 2. Channel fan-out, 3. fuse, 4. explained hits (trust-dial applied).
         let run = self.run_channels(query, &expanded_tags).await?;
-        let fused = rrf_fuse(&run.channels, RRF_K);
+        let fused = rrf_fuse(&run.channels, self.effective_rrf_k());
         let mut hits =
             assemble_hits(&fused, &run, &expanded_tags, self.graph.as_deref(), query).await?;
 

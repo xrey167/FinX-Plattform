@@ -8,9 +8,51 @@
 //! in-memory and real backends is dampened to what rank order can express.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The conventional RRF dampening constant.
 pub const RRF_K: f64 = 60.0;
+
+/// A hot-applied, lock-free handle to the live RRF dampening constant `k`
+/// (knowledge-system K-R3).
+///
+/// The self-tuning worker writes a new value through [`RrfKHandle::store`]; the
+/// retriever's `search` path reads it through [`RrfKHandle::load`] on every
+/// query, so an accepted tune takes effect on the very next search with no
+/// rebuild and no lock held across I/O.  The value is stored as the raw bit
+/// pattern of an `f64` in an [`AtomicU64`], so reads and writes are wait-free.
+///
+/// The handle is clamped at the SOURCE (the tuner never proposes an
+/// out-of-bounds value), so no clamp is applied on read — the stored value is
+/// always within the operator-configured `[min, max]` window.
+#[derive(Clone, Debug)]
+pub struct RrfKHandle(Arc<AtomicU64>);
+
+impl RrfKHandle {
+    /// Build a handle seeded with `initial` (typically [`RRF_K`]).
+    #[must_use]
+    pub fn new(initial: f64) -> Self {
+        Self(Arc::new(AtomicU64::new(initial.to_bits())))
+    }
+
+    /// Read the current `k` (wait-free; safe on the async search path).
+    #[must_use]
+    pub fn load(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Write a new `k` (wait-free; the next search reads it).
+    pub fn store(&self, value: f64) {
+        self.0.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+impl Default for RrfKHandle {
+    fn default() -> Self {
+        Self::new(RRF_K)
+    }
+}
 
 /// One channel's ranked candidate list (best first). Entries carry the raw
 /// channel score purely for explanation; fusion ignores it.
@@ -120,5 +162,16 @@ mod tests {
     fn empty_channels_fuse_to_nothing() {
         assert!(rrf_fuse(&[], RRF_K).is_empty());
         assert!(rrf_fuse(&[Vec::new(), Vec::new()], RRF_K).is_empty());
+    }
+
+    #[test]
+    fn rrf_k_handle_round_trips_f64_and_shares_state_across_clones() {
+        let handle = RrfKHandle::new(RRF_K);
+        assert!((handle.load() - RRF_K).abs() < 1e-12);
+        let clone = handle.clone();
+        handle.store(42.5);
+        // The clone shares the same Arc<AtomicU64> — sees the new value.
+        assert!((clone.load() - 42.5).abs() < 1e-12);
+        assert!((RrfKHandle::default().load() - RRF_K).abs() < 1e-12);
     }
 }

@@ -19,7 +19,9 @@ use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
 use tdw_config::SkillsConfig as SkillsCfg;
-use tdw_config::{ExtractionConfig, FeedsConfig, TdwConfig, WatchlistsConfig};
+use tdw_config::{
+    ExtractionConfig, FeedsConfig, SelfTuneConfig, TdwConfig, WatchlistsConfig,
+};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -109,6 +111,9 @@ struct DaemonHandle {
     /// `None` when `knowledge.skills.enabled = false` (default) or no proposal
     /// queue is attached.
     skill_tournament_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R3 system self-tuning cron worker.
+    /// `None` when `knowledge.self_tune.enabled = false`.
+    self_tune_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -291,6 +296,20 @@ pub struct Backend {
     /// spawned in [`Backend::serve`] (write side: updated after each tick).
     /// Always present after construction; starts at the zeroed default.
     skill_counts: Arc<std::sync::Mutex<tdw_knowledge::skills::SkillCounts>>,
+    /// K-R3 self-tuning configuration, extracted from `config.knowledge.self_tune`
+    /// in [`Backend::from_config`]. Held here so [`Backend::serve`] can spawn the
+    /// self-tuning worker without re-parsing config.
+    self_tune_cfg: SelfTuneConfig,
+    /// Live self-tuning audit-log cell (K-R3). Shared between the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the self-tuning
+    /// worker spawned in [`Backend::serve`] (write side: one record per cycle).
+    /// `None` when `self_tune.enabled = false` — the worker is never spawned and
+    /// the live parameters are never modified.
+    self_tune_log: Option<Arc<tokio::sync::Mutex<tdw_knowledge::self_tune::SelfTuneLog>>>,
+    /// The live, hot-applied RRF fusion-constant handle (K-R3). Shared between
+    /// the retriever (read on every search) and the self-tuning worker (applies
+    /// an accepted candidate). `None` when self-tuning is disabled.
+    rrf_k_handle: Option<tdw_retrieve::RrfKHandle>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -343,6 +362,8 @@ impl Backend {
         // K-R2: extract skills (lifecycle + tournament) config before `config`
         // is consumed. Off by default — offline/keyless installs are unaffected.
         let skills_cfg = config.knowledge.skills.clone();
+        // K-R3: extract self-tuning config before `config` is consumed.
+        let self_tune_cfg = config.knowledge.self_tune.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -533,6 +554,29 @@ impl Backend {
             tdw_knowledge::skills::SkillCounts::default(),
         ));
         knowledge_runtime = knowledge_runtime.with_skill_counts(Arc::clone(&skill_counts_cell));
+        // K-R3: wire the self-tuning seam when enabled. The RRF k handle is
+        // seeded with the compile-time default and shared with the retriever
+        // (so an accepted tune is hot-applied on the next search) AND the
+        // self-tuning worker. The audit log cell is shared with status. When
+        // the kill-switch is off, NEITHER is built — the live parameters are
+        // never modifiable and `tdw.kg.status.self_tune` is omitted.
+        let (self_tune_log, rrf_k_handle) = if self_tune_cfg.enabled {
+            let log = Arc::new(tokio::sync::Mutex::new(
+                tdw_knowledge::self_tune::SelfTuneLog::new(),
+            ));
+            let handle = tdw_retrieve::RrfKHandle::new(tdw_retrieve::RRF_K);
+            knowledge_runtime =
+                knowledge_runtime.with_self_tune(Arc::clone(&log), handle.clone());
+            (Some(log), Some(handle))
+        } else {
+            eprintln!(
+                "[tdw] NOTICE: K-R3 system self-tuning is disabled \
+                 (knowledge.self_tune.enabled = false). \
+                 Set enabled = true in your daemon TOML to activate eval-gated \
+                 parameter self-tuning."
+            );
+            (None, None)
+        };
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -569,6 +613,9 @@ impl Backend {
             extraction_freshness: extraction_freshness_cell,
             skills_cfg,
             skill_counts: skill_counts_cell,
+            self_tune_cfg,
+            self_tune_log,
+            rrf_k_handle,
             daemon: None,
         })
     }
@@ -648,6 +695,11 @@ impl Backend {
             extraction_freshness: extraction_freshness_cell,
             skills_cfg: SkillsCfg::default(),
             skill_counts: skill_counts_cell,
+            // Tests boot with self-tuning OFF (the production default); the
+            // worker and its eval gate are exercised directly in unit tests.
+            self_tune_cfg: SelfTuneConfig::default(),
+            self_tune_log: None,
+            rrf_k_handle: None,
             daemon: None,
         }
     }
@@ -932,6 +984,20 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-R3 — spawn the eval-gated self-tuning worker when enabled. It shares
+        // the SAME live RRF k handle the retriever reads (so an accepted tune is
+        // hot-applied) and the SAME audit log status reads. The worker evals
+        // every candidate against the golden split fixture (config-cadenced,
+        // injected-now), fail-closed on missing eval data.
+        let self_tune_task = spawn_self_tuning_worker(
+            &self.self_tune_cfg,
+            &self.evals_cfg,
+            self.self_tune_log.clone(),
+            self.rrf_k_handle.clone(),
+            Arc::clone(&self.embedder),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
@@ -947,6 +1013,7 @@ impl Backend {
             watchlist_task,
             questions_task,
             skill_tournament_task,
+            self_tune_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -1045,6 +1112,12 @@ impl Backend {
         if let Some(skill_task) = daemon.skill_tournament_task {
             skill_task.abort();
             let _ = skill_task.await;
+        }
+        // K-R3: The self-tuning worker observes the same token; abort if it
+        // lingers so shutdown stays bounded.
+        if let Some(self_tune_task) = daemon.self_tune_task {
+            self_tune_task.abort();
+            let _ = self_tune_task.await;
         }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
@@ -2575,6 +2648,332 @@ fn spawn_eval_worker(
                             error: error.to_string(),
                         };
                     }
+                }
+            }
+        }
+    });
+
+    Some(task)
+}
+
+// ---------------------------------------------------------------------------
+// K-R3: system self-tuning within gates
+// ---------------------------------------------------------------------------
+
+/// The fixed cutoff `k` the self-tuning eval scores at (matches the K-L3
+/// scheduled-eval cutoff so the objective is comparable across subsystems).
+const SELF_TUNE_EVAL_K: usize = 3;
+
+/// The per-cycle gate parameters for [`run_self_tune_cycle`] (K-R3).
+///
+/// Bundles the knob clamp, the promotion margin, and the cycle counter so the
+/// cycle signature stays small. `now` is injected so the cycle never reads a
+/// clock.
+#[derive(Clone, Copy, Debug)]
+struct SelfTuneCycle<'a> {
+    /// Hard `[min, max]` clamp + step for the tunable knob.
+    clamp: tdw_knowledge::self_tune::TuneClamp,
+    /// Minimum out-of-sample improvement required to promote.
+    margin: f64,
+    /// Monotone cycle counter (seeds the deterministic candidate direction).
+    cycle: u64,
+    /// Injected RFC 3339 timestamp for the audit record.
+    now: &'a str,
+}
+
+/// Run ONE self-tuning cycle against a loaded golden-split fixture (K-R3).
+///
+/// This is the pure, deterministic core the worker fires on each cron slot,
+/// factored out so the eval-gated behavior is unit-testable without a daemon.
+/// It NEVER reads a clock or a global — `now` and `cycle` are injected.
+///
+/// Steps:
+/// 1. **Fail-closed on no eval data**: an empty case set ⇒ [`TuneOutcome::NoEvalData`],
+///    the live handle is left UNCHANGED.
+/// 2. Propose a clamped candidate `k` (deterministic from the incumbent + cycle).
+/// 3. Eval the incumbent `k` and the candidate `k` out-of-sample over the SAME
+///    fixed case set, scoring the objective = mean nDCG\@k.
+/// 4. [`tdw_knowledge::self_tune::decide`]: promote ONLY if the candidate beats
+///    the incumbent by at least `margin`.
+/// 5. On promotion, hot-apply the new value to the shared handle so the next
+///    search uses it; otherwise leave it unchanged.
+/// 6. Record the truthful audit (old→new, both scores, when) in the log.
+///
+/// No lock is held across any eval I/O: the handle is a lock-free atomic and the
+/// log is locked only briefly to append the final record AFTER all eval awaits
+/// complete.
+///
+/// # Errors
+///
+/// Propagates a [`tdw_core::Error`] from the retriever build / eval runner. The
+/// caller writes a `NoEvalData` record on error (a build failure is a config
+/// problem, never a tuning regression).
+async fn run_self_tune_cycle(
+    fixture: &tdw_eval_runner::scheduled_eval::GoldenSplitFixture,
+    embedder: Arc<dyn EmbeddingProvider>,
+    handle: &tdw_retrieve::RrfKHandle,
+    log: &Arc<tokio::sync::Mutex<tdw_knowledge::self_tune::SelfTuneLog>>,
+    params: SelfTuneCycle<'_>,
+) -> tdw_core::Result<()> {
+    use tdw_eval_runner::retrieval_eval::{
+        DriftKey, build_in_memory_retriever_with_rrf_k, run_retrieval_eval,
+    };
+    use tdw_knowledge::self_tune::{TunableParam, TuneOutcome, decide, propose_candidate};
+
+    let SelfTuneCycle {
+        clamp,
+        margin,
+        cycle,
+        now,
+    } = params;
+
+    // Step 1 — fail-closed: no eval cases ⇒ no change.
+    if fixture.cases.is_empty() {
+        let mut guard = log.lock().await;
+        guard.record(
+            TunableParam::RrfK,
+            TuneOutcome::NoEvalData {
+                reason: "golden-split fixture has no eval cases".to_string(),
+            },
+            now,
+        );
+        return Ok(());
+    }
+
+    let incumbent = handle.load();
+    // Step 2 — clamped, deterministic candidate.
+    let candidate = propose_candidate(TunableParam::RrfK, incumbent, &clamp, cycle);
+
+    let drift_key = DriftKey {
+        embedder_model: embedder.model_id().to_string(),
+        rules_version: None,
+        infer_version: None,
+    };
+
+    // Step 3 — eval BOTH legs out-of-sample over the same fixed case set. Each
+    // leg builds its OWN in-memory retriever pinned to its k, so the live
+    // retriever is never touched during evaluation and the two scores are
+    // directly comparable.
+    let incumbent_retriever = build_in_memory_retriever_with_rrf_k(
+        Arc::clone(&embedder),
+        fixture.documents.clone(),
+        incumbent,
+    )
+    .await?;
+    let incumbent_report = run_retrieval_eval(
+        &incumbent_retriever,
+        &fixture.cases,
+        SELF_TUNE_EVAL_K,
+        drift_key.clone(),
+    )
+    .await?;
+
+    let candidate_retriever = build_in_memory_retriever_with_rrf_k(
+        Arc::clone(&embedder),
+        fixture.documents.clone(),
+        candidate,
+    )
+    .await?;
+    let candidate_report = run_retrieval_eval(
+        &candidate_retriever,
+        &fixture.cases,
+        SELF_TUNE_EVAL_K,
+        drift_key,
+    )
+    .await?;
+
+    // Objective = mean nDCG@k (the primary ranking-quality metric).
+    let incumbent_score = incumbent_report.mean_ndcg_at_k;
+    let candidate_score = candidate_report.mean_ndcg_at_k;
+
+    // Step 4 — gate decision.
+    let outcome = decide(incumbent, candidate, incumbent_score, candidate_score, margin);
+
+    // Step 5 — hot-apply ONLY on a real promotion. The value is already clamped
+    // at the source, so the live handle can never hold an out-of-bounds value.
+    if outcome.applied() {
+        handle.store(candidate);
+    }
+
+    // Step 6 — record the truthful audit (lock held only for the append, after
+    // all eval IO is done — no lock across IO).
+    {
+        let mut guard = log.lock().await;
+        guard.record(TunableParam::RrfK, outcome, now);
+    }
+    Ok(())
+}
+
+/// Spawn the K-R3 eval-gated self-tuning cron worker.
+///
+/// Returns `None` (no task) when `cfg.enabled = false` OR the handle/log seam is
+/// absent (self-tuning was not wired in `from_config`) OR the eval `split_id` is
+/// unconfigured (there is no golden split to gate against — fail-closed: without
+/// eval data the tuner must not run). A loud notice is emitted in the
+/// not-spawned cases so the disabled state is explicit.
+///
+/// The worker mirrors [`spawn_eval_worker`]: a `tdw-cron` schedule drives an
+/// inline `run_self_tune_cycle` on each due slot, injecting the wall-clock `now`
+/// at fire time. The same golden-split fixture the K-L3 scheduled eval uses is
+/// the gate's eval data.
+fn spawn_self_tuning_worker(
+    cfg: &SelfTuneConfig,
+    evals_cfg: &EvalsConfig,
+    log: Option<Arc<tokio::sync::Mutex<tdw_knowledge::self_tune::SelfTuneLog>>>,
+    handle: Option<tdw_retrieve::RrfKHandle>,
+    embedder: Arc<dyn EmbeddingProvider>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R3 self-tuning worker not spawned \
+             (knowledge.self_tune.enabled = false)."
+        );
+        return None;
+    }
+    // The seam must be wired (from_config builds these iff enabled).
+    let (log, handle) = match (log, handle) {
+        (Some(log), Some(handle)) => (log, handle),
+        _ => {
+            eprintln!(
+                "[tdw] NOTICE: K-R3 self-tuning enabled but the handle/log seam \
+                 is absent — worker not spawned."
+            );
+            return None;
+        }
+    };
+    // Fail-closed: a self-tuner with no golden split has no eval data and must
+    // not run at all.
+    let split_id = match evals_cfg.split_id.as_deref().filter(|s| !s.is_empty()) {
+        Some(s) => s.to_string(),
+        None => {
+            eprintln!(
+                "[tdw] NOTICE: K-R3 self-tuning enabled but knowledge.evals.split_id \
+                 is unconfigured — no golden split to gate against; worker not spawned \
+                 (fail-closed)."
+            );
+            return None;
+        }
+    };
+    let fixture_path = evals_config_to_runner(evals_cfg)
+        .split_fixture_path
+        .clone()
+        .unwrap_or_else(|| default_fixture_path(&split_id));
+
+    let clamp = tdw_knowledge::self_tune::TuneClamp::new(cfg.rrf_k_min, cfg.rrf_k_max, cfg.rrf_k_step);
+    let margin = cfg.margin;
+
+    let schedule = CronSchedule::parse(&cfg.cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 5 * * MON").expect("fallback parse"));
+
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-self-tune-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "self-tune-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: format!("tdw-self-tune:{split_id}"),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-self-tune".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut cycle: u64 = 0;
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+            if due.is_empty() {
+                continue;
+            }
+
+            let now_ts = chrono::Utc::now().to_rfc3339();
+            // Fail-closed on fixture load error: record NoEvalData, change nothing.
+            let fixture = match load_golden_split(&fixture_path) {
+                Ok(f) => f,
+                Err(load_err) => {
+                    eprintln!(
+                        "[tdw] K-R3 self-tuning: fixture load error \
+                         (split={split_id}): {load_err}"
+                    );
+                    let mut guard = log.lock().await;
+                    guard.record(
+                        tdw_knowledge::self_tune::TunableParam::RrfK,
+                        tdw_knowledge::self_tune::TuneOutcome::NoEvalData {
+                            reason: load_err,
+                        },
+                        &now_ts,
+                    );
+                    continue;
+                }
+            };
+
+            cycle = cycle.wrapping_add(1);
+            match run_self_tune_cycle(
+                &fixture,
+                Arc::clone(&embedder),
+                &handle,
+                &log,
+                SelfTuneCycle {
+                    clamp,
+                    margin,
+                    cycle,
+                    now: &now_ts,
+                },
+            )
+            .await
+            {
+                Ok(()) => {
+                    let guard = log.lock().await;
+                    if let Some(record) = guard.last() {
+                        eprintln!("[tdw] K-R3 self-tuning cycle: {}", record.summary);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[tdw] K-R3 self-tuning cycle failed (split={split_id}): {error}");
+                    let mut guard = log.lock().await;
+                    guard.record(
+                        tdw_knowledge::self_tune::TunableParam::RrfK,
+                        tdw_knowledge::self_tune::TuneOutcome::NoEvalData {
+                            reason: format!("eval error: {error}"),
+                        },
+                        &now_ts,
+                    );
                 }
             }
         }
@@ -6359,5 +6758,255 @@ mod tests {
         assert_eq!(json["indexed"], 5);
         assert_eq!(json["duplicates"], 2);
         assert_eq!(json["rejected"], 1);
+    }
+
+    // ── K-R3: system self-tuning within gates ────────────────────────────────
+
+    fn self_tune_clamp() -> tdw_knowledge::self_tune::TuneClamp {
+        // step 10, bounds [10, 120] — a candidate at 60 moves to 70 (within).
+        tdw_knowledge::self_tune::TuneClamp::new(10.0, 120.0, 10.0)
+    }
+
+    fn single_doc_fixture() -> tdw_eval_runner::scheduled_eval::GoldenSplitFixture {
+        use tdw_eval_runner::retrieval_eval::RetrievalEvalCase;
+        use tdw_knowledge::KnowledgeDocument;
+        let entity = tdw_kg::Entity {
+            entity_id: "instrument:acme".to_string(),
+            kind: tdw_kg::EntityKind::Instrument,
+            label: "acme".to_string(),
+            aliases: vec![],
+        };
+        let doc = KnowledgeDocument::new(
+            "doc-a",
+            "acme earnings report strong cloud growth",
+            entity,
+            vec![],
+        );
+        let case = RetrievalEvalCase {
+            case_id: "earnings".to_string(),
+            query: "acme earnings report strong cloud growth".to_string(),
+            expected_doc_ids: vec!["doc-a".to_string()],
+            as_of: None,
+            tags_any: vec![],
+            fixed_split_id: Some("test-split".to_string()),
+        };
+        tdw_eval_runner::scheduled_eval::GoldenSplitFixture {
+            documents: vec![doc],
+            cases: vec![case],
+            baseline: None,
+        }
+    }
+
+    fn empty_cases_fixture() -> tdw_eval_runner::scheduled_eval::GoldenSplitFixture {
+        let mut f = single_doc_fixture();
+        f.cases.clear();
+        f
+    }
+
+    /// (b) No eval data (zero cases) → FAIL-CLOSED: the live RRF k handle is left
+    /// UNCHANGED and the audit records `NoEvalData` (not applied).
+    #[tokio::test]
+    async fn self_tune_no_eval_data_leaves_params_unchanged() {
+        let handle = tdw_retrieve::RrfKHandle::new(60.0);
+        let log = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::self_tune::SelfTuneLog::new(),
+        ));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+
+        run_self_tune_cycle(
+            &empty_cases_fixture(),
+            embedder,
+            &handle,
+            &log,
+            SelfTuneCycle {
+                clamp: self_tune_clamp(),
+                margin: 0.0,
+                cycle: 0,
+                now: "2026-06-12T00:00:00Z",
+            },
+        )
+        .await
+        .expect("cycle must not error on empty cases");
+
+        assert!(
+            (handle.load() - 60.0).abs() < 1e-12,
+            "fail-closed: k must be unchanged, got {}",
+            handle.load()
+        );
+        let guard = log.lock().await;
+        let rec = guard.last().expect("a record was written");
+        assert!(!rec.outcome.applied(), "no eval ⇒ not applied");
+        assert_eq!(guard.applied_count(), 0);
+        assert!(rec.summary.contains("fail-closed"));
+    }
+
+    /// (c) With real eval data and a margin that admits an equal-objective
+    /// candidate (margin 0.0), the candidate is APPLIED to the live handle and
+    /// the audit truthfully records old→new with gated provenance.
+    #[tokio::test]
+    async fn self_tune_applies_and_audits_an_accepted_delta() {
+        let handle = tdw_retrieve::RrfKHandle::new(60.0);
+        let log = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::self_tune::SelfTuneLog::new(),
+        ));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+
+        // cycle 0 ⇒ Up ⇒ candidate = 70.0; single relevant doc means both legs
+        // score nDCG = 1.0, so with margin 0.0 the candidate is admitted.
+        run_self_tune_cycle(
+            &single_doc_fixture(),
+            embedder,
+            &handle,
+            &log,
+            SelfTuneCycle {
+                clamp: self_tune_clamp(),
+                margin: 0.0,
+                cycle: 0,
+                now: "2026-06-12T00:00:00Z",
+            },
+        )
+        .await
+        .expect("cycle runs");
+
+        assert!(
+            (handle.load() - 70.0).abs() < 1e-12,
+            "accepted candidate must be hot-applied to the live handle, got {}",
+            handle.load()
+        );
+        let guard = log.lock().await;
+        let rec = guard.last().expect("record written");
+        assert!(rec.outcome.applied(), "equal-objective at margin 0 promotes");
+        assert_eq!(guard.applied_count(), 1);
+        assert_eq!(rec.provenance, "agent:system:self-tuner;gated:true");
+        assert!(rec.summary.contains("APPLIED"));
+        assert!(rec.summary.contains("60.0000 → 70.0000"), "truthful old→new audit");
+    }
+
+    /// A positive margin rejects an equal-objective candidate → the handle is
+    /// unchanged and the audit records a truthful NO-OP (regression/no-gain
+    /// guard).
+    #[tokio::test]
+    async fn self_tune_rejects_when_no_improvement_beyond_margin() {
+        let handle = tdw_retrieve::RrfKHandle::new(60.0);
+        let log = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::self_tune::SelfTuneLog::new(),
+        ));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+
+        run_self_tune_cycle(
+            &single_doc_fixture(),
+            embedder,
+            &handle,
+            &log,
+            SelfTuneCycle {
+                clamp: self_tune_clamp(),
+                margin: 0.5, // no equal-objective candidate can clear this
+                cycle: 0,
+                now: "2026-06-12T00:00:00Z",
+            },
+        )
+        .await
+        .expect("cycle runs");
+
+        assert!(
+            (handle.load() - 60.0).abs() < 1e-12,
+            "no-improvement ⇒ k unchanged, got {}",
+            handle.load()
+        );
+        let guard = log.lock().await;
+        assert_eq!(guard.applied_count(), 0);
+        assert!(guard.last().expect("record").summary.contains("NO-OP"));
+    }
+
+    /// (d) The clamp is enforced end-to-end: an applied candidate proposed at the
+    /// upper bound can never exceed `rrf_k_max`.
+    #[tokio::test]
+    async fn self_tune_applied_value_never_exceeds_clamp() {
+        // Incumbent AT the upper bound; cycle 0 (Up) would propose max+step but
+        // the clamp pins it to max. With margin 0 the (equal-objective) clamped
+        // candidate is applied — and equals max, never above it.
+        let handle = tdw_retrieve::RrfKHandle::new(120.0);
+        let log = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::self_tune::SelfTuneLog::new(),
+        ));
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+        let clamp = self_tune_clamp();
+
+        run_self_tune_cycle(
+            &single_doc_fixture(),
+            embedder,
+            &handle,
+            &log,
+            SelfTuneCycle {
+                clamp,
+                margin: 0.0,
+                cycle: 0,
+                now: "2026-06-12T00:00:00Z",
+            },
+        )
+        .await
+        .expect("cycle runs");
+
+        assert!(
+            handle.load() <= clamp.max + 1e-12,
+            "applied k must never exceed the clamp max, got {}",
+            handle.load()
+        );
+    }
+
+    /// (a) The tuner never writes config directly: a change is recorded as a
+    /// GATED proposal-style record with `Agent { gated: true }` provenance, and
+    /// the disabled worker spawns nothing (kill-switch).
+    #[test]
+    fn self_tune_worker_disabled_spawns_nothing() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+        let cancel = CancellationToken::new();
+        let cfg = SelfTuneConfig {
+            enabled: false,
+            ..SelfTuneConfig::default()
+        };
+        let evals = EvalsConfig {
+            split_id: Some("golden-split-v1".to_string()),
+            ..EvalsConfig::default()
+        };
+        let handle = rt.block_on(async {
+            spawn_self_tuning_worker(&cfg, &evals, None, None, embedder, cancel)
+        });
+        assert!(handle.is_none(), "kill-switch off ⇒ no worker task spawned");
+    }
+
+    /// Fail-closed wiring: enabled but no golden split configured ⇒ worker is not
+    /// spawned (no eval data to gate against).
+    #[test]
+    fn self_tune_worker_without_golden_split_is_not_spawned() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+        let cancel = CancellationToken::new();
+        let cfg = SelfTuneConfig {
+            enabled: true,
+            ..SelfTuneConfig::default()
+        };
+        let evals = EvalsConfig {
+            split_id: None,
+            ..EvalsConfig::default()
+        };
+        let log = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::self_tune::SelfTuneLog::new(),
+        ));
+        let rrf = tdw_retrieve::RrfKHandle::new(60.0);
+        let handle = rt.block_on(async {
+            spawn_self_tuning_worker(&cfg, &evals, Some(log), Some(rrf), embedder, cancel)
+        });
+        assert!(
+            handle.is_none(),
+            "fail-closed: enabled but no golden split ⇒ no worker"
+        );
     }
 }
