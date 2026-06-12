@@ -1,6 +1,6 @@
 //! K-L1 gate tests: rules-driven inference lives in the daemon.
 //!
-//! Six gates (all offline, no Docker/network, deterministic):
+//! Seven gates (all offline, no Docker/network, deterministic):
 //!
 //! 1. **DeriveEdge e2e** — ingest a doc, seed a base graph edge matching a
 //!    `DeriveEdge` rule, fire inference, assert the derived edge is in the graph
@@ -18,9 +18,16 @@
 //!    truncated) when the rule set would produce more than one derived edge.
 //! 6. **Retraction e2e** — exercise `Backend::retract_knowledge_fact`; assert the
 //!    derived edge is gone and the base edge is untouched after retraction.
+//! 7. **MCP JSON-RPC ingest → `Provenance::Rule`** — drive `tdw.kg.ingest`
+//!    through the real MCP JSON-RPC tool surface with an inference engine wired
+//!    in; seed a base edge matching a `DeriveEdge` rule and assert the derived
+//!    edge appears in the graph with `Provenance::Rule { rule_id }` after the
+//!    ingest call completes (honesty gate for issue 2: the production MCP path
+//!    fires `run_incremental`, not just the `Backend` direct methods).
 
 use std::sync::Arc;
 
+use serde_json::json;
 use tdw_backend::prelude::*;
 use tdw_core::{Direction, GraphEdge, GraphNode, Provenance, TraversalFilter};
 use tdw_infer::{ChangeSet, EdgePattern, InferEngine, InferError, InferRule, RunLimits};
@@ -520,5 +527,162 @@ async fn retract_removes_derived_edge_leaves_base_edge_intact() {
         base_after.iter().any(|(e, _)| e.rel == "owns"),
         "base owns edge must remain intact after retraction; edges: {:?}",
         base_after.iter().map(|(e, _)| e).collect::<Vec<_>>()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 7: MCP JSON-RPC ingest path fires inference → Provenance::Rule
+// ---------------------------------------------------------------------------
+
+/// Drive `tdw.kg.ingest` through the real MCP JSON-RPC surface with an
+/// inference engine wired in. This is the production path (issue 2 honesty
+/// gate): `McpServer::dispatch_knowledge_ingest_tool` must call
+/// `run_incremental` after each ingest batch.
+#[tokio::test]
+async fn mcp_ingest_tool_fires_inference_and_derives_edge_with_rule_provenance() {
+    let backend = Backend::in_memory_for_tests().await;
+    let graph = backend.graph_engine();
+    let now = "2026-01-01";
+
+    // Seed a base edge BEFORE ingest so the rule fires on the described_by /
+    // mentions ChangeSet the K-E3 indexer produces. The DeriveEdge rule fires
+    // on "described_by" (the standard edge written by the indexer).
+    // Note: KnowledgeDocument.id must be a plain identifier (alphanumeric + _ - only),
+    // so use "doc-probe" not "doc:probe".
+    seed_edge(&graph, "instrument:INFER-MCP", "described_by", "doc-probe").await;
+
+    // Wire the DeriveEdge rule: described_by => confirmed_by
+    {
+        let infer = backend.infer_engine_handle();
+        let mut guard = infer.lock().await;
+        guard
+            .hot_reload(vec![derive_rule(
+                "r-mcp-honesty",
+                "described_by",
+                "confirmed_by",
+            )])
+            .expect("hot_reload should accept valid rule");
+    }
+
+    // Build an MCP server with the full K-L1 surface wired up.
+    // The runtime + indexer + infer handles are all shared with the Backend.
+    let runtime = backend.knowledge_runtime_handle();
+    let indexer = backend.knowledge_indexer_handle();
+    let infer = backend.infer_engine_handle();
+    let mut server = McpServer::new()
+        .with_knowledge(runtime)
+        .with_indexer(indexer)
+        .with_infer_engine(infer);
+
+    // Initialize the MCP session (3-step handshake per the MCP spec).
+    let init_line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kl1-test","version":"1.0.0"}}}"#;
+    let init_msgs = server.handle_json_rpc_line(init_line);
+    assert_eq!(
+        init_msgs.len(),
+        1,
+        "initialize must return exactly one message"
+    );
+
+    // The client sends `notifications/initialized` (a notification — no id,
+    // no response) to complete the handshake before issuing any tool calls.
+    // Without this the server's `initialized` flag stays false and every
+    // `tools/call` returns JSON-RPC -32002 "server is not initialized".
+    let notif_msgs = server.handle_json_rpc_line(
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+    );
+    assert!(
+        notif_msgs.is_empty(),
+        "notifications/initialized must produce no response messages"
+    );
+
+    // Ingest a document for entity instrument:INFER-MCP.
+    // The K-E3 indexer writes a described_by edge and the inference engine
+    // fires, deriving confirmed_by from the DeriveEdge rule above.
+    let ingest_request = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tdw.kg.ingest",
+            "arguments": {
+                "documents": [{
+                    "id": "doc-probe",
+                    "body": "probe document for MCP inference gate",
+                    "entity": {
+                        "entity_id": "instrument:INFER-MCP",
+                        "kind": "instrument",
+                        "label": "INFER-MCP",
+                        "aliases": []
+                    },
+                    "tags": ["test:tag"]
+                }],
+                "now": now
+            }
+        }
+    });
+    let ingest_msgs = server.handle_json_rpc_line(&ingest_request.to_string());
+    assert_eq!(
+        ingest_msgs.len(),
+        1,
+        "ingest must return exactly one message"
+    );
+
+    // Parse the response and confirm the document landed (not duplicate/error).
+    let response: serde_json::Value =
+        serde_json::from_str(&ingest_msgs[0]).expect("response must be valid JSON");
+    // The MCP tool result is nested: result.content[0].text contains the JSON body.
+    // If that layer is absent, surface the full response to aid debugging.
+    let content_arr = response["result"]["content"]
+        .as_array()
+        .unwrap_or_else(|| panic!("result.content must be an array; response: {response}"));
+    assert!(
+        !content_arr.is_empty(),
+        "result.content must not be empty; response: {response}"
+    );
+    let content_str = content_arr[0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("result.content[0].text must be a string; response: {response}"));
+    let report: serde_json::Value =
+        serde_json::from_str(content_str).expect("content text must be valid JSON");
+    assert_eq!(
+        report["summary"]["landed"],
+        json!(1),
+        "exactly one document must land; report: {report}"
+    );
+
+    // Assert the derived edge instrument:INFER-MCP -confirmed_by-> doc:probe
+    // is present in the graph with Provenance::Rule { rule_id: "r-mcp-honesty" }.
+    let filter = TraversalFilter {
+        rels: Some(vec!["confirmed_by".to_string()]),
+        kinds: None,
+        as_of: None,
+        direction: Direction::Out,
+        max_hops: 1,
+    };
+    let neighbors = graph
+        .neighbors("instrument:INFER-MCP", &filter)
+        .await
+        .expect("neighbors should succeed");
+
+    let derived = neighbors
+        .iter()
+        .map(|(edge, _node)| edge)
+        .find(|edge| edge.rel == "confirmed_by" && edge.to == "doc-probe");
+    assert!(
+        derived.is_some(),
+        "MCP ingest must trigger inference and produce confirmed_by edge; \
+         edges: {:?}",
+        neighbors.iter().map(|(e, _)| e).collect::<Vec<_>>()
+    );
+
+    let edge = derived.unwrap();
+    assert!(
+        matches!(
+            &edge.provenance,
+            Provenance::Rule { rule_id, .. } if rule_id == "r-mcp-honesty"
+        ),
+        "derived edge must carry Provenance::Rule {{ rule_id: \"r-mcp-honesty\" }}, \
+         got {:?}",
+        edge.provenance
     );
 }

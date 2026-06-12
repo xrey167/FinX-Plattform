@@ -38,12 +38,24 @@
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
+use tdw_core::GraphEngine;
+use tdw_infer::{ChangeSet, InferEngine};
 use tdw_knowledge::indexer::{IndexOutcome, KnowledgeIndexer};
 use tdw_knowledge::{KnowledgeDocument, validate_document};
+use tdw_tags::TagEngine;
 use tokio::sync::Mutex;
 
 use crate::knowledge_tools::block_on;
 use crate::{ToolDescriptor, ToolExecution, ToolFailure, structured, tool_with_annotations};
+
+/// Inference context passed from `McpServer` into `execute` when all three
+/// handles are present: the engine lock, the graph, and the tag engine.
+/// Using a named tuple keeps `execute`'s signature readable.
+pub type InferCtx = (
+    Arc<Mutex<InferEngine>>,
+    Arc<dyn GraphEngine>,
+    Arc<dyn TagEngine>,
+);
 
 /// The name this module owns.
 pub const TOOL_NAME: &str = "tdw.kg.ingest";
@@ -159,6 +171,13 @@ pub fn descriptor() -> ToolDescriptor {
 /// - `duplicate`: same content hash already in the manifest — no write.
 /// - `error`: validation or write failure for this document.
 ///
+/// When `infer_ctx` is `Some`, `run_incremental` is fired once after the
+/// whole batch completes — only when at least one document landed. The
+/// `ChangeSet` covers the standard K-E3 edge types (`described_by`,
+/// `mentions`) plus every tag declared across all landed documents.
+/// Inference errors are logged and never surfaced to the caller (inference
+/// is best-effort; the batch is already durable).
+///
 /// # Errors
 ///
 /// Returns [`ToolFailure::Execution`] if the `documents` field is
@@ -166,6 +185,7 @@ pub fn descriptor() -> ToolDescriptor {
 /// failures are reported inline, not as a top-level error.
 pub fn execute(
     indexer: &Arc<Mutex<KnowledgeIndexer>>,
+    infer_ctx: Option<InferCtx>,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
     let raw_docs = arguments
@@ -194,21 +214,7 @@ pub fn execute(
         .collect::<Result<_, _>>()?;
 
     // Per-document cap validation (before touching any engine).
-    for doc in &docs {
-        if doc.body.chars().count() > MAX_BODY_CHARS {
-            return Err(execution(format!(
-                "document {:?} body exceeds {MAX_BODY_CHARS} character cap",
-                doc.id
-            )));
-        }
-        if doc.mentions.len() > MAX_MENTION_COUNT {
-            return Err(execution(format!(
-                "document {:?} has {} mentions, cap is {MAX_MENTION_COUNT}",
-                doc.id,
-                doc.mentions.len()
-            )));
-        }
-    }
+    validate_doc_caps(&docs)?;
 
     // The `now` override is for testing; production paths omit it so today's
     // UTC date is used. Tool args are attacker-controlled, so `now` is
@@ -226,9 +232,14 @@ pub fn execute(
     // Index each document independently: a per-doc failure is reported inline
     // rather than aborting the whole batch. The indexer lock is acquired once
     // around the whole loop so search never observes a half-applied batch.
+    //
+    // `landed_tags` accumulates tags from every document that actually landed
+    // (not duplicates/errors) so the inference ChangeSet below is accurate.
     let mut report: Vec<Value> = Vec::with_capacity(docs.len());
+    let mut landed_tags: Vec<String> = Vec::new();
     for doc in docs {
         let doc_id = doc.id.clone();
+        let doc_tags = doc.tags.clone();
         // Pre-validate with the public validate_document gate (control-char
         // checks etc.) before handing to the indexer.
         if let Err(error) = validate_document(&doc) {
@@ -245,6 +256,7 @@ pub fn execute(
         });
         match outcome {
             Ok(IndexOutcome::Indexed) => {
+                landed_tags.extend(doc_tags);
                 report.push(json!({ "id": doc_id, "outcome": "landed" }));
             }
             Ok(IndexOutcome::SkippedUnchanged) => {
@@ -273,6 +285,16 @@ pub fn execute(
         .filter(|item| item["outcome"] == "error")
         .count();
 
+    // K-L1: fire incremental inference after the batch when at least one
+    // document landed and the inference context is wired up. Inference is
+    // best-effort — errors are logged loudly and never surfaced to the caller
+    // because the batch is already durable at this point.
+    if landed > 0
+        && let Some(ctx) = infer_ctx
+    {
+        fire_infer_after_ingest(ctx, &landed_tags, now);
+    }
+
     Ok(structured(json!({
         "summary": {
             "total": report.len(),
@@ -282,6 +304,67 @@ pub fn execute(
         },
         "documents": report,
     })))
+}
+
+/// Validate per-document body-length and mention-count caps.
+///
+/// Returns a [`ToolFailure`] naming the first offending document so the batch
+/// is rejected cleanly before any engine is touched.
+fn validate_doc_caps(docs: &[KnowledgeDocument]) -> Result<(), ToolFailure> {
+    for doc in docs {
+        if doc.body.chars().count() > MAX_BODY_CHARS {
+            return Err(execution(format!(
+                "document {:?} body exceeds {MAX_BODY_CHARS} character cap",
+                doc.id
+            )));
+        }
+        if doc.mentions.len() > MAX_MENTION_COUNT {
+            return Err(execution(format!(
+                "document {:?} has {} mentions, cap is {MAX_MENTION_COUNT}",
+                doc.id,
+                doc.mentions.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Fire `run_incremental` after a successful ingest batch (K-L1).
+///
+/// Builds a [`ChangeSet`] from the standard edge types written by the K-E3
+/// indexer (`described_by`, `mentions`) plus any tags that landed, then runs
+/// the engine. Errors are logged to stderr and never surfaced — the batch is
+/// already durable at this point.
+fn fire_infer_after_ingest(ctx: InferCtx, landed_tags: &[String], now: &str) {
+    let (infer, graph, tags_engine) = ctx;
+    let mut changed = ChangeSet::default();
+    changed.edge_types.insert("described_by".to_string());
+    changed.edge_types.insert("mentions".to_string());
+    for tag in landed_tags {
+        changed.tags.insert(tag.clone());
+    }
+    let result = block_on(async {
+        let mut guard = infer.lock().await;
+        guard
+            .run_incremental(&graph, &tags_engine, now, &changed)
+            .await
+    });
+    match result {
+        Ok(rep) if rep.derived_edges > 0 || rep.assigned_tags > 0 => {
+            eprintln!(
+                "tdw-mcp tdw.kg.ingest: inference after batch: derived {} edge(s), \
+                 {} tag(s) in {} iteration(s) (rule-set v{})",
+                rep.derived_edges, rep.assigned_tags, rep.iterations, rep.version
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!(
+                "tdw-mcp tdw.kg.ingest: inference after batch failed (batch already \
+                 durable): {error}"
+            );
+        }
+    }
 }
 
 const fn execution(message: String) -> ToolFailure {

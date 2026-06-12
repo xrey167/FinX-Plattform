@@ -251,14 +251,15 @@ impl Backend {
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph)),
         ));
-        let runtime = Arc::new(
-            KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
-                .with_lexical(Arc::clone(&state.lexical), collection)
-                .with_graph(Arc::clone(&graph)),
-        );
         // Tests boot with empty (no-op) rule and infer engines — no rules_dir
         // is configured so inference does nothing, which is the correct default.
         let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+        let runtime = Arc::new(
+            KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
+                .with_lexical(Arc::clone(&state.lexical), collection)
+                .with_graph(Arc::clone(&graph))
+                .with_tags(Arc::clone(&tags_engine)),
+        );
         Self {
             state,
             runner,
@@ -422,6 +423,7 @@ impl Backend {
         // the rest of the daemon. `None` when no rules_dir is configured.
         let rules_reload_task = spawn_rules_reload_tick(
             &cfg.tdw.knowledge.rules,
+            &cfg.tdw.knowledge.infer,
             self.rules.clone(),
             self.infer.clone(),
             Arc::clone(&self.runtime),
@@ -1304,96 +1306,220 @@ pub(crate) async fn validate_graph_backend(cfg: &tdw_config::GraphConfig) -> Bac
 // K-L1: rules boot-load, directory parsing, hot-reload scheduler
 // ---------------------------------------------------------------------------
 
-/// Load tag rules from every `*.json` file in `dir`.
+/// Default limits for the rules directory loader.
+const DEFAULT_MAX_FILES: usize = 64;
+const DEFAULT_MAX_FILE_SIZE_KB: u64 = 256;
+const DEFAULT_MAX_TOTAL_RULES: usize = 1_000;
+
+/// Parsed rule sets from a rules directory (both tag and infer rules).
+struct LoadedRules {
+    tag_rules: Vec<TagRule>,
+    infer_rules: Vec<tdw_infer::InferRule>,
+}
+
+/// Load both `*.tag.json` (tag rules) and `*.infer.json` (inference rules)
+/// from `dir` with enforced limits.
 ///
-/// Returns a `Vec<TagRule>` in deterministic (lexicographic file-name) order.
-/// A missing, unreadable, or malformed file is a **hard error** — no silent
-/// skip. The error message names the offending path.
+/// # File convention
+///
+/// - `*.tag.json` — JSON array of [`tdw_tag_rules::TagRule`] objects.
+/// - `*.infer.json` — JSON array of [`tdw_infer::InferRule`] objects
+///   (`DeriveEdge` / `PropagateTag` serde shapes).
+/// - Files with any other extension (e.g. plain `.json`, `.md`) are silently
+///   ignored so README files and JSON schemas don't accidentally parse as rules.
+/// - Symlinks are followed (documented); operators should not place symlink
+///   cycles in the rules directory.
+///
+/// # Limits
+///
+/// Exceeding `max_files`, `max_file_size_kb`, or `max_total_rules` is a hard
+/// error. Unreadable files are a hard error (no silent skip — every file that
+/// matches the suffix must be readable and valid JSON).
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::Init`] on any I/O or parse failure.
-fn load_rules_from_dir(dir: &std::path::Path) -> BackendResult<Vec<TagRule>> {
-    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .map_err(|error| {
+/// Returns [`BackendError::Init`] on any limit violation, I/O failure, or
+/// parse failure. The error message always names the offending file.
+fn load_rules_from_dir(
+    dir: &std::path::Path,
+    cfg: &tdw_config::RulesConfig,
+) -> BackendResult<LoadedRules> {
+    let max_files = cfg.max_files.unwrap_or(DEFAULT_MAX_FILES);
+    let max_file_size_kb = cfg.max_file_size_kb.unwrap_or(DEFAULT_MAX_FILE_SIZE_KB);
+    let max_total_rules = cfg.max_total_rules.unwrap_or(DEFAULT_MAX_TOTAL_RULES);
+
+    // Collect all *.tag.json and *.infer.json paths, sorted for determinism.
+    let mut tag_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut infer_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
+
+    let read_dir = std::fs::read_dir(dir).map_err(|error| {
+        BackendError::Init(format!(
+            "knowledge.rules.rules_dir {dir:?} cannot be read: {error}"
+        ))
+    })?;
+
+    for entry in read_dir {
+        match entry {
+            Err(error) => {
+                // Non-fatal directory entry read failure — warn loudly but
+                // keep going so a single bad entry doesn't abort the load.
+                unreadable.push(format!("directory entry error: {error}"));
+            }
+            Ok(entry) => {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if name.ends_with(".tag.json") {
+                    tag_paths.push(path);
+                } else if name.ends_with(".infer.json") {
+                    infer_paths.push(path);
+                }
+                // other extensions silently ignored
+            }
+        }
+    }
+
+    if !unreadable.is_empty() {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {dir:?}: {} unreadable dir entr{}: {}",
+            unreadable.len(),
+            if unreadable.len() == 1 { "y" } else { "ies" },
+            unreadable.join(", ")
+        )));
+    }
+
+    tag_paths.sort();
+    infer_paths.sort();
+
+    let total_files = tag_paths.len() + infer_paths.len();
+    if total_files > max_files {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {dir:?}: {total_files} rule files found, \
+             limit is {max_files} (set knowledge.rules.max_files to raise)"
+        )));
+    }
+
+    let max_bytes = max_file_size_kb * 1024;
+
+    /// Read and size-check a single rule file.
+    fn read_file(path: &std::path::Path, max_bytes: u64) -> BackendResult<String> {
+        let meta = std::fs::metadata(path).map_err(|e| {
             BackendError::Init(format!(
-                "knowledge.rules.rules_dir {dir:?} cannot be read: {error}"
-            ))
-        })?
-        .filter_map(|entry| {
-            entry
-                .ok()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        })
-        .collect();
-    entries.sort();
-    let mut rules = Vec::new();
-    for path in &entries {
-        let text = std::fs::read_to_string(path).map_err(|error| {
-            BackendError::Init(format!(
-                "knowledge.rules.rules_dir: cannot read {path:?}: {error}"
+                "knowledge.rules.rules_dir: cannot stat {path:?}: {e}"
             ))
         })?;
+        if meta.len() > max_bytes {
+            return Err(BackendError::Init(format!(
+                "knowledge.rules.rules_dir: file {path:?} is {} KiB, limit is {} KiB \
+                 (set knowledge.rules.max_file_size_kb to raise)",
+                meta.len() / 1024,
+                max_bytes / 1024,
+            )));
+        }
+        std::fs::read_to_string(path).map_err(|e| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: cannot read {path:?}: {e}"
+            ))
+        })
+    }
+
+    let mut tag_rules: Vec<TagRule> = Vec::new();
+    for path in &tag_paths {
+        let text = read_file(path, max_bytes)?;
         let file_rules: Vec<TagRule> = serde_json::from_str(&text).map_err(|error| {
             BackendError::Init(format!(
-                "knowledge.rules.rules_dir: malformed rule file {path:?}: {error}"
+                "knowledge.rules.rules_dir: malformed tag-rule file {path:?}: {error}"
             ))
         })?;
-        rules.extend(file_rules);
+        tag_rules.extend(file_rules);
     }
-    Ok(rules)
+
+    let mut infer_rules: Vec<tdw_infer::InferRule> = Vec::new();
+    for path in &infer_paths {
+        let text = read_file(path, max_bytes)?;
+        let file_rules: Vec<tdw_infer::InferRule> =
+            serde_json::from_str(&text).map_err(|error| {
+                BackendError::Init(format!(
+                    "knowledge.rules.rules_dir: malformed infer-rule file {path:?}: {error}"
+                ))
+            })?;
+        infer_rules.extend(file_rules);
+    }
+
+    let total_rules = tag_rules.len() + infer_rules.len();
+    if total_rules > max_total_rules {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {dir:?}: {total_rules} total rules loaded, \
+             limit is {max_total_rules} (set knowledge.rules.max_total_rules to raise)"
+        )));
+    }
+
+    Ok(LoadedRules {
+        tag_rules,
+        infer_rules,
+    })
 }
 
-/// Compute a lightweight content hash over a rules directory for change detection.
+/// Compute a content hash over all `*.tag.json` and `*.infer.json` files in
+/// `dir` for hot-reload change detection.
 ///
-/// Hashes the sorted (path, file-size, modification-time) tuple for each `*.json`
-/// file. This is a fast heuristic — an actual content change that leaves size and
-/// mtime unchanged is not detected, but that requires a deliberate adversarial
-/// write and is out of scope for a hot-reload guard.
+/// Hashes the sorted-by-path file **contents** (not mtime/size). This correctly
+/// detects same-second, same-size edits. Unreadable files are logged as
+/// warnings and excluded from the hash (a partial read is not a reliable signal;
+/// the actual parse error will surface on the next reload attempt).
+///
+/// Symlinks are followed (consistent with `load_rules_from_dir`).
 fn dir_content_hash(dir: &std::path::Path) -> Option<u64> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut entries: Vec<(std::path::PathBuf, u64, u64)> = std::fs::read_dir(dir)
-        .ok()?
+    let read_dir = std::fs::read_dir(dir).ok()?;
+    let mut paths: Vec<std::path::PathBuf> = read_dir
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                return None;
+            let name = path.file_name()?.to_str().unwrap_or_default().to_string();
+            if name.ends_with(".tag.json") || name.ends_with(".infer.json") {
+                Some(path)
+            } else {
+                None
             }
-            let meta = entry.metadata().ok()?;
-            let size = meta.len();
-            let mtime = meta
-                .modified()
-                .ok()?
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .ok()?
-                .as_secs();
-            Some((path, size, mtime))
         })
         .collect();
-    entries.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+    paths.sort();
+
     let mut hasher = DefaultHasher::new();
-    for (path, size, mtime) in &entries {
+    for path in &paths {
         path.hash(&mut hasher);
-        size.hash(&mut hasher);
-        mtime.hash(&mut hasher);
+        match std::fs::read(path) {
+            Ok(contents) => contents.hash(&mut hasher),
+            Err(error) => {
+                // Warn loudly; exclude this file from the hash so the tick can
+                // still detect changes in other files. The actual parse error
+                // will surface in load_rules_from_dir on the next reload.
+                eprintln!(
+                    "tdw-backend: rules dir_content_hash: cannot read {path:?}: {error} \
+                     — this file is excluded from the change-detection hash"
+                );
+            }
+        }
     }
     Some(hasher.finish())
 }
 
-/// Boot-load tag rules and build both engines from `rules_cfg` + `infer_cfg`.
+/// Boot-load both tag rules and inference rules; build both engines.
 ///
-/// Absent `rules_dir` → no rules loaded; both engines are empty and version 0.
-/// The fact is logged loudly. A configured but nonexistent directory or a
-/// malformed file is a **hard [`BackendError::Init`]**.
+/// Absent `rules_dir` → both engines are empty (version 0); logs loudly.
+/// A configured but nonexistent directory, a malformed file, or a limit
+/// violation is a **hard [`BackendError::Init`]**.
 ///
 /// # Errors
 ///
-/// Returns [`BackendError::Init`] on directory or file read/parse failure, or
-/// on rule validation/stratification failure inside `hot_reload`.
+/// Returns [`BackendError::Init`] on directory/file issues, limit violations,
+/// or rule validation/stratification failure inside `hot_reload`.
 fn boot_load_rules(
     rules_cfg: &tdw_config::RulesConfig,
     infer_cfg: &tdw_config::InferLimitsConfig,
@@ -1406,7 +1532,8 @@ fn boot_load_rules(
             .max_derived
             .unwrap_or(RunLimits::default().max_derived),
     };
-    let infer_engine = InferEngine::with_limits(limits);
+    let mut infer_engine = InferEngine::with_limits(limits);
+
     let Some(rules_dir) = rules_cfg
         .rules_dir
         .as_deref()
@@ -1414,11 +1541,12 @@ fn boot_load_rules(
     else {
         eprintln!(
             "tdw-backend: knowledge.rules.rules_dir is not configured — \
-             auto-tagging and inference are DISABLED; set [knowledge.rules] rules_dir \
+             auto-tagging AND inference are DISABLED; set [knowledge.rules] rules_dir \
              in your config to enable rule-driven derivation (K-L1)"
         );
         return Ok((RuleEngine::default(), infer_engine));
     };
+
     let dir = std::path::Path::new(rules_dir);
     if !dir.exists() {
         return Err(BackendError::Init(format!(
@@ -1426,17 +1554,31 @@ fn boot_load_rules(
              refusing to boot with a missing rules directory; create it or unset the config key"
         )));
     }
-    let rules = load_rules_from_dir(dir)?;
-    let count = rules.len();
+
+    let loaded = load_rules_from_dir(dir, rules_cfg)?;
+    let tag_count = loaded.tag_rules.len();
+    let infer_count = loaded.infer_rules.len();
+
     let mut rule_engine = RuleEngine::default();
-    rule_engine.hot_reload(rules).map_err(|error| {
+    rule_engine.hot_reload(loaded.tag_rules).map_err(|error| {
         BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?}: rule validation failed: {error}"
+            "knowledge.rules.rules_dir {dir:?}: tag-rule validation failed: {error}"
         ))
     })?;
+
+    infer_engine
+        .hot_reload(loaded.infer_rules)
+        .map_err(|error| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir {dir:?}: infer-rule validation failed: {error}"
+            ))
+        })?;
+
     eprintln!(
-        "tdw-backend: loaded {count} tag rule(s) from {dir:?} (rule-set v{})",
-        rule_engine.version()
+        "tdw-backend: loaded {tag_count} tag rule(s) and {infer_count} infer rule(s) \
+         from {dir:?} (tag-set v{}, infer-set v{})",
+        rule_engine.version(),
+        infer_engine.version()
     );
     Ok((rule_engine, infer_engine))
 }
@@ -1456,15 +1598,20 @@ fn rules_reload_tick() -> std::time::Duration {
 
 /// Spawn the rules hot-reload tick task (K-L1).
 ///
-/// On each tick, computes the `rules_dir` content hash and compares it to the
-/// last-seen hash. When the hash changes, loads the new rule set and calls
-/// `RuleEngine::hot_reload` + `InferEngine::hot_reload` atomically under their
-/// respective locks. An unstratifiable rule set is rejected — the OLD rule set
-/// stays active and the failure is logged loudly; the daemon never half-applies.
+/// On each tick, computes the `rules_dir` content hash (hashing file CONTENTS)
+/// and compares it to the last-seen hash. When changed, both `*.tag.json` and
+/// `*.infer.json` files are re-parsed. The new rule sets are staged and
+/// FULLY VALIDATED before either engine is mutated:
+///
+/// - If tag-rule validation fails → both engines stay UNCHANGED, loud log.
+/// - If infer-rule stratification fails → both engines stay UNCHANGED, loud log.
+/// - Only when BOTH validations pass are the locks acquired and both engines
+///   swapped atomically (rules-lock first, then infer-lock — consistent order).
 ///
 /// Returns `None` when `rules_dir` is absent — no task is spawned.
 fn spawn_rules_reload_tick(
     rules_cfg: &tdw_config::RulesConfig,
+    infer_cfg: &tdw_config::InferLimitsConfig,
     rules: Arc<Mutex<RuleEngine>>,
     infer: Arc<Mutex<InferEngine>>,
     runtime: Arc<KnowledgeRuntime>,
@@ -1476,6 +1623,18 @@ fn spawn_rules_reload_tick(
     }
     let tick = rules_reload_tick();
     let dir = std::path::PathBuf::from(rules_dir);
+    let rules_cfg = rules_cfg.clone();
+    // Read the infer limits once — they are config-static for the lifetime of
+    // the daemon process; hot-reload only swaps rule files, not limit config.
+    let infer_limits = RunLimits {
+        max_iterations: infer_cfg
+            .max_iterations
+            .unwrap_or(RunLimits::default().max_iterations),
+        max_derived: infer_cfg
+            .max_derived
+            .unwrap_or(RunLimits::default().max_derived),
+    };
+
     let handle = tokio::spawn(async move {
         // Seed with the current hash so the first tick only fires on a real change.
         let mut last_hash: Option<u64> = dir_content_hash(&dir);
@@ -1489,58 +1648,88 @@ fn spawn_rules_reload_tick(
             if now_hash == last_hash {
                 continue;
             }
-            // Directory content changed — reload.
-            let new_rules = match load_rules_from_dir(&dir) {
-                Ok(rules) => rules,
+
+            // --- Stage: parse both rule sets from disk. ---------------------
+            // Do this OUTSIDE the locks: parsing may be slow and we must not
+            // hold engine locks during I/O.
+            let loaded = match load_rules_from_dir(&dir, &rules_cfg) {
+                Ok(loaded) => loaded,
                 Err(error) => {
                     eprintln!(
-                        "tdw-backend: rules hot-reload from {dir:?} failed (I/O or parse): \
-                         {error} — keeping the current rule set active"
+                        "tdw-backend: rules hot-reload from {dir:?} failed (I/O/parse/limit): \
+                         {error} — keeping the CURRENT rule sets active"
                     );
                     continue;
                 }
             };
-            let count = new_rules.len();
-            // Acquire BOTH locks together: rule engine first, then infer.
-            // The lock order must be consistent everywhere to avoid deadlocks;
-            // this is the only site that holds both.
-            let mut rule_guard = rules.lock().await;
-            let mut infer_guard = infer.lock().await;
-            if let Err(error) = rule_guard.hot_reload(new_rules) {
+
+            // --- Stage: validate BOTH new rule sets before touching engines. -
+            // Pre-validate tag rules by running a throw-away RuleEngine.
+            let mut staged_rule_engine = RuleEngine::default();
+            if let Err(error) = staged_rule_engine.hot_reload(loaded.tag_rules.clone()) {
                 eprintln!(
                     "tdw-backend: rules hot-reload from {dir:?}: tag-rule validation \
-                     rejected (rule set UNCHANGED): {error}"
+                     rejected — BOTH engines stay UNCHANGED: {error}"
                 );
                 continue;
             }
-            // InferEngine::hot_reload validates stratification — an unstratifiable
-            // set is rejected, leaving the old rules active (atomic rollback).
-            // The tag-rule engine already advanced its version above; that is
-            // acceptable because tag-rule validation succeeded (the stratification
-            // constraint lives only in the infer layer).
-            if let Err(error) = infer_guard.hot_reload(Vec::new()) {
-                // Roll back the tag-rule engine to its prior version is not
-                // directly possible (hot_reload already mutated it). Log loudly —
-                // the operator must fix the stratification issue.
+
+            // Pre-validate infer rules with the correct limits in a throw-away engine.
+            let mut staged_infer_engine = InferEngine::with_limits(infer_limits);
+            if let Err(error) = staged_infer_engine.hot_reload(loaded.infer_rules.clone()) {
                 eprintln!(
-                    "tdw-backend: rules hot-reload from {dir:?}: inference stratification \
-                     check rejected (infer engine UNCHANGED, tag-rule engine advanced): {error}"
+                    "tdw-backend: rules hot-reload from {dir:?}: infer-rule stratification \
+                     rejected — BOTH engines stay UNCHANGED: {error}"
                 );
                 continue;
             }
-            let rules_v = rule_guard.version();
-            let infer_v = infer_guard.version();
-            drop(rule_guard);
-            drop(infer_guard);
-            // Update the version triple on the live KnowledgeRuntime so MCP
-            // search responses reflect the new rule-set version.
-            let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
-            runtime.update_versions(Some(rules_v), Some(infer_v));
-            last_hash = now_hash;
-            eprintln!(
-                "tdw-backend: rules hot-reload from {dir:?}: loaded {count} rule(s) \
-                 at {now} (rule-set v{rules_v}, infer v{infer_v})"
-            );
+
+            let tag_count = loaded.tag_rules.len();
+            let infer_count = loaded.infer_rules.len();
+
+            // --- Swap: both validations passed — acquire locks and replace. --
+            // Lock order: rules first, then infer. Must be consistent at every
+            // call site to avoid deadlocks.
+            {
+                let mut rule_guard = rules.lock().await;
+                let mut infer_guard = infer.lock().await;
+                // These hot_reload calls on the live engines cannot fail —
+                // we already validated the same rule sets above. If they do
+                // (internal engine bug), log loudly rather than panicking.
+                if let Err(error) = rule_guard.hot_reload(loaded.tag_rules) {
+                    eprintln!(
+                        "tdw-backend: rules hot-reload INTERNAL ERROR — tag engine rejected \
+                         pre-validated rules (bug): {error}"
+                    );
+                    continue;
+                }
+                if let Err(error) = infer_guard.hot_reload(loaded.infer_rules) {
+                    eprintln!(
+                        "tdw-backend: rules hot-reload INTERNAL ERROR — infer engine rejected \
+                         pre-validated rules (bug): {error}"
+                    );
+                    continue;
+                }
+                let rules_v = rule_guard.version();
+                let infer_v = infer_guard.version();
+                drop(infer_guard);
+                drop(rule_guard);
+
+                // Update the version triple on the live KnowledgeRuntime so MCP
+                // search responses reflect the new rule-set versions.
+                // NOTE: `update_versions` only stamps the version numbers that
+                // appear in search response metadata. These version numbers are
+                // NOT written as `valid_from` on any derived graph edge — edges
+                // carry the `now` date of the run that derived them, which is
+                // injected at `run_incremental` call time, not here.
+                runtime.update_versions(Some(rules_v), Some(infer_v));
+                last_hash = now_hash;
+                eprintln!(
+                    "tdw-backend: rules hot-reload from {dir:?}: loaded {tag_count} tag \
+                     rule(s) and {infer_count} infer rule(s) \
+                     (tag-set v{rules_v}, infer-set v{infer_v})"
+                );
+            }
         }
     });
     Some(handle)

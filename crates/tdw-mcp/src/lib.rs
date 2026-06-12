@@ -14,6 +14,7 @@ use tdw_app_client::{
 };
 use tdw_app_server::{DaemonEndpoint, DaemonTransport};
 use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
+use tdw_infer::InferEngine;
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
@@ -179,6 +180,15 @@ pub struct McpServer {
     /// daemon's `Backend` so the manifest and in-process state persist across
     /// MCP calls on the same process.
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
+    /// Optional forward-chaining inference engine (knowledge-system K-L1).
+    ///
+    /// When attached, the `tdw.kg.ingest` tool fires `run_incremental` after
+    /// each successful ingest batch so derived edges and propagated tags land
+    /// in the same request as the ingested documents. Also fires after
+    /// `tdw.kg.proposals` `materialize` so operator-approved proposals trigger
+    /// inference. `None` keeps inference off — safe to omit for read-only or
+    /// test deployments.
+    infer_engine: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
 }
 
 impl Default for McpServer {
@@ -196,6 +206,7 @@ impl Default for McpServer {
             knowledge: None,
             feedback_store: None,
             indexer: None,
+            infer_engine: None,
         }
     }
 }
@@ -221,6 +232,7 @@ impl McpServer {
             knowledge: None,
             feedback_store: None,
             indexer: None,
+            infer_engine: None,
         }
     }
 
@@ -306,6 +318,21 @@ impl McpServer {
     #[must_use]
     pub fn with_indexer(mut self, indexer: Arc<tokio::sync::Mutex<KnowledgeIndexer>>) -> Self {
         self.indexer = Some(indexer);
+        self
+    }
+
+    /// Attach the forward-chaining inference engine (knowledge-system K-L1).
+    ///
+    /// When attached, the `tdw.kg.ingest` tool fires `run_incremental` after
+    /// each successful ingest batch, and the `tdw.kg.proposals` `materialize`
+    /// action fires it after operator-approved proposals land in the graph.
+    /// The `graph` and `tags` channels are sourced from the attached
+    /// [`KnowledgeRuntime`] — both must be present for inference to fire.
+    /// `None` skips inference (safe for read-only or test deployments).
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_infer_engine(mut self, infer: Arc<tokio::sync::Mutex<InferEngine>>) -> Self {
+        self.infer_engine = Some(infer);
         self
     }
 
@@ -699,19 +726,28 @@ impl McpServer {
         }
         let runtime = self.knowledge.as_ref()?;
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_write_tools::execute(runtime, name, &arguments_object) {
-            Ok(ToolExecution { structured, .. }) => {
-                vec![success_message(id, &tool_result(&structured))]
-            }
-            Err(ToolFailure::Execution(message)) => {
-                vec![success_message(id, &tool_error_result(&message))]
-            }
-            Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                problem
-                    .with_id(id.clone())
-                    .with_data(json!({ "tool": name })),
-            )],
-        };
+        // Pass the optional infer engine so the `materialize` action can fire
+        // run_incremental after approved proposals land in the graph.
+        let infer_ctx = self.infer_engine.as_ref().and_then(|infer| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            let tags = rt.tags()?.clone();
+            Some((Arc::clone(infer), graph, tags))
+        });
+        let messages =
+            match knowledge_write_tools::execute(runtime, infer_ctx, name, &arguments_object) {
+                Ok(ToolExecution { structured, .. }) => {
+                    vec![success_message(id, &tool_result(&structured))]
+                }
+                Err(ToolFailure::Execution(message)) => {
+                    vec![success_message(id, &tool_error_result(&message))]
+                }
+                Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                    problem
+                        .with_id(id.clone())
+                        .with_data(json!({ "tool": name })),
+                )],
+            };
         Some(messages)
     }
 
@@ -734,6 +770,10 @@ impl McpServer {
     /// runtime or no indexer), otherwise the
     /// [`knowledge_ingest_tools::execute`] result. Returns `None` when `name`
     /// is not the ingest tool.
+    ///
+    /// When an inference engine AND a knowledge runtime with graph + tag engines
+    /// are attached, `run_incremental` is fired after each successful ingest batch
+    /// so derived edges and propagated tags land in the same MCP call.
     fn dispatch_knowledge_ingest_tool(
         &self,
         id: &Value,
@@ -749,8 +789,17 @@ impl McpServer {
                 &tool_error_result("knowledge ingest surface not attached"),
             )]);
         };
+        // Resolve graph + tags from the attached knowledge runtime (if any).
+        // Both must be present for inference to fire; missing either → skip inference.
+        let infer_ctx = self.infer_engine.as_ref().and_then(|infer| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            let tags = rt.tags()?.clone();
+            Some((Arc::clone(infer), graph, tags))
+        });
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_ingest_tools::execute(indexer, &arguments_object) {
+        let messages = match knowledge_ingest_tools::execute(indexer, infer_ctx, &arguments_object)
+        {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
@@ -1051,6 +1100,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
+    infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1066,6 +1116,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(idx) = indexer {
         base.with_indexer(idx)
+    } else {
+        base
+    };
+    let base = if let Some(infer_engine) = infer {
+        base.with_infer_engine(infer_engine)
     } else {
         base
     };
@@ -1577,6 +1632,7 @@ pub fn run_streamable_http_with_knowledge(
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
+    infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1613,6 +1669,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(idx) = indexer {
         base.with_indexer(idx)
+    } else {
+        base
+    };
+    let base = if let Some(infer_engine) = infer {
+        base.with_infer_engine(infer_engine)
     } else {
         base
     };

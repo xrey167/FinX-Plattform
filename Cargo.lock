@@ -5646,6 +5646,7 @@ dependencies = [
  "tdw-core",
  "tdw-embed-local",
  "tdw-endpoint-catalog",
+ "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
  "tdw-protocol",

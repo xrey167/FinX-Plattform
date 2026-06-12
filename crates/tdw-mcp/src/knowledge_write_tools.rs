@@ -18,13 +18,26 @@
 //! bridges through [`knowledge_tools::block_on`] — the same sync→async bridge
 //! the read tools use.
 
+use std::sync::Arc;
+
 use serde_json::{Map, Value, json};
+use tdw_core::GraphEngine;
+use tdw_infer::{ChangeSet, InferEngine};
 use tdw_knowledge::proposals::{ProposalKind, ProposalQueue};
 use tdw_knowledge::runtime::KnowledgeRuntime;
-use tdw_taxonomy::Adaptivity;
+use tdw_tags::TagEngine;
+use tdw_taxonomy::{Adaptivity, ValidationStatus};
+use tokio::sync::Mutex;
 
 use crate::knowledge_tools::block_on;
 use crate::{ToolDescriptor, ToolExecution, ToolFailure, structured, tool_with_annotations};
+
+/// Inference context for the `materialize` action: engine lock + graph + tags.
+type InferCtx = (
+    Arc<Mutex<InferEngine>>,
+    Arc<dyn GraphEngine>,
+    Arc<dyn TagEngine>,
+);
 
 /// The names this module owns.
 pub const TOOL_NAMES: &[&str] = &[
@@ -160,6 +173,7 @@ fn proposals_descriptor() -> ToolDescriptor {
 /// [`ToolFailure::Protocol`].
 pub fn execute(
     runtime: &KnowledgeRuntime,
+    infer_ctx: Option<InferCtx>,
     name: &str,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
@@ -167,7 +181,7 @@ pub fn execute(
         "tdw.tags.define" => submit_define(runtime, arguments),
         "tdw.tags.assign" => submit_assign(runtime, arguments),
         "tdw.kg.annotate" => submit_annotate(runtime, arguments),
-        "tdw.kg.proposals" => proposals(runtime, arguments),
+        "tdw.kg.proposals" => proposals(runtime, infer_ctx, arguments),
         other => Err(execution(format!("unknown knowledge write tool: {other}"))),
     }
 }
@@ -312,6 +326,7 @@ fn submit_annotate(
 #[allow(clippy::significant_drop_tightening)] // ProposalPage<'a> borrows from the guard; guard must outlive the page borrow
 fn proposals(
     runtime: &KnowledgeRuntime,
+    infer_ctx: Option<InferCtx>,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
     let (graph, tags, queue) = write_context(runtime)?;
@@ -362,18 +377,88 @@ fn proposals(
         }
         "materialize" => {
             require_operator(runtime, "materialize")?;
-            let report = block_on(async {
+            // Snapshot the kinds of all Ready+pending proposals BEFORE
+            // materializing so we can build the ChangeSet for inference.
+            // The queue lock is held across the snapshot + materialize to
+            // keep them atomic (no other writer can sneak in).
+            let (mat_report, ready_kinds) = block_on(async {
                 let mut queue = queue.lock().await;
-                queue.materialize_ready(graph, tags, &now).await
+                // Snapshot kinds of Ready proposals before they are consumed.
+                let ready_kinds: Vec<ProposalKind> = {
+                    let page = queue.list(None, Some(usize::MAX));
+                    page.proposals
+                        .iter()
+                        .filter(|p| p.status == ValidationStatus::Ready && p.is_pending())
+                        .map(|p| p.kind.clone())
+                        .collect()
+                };
+                let report = queue.materialize_ready(graph, tags, &now).await?;
+                Ok::<_, tdw_knowledge::KnowledgeError>((report, ready_kinds))
             })
             .map_err(|error| execution(error.to_string()))?;
-            let report = serde_json::to_value(&report).map_err(|error| serde_failure(&error))?;
+
+            // K-L1: fire incremental inference after materialization so derived
+            // edges land for any edge or tag proposal that just materialized.
+            // Best-effort: errors are logged, never surfaced — the proposals
+            // are already durable at this point.
+            if !mat_report.materialized.is_empty()
+                && let Some(ctx) = infer_ctx
+            {
+                fire_infer_after_materialize(ctx, &ready_kinds, &now);
+            }
+
+            let report =
+                serde_json::to_value(&mat_report).map_err(|error| serde_failure(&error))?;
             Ok(structured(json!({ "report": report })))
         }
         other => Err(execution(format!(
             "tdw.kg.proposals: unknown action {other:?} (expected list / approve / reject / \
              materialize)"
         ))),
+    }
+}
+
+/// Fire `run_incremental` after proposals materialize (K-L1).
+///
+/// Builds a [`ChangeSet`] from the edge-type and tag-id kinds of the proposals
+/// that were ready before materialization, then runs the engine. Errors are
+/// logged to stderr and never surfaced — the proposals are already durable.
+fn fire_infer_after_materialize(ctx: InferCtx, ready_kinds: &[ProposalKind], now: &str) {
+    let (infer, graph, tags) = ctx;
+    let mut changed = ChangeSet::default();
+    for kind in ready_kinds {
+        match kind {
+            ProposalKind::Edge { rel, .. } => {
+                changed.edge_types.insert(rel.clone());
+            }
+            ProposalKind::TagAssign { tag_id, .. } => {
+                changed.tags.insert(tag_id.clone());
+            }
+            _ => {}
+        }
+    }
+    if changed.edge_types.is_empty() && changed.tags.is_empty() {
+        return;
+    }
+    let result = block_on(async {
+        let mut guard = infer.lock().await;
+        guard.run_incremental(&graph, &tags, now, &changed).await
+    });
+    match result {
+        Ok(rep) if rep.derived_edges > 0 || rep.assigned_tags > 0 => {
+            eprintln!(
+                "tdw-mcp tdw.kg.proposals materialize: inference derived \
+                 {} edge(s), {} tag(s) in {} iteration(s) (rule-set v{})",
+                rep.derived_edges, rep.assigned_tags, rep.iterations, rep.version
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!(
+                "tdw-mcp tdw.kg.proposals materialize: inference failed \
+                 (proposals already durable): {error}"
+            );
+        }
     }
 }
 

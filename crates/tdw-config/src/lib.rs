@@ -194,15 +194,51 @@ pub struct KnowledgeConfig {
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
 ///
 /// `rules_dir` is optional — absent means "no rules loaded"; the daemon logs
-/// this loudly at boot so the operator knows inference is disabled. When set,
-/// the directory must exist and every `*.json` file in it must parse as a valid
-/// [`TagRule`] (knowledge-system B3 shape); a nonexistent directory or malformed
-/// file is a **hard `Init` error**, never a silent skip.
+/// this loudly at boot so the operator knows auto-tagging AND inference are
+/// disabled. When set, the directory must exist and every rule file must parse
+/// correctly; a nonexistent directory or malformed file is a **hard `Init`
+/// error**, never a silent skip.
+///
+/// # File-naming convention (K-L1)
+///
+/// Two distinct rule types live in separate files identified by their suffix:
+///
+/// - **`*.tag.json`** — [`tdw_tag_rules::TagRule`] array; drives auto-tagging
+///   via the `RuleEngine`. These run synchronously inside the indexer.
+/// - **`*.infer.json`** — [`tdw_infer::InferRule`] array (serde shapes
+///   `DeriveEdge` / `PropagateTag` as documented in `tdw-infer`); drives
+///   forward-chaining inference via the `InferEngine`. These fire after every
+///   ingest batch via `run_incremental`.
+///
+/// Files with any other extension (e.g. plain `.json`) are **ignored** so
+/// `README.json` or schema files don't accidentally parse as rules. Lexicographic
+/// sort order within each group is deterministic.
+///
+/// # Load limits
+///
+/// `max_files`, `max_file_size_kb`, and `max_total_rules` cap the total rules
+/// loaded at boot and on every hot-reload tick. Exceeding any limit is a **hard
+/// `Init` error** at boot and a loud log + keep-old on reload.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RulesConfig {
-    /// Directory containing `*.json` tag-rule files.  `None` disables auto-tagging.
+    /// Directory containing `*.tag.json` (tag rules) and `*.infer.json`
+    /// (inference rules) files.  `None` disables all rule-driven derivation.
     #[serde(default)]
     pub rules_dir: Option<String>,
+    /// Maximum number of rule files (tag + infer combined) permitted in the
+    /// directory. A hard `Init` error (or loud reload rejection) beyond this.
+    /// Default: 64.
+    #[serde(default)]
+    pub max_files: Option<usize>,
+    /// Maximum size of any single rule file in kilobytes. A hard `Init` error
+    /// (or loud reload rejection) if any file exceeds this. Default: 256 KiB.
+    #[serde(default)]
+    pub max_file_size_kb: Option<u64>,
+    /// Maximum total number of rules (tag + infer combined) loaded from the
+    /// directory. A hard `Init` error (or loud reload rejection) beyond this.
+    /// Default: 1 000.
+    #[serde(default)]
+    pub max_total_rules: Option<usize>,
 }
 
 /// Inference-engine run limits (knowledge-system K-L1).
@@ -533,6 +569,28 @@ fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Resul
     {
         return Err(ConfigError::Validation(
             "knowledge.rules.rules_dir must be a non-empty path when set".to_string(),
+        ));
+    }
+    // Load limits: when set, values must be greater than zero.
+    if let Some(max_files) = rules.max_files
+        && max_files == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_files must be greater than 0 when set".to_string(),
+        ));
+    }
+    if let Some(max_kb) = rules.max_file_size_kb
+        && max_kb == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_file_size_kb must be greater than 0 when set".to_string(),
+        ));
+    }
+    if let Some(max_total) = rules.max_total_rules
+        && max_total == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_total_rules must be greater than 0 when set".to_string(),
         ));
     }
     // Infer limits: when set, values must be greater than zero.
