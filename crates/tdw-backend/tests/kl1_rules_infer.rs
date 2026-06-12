@@ -2,10 +2,10 @@
 //!
 //! Ten gates (all offline, no Docker/network, deterministic):
 //!
-//! 1. **DeriveEdge e2e** — ingest a doc, seed a base graph edge matching a
+//! 1. **`DeriveEdge` e2e** — ingest a doc, seed a base graph edge matching a
 //!    `DeriveEdge` rule, fire inference, assert the derived edge is in the graph
 //!    with `Provenance::Rule` and the rule's `rule_id`.
-//! 2. **PropagateTag e2e** — seed a tag on an entity, fire inference with a
+//! 2. **`PropagateTag` e2e** — seed a tag on an entity, fire inference with a
 //!    `PropagateTag` rule, assert the tag is propagated to a connected entity.
 //! 3. **Hot-reload: changed rules applied** — swap in a new rule set via
 //!    `InferEngine::hot_reload`; verify the version increments and a subsequent
@@ -171,11 +171,12 @@ async fn derive_edge_rule_produces_derived_edge_with_rule_provenance() {
     // Fire inference with a ChangeSet that includes listed_on.
     {
         let infer = backend.infer_engine_handle();
-        let mut guard = infer.lock().await;
         let tags_engine: Arc<dyn tdw_tags::TagEngine> = Arc::new(InMemoryTagEngine::default());
         let mut changed = ChangeSet::default();
         changed.edge_types.insert("listed_on".to_string());
-        let report = guard
+        let report = infer
+            .lock()
+            .await
             .run_incremental(&graph, &tags_engine, now, &changed)
             .await
             .expect("run_incremental should succeed");
@@ -211,7 +212,7 @@ async fn derive_edge_rule_produces_derived_edge_with_rule_provenance() {
     );
 
     // Assert Provenance::Rule with our rule_id.
-    let edge = derived.unwrap();
+    let edge = derived.expect("derived edge must be present (asserted above)");
     assert!(
         matches!(&edge.provenance, Provenance::Rule { rule_id, .. } if rule_id == "r-trades-on"),
         "derived edge must carry Provenance::Rule {{ rule_id: \"r-trades-on\" }}, got {:?}",
@@ -370,8 +371,7 @@ async fn hot_reload_rejects_self_recursive_rule_keeping_old_ruleset() {
     );
     assert!(
         matches!(result, Err(InferError::InvalidRule { .. })),
-        "error must be InvalidRule, got {:?}",
-        result
+        "error must be InvalidRule, got {result:?}"
     );
 
     // Version must NOT have changed — old rule set survives.
@@ -440,8 +440,7 @@ async fn limits_exceeded_returns_error_not_silent_truncation() {
     );
     assert!(
         matches!(result, Err(InferError::DerivedLimitExceeded { .. })),
-        "error must be DerivedLimitExceeded, got {:?}",
-        result
+        "error must be DerivedLimitExceeded, got {result:?}"
     );
 }
 
@@ -470,11 +469,12 @@ async fn retract_removes_derived_edge_leaves_base_edge_intact() {
     // Fire inference to materialise the derived edge.
     {
         let infer = backend.infer_engine_handle();
-        let mut guard = infer.lock().await;
         let tags_engine: Arc<dyn tdw_tags::TagEngine> = Arc::new(InMemoryTagEngine::default());
         let mut changed = ChangeSet::default();
         changed.edge_types.insert("owns".to_string());
-        let report = guard
+        let report = infer
+            .lock()
+            .await
             .run_incremental(&graph, &tags_engine, now, &changed)
             .await
             .expect("run_incremental should succeed");
@@ -555,6 +555,7 @@ async fn retract_removes_derived_edge_leaves_base_edge_intact() {
 /// gate): `McpServer::dispatch_knowledge_ingest_tool` must call
 /// `run_incremental` after each ingest batch.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // integration test drives full MCP round-trip; extraction would obscure the gate
 async fn mcp_ingest_tool_fires_inference_and_derives_edge_with_rule_provenance() {
     let backend = Backend::in_memory_for_tests().await;
     let graph = backend.graph_engine();
@@ -691,7 +692,7 @@ async fn mcp_ingest_tool_fires_inference_and_derives_edge_with_rule_provenance()
         neighbors.iter().map(|(e, _)| e).collect::<Vec<_>>()
     );
 
-    let edge = derived.unwrap();
+    let edge = derived.expect("derived edge must be present (asserted above)");
     assert!(
         matches!(
             &edge.provenance,
@@ -771,6 +772,7 @@ async fn from_config_runtime_wiring_and_indexer_rule_slot() {
     let active_before = indexer_guard
         .index()
         .active_tags("probe:entity", "2026-01-01");
+    drop(indexer_guard); // release mutex before assertions
     assert!(
         !active_before.iter().any(|t| t == "probe:gate8"),
         "tag must not be active before any ingest"
@@ -784,12 +786,13 @@ async fn from_config_runtime_wiring_and_indexer_rule_slot() {
 // Gate 9: tdw.kg.why explains a derived edge via real JSON-RPC (R3)
 // ---------------------------------------------------------------------------
 
-/// After seeding a base edge and loading a DeriveEdge rule, drive `tdw.kg.ingest`
+/// After seeding a base edge and loading a `DeriveEdge` rule, drive `tdw.kg.ingest`
 /// through the MCP surface (as Gate 7 does) then call `tdw.kg.why` on the
 /// derived edge and assert that `chain[0].kind == "rule_derived"` with the
 /// correct `rule_id`. This proves the explain surface is honest about
 /// inference-derived provenance, not just the graph-neighbor check.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // integration test drives full MCP round-trip; extraction would obscure the gate
 async fn why_tool_explains_derived_edge_with_rule_provenance() {
     let backend = Backend::in_memory_for_tests().await;
     let graph = backend.graph_engine();

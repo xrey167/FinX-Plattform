@@ -1068,6 +1068,7 @@ impl Backend {
                 eprintln!("tdw-backend: knowledge retraction error for fact {fact_key:?}: {error}");
                 BackendError::Init(format!("knowledge retraction: {error}"))
             })?;
+        drop(infer); // release mutex before returning (significant_drop_tightening)
         if !report.unremovable_tags.is_empty() {
             eprintln!(
                 "tdw-backend: retraction of {fact_key:?} left {} unremovable derived tag(s) \
@@ -1383,10 +1384,36 @@ struct LoadedRules {
 ///
 /// Returns [`BackendError::Init`] on any limit violation, I/O failure, or
 /// parse failure. The error message always names the offending file.
+#[allow(clippy::too_many_lines)] // directory scan + per-file read + limit checks; splitting adds indirection without clarity
 fn load_rules_from_dir(
     dir: &std::path::Path,
     cfg: &tdw_config::RulesConfig,
 ) -> BackendResult<LoadedRules> {
+    /// Read and size-check a single rule file.
+    fn read_file(path: &std::path::Path, max_bytes: u64) -> BackendResult<String> {
+        let meta = std::fs::metadata(path).map_err(|e| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: cannot stat {}: {e}",
+                path.display()
+            ))
+        })?;
+        if meta.len() > max_bytes {
+            return Err(BackendError::Init(format!(
+                "knowledge.rules.rules_dir: file {} is {} KiB, limit is {} KiB \
+                 (set knowledge.rules.max_file_size_kb to raise)",
+                path.display(),
+                meta.len() / 1024,
+                max_bytes / 1024,
+            )));
+        }
+        std::fs::read_to_string(path).map_err(|e| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: cannot read {}: {e}",
+                path.display()
+            ))
+        })
+    }
+
     let max_files = cfg.max_files.unwrap_or(DEFAULT_MAX_FILES);
     let max_file_size_kb = cfg.max_file_size_kb.unwrap_or(DEFAULT_MAX_FILE_SIZE_KB);
     let max_total_rules = cfg.max_total_rules.unwrap_or(DEFAULT_MAX_TOTAL_RULES);
@@ -1398,7 +1425,8 @@ fn load_rules_from_dir(
 
     let read_dir = std::fs::read_dir(dir).map_err(|error| {
         BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?} cannot be read: {error}"
+            "knowledge.rules.rules_dir {} cannot be read: {error}",
+            dir.display()
         ))
     })?;
 
@@ -1427,7 +1455,8 @@ fn load_rules_from_dir(
 
     if !unreadable.is_empty() {
         return Err(BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?}: {} unreadable dir entr{}: {}",
+            "knowledge.rules.rules_dir {}: {} unreadable dir entr{}: {}",
+            dir.display(),
             unreadable.len(),
             if unreadable.len() == 1 { "y" } else { "ies" },
             unreadable.join(", ")
@@ -1440,41 +1469,21 @@ fn load_rules_from_dir(
     let total_files = tag_paths.len() + infer_paths.len();
     if total_files > max_files {
         return Err(BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?}: {total_files} rule files found, \
-             limit is {max_files} (set knowledge.rules.max_files to raise)"
+            "knowledge.rules.rules_dir {}: {total_files} rule files found, \
+             limit is {max_files} (set knowledge.rules.max_files to raise)",
+            dir.display()
         )));
     }
 
     let max_bytes = max_file_size_kb * 1024;
-
-    /// Read and size-check a single rule file.
-    fn read_file(path: &std::path::Path, max_bytes: u64) -> BackendResult<String> {
-        let meta = std::fs::metadata(path).map_err(|e| {
-            BackendError::Init(format!(
-                "knowledge.rules.rules_dir: cannot stat {path:?}: {e}"
-            ))
-        })?;
-        if meta.len() > max_bytes {
-            return Err(BackendError::Init(format!(
-                "knowledge.rules.rules_dir: file {path:?} is {} KiB, limit is {} KiB \
-                 (set knowledge.rules.max_file_size_kb to raise)",
-                meta.len() / 1024,
-                max_bytes / 1024,
-            )));
-        }
-        std::fs::read_to_string(path).map_err(|e| {
-            BackendError::Init(format!(
-                "knowledge.rules.rules_dir: cannot read {path:?}: {e}"
-            ))
-        })
-    }
 
     let mut tag_rules: Vec<TagRule> = Vec::new();
     for path in &tag_paths {
         let text = read_file(path, max_bytes)?;
         let file_rules: Vec<TagRule> = serde_json::from_str(&text).map_err(|error| {
             BackendError::Init(format!(
-                "knowledge.rules.rules_dir: malformed tag-rule file {path:?}: {error}"
+                "knowledge.rules.rules_dir: malformed tag-rule file {}: {error}",
+                path.display()
             ))
         })?;
         tag_rules.extend(file_rules);
@@ -1486,7 +1495,8 @@ fn load_rules_from_dir(
         let file_rules: Vec<tdw_infer::InferRule> =
             serde_json::from_str(&text).map_err(|error| {
                 BackendError::Init(format!(
-                    "knowledge.rules.rules_dir: malformed infer-rule file {path:?}: {error}"
+                    "knowledge.rules.rules_dir: malformed infer-rule file {}: {error}",
+                    path.display()
                 ))
             })?;
         infer_rules.extend(file_rules);
@@ -1495,8 +1505,9 @@ fn load_rules_from_dir(
     let total_rules = tag_rules.len() + infer_rules.len();
     if total_rules > max_total_rules {
         return Err(BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?}: {total_rules} total rules loaded, \
-             limit is {max_total_rules} (set knowledge.rules.max_total_rules to raise)"
+            "knowledge.rules.rules_dir {}: {total_rules} total rules loaded, \
+             limit is {max_total_rules} (set knowledge.rules.max_total_rules to raise)",
+            dir.display()
         )));
     }
 
@@ -1544,8 +1555,9 @@ fn dir_content_hash(dir: &std::path::Path) -> Option<u64> {
                 // still detect changes in other files. The actual parse error
                 // will surface in load_rules_from_dir on the next reload.
                 eprintln!(
-                    "tdw-backend: rules dir_content_hash: cannot read {path:?}: {error} \
-                     — this file is excluded from the change-detection hash"
+                    "tdw-backend: rules dir_content_hash: cannot read {}: {error} \
+                     — this file is excluded from the change-detection hash",
+                    path.display()
                 );
             }
         }
@@ -1570,10 +1582,10 @@ fn boot_load_rules(
     let limits = RunLimits {
         max_iterations: infer_cfg
             .max_iterations
-            .unwrap_or(RunLimits::default().max_iterations),
+            .unwrap_or_else(|| RunLimits::default().max_iterations),
         max_derived: infer_cfg
             .max_derived
-            .unwrap_or(RunLimits::default().max_derived),
+            .unwrap_or_else(|| RunLimits::default().max_derived),
     };
     let mut infer_engine = InferEngine::with_limits(limits);
 
@@ -1593,8 +1605,9 @@ fn boot_load_rules(
     let dir = std::path::Path::new(rules_dir);
     if !dir.exists() {
         return Err(BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?} does not exist — \
-             refusing to boot with a missing rules directory; create it or unset the config key"
+            "knowledge.rules.rules_dir {} does not exist — \
+             refusing to boot with a missing rules directory; create it or unset the config key",
+            dir.display()
         )));
     }
 
@@ -1605,7 +1618,8 @@ fn boot_load_rules(
     let mut rule_engine = RuleEngine::default();
     rule_engine.hot_reload(loaded.tag_rules).map_err(|error| {
         BackendError::Init(format!(
-            "knowledge.rules.rules_dir {dir:?}: tag-rule validation failed: {error}"
+            "knowledge.rules.rules_dir {}: tag-rule validation failed: {error}",
+            dir.display()
         ))
     })?;
 
@@ -1613,13 +1627,15 @@ fn boot_load_rules(
         .hot_reload(loaded.infer_rules)
         .map_err(|error| {
             BackendError::Init(format!(
-                "knowledge.rules.rules_dir {dir:?}: infer-rule validation failed: {error}"
+                "knowledge.rules.rules_dir {}: infer-rule validation failed: {error}",
+                dir.display()
             ))
         })?;
 
     eprintln!(
         "tdw-backend: loaded {tag_count} tag rule(s) and {infer_count} infer rule(s) \
-         from {dir:?} (tag-set v{}, infer-set v{})",
+         from {} (tag-set v{}, infer-set v{})",
+        dir.display(),
         rule_engine.version(),
         infer_engine.version()
     );
@@ -1652,6 +1668,7 @@ fn rules_reload_tick() -> std::time::Duration {
 ///   swapped atomically (rules-lock first, then infer-lock — consistent order).
 ///
 /// Returns `None` when `rules_dir` is absent — no task is spawned.
+#[allow(clippy::too_many_lines)] // async hot-reload tick: validate → swap both engines atomically; splitting loses the invariant commentary
 fn spawn_rules_reload_tick(
     rules_cfg: &tdw_config::RulesConfig,
     infer_cfg: &tdw_config::InferLimitsConfig,
@@ -1673,10 +1690,10 @@ fn spawn_rules_reload_tick(
     let infer_limits = RunLimits {
         max_iterations: infer_cfg
             .max_iterations
-            .unwrap_or(RunLimits::default().max_iterations),
+            .unwrap_or_else(|| RunLimits::default().max_iterations),
         max_derived: infer_cfg
             .max_derived
-            .unwrap_or(RunLimits::default().max_derived),
+            .unwrap_or_else(|| RunLimits::default().max_derived),
     };
 
     let handle = tokio::spawn(async move {
@@ -1700,8 +1717,9 @@ fn spawn_rules_reload_tick(
                 Ok(loaded) => loaded,
                 Err(error) => {
                     eprintln!(
-                        "tdw-backend: rules hot-reload from {dir:?} failed (I/O/parse/limit): \
-                         {error} — keeping the CURRENT rule sets active"
+                        "tdw-backend: rules hot-reload from {} failed (I/O/parse/limit): \
+                         {error} — keeping the CURRENT rule sets active",
+                        dir.display()
                     );
                     continue;
                 }
@@ -1712,8 +1730,9 @@ fn spawn_rules_reload_tick(
             let mut staged_rule_engine = RuleEngine::default();
             if let Err(error) = staged_rule_engine.hot_reload(loaded.tag_rules.clone()) {
                 eprintln!(
-                    "tdw-backend: rules hot-reload from {dir:?}: tag-rule validation \
-                     rejected — BOTH engines stay UNCHANGED: {error}"
+                    "tdw-backend: rules hot-reload from {}: tag-rule validation \
+                     rejected — BOTH engines stay UNCHANGED: {error}",
+                    dir.display()
                 );
                 continue;
             }
@@ -1722,8 +1741,9 @@ fn spawn_rules_reload_tick(
             let mut staged_infer_engine = InferEngine::with_limits(infer_limits);
             if let Err(error) = staged_infer_engine.hot_reload(loaded.infer_rules.clone()) {
                 eprintln!(
-                    "tdw-backend: rules hot-reload from {dir:?}: infer-rule stratification \
-                     rejected — BOTH engines stay UNCHANGED: {error}"
+                    "tdw-backend: rules hot-reload from {}: infer-rule stratification \
+                     rejected — BOTH engines stay UNCHANGED: {error}",
+                    dir.display()
                 );
                 continue;
             }
@@ -1787,9 +1807,10 @@ fn spawn_rules_reload_tick(
                 runtime.update_versions(Some(rules_v), Some(infer_v));
                 last_hash = now_hash;
                 eprintln!(
-                    "tdw-backend: rules hot-reload from {dir:?}: loaded {tag_count} tag \
+                    "tdw-backend: rules hot-reload from {}: loaded {tag_count} tag \
                      rule(s) and {infer_count} infer rule(s) \
-                     (tag-set v{rules_v}, infer-set v{infer_v})"
+                     (tag-set v{rules_v}, infer-set v{infer_v})",
+                    dir.display()
                 );
             }
         }
