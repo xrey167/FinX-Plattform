@@ -922,13 +922,6 @@ impl KnowledgeRuntime {
     }
 }
 
-/// Collect thesis count + top-supported/top-contradicted ids from the graph.
-///
-/// Uses a bounded page walk over all Finding nodes, filtering for
-/// `props.kind_hint = "thesis"`.  For each thesis found, counts its inbound
-/// `supports` / `contradicts` edges (one `neighbors` call each, bounded at
-/// [`THESIS_STATUS_PAGE_CAP`]).  Best-effort: if the graph probe fails the
-/// function returns a zero-count status rather than propagating the error.
 /// Rank evidence (supports/contradicts) across a set of thesis ids; returns
 /// (`most_supported_id`, `most_contradicted_id`).
 async fn rank_thesis_evidence(
@@ -984,6 +977,11 @@ async fn rank_thesis_evidence(
     )
 }
 
+/// Collect thesis count + top-supported/top-contradicted ids from the graph.
+///
+/// Uses a bounded page walk over edges, filtering candidate nodes for
+/// `props.kind_hint = "thesis"`.  Best-effort: graph probe failures return a
+/// zero-count status rather than propagating the error.
 async fn collect_theses_status(graph: &std::sync::Arc<dyn GraphEngine>) -> KgThesesStatus {
     // Page walk: collect up to THESIS_STATUS_PAGE_CAP node ids from the edge list.
     let mut thesis_ids: Vec<(String, String)> = Vec::new(); // (id, title)
@@ -1003,7 +1001,7 @@ async fn collect_theses_status(graph: &std::sync::Arc<dyn GraphEngine>) -> KgThe
                 if thesis_ids.iter().any(|(id, _)| id == candidate_id) {
                     continue;
                 }
-                if thesis_ids.len() + offset >= THESIS_STATUS_PAGE_CAP {
+                if thesis_ids.len() >= THESIS_STATUS_PAGE_CAP {
                     capped = true;
                     break 'outer;
                 }
@@ -1052,13 +1050,7 @@ async fn collect_theses_status(graph: &std::sync::Arc<dyn GraphEngine>) -> KgThe
         count,
         most_supported_id,
         most_contradicted_id,
-        scan_note: if capped {
-            Some(format!(
-                "thesis scan bounded at {THESIS_STATUS_PAGE_CAP} nodes; true count may be higher"
-            ))
-        } else {
-            None
-        },
+        scan_note,
     }
 }
 

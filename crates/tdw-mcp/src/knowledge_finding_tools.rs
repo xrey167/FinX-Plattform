@@ -333,7 +333,10 @@ fn thesis_health_descriptor() -> ToolDescriptor {
          Scans the graph for `supports` and `contradicts` edges pointing TO the thesis id, \
          counting only edges whose `valid_from ≤ as_of` (temporal honesty — no future-evidence \
          leakage). Returns:\n\
-         * `supports_count` / `contradicts_count` — exact counts at `as_of`.\n\
+         * `supports_count` / `contradicts_count` — counts of active evidence edges at `as_of`. \
+           Exact when `counts_truncated=false`; a lower bound when `counts_truncated=true`.\n\
+         * `counts_truncated` — `true` when the active-edge scan exceeded the 1 024-edge cap; \
+           inactive (future/tombstoned) edges are skipped before the cap is tested.\n\
          * `evidence_freshness_days` — age in days of the newest evidence edge at `as_of` \
            (`null` when no evidence exists).\n\
          * `balance` — `\"bullish\"` (supports > contradicts), `\"bearish\"` (contradicts > \
@@ -341,8 +344,7 @@ fn thesis_health_descriptor() -> ToolDescriptor {
          * `horizon_date` — from the thesis node's props (may be absent).\n\
          * `horizon_overdue` — true when `as_of ≥ horizon_date` and no clear majority.\n\
          \n\
-         Health is computed deterministically from the graph at read time (bounded scan of \
-         inbound `supports`/`contradicts` edges, capped at 1 024). Read-only, idempotent. \
+         Health is computed deterministically from the graph at read time. Read-only, idempotent. \
          Requires graph engine.",
         json!({
             "type": "object",
@@ -449,10 +451,24 @@ fn capture_finding(
         validate_url(url)?;
     }
 
-    // --- stable finding id from title hash ---
-    let id_hash = fnv1a64(title.as_bytes());
-    let finding_id = format!("finding:{id_hash:016x}");
-    let document_id = format!("finding-doc:{id_hash:016x}");
+    // --- stable finding id from title hash (or caller-supplied override) ---
+    // `_id_override` is an internal key used by capture_thesis to inject a
+    // namespace-isolated id without going through a separate upsert pass.
+    // It is not exposed in the tool descriptor and is never accepted from
+    // external callers.
+    let (finding_id, document_id) = optional_str(arguments, "_id_override").map_or_else(
+        || {
+            let id_hash = fnv1a64(title.as_bytes());
+            (
+                format!("finding:{id_hash:016x}"),
+                format!("finding-doc:{id_hash:016x}"),
+            )
+        },
+        |ov| {
+            let hex = ov.strip_prefix("finding:").unwrap_or(ov);
+            (format!("finding:{hex}"), format!("finding-doc:{hex}"))
+        },
+    );
 
     let as_of_ts = tdw_tags::date_to_timestamp(&as_of);
 
@@ -480,6 +496,16 @@ fn capture_finding(
     }
     if !tags.is_empty() {
         props["tags"] = json!(tags);
+    }
+    // Optional thesis-specific props injected by capture_thesis (single-shot write).
+    if let Some(kind_hint) = optional_str(arguments, "kind_hint") {
+        props["kind_hint"] = json!(kind_hint);
+    }
+    if let Some(horizon_date) = optional_str(arguments, "horizon_date") {
+        props["horizon_date"] = json!(horizon_date);
+    }
+    if let Some(thesis_user_id) = optional_str(arguments, "thesis_user_id") {
+        props["thesis_user_id"] = json!(thesis_user_id);
     }
 
     // Evidence pin: store immutably with the snippet content hash.
@@ -514,7 +540,7 @@ fn capture_finding(
         let document_node = GraphNode {
             id: document_id.clone(),
             kind: EntityKind::Document,
-            label: format!("finding-doc:{id_hash:016x}"),
+            label: document_id.clone(),
             aliases: Vec::new(),
             props: json!({
                 "as_of": &as_of_ts,
@@ -565,8 +591,12 @@ fn capture_finding(
 
     // --- index through KnowledgeIndexer for hybrid search ---
     if let Some(indexer) = runtime.finding_indexer() {
+        let doc_id_hex = finding_id
+            .strip_prefix("finding:")
+            .unwrap_or(&finding_id)
+            .to_string();
         let doc = tdw_knowledge::KnowledgeDocument {
-            id: format!("{id_hash:016x}"),
+            id: doc_id_hex,
             body: search_body,
             entity: Entity {
                 entity_id: finding_id.clone(),
@@ -714,25 +744,47 @@ fn link_finding(
 /// * `horizon_date` (optional YYYY-MM-DD) is stored in `props.horizon_date`.
 /// * `props.kind_hint = "thesis"` is always written so health and why tools
 ///   can identify the node as a thesis without a taxonomy variant.
+///
+/// # Id namespace isolation
+///
+/// The id hash is computed over `"thesis:{statement}"` (domain-prefix on the
+/// raw FNV-1a input bytes).  A plain finding whose title happens to equal the
+/// thesis statement hashes the title directly and therefore produces a different
+/// `finding:…` id — the two namespaces cannot collide.
+///
+/// # Single-shot write
+///
+/// `kind_hint`, `horizon_date`, and `thesis_user_id` are injected into the
+/// synthetic args map passed to `capture_finding`, which now writes them in one
+/// graph upsert.  No read-modify-upsert is needed.
 fn capture_thesis(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
     now: &str,
 ) -> Result<ToolExecution, ToolFailure> {
-    // Rewrite the incoming arguments to use `title` = falsifiable_statement
-    // so the shared `capture_finding` path handles the rest uniformly.
+    // Validate the falsifiable_statement (same 256-char cap as a finding title).
     let statement = require_str(arguments, "falsifiable_statement")?;
     validate_title(statement)?;
 
-    // Horizon date — optional, validated before we build the rewritten map.
-    let horizon_date = optional_str(arguments, "horizon_date");
-    if let Some(h) = horizon_date {
+    // Horizon date — validated before building the synthetic map.
+    let horizon_date = optional_str(arguments, "horizon_date").map(ToString::to_string);
+    if let Some(h) = &horizon_date {
         validate_date(h)?;
     }
 
+    let user_id = require_user_id(runtime)?;
+
+    // Compute a domain-prefixed id hash so the thesis id namespace is disjoint
+    // from plain findings (which hash the title directly).  A thesis and a
+    // finding with the same text therefore get different `finding:…` ids.
+    let thesis_id_hex = format!("{:016x}", fnv1a64(format!("thesis:{statement}").as_bytes()));
+
     // Build a synthetic argument map that capture_finding accepts.
+    // Pass the original statement as the title (no control characters).
+    // Inject the pre-computed hex so capture_finding skips its own hash.
     let mut synthetic: Map<String, Value> = Map::new();
     synthetic.insert("title".to_string(), Value::String(statement.to_string()));
+    synthetic.insert("_id_override".to_string(), Value::String(thesis_id_hex));
     if let Some(body) = optional_str(arguments, "body") {
         synthetic.insert("body".to_string(), Value::String(body.to_string()));
     }
@@ -745,11 +797,19 @@ fn capture_thesis(
     if let Some(as_of) = optional_str(arguments, "as_of") {
         synthetic.insert("as_of".to_string(), Value::String(as_of.to_string()));
     }
+    // Inject thesis-specific props — capture_finding writes them in the same upsert.
+    synthetic.insert("kind_hint".to_string(), Value::String("thesis".to_string()));
+    if let Some(h) = &horizon_date {
+        synthetic.insert("horizon_date".to_string(), Value::String(h.clone()));
+    }
+    synthetic.insert(
+        "thesis_user_id".to_string(),
+        Value::String(user_id.to_string()),
+    );
 
-    // Run the shared capture path (validates + writes the Finding node).
+    // Run the shared capture path (validates + writes the Finding node in one shot).
     let result = capture_finding(runtime, &synthetic, now)?;
 
-    // Extract the finding_id so we can patch the node with thesis-specific props.
     let finding_id = result
         .structured
         .get("finding_id")
@@ -757,34 +817,9 @@ fn capture_thesis(
         .ok_or_else(|| execution("thesis: capture_finding returned no finding_id".to_string()))?
         .to_string();
 
-    let graph = require_graph(runtime)?;
-    let user_id = require_user_id(runtime)?;
-
     let as_of_str =
         optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
     let as_of_ts = tdw_tags::date_to_timestamp(&as_of_str);
-
-    // Patch the existing node to add kind_hint and horizon_date.
-    block_on(async {
-        let maybe_node = graph
-            .node(&finding_id)
-            .await
-            .map_err(|e| execution(e.to_string()))?;
-        let mut node = maybe_node.ok_or_else(|| {
-            execution(format!("thesis node {finding_id:?} vanished after insert"))
-        })?;
-
-        node.props["kind_hint"] = json!("thesis");
-        if let Some(h) = horizon_date {
-            node.props["horizon_date"] = json!(h);
-        }
-        node.props["thesis_user_id"] = json!(user_id);
-
-        graph
-            .upsert_nodes(vec![node])
-            .await
-            .map_err(|e| execution(e.to_string()))
-    })?;
 
     Ok(structured(json!({
         "thesis_id": finding_id,
@@ -859,9 +894,10 @@ fn thesis_health(
         .map(ToString::to_string);
 
     // Collect inbound supports/contradicts edges to this thesis.
-    // We use a paginated scan of ALL inbound edges via `neighbors` (Direction::In)
-    // and filter to the two relevant rels, bounded by THESIS_HEALTH_EDGE_CAP.
-    let (supports_count, contradicts_count, newest_active_ts) =
+    // active_at filter is applied BEFORE the cap — inactive edges never consume
+    // a cap slot, so counts are exact for theses with ≤ THESIS_HEALTH_EDGE_CAP
+    // active evidence edges.
+    let (supports_count, contradicts_count, newest_active_ts, counts_truncated) =
         block_on(async { compute_thesis_health_counts(graph, thesis_id, &as_of_ts).await })?;
 
     // Evidence freshness in days: age of newest evidence edge at as_of.
@@ -881,33 +917,54 @@ fn thesis_health(
         .as_deref()
         .is_some_and(|h| as_of >= h && balance == "neutral");
 
+    // Honest truncation note — never silently under-count.
+    let counts_note: Option<&str> = if counts_truncated {
+        Some("active edge count exceeded scan cap; supports/contradicts counts are a lower bound")
+    } else {
+        None
+    };
+
     Ok(structured(json!({
         "thesis_id": thesis_id,
         "falsifiable_statement": node.props.get("title").cloned().unwrap_or(Value::Null),
         "as_of": as_of,
         "supports_count": supports_count,
         "contradicts_count": contradicts_count,
+        "counts_truncated": counts_truncated,
+        "counts_note": counts_note,
         "evidence_freshness_days": evidence_freshness_days,
         "balance": balance,
         "horizon_date": horizon_date,
         "horizon_overdue": horizon_overdue,
         "edge_scan_cap": THESIS_HEALTH_EDGE_CAP,
         "health_note": "Computed deterministically from graph at read time; \
-                        only edges active at as_of are counted (temporal honesty)."
+                        only edges active at as_of are counted (temporal honesty). \
+                        Inactive edges do not consume the scan cap."
     })))
 }
 
 /// Scan inbound `supports` and `contradicts` edges to `thesis_id` that are
 /// active at `as_of_ts`, bounded by [`THESIS_HEALTH_EDGE_CAP`].
 ///
-/// Returns `(supports_count, contradicts_count, newest_valid_from)` where
-/// `newest_valid_from` is the `valid_from` timestamp of the most recently
-/// created active evidence edge.
+/// Returns `(supports_count, contradicts_count, newest_valid_from, truncated)`
+/// where:
+/// * `newest_valid_from` is the `valid_from` timestamp of the most recently
+///   created active evidence edge.
+/// * `truncated` is `true` when more than [`THESIS_HEALTH_EDGE_CAP`] active
+///   edges exist and the scan was stopped early.  The caller MUST surface this
+///   in the response so the user knows the counts are a lower bound.
+///
+/// # Ordering guarantee
+///
+/// The `active_at` predicate is applied BEFORE the cap is tested.  Inactive
+/// (future or tombstoned) edges do not consume cap slots — only edges that
+/// actually count at `as_of_ts` do.  This prevents under-counting on theses
+/// with many historically-closed evidence edges.
 async fn compute_thesis_health_counts(
     graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
     thesis_id: &str,
     as_of_ts: &str,
-) -> Result<(usize, usize, Option<String>), ToolFailure> {
+) -> Result<(usize, usize, Option<String>, bool), ToolFailure> {
     use tdw_core::{Direction, TraversalFilter, active_at};
 
     let filter = TraversalFilter {
@@ -926,13 +983,11 @@ async fn compute_thesis_health_counts(
     let mut supports_count: usize = 0;
     let mut contradicts_count: usize = 0;
     let mut newest_active_ts: Option<String> = None;
+    let mut active_scanned: usize = 0;
+    let mut truncated = false;
 
-    for (i, (edge, _node)) in neighbors.iter().enumerate() {
-        if i >= THESIS_HEALTH_EDGE_CAP {
-            break;
-        }
-
-        // Temporal honesty: only count edges active at as_of_ts.
+    for (edge, _node) in &neighbors {
+        // Temporal honesty: inactive edges are skipped and do NOT consume a cap slot.
         if !active_at(
             edge.valid_from.as_deref(),
             edge.valid_to.as_deref(),
@@ -940,6 +995,13 @@ async fn compute_thesis_health_counts(
         ) {
             continue;
         }
+
+        // Cap is applied only to active edges — ensures counts are exact up to the cap.
+        if active_scanned >= THESIS_HEALTH_EDGE_CAP {
+            truncated = true;
+            break;
+        }
+        active_scanned += 1;
 
         match edge.rel.as_str() {
             "supports" => supports_count += 1,
@@ -957,7 +1019,12 @@ async fn compute_thesis_health_counts(
         }
     }
 
-    Ok((supports_count, contradicts_count, newest_active_ts))
+    Ok((
+        supports_count,
+        contradicts_count,
+        newest_active_ts,
+        truncated,
+    ))
 }
 
 /// Approximate age in days between two UTC timestamps (lexicographic comparison,

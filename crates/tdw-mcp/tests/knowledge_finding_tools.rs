@@ -10,10 +10,10 @@
 //! entity excluded from auto-links → descriptors absent without required
 //! attachment.
 //!
-//! K-X7 contract: thesis capture → kind_hint stored → supports/contradicts
-//! links → health math (hand-computed) → as_of leakage regression → why on
+//! K-X7 contract: thesis capture → `kind_hint` stored → `supports`/`contradicts`
+//! links → health math (hand-computed) → `as_of` leakage regression → why on
 //! thesis walks evidence edges → status line count → non-thesis rejected by
-//! thesis_health.
+//! `thesis_health`.
 
 #![deny(clippy::pedantic, clippy::nursery)]
 
@@ -686,8 +686,8 @@ fn why_on_finding_without_evidence_emits_provenance_not_evidence() {
 
 // ── K-X7 Thesis tests ─────────────────────────────────────────────────────────
 
-/// Thesis capture: response contains thesis_id, kind_hint="thesis", and
-/// falsifiable_statement round-trips correctly (K-X7 capture e2e).
+/// Thesis capture: response contains `thesis_id`, `kind_hint="thesis"`, and
+/// `falsifiable_statement` round-trips correctly (K-X7 capture e2e).
 #[test]
 fn thesis_capture_e2e() {
     let (mut server, _graph) = server_with_findings();
@@ -721,7 +721,7 @@ fn thesis_capture_e2e() {
     assert_eq!(sc["horizon_date"], "2027-06-12");
 }
 
-/// Thesis capture rejects an empty falsifiable_statement.
+/// Thesis capture rejects an empty `falsifiable_statement`.
 #[test]
 fn thesis_capture_rejects_empty_statement() {
     let (mut server, _graph) = server_with_findings();
@@ -737,7 +737,7 @@ fn thesis_capture_rejects_empty_statement() {
     );
 }
 
-/// Thesis capture rejects an invalid horizon_date.
+/// Thesis capture rejects an invalid `horizon_date`.
 #[test]
 fn thesis_capture_rejects_bad_horizon_date() {
     let (mut server, _graph) = server_with_findings();
@@ -760,11 +760,11 @@ fn thesis_capture_rejects_bad_horizon_date() {
 ///
 /// Graph state (set up before the health call):
 ///   finding:f1 --supports-->    thesis T
-///   finding:f2 --supports-->    thesis T    (valid_from=NOW)
-///   finding:f3 --contradicts--> thesis T    (valid_from=NOW)
+///   finding:f2 --supports-->    thesis T    (`valid_from=NOW`)
+///   finding:f3 --contradicts--> thesis T    (`valid_from=NOW`)
 ///
-/// Expected health at as_of=NOW:
-///   supports_count=2, contradicts_count=1, balance="bullish"
+/// Expected health at `as_of=NOW`:
+///   `supports_count=2`, `contradicts_count=1`, `balance="bullish"`
 #[test]
 fn thesis_health_math_hand_computed() {
     let (mut server, graph) = server_with_findings();
@@ -884,7 +884,7 @@ fn thesis_health_math_hand_computed() {
     let _ = graph;
 }
 
-/// As-of leakage regression: evidence edges created AFTER the query as_of
+/// `as_of` leakage regression: evidence edges created AFTER the query `as_of`
 /// must NOT be counted.
 ///
 /// Setup: thesis captured on 2026-06-12; we query health at 2026-01-01
@@ -958,7 +958,7 @@ fn thesis_health_as_of_leakage_regression() {
 }
 
 /// `tdw.kg.why` on a thesis node walks the thesis's evidence edges and
-/// includes the user_provenance chain step (K-X7 why-integration).
+/// includes the `user_provenance` chain step (K-X7 why-integration).
 #[test]
 fn why_on_thesis_includes_provenance_step() {
     let (mut server, _graph) = server_with_findings();
@@ -995,23 +995,36 @@ fn why_on_thesis_includes_provenance_step() {
 }
 
 /// `tdw.kg.status` theses field counts thesis nodes correctly (K-X7 status line).
+///
+/// Seeded population: 3 theses, 0 plain findings in this server instance.
+/// The test asserts absolute counts from a controlled population so that cap
+/// bugs cannot be masked by symmetric truncation on both before/after reads.
 #[test]
 fn status_line_counts_theses() {
+    // Fresh server — no pre-existing theses.
     let (mut server, _graph) = server_with_findings();
 
-    // Before any thesis, count must be 0 (or None if no graph).
+    // Confirm the graph is attached and the theses field is present before seeding.
     let status_before = call(&mut server, "tdw.kg.status", &json!({}));
     assert_eq!(status_before["result"]["isError"], false);
-    let sc_before = &status_before["result"]["structuredContent"];
-    // theses field should exist (graph is attached).
-    let theses_before = &sc_before["theses"];
-    let count_before = theses_before["count"].as_u64().unwrap_or(0);
+    let theses_before = &status_before["result"]["structuredContent"]["theses"];
+    assert!(
+        !theses_before.is_null(),
+        "theses field must be present when graph is attached: {theses_before}"
+    );
+    assert_eq!(
+        theses_before["count"].as_u64().unwrap_or(0),
+        0,
+        "fresh server must have 0 theses before seeding"
+    );
 
-    // Capture two theses.
-    for stmt in &[
-        "Thesis Alpha for status test",
-        "Thesis Beta for status test",
-    ] {
+    // Capture exactly 3 theses.
+    let stmts = [
+        "Status count thesis one",
+        "Status count thesis two",
+        "Status count thesis three",
+    ];
+    for stmt in &stmts {
         let r = call(
             &mut server,
             "tdw.kg.thesis",
@@ -1022,13 +1035,16 @@ fn status_line_counts_theses() {
 
     let status_after = call(&mut server, "tdw.kg.status", &json!({}));
     assert_eq!(status_after["result"]["isError"], false);
-    let sc_after = &status_after["result"]["structuredContent"];
-    let count_after = sc_after["theses"]["count"].as_u64().unwrap_or(0);
-
+    let theses_after = &status_after["result"]["structuredContent"]["theses"];
     assert_eq!(
-        count_after,
-        count_before + 2,
-        "status theses.count should increase by 2 after capturing two theses: before={count_before} after={count_after}"
+        theses_after["count"].as_u64().unwrap_or(0),
+        3,
+        "status theses.count must be exactly 3 after seeding 3 theses: {theses_after}"
+    );
+    // scan_note must be absent for a 3-thesis population (well under the cap).
+    assert!(
+        theses_after["scan_note"].is_null(),
+        "scan_note must be absent for small population: {theses_after}"
     );
 }
 
@@ -1125,4 +1141,80 @@ fn thesis_descriptors_present_with_full_attachment() {
         names.contains(&"tdw.kg.thesis_health"),
         "tdw.kg.thesis_health must appear in tools/list: {names:?}"
     );
+}
+
+/// Cap-before-filter regression: inactive edges must NOT consume a cap slot.
+///
+/// Setup: one thesis with N supporting edges at NOW and N contradicting edges
+/// stamped in the future (`active_at=false` at `as_of=NOW`).  We use N=5 for each
+/// side.  The total inbound edge count is 10; the active count is 5.
+///
+/// Correct behaviour: `supports_count=5`, `contradicts_count=0`,
+/// `counts_truncated=false` (5 active edges < cap).
+///
+/// Buggy cap-before-filter behaviour: the 10 raw edges hit the internal
+/// budget first, cutting off active edges and under-counting.  This test
+/// catches that regression at small scale — the logic it exercises is the
+/// same as the 1 024-edge scenario.
+#[test]
+fn thesis_health_cap_does_not_penalise_inactive_edges() {
+    let (mut server, _graph) = server_with_findings();
+
+    // Capture a thesis.
+    let thesis_resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Cap boundary regression thesis",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(thesis_resp["result"]["isError"], false);
+    let thesis_id = thesis_resp["result"]["structuredContent"]["thesis_id"]
+        .as_str()
+        .expect("thesis_id")
+        .to_string();
+
+    // Create 5 support findings at NOW (active at as_of=NOW).
+    for i in 0..5usize {
+        let f = call(
+            &mut server,
+            "tdw.kg.finding",
+            &json!({ "title": format!("Cap-test support finding {i}"), "as_of": NOW }),
+        );
+        assert_eq!(f["result"]["isError"], false);
+        let fid = f["result"]["structuredContent"]["finding_id"]
+            .as_str()
+            .expect("fid")
+            .to_string();
+        let lnk = call(
+            &mut server,
+            "tdw.kg.link",
+            &json!({ "from_finding_id": fid, "to": thesis_id, "rel": "supports" }),
+        );
+        assert_eq!(lnk["result"]["isError"], false, "support link {i}: {lnk}");
+    }
+
+    // Query health at NOW: only the 5 support edges are active.
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": thesis_id, "as_of": NOW }),
+    );
+    assert_eq!(health["result"]["isError"], false, "health: {health}");
+    let sc = &health["result"]["structuredContent"];
+
+    assert_eq!(
+        sc["supports_count"], 5,
+        "supports_count must be 5 (all active): {sc}"
+    );
+    assert_eq!(
+        sc["contradicts_count"], 0,
+        "contradicts_count must be 0: {sc}"
+    );
+    assert_eq!(
+        sc["counts_truncated"], false,
+        "counts_truncated must be false (5 active << cap): {sc}"
+    );
+    assert_eq!(sc["balance"], "bullish", "balance must be bullish: {sc}");
 }
