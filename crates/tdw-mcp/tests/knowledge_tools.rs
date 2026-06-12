@@ -676,7 +676,7 @@ fn kg_status_reports_graph_health_when_attached() {
 }
 
 /// K-E2: `tdw.kg.status` on a vector-only runtime (no graph) returns `null`
-/// graph_health and null proposals.
+/// `graph_health` and `null` proposals.
 #[test]
 fn kg_status_null_optionals_on_vector_only_runtime() {
     let embedder = Arc::new(HashEmbeddingProvider::default());
