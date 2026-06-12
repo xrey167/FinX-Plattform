@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 
+mod demo;
 mod ingest;
 mod params;
 mod reindex;
@@ -74,6 +75,16 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "ingest")
     {
         return ingest::run(&args).await;
+    }
+
+    // kg demo: seeded offline walkthrough of ingest/search/why/diff/status
+    // (knowledge-system-2 K-X2). Fully offline, deterministic, <60s.
+    // Doubles as an e2e smoke test when --json is passed.
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "demo")
+    {
+        return demo::run(&args).await;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).
