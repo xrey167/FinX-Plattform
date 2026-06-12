@@ -597,14 +597,10 @@ async fn sweep_fires_inference_for_landed_edge_proposals() {
     let mut changed = ChangeSet::default();
     changed.edge_types.insert("member_of".to_string());
 
-    let infer = Arc::new(Mutex::new(engine));
-    let rep = {
-        let mut guard = infer.lock().expect("infer mutex not poisoned");
-        guard
-            .run_incremental(&graph, &tags, NOW, &changed)
-            .await
-            .expect("run_incremental")
-    };
+    let rep = engine
+        .run_incremental(&graph, &tags, NOW, &changed)
+        .await
+        .expect("run_incremental");
 
     assert!(
         rep.derived_edges > 0,
