@@ -270,8 +270,8 @@ async fn knowledge_status_returns_200_with_snapshot() {
         );
         assert_eq!(
             body["taxonomy_kind_count"].as_u64(),
-            Some(51),
-            "taxonomy_kind_count is 51: {body}"
+            Some(52),
+            "taxonomy_kind_count is 52: {body}"
         );
         assert!(body["versions"].is_object(), "versions object: {body}");
         assert_eq!(
