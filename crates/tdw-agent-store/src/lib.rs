@@ -9,6 +9,7 @@ pub use feedback::{
 };
 pub use memory::{
     MemoryStore, MemoryStoreError, age_days, consolidate_at, spawn_consolidation_scheduler,
+    spawn_consolidation_scheduler_with_feedback,
 };
 
 use std::collections::BTreeMap;

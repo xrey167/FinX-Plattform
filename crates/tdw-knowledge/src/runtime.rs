@@ -105,6 +105,11 @@ pub struct KnowledgeRuntime {
     /// which writes [`EvalFreshness`] after each run. `None` when no eval is
     /// configured (status reports [`EvalFreshness::Unconfigured`]).
     eval_freshness: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
+    /// Live consolidation-freshness cell (K-L2). Shared with the consolidation
+    /// scheduler, which writes [`ConsolidationFreshness`] after each tick.
+    /// `None` before the first write or when the scheduler is not running
+    /// (status reports [`ConsolidationFreshness::Pending`]).
+    consolidation_freshness: Option<Arc<tokio::sync::Mutex<ConsolidationFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -130,6 +135,7 @@ impl KnowledgeRuntime {
             bound_user_id: None,
             finding_indexer: None,
             eval_freshness: None,
+            consolidation_freshness: None,
         }
     }
 
@@ -350,6 +356,32 @@ impl KnowledgeRuntime {
     pub const fn eval_freshness_cell(&self) -> Option<&Arc<tokio::sync::Mutex<EvalFreshness>>> {
         self.eval_freshness.as_ref()
     }
+
+    /// Attach the consolidation-freshness cell (K-L2).
+    ///
+    /// The consolidation scheduler (`spawn_consolidation_scheduler_with_feedback`
+    /// in `tdw-agent-store`) holds a clone of this `Arc` and writes the updated
+    /// [`ConsolidationFreshness`] after each tick. The `status()` method reads the
+    /// cell to populate the `consolidation_freshness` field in [`KgStatus`].
+    #[must_use]
+    pub fn with_consolidation_freshness(
+        mut self,
+        cell: Arc<tokio::sync::Mutex<ConsolidationFreshness>>,
+    ) -> Self {
+        self.consolidation_freshness = Some(cell);
+        self
+    }
+
+    /// The consolidation-freshness cell, when attached.
+    ///
+    /// The consolidation scheduler uses this to write updated freshness after
+    /// each tick.
+    #[must_use]
+    pub const fn consolidation_freshness_cell(
+        &self,
+    ) -> Option<&Arc<tokio::sync::Mutex<ConsolidationFreshness>>> {
+        self.consolidation_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -367,8 +399,58 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("bound_user_id", &self.bound_user_id.is_some())
             .field("finding_indexer", &self.finding_indexer.is_some())
             .field("eval_freshness", &self.eval_freshness.is_some())
+            .field(
+                "consolidation_freshness",
+                &self.consolidation_freshness.is_some(),
+            )
             .finish_non_exhaustive()
     }
+}
+
+// ---------------------------------------------------------------------------
+// K-L2: consolidation-freshness status (knowledge-system-2 K-L2)
+// ---------------------------------------------------------------------------
+
+/// Consolidation-freshness status for `tdw.kg.status` (K-L2).
+///
+/// Surfaced as `consolidation_freshness` on [`KgStatus`] so operators see at a
+/// glance whether the last scheduled consolidation tick applied any plans,
+/// encountered an error, or has never fired.
+///
+/// The scheduler (`spawn_consolidation_scheduler_with_feedback` in
+/// `tdw-agent-store`) writes this cell after each tick. The type lives here
+/// (in `tdw-knowledge`) so `tdw-agent-store` (which already depends on
+/// `tdw-knowledge`) can write it without a circular dependency.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum ConsolidationFreshness {
+    /// The scheduler has not yet fired (daemon just started, or tick interval
+    /// has not elapsed). Reported as `"pending"` in `tdw.kg.status`.
+    Pending,
+
+    /// The last tick completed successfully. `applied_count` is the number of
+    /// memories that were promoted or expired; zero means the store was already
+    /// up-to-date (no actions needed).
+    Ok {
+        /// RFC 3339 timestamp of the last tick (`now` injected at tick time).
+        last_tick_at: String,
+        /// Memories before the tick.
+        before_count: usize,
+        /// Memories after the tick (after expirations).
+        after_count: usize,
+        /// Number of consolidation actions applied (promotions + expirations).
+        applied_count: usize,
+    },
+
+    /// The last tick encountered a persistence error (e.g. could not write a
+    /// `*.json5` file). The scheduler continues; this state records the most
+    /// recent error for operator visibility.
+    Error {
+        /// RFC 3339 timestamp of the failing tick.
+        last_tick_at: String,
+        /// Human-readable error description.
+        error: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +638,12 @@ pub struct KgStatus {
     /// the honest loudly-visible default when no golden split is wired: the
     /// scheduler runs nothing and this field says so explicitly.
     pub eval_freshness: EvalFreshness,
+
+    // --- Consolidation freshness (autonomy-gaps #2+#8, K-L2) ---
+    /// Live consolidation-freshness status from the periodic consolidation tick
+    /// (K-L2). Reports the last tick time, before/after memory counts, and how
+    /// many plans were applied. `Pending` until the first tick fires.
+    pub consolidation_freshness: ConsolidationFreshness,
 }
 
 impl KnowledgeRuntime {
@@ -652,6 +740,18 @@ impl KnowledgeRuntime {
                         .map_or(EvalFreshness::Unconfigured, |guard| guard.clone())
                 });
 
+        // Consolidation-freshness (K-L2): read the shared cell if wired, else
+        // Pending (scheduler not yet attached or first tick has not fired).
+        // `try_lock` avoids blocking: if the scheduler is mid-write we return
+        // the last known state (or Pending) rather than deadlocking.
+        let consolidation_freshness =
+            self.consolidation_freshness
+                .as_ref()
+                .map_or(ConsolidationFreshness::Pending, |cell| {
+                    cell.try_lock()
+                        .map_or(ConsolidationFreshness::Pending, |guard| guard.clone())
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -664,6 +764,7 @@ impl KnowledgeRuntime {
             proposals,
             language_model_grade,
             eval_freshness,
+            consolidation_freshness,
         }
     }
 }

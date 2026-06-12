@@ -10,7 +10,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tdw_agent::{ConsolidationAction, Memory, UsageHint, consolidation_plan_with_usage};
 use tdw_agent_store::{
-    MemoryStore, RetrievalFeedbackStore, consolidate_at, spawn_consolidation_scheduler,
+    MemoryStore, RetrievalFeedbackStore, consolidate_at,
+    spawn_consolidation_scheduler_with_feedback,
 };
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
@@ -30,7 +31,7 @@ use tdw_eval_runner::scheduled_eval::{
 };
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
-use tdw_knowledge::runtime::{EvalFreshness, KnowledgeRuntime};
+use tdw_knowledge::runtime::{ConsolidationFreshness, EvalFreshness, KnowledgeRuntime};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
 use tdw_protocol::{EventMsg, OpEnvelope};
@@ -158,6 +159,12 @@ pub struct Backend {
     /// [`Backend::serve`] can register the cron trigger and spawn the eval
     /// worker without a second round of config parsing.
     evals_cfg: EvalsConfig,
+    /// Live consolidation-freshness cell (K-L2). Shared between the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the consolidation
+    /// scheduler spawned in [`Backend::serve`] (write side: updated after each
+    /// tick). Always `Some` after construction; pre-populated with
+    /// [`ConsolidationFreshness::Pending`].
+    consolidation_freshness: Arc<Mutex<ConsolidationFreshness>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -274,6 +281,8 @@ impl Backend {
         // K-X6: bind the config user identity and the finding indexer so the
         // MCP finding tools are available in production. Per-session identity
         // arrives with K-L5.
+        // K-L2: build the consolidation-freshness cell (always present; starts Pending).
+        let consolidation_freshness_cell = build_consolidation_freshness_cell();
         // K-L3: attach the eval-freshness cell when configured.
         let mut knowledge_runtime =
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
@@ -282,7 +291,8 @@ impl Backend {
                 .with_tags(Arc::clone(&tags_engine))
                 .with_versions(rules_v, infer_v)
                 .with_user_id(user_id)
-                .with_finding_indexer(Arc::clone(&finding_indexer));
+                .with_finding_indexer(Arc::clone(&finding_indexer))
+                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell));
         if let Some(cell) = eval_freshness_cell {
             knowledge_runtime = knowledge_runtime.with_eval_freshness(cell);
         }
@@ -301,6 +311,7 @@ impl Backend {
             infer,
             finding_indexer,
             evals_cfg,
+            consolidation_freshness: consolidation_freshness_cell,
             daemon: None,
         })
     }
@@ -331,13 +342,15 @@ impl Backend {
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph)),
         ));
+        let consolidation_freshness_cell = build_consolidation_freshness_cell();
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
                 .with_tags(Arc::clone(&tags_engine))
                 .with_user_id("test-user")
-                .with_finding_indexer(Arc::clone(&finding_indexer)),
+                .with_finding_indexer(Arc::clone(&finding_indexer))
+                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell)),
         );
         Self {
             state,
@@ -353,6 +366,7 @@ impl Backend {
             infer: Arc::new(Mutex::new(InferEngine::default())),
             finding_indexer,
             evals_cfg: EvalsConfig::default(),
+            consolidation_freshness: consolidation_freshness_cell,
             daemon: None,
         }
     }
@@ -491,10 +505,14 @@ impl Backend {
             }
         });
 
-        // Phase B — co-spawn the memory-consolidation scheduler on the same
-        // cancellation token, mirroring the relay's lifecycle.
-        let consolidation_task = spawn_consolidation_scheduler(
+        // Phase B / K-L2 — co-spawn the feedback-aware consolidation scheduler
+        // on the same cancellation token, mirroring the relay's lifecycle.
+        // Uses the shared feedback store so recency credit is applied on every
+        // tick; results are persisted and the freshness cell is updated.
+        let consolidation_task = spawn_consolidation_scheduler_with_feedback(
             self.memory.clone(),
+            self.feedback.clone(),
+            Arc::clone(&self.consolidation_freshness),
             consolidation_tick(),
             cancel.clone(),
         );
@@ -617,6 +635,17 @@ impl Backend {
     #[must_use]
     pub fn feedback_store_handle(&self) -> Arc<Mutex<RetrievalFeedbackStore>> {
         Arc::clone(&self.feedback)
+    }
+
+    /// The shared consolidation-freshness cell (K-L2). The consolidation
+    /// scheduler writes this after every tick; [`KnowledgeRuntime::status`] reads
+    /// it to populate `tdw.kg.status.consolidation_freshness`.
+    ///
+    /// Always `Some` after construction; starts as
+    /// [`ConsolidationFreshness::Pending`] until the first tick fires.
+    #[must_use]
+    pub fn consolidation_freshness_cell(&self) -> Arc<Mutex<ConsolidationFreshness>> {
+        Arc::clone(&self.consolidation_freshness)
     }
 
     /// Replace the feedback store with a host-supplied handle (builder pattern).
@@ -1421,6 +1450,21 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// Build the consolidation-freshness shared cell for the K-L2 feedback loop.
+///
+/// Returns an `Arc<Mutex<ConsolidationFreshness>>` pre-populated with
+/// [`ConsolidationFreshness::Pending`]. The returned `Arc` is shared between
+/// the [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the consolidation
+/// scheduler task spawned during [`Backend::serve`] (write side: updates after
+/// each tick).
+///
+/// Always returns `Some`; the `Option` wrapper is kept so callers can use
+/// `if let Some(cell) = ...` symmetrically with `build_eval_freshness_cell`.
+#[must_use]
+pub fn build_consolidation_freshness_cell() -> Arc<Mutex<ConsolidationFreshness>> {
+    Arc::new(Mutex::new(ConsolidationFreshness::Pending))
+}
+
 /// Build the eval-freshness shared cell for the K-L3 scheduled self-eval (K-L3).
 ///
 /// Returns `Some(Arc<Mutex<EvalFreshness>>)` pre-populated with
@@ -1432,6 +1476,7 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
 /// The returned `Arc` is shared between the `KnowledgeRuntime` (read side:
 /// `tdw.kg.status`) and the eval worker task spawned during [`Backend::serve`]
 /// (write side: updates after each cron-triggered run).
+#[must_use]
 pub fn build_eval_freshness_cell(
     config: &EvalsConfig,
 ) -> Option<Arc<tokio::sync::Mutex<EvalFreshness>>> {
@@ -1477,6 +1522,7 @@ fn evals_config_to_runner(cfg: &EvalsConfig) -> EvalRunnerConfig {
 ///
 /// Returns `None` when no `split_id` is configured — the caller omits the task
 /// from [`DaemonHandle`] and status reports [`EvalFreshness::Unconfigured`].
+#[allow(clippy::too_many_lines)]
 fn spawn_eval_worker(
     cfg: &EvalsConfig,
     cell: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
