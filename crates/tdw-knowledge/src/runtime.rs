@@ -673,6 +673,38 @@ pub struct KgGraphHealth {
     pub error: Option<String>,
 }
 
+/// Thesis summary line for `tdw.kg.status` (K-X7).
+///
+/// A lightweight observability signal: how many thesis nodes exist, and which
+/// ids are at the extremes of the evidence balance.  These fields are computed
+/// cheaply at status-collection time — **no full health scan is run**; only the
+/// count of thesis-kind Finding nodes is derived from a bounded graph page walk
+/// (capped at [`THESIS_STATUS_PAGE_CAP`] nodes).  Call `tdw.kg.thesis_health`
+/// for full evidence counts on a specific thesis.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgThesesStatus {
+    /// Number of thesis nodes (Finding nodes with `props.kind_hint = "thesis"`)
+    /// visible in the bounded graph scan.
+    pub count: usize,
+    /// Id of the thesis with the most `supports` inbound edges (approximate:
+    /// derived from the bounded scan page, not a full graph scan). `None` when
+    /// no theses exist or when counts are tied.
+    #[serde(default)]
+    pub most_supported_id: Option<String>,
+    /// Id of the thesis with the most `contradicts` inbound edges (approximate,
+    /// same bounded scan). `None` when no theses exist or when counts are tied.
+    #[serde(default)]
+    pub most_contradicted_id: Option<String>,
+    /// Present when the thesis count was bounded by the page cap and the true
+    /// count may be higher.
+    #[serde(default)]
+    pub scan_note: Option<String>,
+}
+
+/// Page cap for the thesis-count scan in `status()`.  Large enough to cover
+/// typical graphs; honest `scan_note` fires when exceeded.
+pub const THESIS_STATUS_PAGE_CAP: usize = 4_096;
+
 /// Full observability snapshot for one `KnowledgeRuntime` instance.
 ///
 /// Collected by [`KnowledgeRuntime::status`] and surfaced identically by the
@@ -752,6 +784,20 @@ pub struct KgStatus {
     /// `[knowledge.proposals]` — the operator tool is then the only landing
     /// path.
     pub auto_materialize_freshness: SweepFreshness,
+
+    // --- Theses (K-X7) ---
+    /// Thesis summary for the attached graph (K-X7).
+    ///
+    /// `None` when no graph engine is attached (no Finding nodes can exist
+    /// without a graph).  When present, carries the count of thesis nodes
+    /// (Finding nodes with `props.kind_hint = "thesis"`), plus the ids of
+    /// the most evidence-rich (healthiest) and most-contradicted theses —
+    /// both bounded to 1 id each (cheapest indicative signal without a full
+    /// health scan).  An honest `scan_note` is included when the count is
+    /// bounded by the graph page limit.
+    #[serde(default)]
+    pub theses: Option<KgThesesStatus>,
+
     // --- Scheduled feed freshness (K-L6) ---
     /// Per-feed freshness snapshots from all configured feeds (K-L6).
     ///
@@ -887,6 +933,16 @@ impl KnowledgeRuntime {
                         .map_or(SweepFreshness::Pending, |guard| guard.clone())
                 });
 
+        // Thesis summary (K-X7): scan Finding nodes for kind_hint="thesis" using
+        // a bounded page walk.  This is a lightweight count probe — no full
+        // health scan.  Only runs when a graph engine is attached.
+        let theses = if let Some(graph) = self.graph.as_ref() {
+            let theses_status = collect_theses_status(graph).await;
+            Some(theses_status)
+        } else {
+            None
+        };
+
         // Feed freshness (K-L6): snapshot each cell with try_lock to avoid
         // blocking the status handler when a feed task is mid-write.
         let feed_statuses: Vec<FeedFreshness> = self
@@ -921,9 +977,142 @@ impl KnowledgeRuntime {
             eval_freshness,
             consolidation_freshness,
             auto_materialize_freshness,
+            theses,
             feed_statuses,
             feed_note,
         }
+    }
+}
+
+/// Rank evidence (supports/contradicts) across a set of thesis ids; returns
+/// (`most_supported_id`, `most_contradicted_id`).
+async fn rank_thesis_evidence(
+    graph: &std::sync::Arc<dyn GraphEngine>,
+    thesis_ids: &[(String, String)],
+) -> (Option<String>, Option<String>) {
+    use tdw_core::{Direction, TraversalFilter};
+
+    let evidence_filter = TraversalFilter {
+        rels: Some(vec!["supports".to_string(), "contradicts".to_string()]),
+        direction: Direction::In,
+        max_hops: 1,
+        ..TraversalFilter::default()
+    };
+
+    let mut best_supported: Option<(String, usize)> = None;
+    let mut most_contradicted: Option<(String, usize)> = None;
+
+    for (thesis_id, _) in thesis_ids {
+        let Ok(neighbors) = graph.neighbors(thesis_id, &evidence_filter).await else {
+            continue;
+        };
+        let sup = neighbors
+            .iter()
+            .filter(|(e, _)| e.rel == "supports")
+            .count();
+        let con = neighbors
+            .iter()
+            .filter(|(e, _)| e.rel == "contradicts")
+            .count();
+
+        if sup > 0 {
+            match &best_supported {
+                None => best_supported = Some((thesis_id.clone(), sup)),
+                Some((_, prev)) if sup > *prev => best_supported = Some((thesis_id.clone(), sup)),
+                _ => {}
+            }
+        }
+        if con > 0 {
+            match &most_contradicted {
+                None => most_contradicted = Some((thesis_id.clone(), con)),
+                Some((_, prev)) if con > *prev => {
+                    most_contradicted = Some((thesis_id.clone(), con));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    (
+        best_supported.map(|(id, _)| id),
+        most_contradicted.map(|(id, _)| id),
+    )
+}
+
+/// Collect thesis count + top-supported/top-contradicted ids from the graph.
+///
+/// Uses a bounded page walk over edges, filtering candidate nodes for
+/// `props.kind_hint = "thesis"`.  Best-effort: graph probe failures return a
+/// zero-count status rather than propagating the error.
+async fn collect_theses_status(graph: &std::sync::Arc<dyn GraphEngine>) -> KgThesesStatus {
+    // Page walk: collect up to THESIS_STATUS_PAGE_CAP node ids from the edge list.
+    let mut thesis_ids: Vec<(String, String)> = Vec::new(); // (id, title)
+    let mut offset = 0usize;
+    let page_size = 256usize;
+    let mut capped = false;
+
+    'outer: loop {
+        let Ok(page) = graph.edges(None, offset, page_size).await else {
+            break;
+        };
+        if page.is_empty() {
+            break;
+        }
+        for edge in &page {
+            for candidate_id in [&edge.from, &edge.to] {
+                if thesis_ids.iter().any(|(id, _)| id == candidate_id) {
+                    continue;
+                }
+                if thesis_ids.len() >= THESIS_STATUS_PAGE_CAP {
+                    capped = true;
+                    break 'outer;
+                }
+                if let Ok(Some(node)) = graph.node(candidate_id).await
+                    && node.kind == EntityKind::Finding
+                    && node.props.get("kind_hint").and_then(|v| v.as_str()) == Some("thesis")
+                {
+                    let title = node
+                        .props
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    thesis_ids.push((candidate_id.clone(), title));
+                }
+            }
+        }
+        offset += page.len();
+        if offset >= THESIS_STATUS_PAGE_CAP * 4 {
+            capped = true;
+            break;
+        }
+    }
+
+    let scan_note = if capped {
+        Some(format!(
+            "thesis scan bounded at {THESIS_STATUS_PAGE_CAP} nodes; true count may be higher"
+        ))
+    } else {
+        None
+    };
+
+    let count = thesis_ids.len();
+    if count == 0 {
+        return KgThesesStatus {
+            count: 0,
+            most_supported_id: None,
+            most_contradicted_id: None,
+            scan_note,
+        };
+    }
+
+    let (most_supported_id, most_contradicted_id) = rank_thesis_evidence(graph, &thesis_ids).await;
+
+    KgThesesStatus {
+        count,
+        most_supported_id,
+        most_contradicted_id,
+        scan_note,
     }
 }
 
