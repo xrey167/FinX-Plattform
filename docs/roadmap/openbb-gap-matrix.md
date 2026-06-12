@@ -78,9 +78,9 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | estimates (price_target, consensus, forward_*) | HAVE | **`equity/estimates/{consensus,historical_eps,price_target,forward}` HAVE** (standardized; consensus G004 Yahoo, the rest FMP-keyed — price_target P3W5, forward_eps/sales/ebitda P3W5); benzinga/seeking-alpha raw | done |
 | calendar (dividend/earnings/ipo/splits/events) | PARTIAL | dividend/earnings/ipo standardized via nasdaq (keyless public calendar API, G004p2); benzinga earnings raw; splits/events MISSING | in-progress |
 | compare (peers/groups/company_facts) | MISSING | — | todo |
-| discovery (active/gainers/losers/...) | MISSING | no fmp/yahoo discovery endpoints | todo |
+| discovery (active/gainers/losers/...) | HAVE | `equity/discovery/{active,gainers,losers}` FMP-backed (stale row corrected P3W7) | done |
 | ownership (insider/institutional/13f/gov_trades/share_stats) | PARTIAL | **`equity/ownership/form_13f` + `equity/ownership/share_statistics` HAVE** (SEC, keyless, G003); insider/institutional/gov_trades still MISSING | in-progress |
-| shorts (short_interest/short_volume/fails_to_deliver) | PARTIAL | finra short interest HAVE; **`equity/shorts/fails_to_deliver` HAVE** (SEC FTD, G003); stockgrid short_volume still MISSING | in-progress |
+| shorts (short_interest/short_volume/fails_to_deliver) | HAVE (short_volume deferred) | finra short interest HAVE; **`equity/shorts/fails_to_deliver` HAVE** (SEC FTD, G003); stockgrid `short_volume` DEFERRED (P3W7 — no vendor-published API, see D2) | done (short_volume deferred) |
 | darkpool/otc | HAVE | finra OTC weekly | done |
 
 ### 2. economy (46 cmds)
@@ -121,7 +121,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 |---|---|---|---|
 | search / info / historical | PARTIAL | historical reuses price; etf search/info MISSING | todo |
 | holdings / sectors / countries / equity_exposure / nport | PARTIAL | **`etf/holdings` HAVE** (keyless, SEC N-PORT `NPORT-P` disclosures, G003); sectors/countries/equity_exposure still need fmp | in-progress |
-| price_performance / discovery (active/gainers/losers) | MISSING | needs fmp + wsj | todo |
+| price_performance / discovery (active/gainers/losers) | HAVE | `equity/price/performance` (Yahoo) + `equity/discovery/{active,gainers,losers}` (FMP); wsj etf-discovery DEFERRED (P3W7 — no vendor-published API, see D2) | done (wsj variant deferred) |
 
 ### 6. index (9 cmds)
 
@@ -229,7 +229,7 @@ Clean-room: add endpoints from each vendor's *own* public API docs, normalize to
 | L2.8 | **tdw-provider-eia** · petroleum_status_report, short_term_energy_outlook, psd_data/psd_report. Gates: live-gated. Done-when: 3 report endpoints. | S | todo |
 | L2.9 | **tdw-provider-ecb** · currency/reference_rates + rate/ecb + balance_of_payments shape. Gates: live-gated. Done-when: reference_rates standardized. | S | todo |
 | L2.10 | **tdw-provider-nasdaq** · calendars (dividend/earnings/ipo), top_retail, sp500_multiples (Shiller PE). Gates: live-gated. Done-when: 4 endpoints. | S | todo |
-| L2.11 | **tdw-provider-finra** + **stockgrid (new, see L3)** · shorts cluster (short_interest HAVE; add short_volume, FTD via sec). Gates: live-gated. Done-when: shorts cluster complete. | S | todo |
+| L2.11 | **tdw-provider-finra** + **stockgrid (new, see L3)** · shorts cluster (short_interest HAVE; add short_volume, FTD via sec). Gates: live-gated. Done-when: shorts cluster complete. | S | mostly done (short_interest + SEC FTD HAVE; stockgrid `short_volume` deferred P3W7 — see D2/L3.8) |
 | L2.12 | **tdw-provider-{benzinga,tiingo,seeking-alpha}** · standardized news/company + news/world + estimates (price_target/consensus/forward). Gates: live-gated. Done-when: news + estimates clusters normalized. | M | todo |
 | L2.13 | **tdw-provider-deribit** · futures/instruments+info+curve, options/chains normalize. Gates: live-gated. Done-when: derivatives cluster for deribit standardized. | S | todo |
 | L2.14 | **tdw-provider-tradier** · price/quote, options/chains. Gates: live-gated. Done-when: quote+chains standardized. | S | todo |
@@ -245,10 +245,10 @@ the vendor's public API docs.
 | L3.2 | **tdw-provider-government-us** · US Treasury Fiscal/Direct · no key | treasury_prices, treasury_auctions, treasury yield data | S | done |
 | L3.3 | **tdw-provider-imf** · IMF SDMX · no key | indicators, direction_of_trade, balance_of_payments, shipping/*, imf_utils dataflow discovery | M | done (P3W3, #367; `economy/imf/{international_financial_statistics,direction_of_trade,balance_of_payments}`. shipping/imf_utils discovery deferred) |
 | L3.4 | **tdw-provider-econdb** · EconDB · optional key | gdp/real+nominal, indicators, country_profile, export_destinations | M | done (P3W4; `economy/econdb/series` — series-by-ticker → MacroSeries, optional token. country_profile/export_destinations deferred) |
-| L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | todo |
-| L3.6 | **tdw-provider-finviz** · Finviz · no key | screener, compare/groups, price/performance, metrics, price_target | M | todo |
+| L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | deferred (P3W7 — paid key, not free/live-verifiable; see D3) |
+| L3.6 | **tdw-provider-finviz** · Finviz · no key | screener, compare/groups, price/performance, metrics, price_target | M | deferred (P3W7 — no official API; HTML-scrape only, see D2. price/performance already via Yahoo) |
 | L3.7 | **tdw-provider-cftc** · CFTC (Socrata) · app token | regulators/cftc/cot + cot_search | S | todo |
-| L3.8 | **tdw-provider-stockgrid** · Stockgrid · no key | shorts/short_volume | S | todo |
+| L3.8 | **tdw-provider-stockgrid** · Stockgrid · no key | shorts/short_volume | S | deferred (P3W7 — no vendor-published API; site-backing JSON only, see D2) |
 | L3.9 | **tdw-provider-wsj** · WSJ market data · no key | etf/discovery (active/gainers/losers) | S | todo |
 | L3.10 | **tdw-provider-biztoc** · Biztoc · free key | news/world | S | todo |
 | L3.11 | **tdw-provider-famafrench** · Ken French Data Library · no key (academic) | famafrench/* factors + portfolio returns | M | todo |
@@ -345,8 +345,8 @@ slice; none blocks the delivered surface.
 | # | Deferred task | Why deferred | Status |
 |---|---|---|---|
 | D1 | `tdw-provider-famafrench` (Ken French factors) | — | **DONE** (P2W6, route `economy/factors/famafrench`; pure-Rust zip/miniz_oxide, no C). Portfolio-returns variant still deferred. |
-| D2 | `tdw-provider-{stockgrid,wsj,biztoc}` (short_volume / etf-discovery / news-world) | Niche providers whose exact public API shapes cannot be verified clean-room without vendor-doc access — building blind risks invented endpoints | todo (deferred) |
-| D3 | `tdw-provider-intrinio` (options unusual/snapshots/surface, reported_financials) | Paid key; lower priority than the keyless surface | todo (deferred) |
+| D2 | `tdw-provider-{stockgrid,wsj,biztoc,finviz}` (short_volume / etf-discovery / news-world / screener) | **DEFERRED (P3W7, assessed) — none has a verifiable *vendor-published* public API.** stockgrid / wsj / finviz expose only undocumented site-backing JSON endpoints (reverse-engineered, no official API docs); biztoc is a keyed RapidAPI proxy. Building any would mean inventing/guessing endpoint shapes, violating the clean-room "vendor's own public API docs only" rule (and no network to live-verify). Crucially the *parity value* these would add is already delivered by verifiable providers: **discovery** active/gainers/losers via FMP (`equity/discovery/{active,gainers,losers}`), **price/performance** via Yahoo (`equity/price/performance`), **shorts** via FINRA short-interest + SEC `equity/shorts/fails_to_deliver` (G003). Revisit only if a vendor publishes official API docs. | deferred (P3W7, documented) |
+| D3 | `tdw-provider-intrinio` (options unusual/snapshots/surface, reported_financials) | **DEFERRED (P3W7, assessed):** paid key — cannot be free/live-verified, and its surface (options unusual/IV-surface) needs both the paid feed and a compute layer; lower priority than the keyless surface. Revisit if a paid Intrinio key is provisioned. | todo (deferred) |
 | D4 | `tdw-provider-{imf,econdb,finviz}` (W5 remainder: SDMX macro / gdp+indicators / screener+price_target) | Net-new niche crates; macro breadth already broad via FRED (32 routes) | **imf DONE** (P3W3, #367; `economy/imf/*` SDMX-JSON → MacroSeries). **econdb DONE** (P3W4; `economy/econdb/series` → MacroSeries, optional token). finviz screener/price_target still todo (deferred). |
 | D5 | Parquet + XLSX export from any `ResultEnvelope` (L5.4) | CSV + JSON shipped (G013). XLSX needed an export writer; the platform avoids native/C deps everywhere (charting/analytics used zero). | **XLSX DONE (P3W6, `rust_xlsxwriter` pure-Rust, MIT)** — `tdw-cli --export xlsx` from any envelope; `default-features = false` keeps the tree C-free (`zip`→`flate2`/`miniz_oxide`), `cargo deny` green; no `arrow`/`parquet`/C-binding dep added. **Parquet DEFERRED**: arrow-rs `parquet` is pure-Rust but a ~40-crate heavy tree contradicting the platform's zero-heavy-dep posture; the light alternatives (arrow2/parquet2) are archived/unmaintained; revisit if a light maintained pure-Rust Parquet writer emerges or the dep weight is explicitly accepted. |
 | D6 | `tdw-analytics-portfolio` (returns/drawdown/allocation/attribution, L4.4) | Beyond OpenBB parity; pure-compute, can be added on the L4.2 quant base any time | todo (deferred) |
