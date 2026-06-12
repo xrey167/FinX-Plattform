@@ -743,6 +743,17 @@ pub struct KnowledgeConfig {
     /// MCP tools available for subscription management.
     #[serde(default)]
     pub watchlists: WatchlistsConfig,
+    /// Open-question matching engine settings (knowledge-system K-X8).
+    ///
+    /// Controls the cron cadence at which the daemon checks newly-arrived
+    /// facts against open questions and fires candidate-match alerts.
+    ///
+    /// **Default: `enabled = true`, `cadence = "*/15 * * * *"` (every 15 min).**
+    /// Set `enabled = false` to keep the `tdw.kg.ask` / `tdw.kg.resolve` /
+    /// `tdw.kg.dismiss` MCP tools available while disabling the background
+    /// matching loop.
+    #[serde(default)]
+    pub questions: QuestionsConfig,
 }
 
 /// Knowledge watchlist change-detection configuration (knowledge-system K-X5).
@@ -772,6 +783,41 @@ pub struct WatchlistsConfig {
 }
 
 impl Default for WatchlistsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cadence: "*/15 * * * *".to_string(),
+        }
+    }
+}
+
+/// Open-question matching-engine configuration (knowledge-system K-X8).
+///
+/// # Example
+///
+/// ```toml
+/// [knowledge.questions]
+/// enabled = true
+/// cadence = "*/15 * * * *"
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct QuestionsConfig {
+    /// Whether the background matching-engine cron is registered at daemon
+    /// start. When `false`, questions can still be parked/resolved/dismissed
+    /// via MCP tools but no candidate-match alert is ever fired automatically.
+    ///
+    /// Default: `true`.
+    pub enabled: bool,
+    /// Cron expression for the matching-engine cadence.
+    ///
+    /// Must be a valid 5-field cron expression.  Invalid expressions fall back
+    /// to `"*/15 * * * *"` with a loud log at daemon start.
+    ///
+    /// Default: `"*/15 * * * *"` (every 15 minutes).
+    pub cadence: String,
+}
+
+impl Default for QuestionsConfig {
     fn default() -> Self {
         Self {
             enabled: true,

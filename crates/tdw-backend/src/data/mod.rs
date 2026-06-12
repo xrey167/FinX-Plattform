@@ -16,6 +16,7 @@ use tdw_agent_store::{
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::ProposalsConfig as ProposalsCfg;
+use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
 use tdw_config::{FeedsConfig, TdwConfig, WatchlistsConfig};
 use tdw_core::{
@@ -34,11 +35,15 @@ use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::feeds::{FeedFreshness, FeedSource, FixtureFeedSource};
 use tdw_knowledge::indexer::KnowledgeIndexer;
+use tdw_knowledge::runtime::QuestionsFreshness;
 use tdw_knowledge::runtime::WatchlistFreshness;
 use tdw_knowledge::runtime::{
     ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
 };
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tdw_mcp::knowledge_question_tools::{
+    OpenQuestionStore, load_store_from_env as load_question_store_from_env, tick_question_check,
+};
 use tdw_mcp::knowledge_watchlist_tools::{WatchlistStore, tick_watchlist_check};
 use tdw_outbox::InMemoryOutbox;
 use tdw_patterns::{MiningLimits, PatternEngine, PatternIndex};
@@ -87,6 +92,9 @@ struct DaemonHandle {
     /// The K-X5 knowledge watchlist change-detection cron task.
     /// `None` when `knowledge.watchlists.enabled = false`.
     watchlist_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-X8 open-question matching-engine cron task.
+    /// `None` when `knowledge.questions.enabled = false`.
+    questions_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -226,6 +234,23 @@ pub struct Backend {
     /// tick). Always present after construction; starts as
     /// [`WatchlistFreshness::default`].
     watchlist_freshness: Arc<std::sync::Mutex<WatchlistFreshness>>,
+    /// K-X8 open-question matching configuration, extracted from
+    /// `config.knowledge.questions` in [`Backend::from_config`]. Held here
+    /// so [`Backend::serve`] can register the cron trigger and spawn the
+    /// questions worker without a second round of config parsing.
+    questions_cfg: QuestionsConfig,
+    /// The open-question store (knowledge-system K-X8). Shared between the MCP
+    /// tools (`tdw.kg.ask` / `tdw.kg.resolve` / `tdw.kg.dismiss` /
+    /// `tdw.kg.questions`) and the background cron task that runs match
+    /// detection. Always present after construction; loaded from
+    /// `TDW_QUESTIONS_DIR` when set, else starts empty.
+    question_store: Arc<std::sync::Mutex<OpenQuestionStore>>,
+    /// Live questions-freshness cell (K-X8). Shared between the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the questions
+    /// cron task spawned in [`Backend::serve`] (write side: updated after each
+    /// tick). Always present after construction; starts as
+    /// [`QuestionsFreshness::default`].
+    question_freshness: Arc<std::sync::Mutex<QuestionsFreshness>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -266,6 +291,8 @@ impl Backend {
         let feeds_cfg = config.knowledge.feeds.clone();
         // K-X5: extract watchlists config before `config` is consumed.
         let watchlists_cfg = config.knowledge.watchlists.clone();
+        // K-X8: extract questions config before `config` is consumed.
+        let questions_cfg = config.knowledge.questions.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -420,6 +447,13 @@ impl Backend {
             Arc::new(std::sync::Mutex::new(WatchlistFreshness::default()));
         knowledge_runtime =
             knowledge_runtime.with_watchlist_freshness(Arc::clone(&watchlist_freshness_cell));
+        // K-X8: build the question store and freshness cell, wiring the cell
+        // into the runtime so `tdw.kg.status` can read it.
+        let question_store = Arc::new(std::sync::Mutex::new(load_question_store_from_env()));
+        let question_freshness_cell =
+            Arc::new(std::sync::Mutex::new(QuestionsFreshness::default()));
+        knowledge_runtime =
+            knowledge_runtime.with_questions_freshness(Arc::clone(&question_freshness_cell));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -448,6 +482,9 @@ impl Backend {
             watchlists_cfg,
             watchlist_store,
             watchlist_freshness: watchlist_freshness_cell,
+            questions_cfg,
+            question_store,
+            question_freshness: question_freshness_cell,
             daemon: None,
         })
     }
@@ -510,6 +547,9 @@ impl Backend {
             watchlists_cfg: WatchlistsConfig::default(),
             watchlist_store: Arc::new(std::sync::Mutex::new(WatchlistStore::new())),
             watchlist_freshness: Arc::new(std::sync::Mutex::new(WatchlistFreshness::default())),
+            questions_cfg: QuestionsConfig::default(),
+            question_store: Arc::new(std::sync::Mutex::new(OpenQuestionStore::new())),
+            question_freshness: Arc::new(std::sync::Mutex::new(QuestionsFreshness::default())),
             daemon: None,
         }
     }
@@ -743,6 +783,15 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-X8 — spawn the open-question matching-engine cron task when enabled.
+        let questions_task = spawn_questions_task(
+            &self.questions_cfg,
+            Arc::clone(&self.question_store),
+            Arc::clone(&self.graph),
+            Arc::clone(&self.question_freshness),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
@@ -754,6 +803,7 @@ impl Backend {
             pattern_mining_task,
             feed_handles,
             watchlist_task,
+            questions_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -830,6 +880,12 @@ impl Backend {
             watchlist_task.abort();
             let _ = watchlist_task.await;
         }
+        // K-X8: The questions cron task observes the same token; abort if it
+        // lingers so shutdown stays bounded.
+        if let Some(questions_task) = daemon.questions_task {
+            questions_task.abort();
+            let _ = questions_task.await;
+        }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
         daemon.transport_task.abort();
@@ -893,6 +949,27 @@ impl Backend {
     #[must_use]
     pub fn watchlist_freshness_cell(&self) -> Arc<std::sync::Mutex<WatchlistFreshness>> {
         Arc::clone(&self.watchlist_freshness)
+    }
+
+    /// The shared open-question store (K-X8).
+    ///
+    /// Pass this to [`tdw_mcp::McpServer::with_question_store`] to expose the
+    /// `tdw.kg.ask` / `tdw.kg.resolve` / `tdw.kg.dismiss` / `tdw.kg.questions`
+    /// tools to connected agents. The `Arc<std::sync::Mutex<OpenQuestionStore>>`
+    /// is shared with the background cron task that runs match detection.
+    #[must_use]
+    pub fn question_store_handle(&self) -> Arc<std::sync::Mutex<OpenQuestionStore>> {
+        Arc::clone(&self.question_store)
+    }
+
+    /// The shared questions-freshness cell (K-X8).
+    ///
+    /// The questions cron task writes this after every tick. Always `Some`
+    /// after construction; starts as [`QuestionsFreshness::default`] until the
+    /// first tick fires.
+    #[must_use]
+    pub fn question_freshness_cell(&self) -> Arc<std::sync::Mutex<QuestionsFreshness>> {
+        Arc::clone(&self.question_freshness)
     }
 
     /// Replace the feedback store with a host-supplied handle (builder pattern).
@@ -2524,6 +2601,110 @@ fn spawn_watchlist_task(
                 tick_watchlist_check(&store, &graph, tags.as_ref(), now_ms, &freshness).await;
             if fired > 0 {
                 eprintln!("[tdw] knowledge watchlists: {fired} alert(s) fired this tick");
+            }
+        }
+    });
+    Some(task)
+}
+
+/// Spawn the open-question matching-engine cron task (K-X8).
+///
+/// When `cfg.enabled = false` returns `None`; no trigger is registered and
+/// no background work is spawned.  A loud log is emitted at daemon start so
+/// operators see the disabled state explicitly.
+///
+/// The task follows the same loop structure as `spawn_watchlist_task`:
+/// 1. Sleep for one `cron_tick` interval.
+/// 2. Call `due_triggers` against a `ScheduleRegistry` with the questions
+///    cadence trigger.
+/// 3. On fire: call `tick_question_check` (injected-now path).
+fn spawn_questions_task(
+    cfg: &QuestionsConfig,
+    store: Arc<std::sync::Mutex<OpenQuestionStore>>,
+    graph: Arc<dyn GraphEngine>,
+    freshness: Arc<std::sync::Mutex<QuestionsFreshness>>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] knowledge questions: matching engine disabled \
+             (knowledge.questions.enabled = false); questions can still be parked \
+             via tdw.kg.ask but no alert will fire automatically"
+        );
+        return None;
+    }
+
+    let schedule = CronSchedule::parse(&cfg.cadence).unwrap_or_else(|_| {
+        eprintln!(
+            "[tdw] knowledge questions: invalid cadence {:?}; \
+             falling back to \"*/15 * * * *\"",
+            cfg.cadence
+        );
+        CronSchedule::parse("*/15 * * * *").expect("fallback parse")
+    });
+
+    let trigger_id = "tdw-questions-check".to_string();
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-questions-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "questions-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: trigger_id,
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-questions".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            let fired = tick_question_check(&store, &graph, now_ms, &freshness).await;
+            if fired > 0 {
+                eprintln!(
+                    "[tdw] knowledge questions: {fired} candidate-match alert(s) fired this tick"
+                );
             }
         }
     });

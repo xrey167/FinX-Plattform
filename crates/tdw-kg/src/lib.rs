@@ -557,6 +557,6 @@ mod tests {
             serde_json::Value::String("venue".to_string()),
             "kinds serialize to the registry's lowercase tokens"
         );
-        assert_eq!(EntityKind::ALL.len(), 53);
+        assert_eq!(EntityKind::ALL.len(), 54); // K-X8 added OpenQuestion
     }
 }

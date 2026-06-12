@@ -270,8 +270,8 @@ async fn knowledge_status_returns_200_with_snapshot() {
         );
         assert_eq!(
             body["taxonomy_kind_count"].as_u64(),
-            Some(53),
-            "taxonomy_kind_count is 53 (K-R4 added Pattern): {body}"
+            Some(54),
+            "taxonomy_kind_count is 54 (K-X8 added OpenQuestion): {body}"
         );
         assert!(body["versions"].is_object(), "versions object: {body}");
         assert_eq!(
