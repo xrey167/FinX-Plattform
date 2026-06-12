@@ -1312,13 +1312,51 @@ impl Backend {
     ///
     /// Returns [`BackendError::Knowledge`] if the query is empty, `top_k` is
     /// zero, or an embedding/storage step fails.
+    /// Search the embedded knowledge index for the `top_k` nearest hits to
+    /// `query`.
+    ///
+    /// # Lock discipline
+    ///
+    /// The indexer mutex is **not** held across the search: `KnowledgeIndex`
+    /// wraps its engines as `Arc<dyn …>` so a cheap clone of those two handles
+    /// (embedder + vector engine) is sufficient to call `search` independently.
+    /// This prevents the feed ingest task's long-running `index_batch_at` from
+    /// blocking concurrent searches (Gemini K-L6 #382).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the query is empty, `top_k` is
+    /// zero, or an embedding/storage step fails.
+    /// Search the embedded knowledge index for the `top_k` nearest hits to
+    /// `query`.
+    ///
+    /// # Lock discipline
+    ///
+    /// The indexer mutex is **not** held across the search.  `KnowledgeIndex`
+    /// wraps its storage engines as `Arc<dyn …>` handles, so cloning
+    /// `self.embedder` and `self.state.vector` (both already `Arc`s on
+    /// `Backend`) is sufficient to issue the search query without touching the
+    /// indexer mutex at all.  `KnowledgeIndex::new` derives the collection name
+    /// from the embedder's `model_id`, guaranteeing the same namespace as the
+    /// shared indexer.
+    ///
+    /// This prevents the feed ingest task's long-running `index_batch_at` from
+    /// blocking concurrent searches (Gemini K-L6 #382).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Knowledge`] if the query is empty, `top_k` is
+    /// zero, or an embedding/storage step fails.
     pub async fn knowledge_search(
         &self,
         query: &str,
         top_k: usize,
     ) -> BackendResult<Vec<KnowledgeHit>> {
-        let indexer = self.indexer.lock().await;
-        Ok(indexer.index().search(query, top_k).await?)
+        // Build a temporary read-only KnowledgeIndex from the shared Arc
+        // handles — no lock acquired, no blocking of concurrent ingests.
+        let search_index =
+            KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
+        Ok(search_index.search(query, top_k).await?)
     }
 
     // --- Inference engine (K-L1) --------------------------------------------
@@ -2445,9 +2483,10 @@ fn spawn_feed_tasks(
                 // Cron slot fired — poll the source.
                 let articles = match source.poll(max_items).await {
                     Ok(items) => {
-                        // Successful fetch resets the error counter and throttle.
-                        consecutive_errors = 0;
-                        throttled_until_ms = 0;
+                        // Fetch succeeded — do NOT reset consecutive_errors here.
+                        // A successful fetch followed by a failed index is still
+                        // an error; the counter resets only after a fully
+                        // successful ingest (Gemini K-L6 #382 MEDIUM).
                         items
                     }
                     Err(error) => {

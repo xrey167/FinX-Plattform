@@ -1078,21 +1078,22 @@ async fn compute_thesis_health_counts(
     ))
 }
 
-/// Approximate age in days between two UTC timestamps (lexicographic comparison,
-/// Julian-day arithmetic — same approach as `timestamp_span_days` in the diff
-/// tool; precise enough for observability output).
+/// Age in days between two UTC timestamps.
+///
+/// Parses the leading `YYYY-MM-DD` portion of each timestamp and delegates to
+/// [`chrono::NaiveDate::signed_duration_since`] for exact Gregorian arithmetic.
+/// The previous Julian-day formula omitted the Jan/Feb year-shift and produced
+/// off-by-one errors for date pairs that span a month boundary in those two
+/// months (Gemini K-X7 #391).
 fn compute_age_days(from_ts: &str, to_ts: &str) -> i64 {
-    fn parse_ymd(ts: &str) -> Option<(i64, i64, i64)> {
-        let y: i64 = ts.get(0..4)?.parse().ok()?;
-        let m: i64 = ts.get(5..7)?.parse().ok()?;
-        let d: i64 = ts.get(8..10)?.parse().ok()?;
-        Some((y, m, d))
+    use chrono::NaiveDate;
+    fn parse_date(ts: &str) -> Option<NaiveDate> {
+        // Accept both bare dates ("YYYY-MM-DD") and RFC 3339 timestamps
+        // ("YYYY-MM-DDT…") by slicing the leading 10 bytes.
+        NaiveDate::parse_from_str(ts.get(0..10)?, "%Y-%m-%d").ok()
     }
-    const fn julian(y: i64, m: i64, d: i64) -> i64 {
-        365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + d
-    }
-    match (parse_ymd(from_ts), parse_ymd(to_ts)) {
-        (Some((fy, fm, fd)), Some((ty, tm, td))) => (julian(ty, tm, td) - julian(fy, fm, fd)).abs(),
+    match (parse_date(from_ts), parse_date(to_ts)) {
+        (Some(from), Some(to)) => to.signed_duration_since(from).num_days().abs(),
         _ => 0,
     }
 }
@@ -1461,5 +1462,58 @@ mod tests {
         assert!(!contains_token("hello world", ""));
         // Colon is non-alphanumeric, so the token boundary is satisfied.
         assert!(contains_token("instrument:aapl", "aapl"));
+    }
+
+    // ── compute_age_days ─────────────────────────────────────────────────────
+    // The old Julian-day formula omitted the Jan/Feb year-shift, causing
+    // off-by-one errors for date pairs that cross a Jan or Feb boundary.
+    // These tests verify the corrected chrono-based implementation.
+
+    #[test]
+    fn compute_age_days_same_date_is_zero() {
+        assert_eq!(compute_age_days("2024-03-15", "2024-03-15"), 0);
+    }
+
+    #[test]
+    fn compute_age_days_simple_delta() {
+        // 10 days apart within a single month, no boundary issues.
+        assert_eq!(compute_age_days("2024-03-01", "2024-03-11"), 10);
+        // Symmetric: absolute value.
+        assert_eq!(compute_age_days("2024-03-11", "2024-03-01"), 10);
+    }
+
+    #[test]
+    fn compute_age_days_jan_to_feb_span() {
+        // Jan 31 → Feb 01 is exactly 1 day.  The old formula returned 0 here
+        // because it applied (153*m+2)/5 without shifting Jan/Feb to months
+        // 13/14 of the prior year, collapsing the month-length contribution.
+        assert_eq!(compute_age_days("2024-01-31", "2024-02-01"), 1);
+        // Jan 01 → Feb 01 is 31 days in any year.
+        assert_eq!(compute_age_days("2024-01-01", "2024-02-01"), 31);
+    }
+
+    #[test]
+    fn compute_age_days_cross_year_boundary() {
+        // 2023-12-31 → 2024-01-01 is exactly 1 day.
+        assert_eq!(compute_age_days("2023-12-31", "2024-01-01"), 1);
+        // 2023-11-15 → 2024-02-15 spans the year boundary and two
+        // months — 92 days (Nov: 15 remaining, Dec: 31, Jan: 31, Feb: 15).
+        assert_eq!(compute_age_days("2023-11-15", "2024-02-15"), 92);
+    }
+
+    #[test]
+    fn compute_age_days_rfc3339_timestamps_accepted() {
+        // The function must accept full RFC 3339 strings, not just bare dates.
+        assert_eq!(
+            compute_age_days("2024-01-31T00:00:00Z", "2024-02-01T12:00:00Z"),
+            1,
+        );
+    }
+
+    #[test]
+    fn compute_age_days_malformed_returns_zero() {
+        assert_eq!(compute_age_days("not-a-date", "2024-01-01"), 0);
+        assert_eq!(compute_age_days("2024-01-01", ""), 0);
+        assert_eq!(compute_age_days("", ""), 0);
     }
 }

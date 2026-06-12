@@ -1370,6 +1370,20 @@ fn validate_feeds(feeds: &FeedsConfig) -> Result<()> {
             )));
         }
     }
+    // Duplicate feed id check (Gemini K-L6 #382 MEDIUM): each id must be
+    // unique across all entries.  This is O(n²) but n is expected to be small
+    // (tens of feeds at most) and validation runs once at config load.
+    {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for entry in &feeds.entries {
+            if !seen.insert(entry.id.as_str()) {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.feeds: duplicate feed id {:?} — each feed must have a unique id",
+                    entry.id
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
