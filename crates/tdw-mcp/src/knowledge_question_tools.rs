@@ -265,12 +265,42 @@ impl OpenQuestionStore {
 
     /// Persist to `path` as JSON.
     ///
+    /// The (cheap, CPU-bound) serialization runs inline so the `&self` borrow is
+    /// not held across the offloaded I/O.  The blocking write-temp-then-rename is
+    /// offloaded to [`tokio::task::spawn_blocking`] when an ambient tokio runtime
+    /// exists, so it never stalls an async worker thread (this is reached from
+    /// the async `tick_question_check` cron path).  When there is no ambient
+    /// runtime (plain sync callers, unit tests) it falls back to a direct sync
+    /// write+rename — same atomic temp-then-rename pattern either way.
+    ///
     /// # Errors
     ///
     /// Returns an error string if serialization or file I/O fails.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_string_pretty(&self.entries)
             .map_err(|e| format!("questions serialize failed: {e}"))?;
+        let path = path.to_path_buf();
+        match tokio::runtime::Handle::try_current() {
+            // Ambient runtime present: do not block the async worker — offload
+            // the write+rename to the blocking pool and wait for it.
+            Ok(handle) => tokio::task::block_in_place(|| {
+                handle.block_on(async {
+                    tokio::task::spawn_blocking(move || Self::write_atomic(&path, &json))
+                        .await
+                        .map_err(|e| format!("questions persist task join failed: {e}"))?
+                })
+            }),
+            // No ambient runtime (sync callers, unit tests): direct sync I/O.
+            Err(_) => Self::write_atomic(&path, &json),
+        }
+    }
+
+    /// Atomic write: serialize-to-temp then rename over the destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if either the temp write or the rename fails.
+    fn write_atomic(path: &Path, json: &str) -> Result<(), String> {
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, json.as_bytes())
             .map_err(|e| format!("questions write to {} failed: {e}", tmp.display()))?;
@@ -1158,19 +1188,94 @@ async fn check_question(
         }
     }
 
+    // ── Secondary match: target entity gained match_tag ──────────────────
+    // Tags are first-class graph citizens (knowledge-system A5): an assignment
+    // is a `tagged` edge from the entity node to the tag node, with the
+    // [assigned_at, expires_at) window mapped onto the edge's
+    // [valid_from, valid_to) timestamps (see GraphTagEngine). A "tag gain" is
+    // therefore exactly a `tagged` edge to this tag that is active at `to_ts`
+    // but was not active at `from_ts` — the same new-edge predicate the primary
+    // and tertiary branches use, scanned over the same GraphEngine seam.
+    if let Some(ref tag_id) = q.match_tag {
+        // Page over `tagged` edges using the bounded scan seam. When a target
+        // entity is set we only care about that entity gaining the tag; with no
+        // target, ANY entity gaining the tag fires (the standing "did anyone get
+        // tagged X?" question).
+        let edges = graph
+            .edges(Some("tagged"), 0, MATCH_ENGINE_EDGE_CAP)
+            .await
+            .map_err(|e| e.to_string())?;
+        for edge in &edges {
+            // Only `tagged` edges pointing AT this tag node.
+            if edge.to != *tag_id {
+                continue;
+            }
+            // When the question pins an entity, require the gain to be on it.
+            if let Some(ref entity_id) = q.match_entity_id
+                && edge.from != *entity_id
+            {
+                continue;
+            }
+            // New assignment: active at to_ts but not at from_ts.
+            if !active_at(
+                edge.valid_from.as_deref(),
+                edge.valid_to.as_deref(),
+                &from_ts,
+            ) && active_at(edge.valid_from.as_deref(), edge.valid_to.as_deref(), &to_ts)
+            {
+                let candidate_id = format!("{}:{}:{}", edge.from, edge.rel, edge.to);
+                let scope_note = q.match_entity_id.as_deref().map_or_else(
+                    || " (any entity)".to_string(),
+                    |e| format!(" on entity {e:?}"),
+                );
+                let why = format!(
+                    "entity gained tag {tag_id:?}{scope_note} between {} and {}",
+                    q.last_checked_as_of, now_as_of,
+                );
+                return Ok(Some(MatchCandidate {
+                    matching_edge_id: candidate_id,
+                    why,
+                }));
+            }
+        }
+    }
+
     // No deterministic match found.
     Ok(None)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Acquire `mutex`, recovering from poisoning.
+///
+/// # Why continuation is safe for these stores
+///
+/// The two mutexes this guards — [`OpenQuestionStore`] and `QuestionsFreshness`
+/// — hold only independent, per-record bookkeeping: a `BTreeMap` of
+/// [`QuestionEntry`] keyed by id plus a couple of scalar counters/cursors.
+/// Every mutation here (`record_match`, `advance_checked`, `upsert`, the
+/// freshness-cell writes) touches one record/field at a time and leaves no
+/// cross-record invariant that a mid-write panic could tear: the worst a
+/// poisoned tick can leave behind is a stale `last_checked_as_of` cursor or an
+/// un-incremented counter, both of which self-heal on the next tick (a stale
+/// cursor merely re-scans an already-seen window; a missed count is cosmetic).
+/// There is no allocation/length pairing, no parallel arrays, and no partial
+/// transaction that could observe a half-applied state.  Recovering and
+/// continuing therefore cannot propagate corruption — only at most replay
+/// idempotent work — so we log loudly at error level and proceed rather than
+/// abort the whole cron loop (which would silently stop matching every standing
+/// question for an unbounded time).
 fn lock_loudly<T, R>(mutex: &Mutex<T>, context: &str, f: impl FnOnce(&mut T) -> R) -> R {
     match mutex.lock() {
         Ok(mut guard) => f(&mut guard),
         Err(poisoned) => {
             eprintln!(
                 "[tdw] ERROR: mutex poisoned — recovering ({context}). \
-                 A previous cron tick panicked; data may be stale."
+                 A previous cron tick panicked; state MAY BE INCONSISTENT. \
+                 Continuing is safe for this store: it holds only independent \
+                 per-question bookkeeping (no torn cross-record invariant), so \
+                 the worst-case residue is a stale cursor that self-heals on the \
+                 next tick. See lock_loudly docs for the full justification."
             );
             let mut guard = poisoned.into_inner();
             f(&mut guard)
@@ -1435,9 +1540,12 @@ mod tests {
         let now_ms = 1_749_686_400_000_i64; // 2025-06-12
         let fired = tick_question_check(&store, &graph, now_ms, &freshness).await;
         assert_eq!(fired, 0);
-        let f = freshness.lock().expect("freshness");
-        assert_eq!(f.open_count, 0);
-        assert_eq!(f.last_check_ms, now_ms);
+        let (open_count, last_check_ms) = {
+            let f = freshness.lock().expect("freshness");
+            (f.open_count, f.last_check_ms)
+        };
+        assert_eq!(open_count, 0);
+        assert_eq!(last_check_ms, now_ms);
     }
 
     /// Gate: matching engine fires one alert when a new edge appears near the
@@ -1512,9 +1620,12 @@ mod tests {
         assert_eq!(fired, 1);
 
         // Freshness bookkeeping updated.
-        let f = freshness.lock().expect("freshness");
-        assert_eq!(f.total_matches_fired, 1);
-        assert_eq!(f.last_check_ms, now_ms);
+        let (total_matches_fired, last_check_ms) = {
+            let f = freshness.lock().expect("freshness");
+            (f.total_matches_fired, f.last_check_ms)
+        };
+        assert_eq!(total_matches_fired, 1);
+        assert_eq!(last_check_ms, now_ms);
     }
 
     /// Gate: a second tick with the same data does NOT re-fire because
@@ -1619,5 +1730,194 @@ mod tests {
         let updated = store.entries.get(&qid).expect("entry");
         assert_eq!(updated.last_checked_as_of, "2026-06-12");
         assert_eq!(updated.matches_fired, 1);
+    }
+
+    // ── Secondary match: match_tag (K-X8 open-question Gemini HIGH fix) ────────
+
+    /// Seed an entity, a tag node, and a `tagged` edge (the A5 tag-assignment
+    /// edge shape) whose `valid_from` falls inside `[from, to)`.
+    #[cfg(test)]
+    async fn seed_tag_assignment(
+        graph: &std::sync::Arc<dyn GraphEngine>,
+        entity_id: &str,
+        tag_id: &str,
+        valid_from: &str,
+    ) {
+        use tdw_core::{GraphEdge, GraphNode, Provenance};
+        graph
+            .upsert_nodes(vec![
+                GraphNode {
+                    id: entity_id.to_string(),
+                    kind: EntityKind::Instrument,
+                    label: entity_id.to_string(),
+                    aliases: vec![],
+                    props: Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+                GraphNode {
+                    id: tag_id.to_string(),
+                    kind: EntityKind::Tag,
+                    label: tag_id.to_string(),
+                    aliases: vec![],
+                    props: Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+            ])
+            .await
+            .expect("upsert nodes");
+        graph
+            .upsert_edges(vec![GraphEdge {
+                from: entity_id.to_string(),
+                to: tag_id.to_string(),
+                rel: "tagged".to_string(),
+                props: Value::Null,
+                provenance: Provenance::System {
+                    detail: "test".to_string(),
+                },
+                valid_from: Some(valid_from.to_string()),
+                valid_to: None,
+            }])
+            .await
+            .expect("upsert tagged edge");
+    }
+
+    /// Gate (HIGH fix): a tag-only question (no entity, no predicate) FIRES when
+    /// some entity gains the configured tag inside the check window — the path
+    /// that was documented-but-dead before this fix.
+    #[tokio::test]
+    async fn tick_fires_when_entity_gains_match_tag() {
+        use std::sync::Arc;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        // Tag assigned 2025-06-01 — new relative to last_checked 2025-05-01,
+        // active by now 2025-06-12.
+        seed_tag_assignment(
+            &graph,
+            "instrument:AAPL",
+            "sector:tech",
+            "2025-06-01T00:00:00Z",
+        )
+        .await;
+
+        let store = Arc::new(Mutex::new(OpenQuestionStore::new()));
+        let freshness = Arc::new(Mutex::new(QuestionsFreshness::default()));
+
+        let mut entry = make_entry("analyst", "Did anything get tagged tech?");
+        entry.match_tag = Some("sector:tech".to_string());
+        entry.last_checked_as_of = "2025-05-01".to_string();
+        {
+            let mut s = store.lock().expect("store");
+            s.upsert(entry);
+        }
+
+        let now_ms = 1_749_686_400_000_i64; // 2025-06-12
+        let fired = tick_question_check(&store, &graph, now_ms, &freshness).await;
+        assert_eq!(fired, 1, "match_tag must fire on a tag gain");
+    }
+
+    /// Gate: the SAME tag-only question does NOT fire when the tag is absent
+    /// (no `tagged` edge to it) — proving the branch is truthful, not a
+    /// fire-always stub.
+    #[tokio::test]
+    async fn tick_does_not_fire_when_match_tag_absent() {
+        use std::sync::Arc;
+        use tdw_core::{GraphNode, Provenance};
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        // Seed the entity and an UNRELATED tag assignment, but never assign the
+        // tag the question watches for.
+        graph
+            .upsert_nodes(vec![
+                GraphNode {
+                    id: "instrument:AAPL".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Apple".to_string(),
+                    aliases: vec![],
+                    props: Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+                GraphNode {
+                    id: "sector:energy".to_string(),
+                    kind: EntityKind::Tag,
+                    label: "Energy".to_string(),
+                    aliases: vec![],
+                    props: Value::Null,
+                    valid_from: None,
+                    valid_to: None,
+                },
+            ])
+            .await
+            .expect("upsert nodes");
+        graph
+            .upsert_edges(vec![tdw_core::GraphEdge {
+                from: "instrument:AAPL".to_string(),
+                to: "sector:energy".to_string(),
+                rel: "tagged".to_string(),
+                props: Value::Null,
+                provenance: Provenance::System {
+                    detail: "test".to_string(),
+                },
+                valid_from: Some("2025-06-01T00:00:00Z".to_string()),
+                valid_to: None,
+            }])
+            .await
+            .expect("upsert tagged edge");
+
+        let store = Arc::new(Mutex::new(OpenQuestionStore::new()));
+        let freshness = Arc::new(Mutex::new(QuestionsFreshness::default()));
+
+        let mut entry = make_entry("analyst", "Did anything get tagged tech?");
+        entry.match_tag = Some("sector:tech".to_string()); // absent in the graph
+        entry.last_checked_as_of = "2025-05-01".to_string();
+        {
+            let mut s = store.lock().expect("store");
+            s.upsert(entry);
+        }
+
+        let now_ms = 1_749_686_400_000_i64; // 2025-06-12
+        let fired = tick_question_check(&store, &graph, now_ms, &freshness).await;
+        assert_eq!(fired, 0, "match_tag must NOT fire when the tag is absent");
+    }
+
+    /// Gate: with BOTH an entity and a tag pinned, the gain must be ON that
+    /// entity — a different entity gaining the same tag does not fire.
+    #[tokio::test]
+    async fn tick_match_tag_scoped_to_entity() {
+        use std::sync::Arc;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        // A DIFFERENT entity gains the tag.
+        seed_tag_assignment(
+            &graph,
+            "instrument:MSFT",
+            "sector:tech",
+            "2025-06-01T00:00:00Z",
+        )
+        .await;
+
+        let store = Arc::new(Mutex::new(OpenQuestionStore::new()));
+        let freshness = Arc::new(Mutex::new(QuestionsFreshness::default()));
+
+        let mut entry = make_entry("analyst", "Did AAPL get tagged tech?");
+        entry.match_entity_id = Some("instrument:AAPL".to_string());
+        entry.match_tag = Some("sector:tech".to_string());
+        entry.last_checked_as_of = "2025-05-01".to_string();
+        {
+            let mut s = store.lock().expect("store");
+            s.upsert(entry);
+        }
+
+        let now_ms = 1_749_686_400_000_i64; // 2025-06-12
+        let fired = tick_question_check(&store, &graph, now_ms, &freshness).await;
+        assert_eq!(
+            fired, 0,
+            "tag gain on a different entity must not fire an entity-pinned question"
+        );
     }
 }
