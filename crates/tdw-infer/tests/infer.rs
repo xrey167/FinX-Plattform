@@ -610,8 +610,8 @@ async fn forged_index_cannot_delete_base_edges() {
     assert_eq!(rel_count(&graph, "exposed_to").await, 1, "base edge intact");
 }
 
-/// K-X6 F4 regression: a user-authored edge (Provenance::Agent { gated: false })
-/// that matches a DeriveEdge pattern must NOT produce a derived fact when
+/// K-X6 F4 regression: a user-authored edge (`Provenance::Agent { gated: false }`)
+/// that matches a `DeriveEdge` pattern must NOT produce a derived fact when
 /// `exclude_user_authored = true` (the default). Enabling opt-in via
 /// `with_user_authored_inference(true)` DOES allow derivation.
 #[tokio::test]

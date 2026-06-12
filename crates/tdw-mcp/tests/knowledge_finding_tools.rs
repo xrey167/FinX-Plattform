@@ -250,8 +250,8 @@ fn descriptors_present_with_full_attachment() {
     );
 }
 
-/// Capture a finding — response reports finding_id, auto_links (AAPL
-/// mentioned in title), evidence_pinned=false for a bare capture.
+/// Capture a finding — response reports `finding_id`, `auto_links` (AAPL
+/// mentioned in title), `evidence_pinned=false` for a bare capture.
 #[test]
 fn capture_finding_reports_id_and_auto_links() {
     let (mut server, _graph) = server_with_findings();
@@ -616,14 +616,13 @@ fn finding_tool_returns_tool_error_when_surface_unavailable() {
     let listed = decode(
         &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
     );
-    let names: Vec<&str> = listed["result"]["tools"]
-        .as_array()
-        .expect("tools array")
-        .iter()
-        .filter_map(|t| t["name"].as_str())
-        .collect();
     assert!(
-        !names.contains(&"tdw.kg.finding"),
+        !listed["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .any(|x| x == "tdw.kg.finding"),
         "finding must be absent without user id"
     );
 
