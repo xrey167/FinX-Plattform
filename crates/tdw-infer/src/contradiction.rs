@@ -15,6 +15,13 @@
 //! covers `as_of`: `valid_from ≤ as_of < valid_to` (open bounds pass).  The
 //! check uses [`tdw_core::active_at`] directly.
 //!
+//! # Timestamp normalization
+//!
+//! All call sites pass `as_of` as a date string (`YYYY-MM-DD`).
+//! [`date_to_utc_rfc3339`] converts it to the normalized UTC form
+//! `YYYY-MM-DDT00:00:00Z` required by [`tdw_core::validate_graph_edge`] before
+//! it is written into `valid_to`.  Lexicographic ordering is preserved.
+//!
 //! # Trust-class matrix
 //!
 //! | Old-edge provenance                | Action                                      |
@@ -25,6 +32,16 @@
 //! | `Agent { gated: false }` (finding) | **Surface conflict** — never auto-close     |
 //! | `Manual`                           | **Surface conflict** — never auto-close     |
 //! | `Rule`                             | **Skip** — B7 retraction handles derived    |
+//!
+//! # Same-timestamp semantics
+//!
+//! When the superseding fact's `valid_from` equals the superseded edge's
+//! `valid_from`, closing at `valid_from` would produce an empty window
+//! `[T, T)` which the graph engine rejects.  The deterministic rule: when
+//! `winner.valid_from == loser.valid_from`, surface the case as a
+//! `Conflict` rather than auto-closing.  This prevents silent data loss and
+//! forces an operator decision when two distinct values are asserted at the
+//! exact same timestamp.
 //!
 //! # Provenance on closures
 //!
@@ -54,6 +71,25 @@ use tdw_taxonomy::FunctionalPredicateSet;
 
 /// Page size for graph-edge scans inside the contradiction detector.
 const PAGE: usize = 256;
+
+/// Convert a `YYYY-MM-DD` date string to the normalized UTC RFC 3339 form
+/// `YYYY-MM-DDT00:00:00Z` required by [`tdw_core::validate_graph_edge`].
+///
+/// The graph's `is_timestampish` validator requires `≥ 20` characters ending
+/// in `Z` with `T` at position 10 — date-only strings are rejected.  This
+/// helper appends the midnight suffix so lexicographic ordering is preserved
+/// and the resulting string passes validation.
+///
+/// Callers throughout the MCP and backend layers pass `as_of` as a
+/// `YYYY-MM-DD` date; this is the single normalization point.
+#[must_use]
+pub fn date_to_utc_rfc3339(date: &str) -> String {
+    // If it already looks like a full RFC 3339 UTC timestamp, return as-is.
+    if date.len() >= 20 && date.ends_with('Z') {
+        return date.to_string();
+    }
+    format!("{date}T00:00:00Z")
+}
 
 /// What happened to one arriving edge.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,8 +181,11 @@ impl ContradictionDetector {
     /// Check one arriving edge for functional-predicate contradiction and, if
     /// found, close the superseded edge's validity window.
     ///
-    /// `as_of` is the arrival timestamp (RFC 3339 UTC, same format the graph
-    /// uses for `valid_from`/`valid_to`).  It is used as:
+    /// `as_of` may be either `YYYY-MM-DD` or a full RFC 3339 UTC timestamp
+    /// (`YYYY-MM-DDTHH:MM:SSZ`).  It is normalized to RFC 3339 UTC form
+    /// internally before being written into `valid_to` (the graph engine
+    /// validates all timestamps in that form).  The normalized timestamp is
+    /// used as:
     /// - the `as_of` point for the "is there an active conflicting edge?"
     ///   check, and
     /// - the `valid_to` written onto the superseded edge.
@@ -161,6 +200,8 @@ impl ContradictionDetector {
         arriving: &GraphEdge,
         as_of: &str,
     ) -> Result<InvalidationOutcome, ContradictionError> {
+        let as_of = date_to_utc_rfc3339(as_of);
+        let as_of = as_of.as_str();
         // Fast path: skip non-functional relations immediately.
         if !self.predicates.is_functional(&arriving.rel) {
             return Ok(InvalidationOutcome::NotFunctional);
@@ -224,6 +265,10 @@ impl ContradictionDetector {
         arriving: &[GraphEdge],
         as_of: &str,
     ) -> Result<ContradictionReport, ContradictionError> {
+        // Normalize once for the whole batch so each check_and_invalidate call
+        // receives an already-normalized timestamp and does not re-normalize.
+        let as_of_owned = date_to_utc_rfc3339(as_of);
+        let as_of = as_of_owned.as_str();
         let mut report = ContradictionReport::default();
         for edge in arriving {
             match self.check_and_invalidate(graph, edge, as_of).await? {
@@ -279,6 +324,10 @@ impl ContradictionDetector {
         graph: &Arc<dyn GraphEngine>,
         as_of: &str,
     ) -> Result<ContradictionReport, ContradictionError> {
+        // Normalize as_of to RFC 3339 UTC once at entry — all graph writes of
+        // valid_to must use this form (is_timestampish contract).
+        let as_of_owned = date_to_utc_rfc3339(as_of);
+        let as_of = as_of_owned.as_str();
         let mut report = ContradictionReport::default();
         // Iterate over every functional predicate in sorted order for
         // determinism.  For each, collect all active edges grouped by `from`.
@@ -358,6 +407,9 @@ impl ContradictionDetector {
 
     /// Apply the trust-class matrix to a found conflict and either close the
     /// old edge or surface it as a conflict.
+    ///
+    /// `as_of` must already be a normalized RFC 3339 UTC timestamp (callers
+    /// normalize via [`date_to_utc_rfc3339`] at their entry point).
     async fn resolve(
         &self,
         graph: &Arc<dyn GraphEngine>,
@@ -398,6 +450,23 @@ impl ContradictionDetector {
             Provenance::Ingest { .. }
             | Provenance::Agent { gated: true, .. }
             | Provenance::System { .. } => {
+                // Same-timestamp guard: if the superseded edge's valid_from
+                // equals as_of, closing at as_of would create an empty window
+                // [T, T) which the graph engine rejects.  This is the
+                // intraday-supersession case — two distinct values at the
+                // exact same timestamp is ambiguous, so we surface it as a
+                // conflict rather than auto-closing.  See module-level
+                // "Same-timestamp semantics" section.
+                if existing.valid_from.as_deref().is_some_and(|vf| vf >= as_of) {
+                    return Ok(InvalidationOutcome::Conflict {
+                        from: existing.from,
+                        rel: existing.rel,
+                        old_to: existing.to,
+                        new_to: arriving.to.clone(),
+                        old_provenance_class: "ingest:same-timestamp",
+                    });
+                }
+
                 let old_to = existing.to.clone();
                 let from = existing.from.clone();
                 let rel = existing.rel.clone();
@@ -417,10 +486,8 @@ impl ContradictionDetector {
                 props.insert("invalidated_by".to_string(), json!(new_edge_ref));
                 existing.props = serde_json::Value::Object(props);
 
-                // Close the validity window at as_of.  If the edge had no
-                // valid_to yet (open-ended), set it; if it already had one
-                // that is later than as_of, bring it in (should not happen
-                // normally, but we never widen a window).
+                // Close the validity window at as_of (normalized RFC 3339 UTC
+                // form — validated by the graph engine on replace_edges).
                 existing.valid_to = Some(as_of.to_string());
 
                 // Atomic replace: fetch all (from, rel, *) edges for this
@@ -504,10 +571,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-
-    fn ts(s: &str) -> String {
-        s.to_string()
-    }
 
     /// Build a minimal GraphNode for a test entity.
     fn node(id: &str) -> GraphNode {
@@ -983,5 +1046,132 @@ mod tests {
         let report = detector.check_batch(&graph, &batch, t2).await.unwrap();
         assert_eq!(report.invalidated, 1, "one ingest edge invalidated");
         assert_eq!(report.conflicts, 1, "one user conflict surfaced");
+    }
+
+    // -----------------------------------------------------------------------
+    // scan_all_functional writes invalidated_by into props (why-chain)
+    // -----------------------------------------------------------------------
+
+    /// `scan_all_functional` must annotate the closed edge with
+    /// `invalidated_by` so a `tdw.kg.why` query on the old edge surfaces the
+    /// supersession lineage.  This exercises the scan path (not just
+    /// `check_and_invalidate`) end-to-end.
+    #[tokio::test]
+    async fn scan_all_functional_annotates_invalidated_by_on_closed_edge() {
+        let t1 = "2024-01-01T00:00:00Z";
+        let t2 = "2024-06-01T00:00:00Z";
+
+        let alice_edge = ingest_edge("company:ACME", "ceo_of", "person:alice", Some(t1));
+        let bob_edge = ingest_edge("company:ACME", "ceo_of", "person:bob", Some(t2));
+
+        let graph = seeded_graph(
+            &["company:ACME", "person:alice", "person:bob"],
+            &[alice_edge, bob_edge],
+        )
+        .await;
+        let graph: Arc<dyn tdw_core::GraphEngine> = graph;
+
+        let detector = ContradictionDetector::default_predicates();
+        let report = detector
+            .scan_all_functional(&graph, t2)
+            .await
+            .expect("scan should succeed");
+
+        assert_eq!(
+            report.invalidated, 1,
+            "one edge must be invalidated by scan"
+        );
+
+        // Read alice's edge directly and check the annotation.
+        let all_edges = graph.edges(Some("ceo_of"), 0, 256).await.unwrap();
+        let alice_closed = all_edges
+            .iter()
+            .find(|e| e.to == "person:alice")
+            .expect("alice edge still exists (history preserved)");
+
+        assert_eq!(
+            alice_closed.valid_to.as_deref(),
+            Some(t2),
+            "alice edge must be closed at t2"
+        );
+
+        let inv_by = alice_closed
+            .props
+            .get("invalidated_by")
+            .and_then(|v| v.as_str())
+            .expect("invalidated_by annotation must be present on closed edge");
+
+        assert!(
+            inv_by.contains("person:bob"),
+            "invalidated_by must name the superseding entity; got: {inv_by}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-timestamp supersession: surface as Conflict, not auto-close
+    // -----------------------------------------------------------------------
+
+    /// When the arriving fact's `valid_from` equals the superseded edge's
+    /// `valid_from`, closing would create an empty window `[T, T)` which the
+    /// graph engine rejects.  The documented rule: surface as Conflict.
+    #[tokio::test]
+    async fn same_valid_from_surfaces_as_conflict_not_auto_closed() {
+        let t_same = "2024-06-01T00:00:00Z";
+
+        // Both edges have the same valid_from.
+        let alice_edge = ingest_edge("company:ACME", "ceo_of", "person:alice", Some(t_same));
+        let graph = seeded_graph(
+            &["company:ACME", "person:alice", "person:bob"],
+            &[alice_edge],
+        )
+        .await;
+        let graph: Arc<dyn tdw_core::GraphEngine> = graph;
+
+        let detector = ContradictionDetector::default_predicates();
+        let arriving = ingest_edge("company:ACME", "ceo_of", "person:bob", Some(t_same));
+
+        let outcome = detector
+            .check_and_invalidate(&graph, &arriving, t_same)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                outcome,
+                InvalidationOutcome::Conflict {
+                    old_provenance_class: "ingest:same-timestamp",
+                    ..
+                }
+            ),
+            "same-timestamp contradiction must surface as Conflict, not auto-close: {outcome:?}"
+        );
+
+        // Alice's edge must be untouched (valid_to still None).
+        let edges = graph.edges(Some("ceo_of"), 0, 256).await.unwrap();
+        let alice = edges
+            .iter()
+            .find(|e| e.to == "person:alice")
+            .expect("alice edge still present");
+        assert!(
+            alice.valid_to.is_none(),
+            "same-timestamp conflict must NOT auto-close alice's edge"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // date_to_utc_rfc3339: date-only input is normalized to RFC 3339 UTC
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn date_to_utc_rfc3339_normalizes_date_only_input() {
+        assert_eq!(
+            super::date_to_utc_rfc3339("2024-06-01"),
+            "2024-06-01T00:00:00Z"
+        );
+        // Already-normalized input is returned unchanged.
+        assert_eq!(
+            super::date_to_utc_rfc3339("2024-06-01T00:00:00Z"),
+            "2024-06-01T00:00:00Z"
+        );
     }
 }

@@ -50,6 +50,23 @@
 //! in both directions via `tdw.kg.traverse`.  Duplicate links (same
 //! from/rel/to triple) are idempotently rejected with a loud error so the
 //! caller's intent is clear.
+//!
+//! # K-X7 seam — contradiction evidence on closed edges
+//!
+//! K-X7 (knowledge-system K-X7, tracked in PR #391) extends this module to
+//! emit a `contradicts` evidence edge whenever K-M4 closes a functional-
+//! predicate edge that backs a finding.  The contract:
+//!
+//! * K-M4 closes the superseded edge and sets `invalidated_by` in its props.
+//! * K-X7 reads `invalidated_by`, resolves the finding that cites the closed
+//!   edge (via `described_by` / `mentioned_by`), and writes a
+//!   `contradicts` edge from that finding to the newly-arrived superseding
+//!   fact.
+//!
+//! No dead code is introduced here: K-X7 owns its own hook site and queries
+//! the `invalidated_by` prop written by `ContradictionDetector::resolve`.
+//! This note documents the seam so both stories stay coherent; the
+//! implementation lives in the K-X7 branch.
 
 use serde_json::{Map, Value, json};
 use tdw_core::{Direction, GraphEdge, GraphNode, Provenance, TraversalFilter};
