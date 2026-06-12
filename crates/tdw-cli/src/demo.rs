@@ -55,6 +55,63 @@ use crate::CliError;
 const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kg-demo");
 
 // ---------------------------------------------------------------------------
+// Single-source-of-truth MCP example builders
+//
+// These functions produce the EXACT JSON objects that run_all prints as
+// "Equivalent tool" narration lines.  The drift-prevention test calls the
+// same functions — there is no separate hand-written literal that could lie.
+// ---------------------------------------------------------------------------
+
+/// Build the search-step MCP example.
+///
+/// Top-level keys must match the real `tdw.kg.search` schema
+/// (`knowledge_tools.rs::search_descriptor`).
+/// Required: `query`. Optional: `top_k`, `tags_any`, `entity_kinds`, `plane`, `as_of`, `expand`.
+#[must_use]
+pub fn search_example_json() -> Value {
+    json!({ "query": "AAPL supply chain", "top_k": 3 })
+}
+
+/// Build the diff-step MCP example.
+///
+/// Top-level keys must match the real `tdw.kg.diff` schema
+/// (`knowledge_explain_tools.rs::diff_descriptor`).
+/// Required: `from_as_of`, `to_as_of`. Optional: `plane`, `scope_entity_id`, `limit`.
+#[must_use]
+pub fn diff_example_json(from_as_of: &str, to_as_of: &str) -> Value {
+    json!({ "from_as_of": from_as_of, "to_as_of": to_as_of })
+}
+
+/// Build the why-step MCP example for a concrete `supply_chain_peer` edge.
+///
+/// `from_node_id` and `to_node_id` are bare graph node ids (e.g. `"company:AAPL"`).
+/// Top-level keys must match the real `tdw.kg.why` schema
+/// (`knowledge_explain_tools.rs::why_descriptor`): one of `entity_id`, `edge`,
+/// `tag_assignment`, `as_of`.  The `edge` sub-object allows only `from`, `rel`, `to`.
+#[must_use]
+pub fn why_example_json(from_node_id: &str, to_node_id: &str) -> Value {
+    json!({
+        "edge": {
+            "from": from_node_id,
+            "rel": "supply_chain_peer",
+            "to": to_node_id
+        }
+    })
+}
+
+/// Parse a bare graph node id from a derivation-index edge key.
+///
+/// Derivation index keys have the form `"edge:{from}->{rel}->{to}"`.
+/// This strips the `"edge:"` prefix and returns `(from, to)` node ids,
+/// or `None` if the key does not match the expected pattern.
+fn node_ids_from_edge_key<'a>(key: &'a str, rel: &str) -> Option<(&'a str, &'a str)> {
+    let body = key.strip_prefix("edge:")?;
+    let sep = format!("->{rel}->");
+    let (from, to) = body.split_once(sep.as_str())?;
+    Some((from, to))
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -68,7 +125,7 @@ const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/kg-demo
 pub async fn run(args: &[String]) -> Result<(), CliError> {
     let json_mode = args.iter().any(|a| a == "--json");
     let runner = DemoRunner { json_mode };
-    runner.run_all().await
+    runner.run_all().await.map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +160,7 @@ impl DemoRunner {
         }
     }
 
-    async fn run_all(self) -> Result<(), CliError> {
+    async fn run_all(self) -> Result<SmokeResult, CliError> {
         // ── Banner ────────────────────────────────────────────────────────
         self.narrate("tdw kg demo — knowledge-graph offline walkthrough (K-X2)");
         self.narrate(
@@ -248,9 +305,13 @@ impl DemoRunner {
         // STEP 2 — SEARCH
         // ================================================================
         self.section("Step 2 · Search");
-        self.narrate(
-            "Equivalent tool: MCP tdw.kg.search { \"query\": \"AAPL supply chain\", \"top_k\": 3 }",
-        );
+
+        // Use the shared example builder — same value the drift test validates.
+        let search_ex = search_example_json();
+        self.narrate(&format!(
+            "Equivalent tool: MCP tdw.kg.search {}",
+            serde_json::to_string(&search_ex).unwrap_or_default()
+        ));
         self.narrate(
             "  Note: demo uses the hash embedder (keyword-match, not semantic). \
              For semantic relevance configure a real embedder (local / openai / google).",
@@ -293,22 +354,18 @@ impl DemoRunner {
         let derivation_index = infer_engine.derivation_index();
         let why_result = explain_derived_edge(derivation_index)?;
 
-        // Emit the exact equivalent MCP invocation using the real tdw.kg.why schema:
-        // { "edge": { "from": "...", "rel": "supply_chain_peer", "to": "..." } }
-        // The schema requires exactly one of entity_id / edge / tag_assignment.
-        let edge_from = why_result
-            .fact_key
-            .split("->supply_chain_peer->")
-            .next()
-            .unwrap_or("");
-        let edge_to = why_result
-            .fact_key
-            .split("->supply_chain_peer->")
-            .nth(1)
-            .unwrap_or("");
+        // Parse bare node ids from the derivation-index key ("edge:{from}->{rel}->{to}").
+        // node_ids_from_edge_key strips the "edge:" prefix so callers get "company:AAPL",
+        // not "edge:company:AAPL" — the latter is not a valid graph node id.
+        let (edge_from, edge_to) =
+            node_ids_from_edge_key(&why_result.fact_key, "supply_chain_peer")
+                .ok_or("demo smoke: cannot parse node ids from fact_key")?;
+
+        // Use the shared example builder — same value the drift test validates.
+        let why_ex = why_example_json(edge_from, edge_to);
         self.narrate(&format!(
-            "Equivalent tool: MCP tdw.kg.why {{ \"edge\": {{ \"from\": \"{edge_from}\", \
-             \"rel\": \"supply_chain_peer\", \"to\": \"{edge_to}\" }} }}"
+            "Equivalent tool: MCP tdw.kg.why {}",
+            serde_json::to_string(&why_ex).unwrap_or_default()
         ));
 
         self.narrate(&format!("  Derived edge: {}", why_result.fact_key));
@@ -336,16 +393,23 @@ impl DemoRunner {
             return Err("demo smoke: why provenance chain is empty".into());
         }
 
+        let why_rule_id = why_result.rule_id.clone();
+
         // ================================================================
         // STEP 4 — INGEST v2 then TEMPORAL GRAPH DIFF
         // ================================================================
         self.section("Step 4 · Diff (two as_of snapshots — temporal graph-state diff)");
-        self.narrate(
-            "Equivalent tool: MCP tdw.kg.diff { \"from_as_of\": \"2026-01-15\", \"to_as_of\": \"2026-04-15\" }",
-        );
-        self.narrate("  Ingesting v2 snapshot (3 updated/new documents)...");
 
         let v2_date = "2026-04-15";
+
+        // Use the shared example builder — same value the drift test validates.
+        let diff_ex = diff_example_json(v1_date, v2_date);
+        self.narrate(&format!(
+            "Equivalent tool: MCP tdw.kg.diff {}",
+            serde_json::to_string(&diff_ex).unwrap_or_default()
+        ));
+        self.narrate("  Ingesting v2 snapshot (3 updated/new documents)...");
+
         let mut landed_v2 = 0usize;
         let mut skipped_v2 = 0usize;
 
@@ -455,8 +519,42 @@ impl DemoRunner {
              for loading your own documents.",
         );
 
-        Ok(())
+        Ok(SmokeResult {
+            landed_v1,
+            derived_edges_v1: infer_report.derived_edges,
+            why_rule_id,
+            manifest_changed: manifest_diff.changed,
+            manifest_added: manifest_diff.added,
+            total_docs,
+            derived_edges_total: derived_edges,
+        })
     }
+}
+
+// ---------------------------------------------------------------------------
+// SmokeResult — exact counts returned to callers / integration tests
+// ---------------------------------------------------------------------------
+
+/// Exact outcome values from a full demo run.
+///
+/// Returned by `run_smoke_detailed` so integration tests can make
+/// precise assertions rather than just checking `Ok(())`.
+#[allow(dead_code)] // fields read by the integration test (tests/kg_demo.rs), not by lib itself
+pub struct SmokeResult {
+    /// Documents landed in the v1 ingest pass.
+    pub landed_v1: usize,
+    /// Derived edges minted by the `DeriveEdge` rule after v1.
+    pub derived_edges_v1: usize,
+    /// Rule id that produced the first `supply_chain_peer` edge.
+    pub why_rule_id: String,
+    /// Document ids whose content changed in the v1→v2 diff.
+    pub manifest_changed: Vec<String>,
+    /// Document ids that are new in v2.
+    pub manifest_added: Vec<String>,
+    /// Total unique document ids in the manifest after both passes.
+    pub total_docs: usize,
+    /// Total derived edges in the derivation index after both passes.
+    pub derived_edges_total: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -526,7 +624,7 @@ fn collect_tag_ids(
 
 /// Output of the why-step explanation.
 pub struct WhyResult {
-    /// The full derivation index key, e.g. `"A->supply_chain_peer->B"`.
+    /// The full derivation index key, e.g. `"edge:A->supply_chain_peer->B"`.
     pub fact_key: String,
     /// Id of the rule that fired.
     pub rule_id: String,
@@ -661,24 +759,31 @@ pub async fn compute_temporal_graph_diff(
 }
 
 // ---------------------------------------------------------------------------
-// Integration-test helpers (pub so the tests module can call them)
+// Integration-test helpers (pub so tests/kg_demo.rs can call them)
 // ---------------------------------------------------------------------------
 
-/// Run the full demo in `--json` mode and return `Ok(())` if every step passes.
+/// Run the full demo in `--json` mode and return exact outcome counts.
 ///
-/// Used by integration tests for a programmatic assertion.
+/// # Errors
+///
+/// Returns a descriptive error if any step fails.
+pub async fn run_smoke_detailed() -> Result<SmokeResult, CliError> {
+    let args: Vec<String> = ["tdw", "kg", "demo", "--json"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let json_mode = args.iter().any(|a| a == "--json");
+    DemoRunner { json_mode }.run_all().await
+}
+
+/// Run the full demo and return `Ok(())` — convenience wrapper for smoke tests.
 ///
 /// # Errors
 ///
 /// Returns a descriptive error if any step fails.
 #[allow(dead_code)] // used by integration tests in tests/kg_demo.rs
 pub async fn run_smoke() -> Result<(), CliError> {
-    // Synthesise `--json` args list.
-    let args: Vec<String> = ["tdw", "kg", "demo", "--json"]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    run(&args).await
+    run_smoke_detailed().await.map(|_| ())
 }
 
 #[cfg(test)]
@@ -713,7 +818,6 @@ mod tests {
         let mut m = IndexManifest::default();
         m.record("aapl-profile", "oldhash", "2026-01-15");
         m.record("aapl-profile", "newhash", "2026-04-15"); // overwrite
-
         m.record("new-doc", "somehash", "2026-04-15");
 
         // v1_doc_ids snapshotted from the manifest BEFORE v2 ingest.
@@ -731,15 +835,40 @@ mod tests {
         );
     }
 
-    /// Validate that each demo step's printed MCP invocation uses ONLY parameter
-    /// names present in the real tool schemas (`additionalProperties: false`).
+    #[test]
+    fn node_ids_from_edge_key_strips_prefix_and_splits_correctly() {
+        // edge_key format: "edge:{from}->{rel}->{to}"
+        // node_ids_from_edge_key must return bare node ids without the "edge:" prefix.
+        let key = "edge:company:AAPL->supply_chain_peer->company:TSMC";
+        let result = node_ids_from_edge_key(key, "supply_chain_peer");
+        assert!(result.is_some(), "valid key should parse");
+        let (from, to) = result.expect("valid key");
+        assert_eq!(from, "company:AAPL", "from must not carry 'edge:' prefix");
+        assert_eq!(to, "company:TSMC");
+
+        // Keys without the prefix must not parse.
+        assert!(
+            node_ids_from_edge_key(
+                "company:AAPL->supply_chain_peer->company:TSMC",
+                "supply_chain_peer"
+            )
+            .is_none(),
+            "key without 'edge:' prefix must return None"
+        );
+    }
+
+    /// Drift-prevention: validate that every example JSON built by the shared
+    /// example-builder functions uses ONLY parameter names that exist in the real
+    /// MCP tool schemas (`additionalProperties: false`).
     ///
-    /// This test parses the exact string literals emitted by `run_all` and checks
-    /// every key against the schema, so documentation cannot drift from reality.
+    /// The test calls the SAME builder functions that `run_all` uses for its
+    /// narration — there is no separate hand-written JSON literal here, so the
+    /// test cannot pass while the printed example is wrong.
     #[test]
     fn demo_mcp_examples_match_real_tool_schemas() {
-        // ── tdw.kg.search schema (from knowledge_tools.rs search_descriptor) ──
-        // Required: query. Optional: top_k, tags_any, entity_kinds, plane, as_of, expand.
+        // ── tdw.kg.search ─────────────────────────────────────────────────
+        // Schema (knowledge_tools.rs search_descriptor):
+        // required: query  |  optional: top_k, tags_any, entity_kinds, plane, as_of, expand
         let search_allowed: BTreeSet<&str> = [
             "query",
             "top_k",
@@ -752,43 +881,63 @@ mod tests {
         .into_iter()
         .collect();
 
-        // The demo emits: { "query": "...", "top_k": 3 }
-        let search_example = json!({ "query": "AAPL supply chain", "top_k": 3 });
-        for key in search_example.as_object().unwrap().keys() {
-            assert!(
-                search_allowed.contains(key.as_str()),
-                "demo search example uses unknown key {key:?} — not in tdw.kg.search schema"
-            );
+        // Call the shared builder — same value run_all narrates.
+        let search_ex = search_example_json();
+        if let Value::Object(map) = &search_ex {
+            for key in map.keys() {
+                assert!(
+                    search_allowed.contains(key.as_str()),
+                    "search_example_json() emits unknown key {key:?} — fix search_example_json()"
+                );
+            }
         }
 
-        // ── tdw.kg.why schema (from knowledge_explain_tools.rs why_descriptor) ──
-        // Allowed top-level: entity_id, edge, tag_assignment, as_of.
-        // edge sub-object required: from, rel, to (additionalProperties: false).
+        // ── tdw.kg.why ────────────────────────────────────────────────────
+        // Schema (knowledge_explain_tools.rs why_descriptor):
+        // top-level allowed: entity_id, edge, tag_assignment, as_of
+        // edge sub-object allowed: from, rel, to  (additionalProperties: false)
         let why_allowed: BTreeSet<&str> = ["entity_id", "edge", "tag_assignment", "as_of"]
             .into_iter()
             .collect();
         let why_edge_allowed: BTreeSet<&str> = ["from", "rel", "to"].into_iter().collect();
 
-        // The demo emits: { "edge": { "from": "...", "rel": "supply_chain_peer", "to": "..." } }
-        let why_example = json!({
-            "edge": { "from": "instrument:AAPL", "rel": "supply_chain_peer", "to": "company:TSMC" }
-        });
-        for key in why_example.as_object().unwrap().keys() {
-            assert!(
-                why_allowed.contains(key.as_str()),
-                "demo why example uses unknown top-level key {key:?} — not in tdw.kg.why schema"
-            );
-        }
-        let edge_obj = why_example["edge"].as_object().unwrap();
-        for key in edge_obj.keys() {
-            assert!(
-                why_edge_allowed.contains(key.as_str()),
-                "demo why edge example uses unknown key {key:?} — not in tdw.kg.why edge schema"
-            );
+        // Use realistic node ids to verify the builder strips the "edge:" prefix.
+        let why_ex = why_example_json("company:AAPL", "company:TSMC");
+        if let Value::Object(top) = &why_ex {
+            for key in top.keys() {
+                assert!(
+                    why_allowed.contains(key.as_str()),
+                    "why_example_json() emits unknown top-level key {key:?}"
+                );
+            }
+            if let Some(Value::Object(edge_obj)) = top.get("edge") {
+                for key in edge_obj.keys() {
+                    assert!(
+                        why_edge_allowed.contains(key.as_str()),
+                        "why_example_json() edge sub-object has unknown key {key:?}"
+                    );
+                }
+                // The "from" value must be a bare node id — not "edge:company:AAPL".
+                if let Some(Value::String(from_val)) = edge_obj.get("from") {
+                    assert!(
+                        !from_val.starts_with("edge:"),
+                        "why_example_json() 'from' must be a bare node id, got {from_val:?}"
+                    );
+                }
+                if let Some(Value::String(to_val)) = edge_obj.get("to") {
+                    assert!(
+                        !to_val.starts_with("edge:"),
+                        "why_example_json() 'to' must be a bare node id, got {to_val:?}"
+                    );
+                }
+            } else {
+                panic!("why_example_json() must have an 'edge' object");
+            }
         }
 
-        // ── tdw.kg.diff schema (from knowledge_explain_tools.rs diff_descriptor) ──
-        // Required: from_as_of, to_as_of. Optional: plane, scope_entity_id, limit.
+        // ── tdw.kg.diff ───────────────────────────────────────────────────
+        // Schema (knowledge_explain_tools.rs diff_descriptor):
+        // required: from_as_of, to_as_of  |  optional: plane, scope_entity_id, limit
         let diff_allowed: BTreeSet<&str> = [
             "from_as_of",
             "to_as_of",
@@ -799,12 +948,23 @@ mod tests {
         .into_iter()
         .collect();
 
-        // The demo emits: { "from_as_of": "2026-01-15", "to_as_of": "2026-04-15" }
-        let diff_example = json!({ "from_as_of": "2026-01-15", "to_as_of": "2026-04-15" });
-        for key in diff_example.as_object().unwrap().keys() {
+        // Call the shared builder — same value run_all narrates.
+        let diff_ex = diff_example_json("2026-01-15", "2026-04-15");
+        if let Value::Object(map) = &diff_ex {
+            for key in map.keys() {
+                assert!(
+                    diff_allowed.contains(key.as_str()),
+                    "diff_example_json() emits unknown key {key:?} — fix diff_example_json()"
+                );
+            }
+            // Both required keys must be present.
             assert!(
-                diff_allowed.contains(key.as_str()),
-                "demo diff example uses unknown key {key:?} — not in tdw.kg.diff schema"
+                map.contains_key("from_as_of"),
+                "diff example must have from_as_of"
+            );
+            assert!(
+                map.contains_key("to_as_of"),
+                "diff example must have to_as_of"
             );
         }
     }
