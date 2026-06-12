@@ -230,17 +230,18 @@ async fn golden_split_regression_gate() {
     }
 
     use tdw_eval_runner::baseline_comparator::{RegressionThresholds, compare_to_baseline};
-    use tdw_eval_runner::retrieval_eval::RetrievalEvalReport;
+    use tdw_eval_runner::scheduled_eval::{GoldenSplitFixture, load_golden_split};
 
-    // ── load baseline ────────────────────────────────────────────────────────
-    let baseline_path = concat!(
+    // ── load fixture (GoldenSplitFixture: documents + cases + baseline) ──────
+    let fixture_path = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/baselines/golden-split-v1.json"
     );
-    let baseline_json =
-        std::fs::read_to_string(baseline_path).expect("baseline file must be readable");
-    let baseline: RetrievalEvalReport =
-        serde_json::from_str(&baseline_json).expect("baseline must be valid JSON");
+    let fixture: GoldenSplitFixture =
+        load_golden_split(fixture_path).expect("fixture file must be readable and valid JSON");
+    let baseline = fixture
+        .baseline
+        .expect("golden-split-v1 fixture must contain a baseline (not a first-run fixture)");
 
     // ── run current eval with HashEmbeddingProvider ──────────────────────────
     let embedder = Arc::new(HashEmbeddingProvider::default());
@@ -293,7 +294,9 @@ async fn golden_split_regression_gate() {
          {}\n\n\
          If this is an intentional quality change, bless the baseline:\n\
            1. Inspect the fresh report printed above.\n\
-           2. Copy it over crates/tdw-eval-runner/baselines/golden-split-v1.json\n\
+           2. Update the \"baseline\" field in\n\
+              crates/tdw-eval-runner/baselines/golden-split-v1.json\n\
+              (keep the documents and cases fields unchanged).\n\
            3. Open a PR documenting the intentional change.\n\
          DO NOT auto-overwrite the baseline.",
         verdict.summary

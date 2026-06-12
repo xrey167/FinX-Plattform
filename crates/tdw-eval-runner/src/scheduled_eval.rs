@@ -59,7 +59,9 @@ pub use tdw_knowledge::runtime::EvalFreshness;
 /// The `[knowledge.evals]` configuration block.
 ///
 /// Serde defaults: `split_id` = `None` (eval disabled), `cadence` = weekly
-/// (`"0 3 * * MON"`), thresholds = 5 pp per metric.
+/// (`"0 3 * * MON"`), thresholds = 5 pp per metric, `split_fixture_path` =
+/// `None` (falls back to the embedded fixture at
+/// `baselines/<split_id>.json` relative to the `tdw-eval-runner` crate root).
 ///
 /// Validation: `cadence` must be a valid 5-field cron expression (validated by
 /// parsing it with the raw `cron` crate); thresholds must be in `[0.0, 1.0]`.
@@ -98,6 +100,21 @@ pub struct ScheduledEvalConfig {
     /// Maximum allowed drop in mean nDCG\@k before a regression is declared.
     #[serde(default = "default_threshold")]
     pub max_ndcg_drop: f64,
+
+    /// Filesystem path to the golden-split fixture file (JSON).
+    ///
+    /// The fixture file must be a JSON object matching the [`GoldenSplitFixture`]
+    /// shape: `{ "documents": [...], "cases": [...], "baseline": <report> }`.
+    /// `baseline` may be `null` — that signals a first-run state where no
+    /// prior baseline exists (see [`run_scheduled_eval_from_fixture`]).
+    ///
+    /// When `None`, the worker falls back to the embedded fixture at
+    /// `<crate-root>/baselines/<split_id>.json`.  When the resolved path does
+    /// not exist or fails to parse, the worker writes
+    /// [`EvalFreshness::Stale`] to the cell and emits no alarm — a missing or
+    /// corrupt fixture is a configuration error, never a retrieval regression.
+    #[serde(default)]
+    pub split_fixture_path: Option<String>,
 }
 
 fn default_cadence() -> String {
@@ -116,6 +133,7 @@ impl Default for ScheduledEvalConfig {
             max_recall_drop: default_threshold(),
             max_mrr_drop: default_threshold(),
             max_ndcg_drop: default_threshold(),
+            split_fixture_path: None,
         }
     }
 }
@@ -181,6 +199,189 @@ impl ScheduledEvalConfig {
             max_recall_drop: self.max_recall_drop,
             max_mrr_drop: self.max_mrr_drop,
             max_ndcg_drop: self.max_ndcg_drop,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Golden-split fixture — the checked-in corpus+cases+baseline bundle
+// ---------------------------------------------------------------------------
+
+/// The checked-in fixture that feeds one cron-triggered eval run.
+///
+/// A `GoldenSplitFixture` bundles everything the worker needs at fire time:
+/// the fixed document corpus, the fixed case set, and the persisted baseline
+/// report to compare against.  All three are **checked into the repository**
+/// and never generated at runtime.
+///
+/// # Baseline `None` = first-run
+///
+/// When `baseline` is `null` (or absent) in the fixture JSON, no prior
+/// baseline exists.  The worker treats this as a **first-run** state: it runs
+/// the eval, records the result as `Green` with summary
+/// `"first-run: no prior baseline — current metrics recorded"`, and does **not**
+/// alarm.  Operators bless the baseline by running the golden-split gate test
+/// (see `retrieval_eval.rs`) and checking the printed report into the fixture
+/// file.
+///
+/// # Zero-cases posture
+///
+/// An empty `cases` list is structurally incapable of producing a
+/// `Regressed` result.  The worker writes `Stale` with notice
+/// `"split fixture has no eval cases"` and does **not** alarm.  This prevents
+/// a misconfigured or incomplete fixture from silently generating spurious
+/// alarms.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GoldenSplitFixture {
+    /// The fixed document corpus that seeds the in-memory retriever.
+    pub documents: Vec<KnowledgeDocument>,
+    /// The fixed golden case set.
+    pub cases: Vec<RetrievalEvalCase>,
+    /// The persisted baseline report to compare against.  `None` = first-run.
+    pub baseline: Option<RetrievalEvalReport>,
+}
+
+/// Load a [`GoldenSplitFixture`] from a filesystem path.
+///
+/// # Errors
+///
+/// Returns a `String` describing the failure (file not found, invalid JSON,
+/// schema mismatch).  The caller writes [`EvalFreshness::Stale`] on error
+/// and does **not** alarm — a missing or corrupt fixture is a configuration
+/// error, not a retrieval regression.
+pub fn load_golden_split(path: &str) -> Result<GoldenSplitFixture, String> {
+    let json = std::fs::read_to_string(path)
+        .map_err(|err| format!("cannot read golden-split fixture {path:?}: {err}"))?;
+    serde_json::from_str(&json)
+        .map_err(|err| format!("invalid JSON in golden-split fixture {path:?}: {err}"))
+}
+
+/// The default fixture directory relative to the `tdw-eval-runner` crate root.
+///
+/// `baselines/<split_id>.json`.  Used when `split_fixture_path` is `None`.
+/// The embedded `golden-split-v1.json` ships with the crate and is kept in
+/// sync by the nightly CI golden-split gate (see `retrieval_eval.rs`).
+#[must_use]
+pub fn default_fixture_path(split_id: &str) -> String {
+    format!("{}/baselines/{split_id}.json", env!("CARGO_MANIFEST_DIR"))
+}
+
+// ---------------------------------------------------------------------------
+// run_scheduled_eval_from_fixture — the safe, no-false-alarm entry point
+// ---------------------------------------------------------------------------
+
+/// Run the scheduled eval using a loaded [`GoldenSplitFixture`], guarding
+/// against every no-corpus / first-run / missing-baseline state.
+///
+/// This is the entry point the daemon worker calls after loading the fixture.
+/// It enforces the zero-false-alarm contract:
+///
+/// - **Empty cases** → `Stale("split fixture has no eval cases")`, no alarm.
+/// - **No baseline** (first-run) → runs eval, returns `Green` with summary
+///   `"first-run: no prior baseline — current metrics recorded"`, no alarm.
+/// - **Baseline present** → real comparison; `Regressed` only on genuine
+///   metric drop.
+///
+/// # Errors
+///
+/// Propagates `tdw_core::Error` from the retriever build or eval runner.
+/// The caller should write `Stale` on error.
+pub async fn run_scheduled_eval_from_fixture(
+    embedder: Arc<dyn EmbeddingProvider>,
+    fixture: &GoldenSplitFixture,
+    config: &ScheduledEvalConfig,
+    now_ms: i64,
+) -> tdw_core::Result<ScheduledEvalOutcome> {
+    // Zero-cases posture: structurally incapable of Regressed.
+    if fixture.cases.is_empty() {
+        let split_id = config
+            .split_id
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let stale = EvalFreshness::Stale {
+            last_run_ms: now_ms,
+            split_id,
+            error: "split fixture has no eval cases".to_string(),
+        };
+        // Synthesise a sentinel outcome so callers can write the cell uniformly.
+        let empty_report = RetrievalEvalReport {
+            k: 0,
+            mean_recall_at_k: 0.0,
+            mrr: 0.0,
+            mean_ndcg_at_k: 0.0,
+            cases: vec![],
+            drift_key: DriftKey {
+                embedder_model: embedder.model_id().to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+        };
+        let empty_verdict = RegressionVerdict {
+            is_regression: false,
+            summary: "no cases".to_string(),
+            deltas: vec![],
+            baseline_drift_key: empty_report.drift_key.clone(),
+            current_drift_key: empty_report.drift_key.clone(),
+            drift_key_changed: false,
+        };
+        return Ok(ScheduledEvalOutcome {
+            report: empty_report,
+            verdict: empty_verdict,
+            freshness: stale,
+            ran_at_ms: now_ms,
+        });
+    }
+
+    let drift_key = DriftKey {
+        embedder_model: embedder.model_id().to_string(),
+        rules_version: None,
+        infer_version: None,
+    };
+
+    match &fixture.baseline {
+        None => {
+            // First-run: run eval, return Green with notice — never alarm.
+            let split_id = config
+                .split_id
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let retriever =
+                build_in_memory_retriever(Arc::clone(&embedder), fixture.documents.clone()).await?;
+            let report =
+                run_retrieval_eval(&retriever, &fixture.cases, 3, drift_key.clone()).await?;
+            let summary = "first-run: no prior baseline — current metrics recorded".to_string();
+            let verdict = RegressionVerdict {
+                is_regression: false,
+                summary: summary.clone(),
+                deltas: vec![],
+                baseline_drift_key: drift_key.clone(),
+                current_drift_key: drift_key,
+                drift_key_changed: false,
+            };
+            Ok(ScheduledEvalOutcome {
+                report,
+                verdict,
+                freshness: EvalFreshness::Green {
+                    last_run_ms: now_ms,
+                    split_id,
+                    summary,
+                },
+                ran_at_ms: now_ms,
+            })
+        }
+        Some(baseline) => {
+            // Normal path: real comparison against persisted baseline.
+            run_scheduled_eval(
+                embedder,
+                fixture.documents.clone(),
+                &fixture.cases,
+                drift_key,
+                3,
+                baseline,
+                config,
+                now_ms,
+            )
+            .await
         }
     }
 }
@@ -813,5 +1014,252 @@ mod tests {
         let sink = NoopEvalAlertSink;
         // Must not panic regardless of input.
         sink.notify("any-split", "any body");
+    }
+
+    // ── GoldenSplitFixture helpers ────────────────────────────────────────────
+
+    fn make_entity(id: &str) -> tdw_kg::Entity {
+        tdw_kg::Entity {
+            entity_id: id.to_string(),
+            kind: tdw_kg::EntityKind::Instrument,
+            label: id.to_string(),
+            aliases: vec![],
+        }
+    }
+
+    /// A corpus + cases that score recall = 1.0 with the hash embedder
+    /// (exact-body query matches doc-a).
+    fn green_fixture() -> GoldenSplitFixture {
+        let doc = KnowledgeDocument {
+            id: "doc-a".to_string(),
+            body: "acme earnings report strong cloud growth".to_string(),
+            entity: make_entity("instrument:acme"),
+            tags: vec![],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: vec![],
+        };
+        let case = RetrievalEvalCase {
+            case_id: "earnings".to_string(),
+            query: "acme earnings report strong cloud growth".to_string(),
+            expected_doc_ids: vec!["doc-a".to_string()],
+            as_of: None,
+            tags_any: vec![],
+            fixed_split_id: Some("test-split".to_string()),
+        };
+        // Baseline at perfect recall — matching corpus should stay Green.
+        let baseline = RetrievalEvalReport {
+            k: 3,
+            mean_recall_at_k: 1.0,
+            mrr: 1.0,
+            mean_ndcg_at_k: 1.0,
+            cases: vec![],
+            drift_key: DriftKey {
+                embedder_model: "local-hash-8".to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+        };
+        GoldenSplitFixture {
+            documents: vec![doc],
+            cases: vec![case],
+            baseline: Some(baseline),
+        }
+    }
+
+    /// Same corpus but baseline expects a doc that is NOT in the corpus
+    /// (will produce recall = 0 → Regressed vs perfect baseline).
+    fn regressed_fixture() -> GoldenSplitFixture {
+        let doc = KnowledgeDocument {
+            id: "doc-a".to_string(),
+            body: "totally unrelated body".to_string(),
+            entity: make_entity("instrument:acme"),
+            tags: vec![],
+            source: None,
+            plane: None,
+            as_of: None,
+            mentions: vec![],
+        };
+        let case = RetrievalEvalCase {
+            case_id: "miss".to_string(),
+            query: "acme earnings report strong cloud growth".to_string(),
+            expected_doc_ids: vec!["doc-nonexistent".to_string()],
+            as_of: None,
+            tags_any: vec![],
+            fixed_split_id: Some("test-split".to_string()),
+        };
+        // Perfect baseline — miss will produce regression.
+        let baseline = RetrievalEvalReport {
+            k: 3,
+            mean_recall_at_k: 1.0,
+            mrr: 1.0,
+            mean_ndcg_at_k: 1.0,
+            cases: vec![],
+            drift_key: DriftKey {
+                embedder_model: "local-hash-8".to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+        };
+        GoldenSplitFixture {
+            documents: vec![doc],
+            cases: vec![case],
+            baseline: Some(baseline),
+        }
+    }
+
+    // ── run_scheduled_eval_from_fixture ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn fixture_with_real_corpus_produces_green() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let fixture = green_fixture();
+        let cfg = config_with_split("test-split");
+        let now_ms = 1_749_297_600_000_i64;
+
+        let outcome = run_scheduled_eval_from_fixture(embedder, &fixture, &cfg, now_ms)
+            .await
+            .expect("eval must succeed");
+
+        assert!(
+            matches!(outcome.freshness, EvalFreshness::Green { .. }),
+            "matching corpus + matching baseline must be Green; got {:?}",
+            outcome.freshness
+        );
+        assert!(!outcome.freshness.is_alarm(), "Green must not alarm");
+        assert!(!outcome.verdict.is_regression);
+    }
+
+    #[tokio::test]
+    async fn fixture_with_injected_drift_produces_regressed() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let fixture = regressed_fixture(); // gold doc absent → recall = 0
+        let cfg = config_with_split("test-split");
+        let now_ms = 1_749_297_600_000_i64;
+
+        let outcome = run_scheduled_eval_from_fixture(embedder, &fixture, &cfg, now_ms)
+            .await
+            .expect("eval must succeed even on regression");
+
+        assert!(
+            matches!(outcome.freshness, EvalFreshness::Regressed { .. }),
+            "corpus miss with perfect baseline must be Regressed; got {:?}",
+            outcome.freshness
+        );
+        assert!(outcome.freshness.is_alarm(), "Regressed must alarm");
+        assert!(outcome.verdict.is_regression);
+    }
+
+    #[tokio::test]
+    async fn fixture_with_no_baseline_produces_green_first_run() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        // Same docs/cases as green_fixture but baseline = None (first run).
+        let mut fixture = green_fixture();
+        fixture.baseline = None;
+        let cfg = config_with_split("test-split");
+        let now_ms = 1_749_297_600_000_i64;
+
+        let outcome = run_scheduled_eval_from_fixture(embedder, &fixture, &cfg, now_ms)
+            .await
+            .expect("first-run must succeed");
+
+        assert!(
+            matches!(outcome.freshness, EvalFreshness::Green { .. }),
+            "first-run (no baseline) must be Green; got {:?}",
+            outcome.freshness
+        );
+        assert!(!outcome.freshness.is_alarm(), "first-run must not alarm");
+        // Summary must carry the first-run notice.
+        if let EvalFreshness::Green { ref summary, .. } = outcome.freshness {
+            assert!(
+                summary.contains("first-run"),
+                "summary must carry first-run notice; got: {summary}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fixture_with_no_cases_produces_stale_no_alarm() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let mut fixture = green_fixture();
+        fixture.cases.clear(); // zero cases → structurally incapable of Regressed
+        let cfg = config_with_split("test-split");
+        let now_ms = 1_749_297_600_000_i64;
+
+        let outcome = run_scheduled_eval_from_fixture(embedder, &fixture, &cfg, now_ms)
+            .await
+            .expect("empty-cases must not propagate an error");
+
+        assert!(
+            matches!(outcome.freshness, EvalFreshness::Stale { .. }),
+            "empty cases must be Stale; got {:?}",
+            outcome.freshness
+        );
+        // Stale from empty cases IS is_alarm() = true (it's a Stale variant) —
+        // but crucially it is NOT Regressed, so no regression alert fires.
+        assert!(
+            !matches!(outcome.freshness, EvalFreshness::Regressed { .. }),
+            "empty cases must never produce Regressed"
+        );
+    }
+
+    #[test]
+    fn load_golden_split_returns_error_for_missing_path() {
+        let result = load_golden_split("/nonexistent/path/to/fixture.json");
+        let msg = result.expect_err("missing file must return Err, not Ok");
+        assert!(
+            msg.contains("cannot read golden-split fixture"),
+            "error must describe the load failure; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_golden_split_returns_error_for_invalid_json() {
+        // Write a temp file with bad JSON via std::fs.
+        let dir = std::env::temp_dir();
+        let path = dir.join("tdw_test_invalid_fixture.json");
+        std::fs::write(&path, b"not json at all").expect("write temp file");
+        let path_str = path.to_string_lossy().to_string();
+
+        let result = load_golden_split(&path_str);
+        let _ = std::fs::remove_file(&path); // cleanup
+
+        let msg = result.expect_err("invalid JSON must return Err");
+        assert!(
+            msg.contains("invalid JSON"),
+            "error must describe JSON parse failure; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_golden_split_loads_embedded_fixture() {
+        // The crate-embedded golden-split-v1.json must parse without a baseline
+        // field being required (baseline is Option).
+        let path = default_fixture_path("golden-split-v1");
+        // This path is only valid when running inside the workspace (CARGO_MANIFEST_DIR).
+        // If the file doesn't exist (unusual CI setup), skip gracefully.
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("embedded fixture not found at {path}; skipping");
+            return;
+        }
+        let fixture = load_golden_split(&path).expect("embedded fixture must parse");
+        // The embedded fixture has 2 cases (earnings + supply).
+        assert!(
+            !fixture.cases.is_empty(),
+            "embedded fixture must have at least one case"
+        );
     }
 }

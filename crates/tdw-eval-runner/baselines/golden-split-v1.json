@@ -1,27 +1,94 @@
 {
-  "k": 3,
-  "mean_recall_at_k": 1.0,
-  "mrr": 1.0,
-  "mean_ndcg_at_k": 1.0,
+  "documents": [
+    {
+      "id": "doc-old",
+      "body": "acme earnings report strong cloud growth",
+      "entity": {
+        "entity_id": "instrument:acme",
+        "kind": "instrument",
+        "label": "instrument:acme",
+        "aliases": []
+      },
+      "tags": ["sector:tech"],
+      "source": null,
+      "plane": "platform",
+      "as_of": "2026-01-01",
+      "mentions": []
+    },
+    {
+      "id": "doc-mid",
+      "body": "beta supply chain components note",
+      "entity": {
+        "entity_id": "instrument:beta",
+        "kind": "instrument",
+        "label": "instrument:beta",
+        "aliases": []
+      },
+      "tags": ["sector:industrial"],
+      "source": null,
+      "plane": "platform",
+      "as_of": "2026-02-01",
+      "mentions": []
+    },
+    {
+      "id": "doc-new",
+      "body": "acme earnings beat later quarter",
+      "entity": {
+        "entity_id": "instrument:acme",
+        "kind": "instrument",
+        "label": "instrument:acme",
+        "aliases": []
+      },
+      "tags": ["sector:tech"],
+      "source": null,
+      "plane": "platform",
+      "as_of": "2026-03-01",
+      "mentions": []
+    }
+  ],
   "cases": [
     {
       "case_id": "earnings",
-      "recall_at_k": 1.0,
-      "reciprocal_rank": 1.0,
-      "ndcg_at_k": 1.0,
-      "ranked": ["doc-old"]
+      "query": "acme earnings report strong cloud growth",
+      "expected_doc_ids": ["doc-old"],
+      "as_of": null,
+      "tags_any": [],
+      "fixed_split_id": "golden-split-v1"
     },
     {
       "case_id": "supply",
-      "recall_at_k": 1.0,
-      "reciprocal_rank": 1.0,
-      "ndcg_at_k": 1.0,
-      "ranked": ["doc-mid"]
+      "query": "beta supply chain components note",
+      "expected_doc_ids": ["doc-mid"],
+      "as_of": null,
+      "tags_any": [],
+      "fixed_split_id": "golden-split-v1"
     }
   ],
-  "drift_key": {
-    "embedder_model": "local-hash-8",
-    "rules_version": 1,
-    "infer_version": 1
+  "baseline": {
+    "k": 3,
+    "mean_recall_at_k": 1.0,
+    "mrr": 1.0,
+    "mean_ndcg_at_k": 1.0,
+    "cases": [
+      {
+        "case_id": "earnings",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg_at_k": 1.0,
+        "ranked": ["doc-old"]
+      },
+      {
+        "case_id": "supply",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "ndcg_at_k": 1.0,
+        "ranked": ["doc-mid"]
+      }
+    ],
+    "drift_key": {
+      "embedder_model": "local-hash-8",
+      "rules_version": 1,
+      "infer_version": 1
+    }
   }
 }

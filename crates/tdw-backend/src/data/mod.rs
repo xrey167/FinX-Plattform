@@ -25,8 +25,8 @@ use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_eval_runner::scheduled_eval::{
-    EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, eval_trigger_id, regression_alert_body,
-    run_scheduled_eval,
+    EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, default_fixture_path, eval_trigger_id,
+    load_golden_split, regression_alert_body, run_scheduled_eval_from_fixture,
 };
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
@@ -1455,6 +1455,7 @@ fn evals_config_to_runner(cfg: &EvalsConfig) -> EvalRunnerConfig {
         max_recall_drop: cfg.max_recall_drop,
         max_mrr_drop: cfg.max_mrr_drop,
         max_ndcg_drop: cfg.max_ndcg_drop,
+        split_fixture_path: cfg.split_fixture_path.clone(),
     }
 }
 
@@ -1462,11 +1463,17 @@ fn evals_config_to_runner(cfg: &EvalsConfig) -> EvalRunnerConfig {
 ///
 /// Registers the eval [`ScheduledTrigger`] in a local [`ScheduleRegistry`] and
 /// starts a tokio task that ticks every [`tdw_cron::cron_tick()`] seconds.  On
-/// each tick, [`due_triggers`] is consulted; when the weekly slot fires the
-/// worker runs [`run_scheduled_eval`] with an empty golden corpus (the golden
-/// documents and cases must be injected at fire time by a future extension),
-/// writes the outcome freshness to the shared cell, and emits an `eprintln!`
-/// alert when `is_alarm()`.
+/// each cron slot:
+///
+/// 1. Loads the [`GoldenSplitFixture`] from the configured path (or the
+///    crate-embedded fallback at `baselines/<split_id>.json`).
+/// 2. If the fixture fails to load or has no cases → writes
+///    [`EvalFreshness::Stale`] to the cell and **does not alarm** — a missing
+///    or empty fixture is a configuration error, never a retrieval regression.
+/// 3. If the fixture has no baseline (first-run) → runs eval, writes `Green`
+///    with a `"first-run"` notice, **does not alarm**.
+/// 4. Otherwise → runs `run_scheduled_eval_from_fixture`, writes the outcome,
+///    emits an alert only on genuine `Regressed`.
 ///
 /// Returns `None` when no `split_id` is configured — the caller omits the task
 /// from [`DaemonHandle`] and status reports [`EvalFreshness::Unconfigured`].
@@ -1484,10 +1491,17 @@ fn spawn_eval_worker(
         .filter(|s| !s.is_empty())?
         .to_string();
     let runner_cfg = evals_config_to_runner(cfg);
+    // Resolve the fixture path once at task-spawn time (not at fire time) so
+    // any path-resolution error is visible immediately in logs.
+    let fixture_path = runner_cfg
+        .split_fixture_path
+        .clone()
+        .unwrap_or_else(|| default_fixture_path(&split_id));
 
-    // Build the ScheduleRegistry with the eval trigger (K-L3 cron registration).
-    // The TriggerAction carries a sentinel Op::Shutdown envelope — the eval
-    // worker fires run_scheduled_eval inline and never dispatches the action.
+    // Build the ScheduleRegistry with the eval trigger (K-L3 cron
+    // registration). The TriggerAction carries a sentinel Op::Shutdown
+    // envelope — the eval worker fires run_scheduled_eval_from_fixture inline
+    // and never dispatches the action.
     let trigger_id = eval_trigger_id(&split_id);
     let schedule = CronSchedule::parse(&cfg.cadence)
         .unwrap_or_else(|_| CronSchedule::parse("0 3 * * MON").expect("fallback parse"));
@@ -1548,34 +1562,32 @@ fn spawn_eval_worker(
                 continue;
             }
 
-            // Cron slot fired — run the golden-split regression detection eval.
-            // The golden documents and cases are currently empty; wiring the
-            // corpus loader is a follow-up (K-L3 extension point).  The worker
-            // already owns the freshness cell, the embedder, and the config;
-            // the outcome is written to the cell even on an empty corpus so that
-            // status reflects the last attempt.
-            let outcome = run_scheduled_eval(
+            // Cron slot fired — load the golden-split fixture and run the
+            // regression detection eval.  A fixture load error writes Stale
+            // and does NOT alarm: missing/corrupt fixture = config error, not
+            // retrieval regression.
+            let fixture = match load_golden_split(&fixture_path) {
+                Ok(f) => f,
+                Err(load_err) => {
+                    eprintln!(
+                        "[tdw] knowledge self-eval: fixture load error \
+                         (split={split_id}): {load_err}"
+                    );
+                    if let Some(ref cell) = cell {
+                        let mut guard = cell.lock().await;
+                        *guard = EvalFreshness::Stale {
+                            last_run_ms: now_ms,
+                            split_id: split_id.clone(),
+                            error: load_err,
+                        };
+                    }
+                    continue;
+                }
+            };
+
+            let outcome = run_scheduled_eval_from_fixture(
                 Arc::clone(&embedder),
-                Vec::<tdw_knowledge::KnowledgeDocument>::new(),
-                &[],
-                tdw_eval_runner::retrieval_eval::DriftKey {
-                    embedder_model: embedder.model_id().to_string(),
-                    rules_version: None,
-                    infer_version: None,
-                },
-                3,
-                &tdw_eval_runner::retrieval_eval::RetrievalEvalReport {
-                    k: 3,
-                    mean_recall_at_k: 1.0,
-                    mrr: 1.0,
-                    mean_ndcg_at_k: 1.0,
-                    cases: vec![],
-                    drift_key: tdw_eval_runner::retrieval_eval::DriftKey {
-                        embedder_model: embedder.model_id().to_string(),
-                        rules_version: None,
-                        infer_version: None,
-                    },
-                },
+                &fixture,
                 &runner_cfg,
                 now_ms,
             )
@@ -1584,18 +1596,18 @@ fn spawn_eval_worker(
             match outcome {
                 Ok(result) => {
                     // Emit alert on regression via the wired sink, with an
-                    // eprintln! fallback when no sink is configured.  The sink
-                    // call happens before the cell write so an observer that
-                    // races on the cell always sees the alarm after the
-                    // notification has been dispatched.
+                    // eprintln! fallback.  Stale (empty-cases / first-run) is
+                    // NOT an alarm and never reaches this branch with
+                    // is_alarm() = true due to run_scheduled_eval_from_fixture
+                    // guarantees.
                     if result.freshness.is_alarm() {
                         let body = regression_alert_body(&result.verdict);
                         if let Some(ref sink) = alert_sink {
                             sink.notify(&split_id, &body);
                         }
                         eprintln!(
-                            "[tdw] ALERT: knowledge self-eval regression (split={split_id}): \
-                             {body}"
+                            "[tdw] ALERT: knowledge self-eval regression \
+                             (split={split_id}): {body}"
                         );
                     }
                     if let Some(ref cell) = cell {
@@ -1609,7 +1621,7 @@ fn spawn_eval_worker(
                         let mut guard = cell.lock().await;
                         *guard = EvalFreshness::Stale {
                             last_run_ms: now_ms,
-                            split_id: split_id.to_string(),
+                            split_id: split_id.clone(),
                             error: error.to_string(),
                         };
                     }

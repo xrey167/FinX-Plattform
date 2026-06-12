@@ -240,6 +240,19 @@ pub struct ScheduledEvalConfig {
     /// declared. Must be in `[0.0, 1.0]`. Default: `0.05`.
     #[serde(default = "ScheduledEvalConfig::default_threshold")]
     pub max_ndcg_drop: f64,
+
+    /// Filesystem path to the golden-split fixture file (JSON).
+    ///
+    /// Must point to a `GoldenSplitFixture` JSON object
+    /// (`{ "documents": [...], "cases": [...], "baseline": <report>|null }`).
+    /// When `None`, the daemon falls back to the fixture embedded in the
+    /// `tdw-eval-runner` crate at `baselines/<split_id>.json`.
+    ///
+    /// A missing or unparseable file causes the eval worker to write
+    /// `Stale` (no alarm) — a load error is a configuration problem, never
+    /// a retrieval regression.
+    #[serde(default)]
+    pub split_fixture_path: Option<String>,
 }
 
 impl ScheduledEvalConfig {
@@ -260,6 +273,7 @@ impl Default for ScheduledEvalConfig {
             max_recall_drop: Self::default_threshold(),
             max_mrr_drop: Self::default_threshold(),
             max_ndcg_drop: Self::default_threshold(),
+            split_fixture_path: None,
         }
     }
 }
