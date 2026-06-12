@@ -752,3 +752,245 @@ async fn traverse_rejects_hub_fanout() {
         "hub fan-out must be a budget tool error: {text}"
     );
 }
+
+// ── K-X3 Trust-dial integration tests (JSON-RPC surface) ────────────────────
+
+/// Build a minimal runtime that indexes one `document_ingested` document
+/// (an instrument) and one `user_authored` document (a finding), so the
+/// provenance-class filter can be exercised end-to-end via the MCP surface.
+fn server_with_trust_fixture() -> McpServer {
+    let (runtime, _graph) = block(async {
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        let lexical = Arc::new(InMemoryLexicalEngine::default());
+        let graph = Arc::new(InMemoryGraphEngine::default());
+
+        let index = KnowledgeIndex::new(embedder.clone(), vectors.clone());
+        let mut indexer = KnowledgeIndexer::new(index)
+            .with_lexical(lexical.clone(), LEXICAL_INDEX)
+            .with_graph(Arc::new(SharedGraph(graph.clone())));
+
+        // document_ingested: instrument entity
+        indexer
+            .index_at(
+                KnowledgeDocument {
+                    id: "trust-doc-ingested".to_string(),
+                    body: "equity research note AAPL momentum".to_string(),
+                    entity: Entity {
+                        entity_id: "instrument:AAPL-trust".to_string(),
+                        kind: EntityKind::Instrument,
+                        label: "Apple trust fixture".to_string(),
+                        aliases: Vec::new(),
+                    },
+                    tags: vec!["asset:equity".to_string()],
+                    source: None,
+                    plane: Some("shared".to_string()),
+                    as_of: Some(NOW.to_string()),
+                    mentions: Vec::new(),
+                },
+                NOW,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("index instrument doc: {e}"));
+
+        // user_authored: finding entity (K-X6 kind)
+        indexer
+            .index_at(
+                KnowledgeDocument {
+                    id: "trust-doc-finding".to_string(),
+                    body: "equity research note AAPL momentum personal finding".to_string(),
+                    entity: Entity {
+                        entity_id: "finding:trust-finding-001".to_string(),
+                        kind: EntityKind::Finding,
+                        label: "Trust finding fixture".to_string(),
+                        aliases: Vec::new(),
+                    },
+                    tags: vec!["asset:equity".to_string()],
+                    source: None,
+                    plane: Some("shared".to_string()),
+                    as_of: Some(NOW.to_string()),
+                    mentions: Vec::new(),
+                },
+                NOW,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("index finding doc: {e}"));
+
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_lexical(lexical, LEXICAL_INDEX)
+            .with_graph(Arc::new(SharedGraph(graph.clone())));
+        (Arc::new(runtime), graph)
+    });
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    server
+}
+
+#[test]
+fn trust_dial_default_returns_all_classes_with_unfiltered_scope() {
+    // No provenance_classes → all classes, trust_scope.filtered = false.
+    let mut server = server_with_trust_fixture();
+    let response = call(
+        &mut server,
+        "tdw.kg.search",
+        &json!({ "query": "equity research AAPL momentum", "top_k": 8 }),
+    );
+    let result = &response["result"]["content"][0]["text"];
+    let payload: serde_json::Value = serde_json::from_str(result.as_str().expect("text content"))
+        .expect("structured result parses");
+
+    // trust_scope must report unfiltered
+    assert_eq!(
+        payload["trust_scope"]["filtered"], false,
+        "unfiltered search must report filtered=false: {payload}"
+    );
+    let hit_ids: Vec<&str> = payload["hits"]
+        .as_array()
+        .expect("hits array")
+        .iter()
+        .filter_map(|h| h["id"].as_str())
+        .collect();
+    assert!(
+        hit_ids.contains(&"trust-doc-ingested"),
+        "instrument doc must appear without filter: {hit_ids:?}"
+    );
+    assert!(
+        hit_ids.contains(&"trust-doc-finding"),
+        "finding doc must appear without filter: {hit_ids:?}"
+    );
+}
+
+#[test]
+fn trust_dial_document_only_excludes_findings() {
+    // provenance_classes = [document_ingested] → finding excluded.
+    let mut server = server_with_trust_fixture();
+    let response = call(
+        &mut server,
+        "tdw.kg.search",
+        &json!({
+            "query": "equity research AAPL momentum",
+            "top_k": 8,
+            "provenance_classes": ["document_ingested"],
+        }),
+    );
+    let result = &response["result"]["content"][0]["text"];
+    let payload: serde_json::Value = serde_json::from_str(result.as_str().expect("text content"))
+        .expect("structured result parses");
+
+    assert_eq!(
+        payload["trust_scope"]["filtered"], true,
+        "filtered search must report filtered=true: {payload}"
+    );
+    let classes_in_scope = &payload["trust_scope"]["provenance_classes"];
+    assert!(
+        classes_in_scope.to_string().contains("document_ingested"),
+        "scope must name the active class: {classes_in_scope}"
+    );
+    let hit_ids: Vec<&str> = payload["hits"]
+        .as_array()
+        .expect("hits array")
+        .iter()
+        .filter_map(|h| h["id"].as_str())
+        .collect();
+    assert!(
+        hit_ids.contains(&"trust-doc-ingested"),
+        "instrument doc must pass document_ingested filter: {hit_ids:?}"
+    );
+    assert!(
+        !hit_ids.contains(&"trust-doc-finding"),
+        "finding must be excluded by document_ingested filter: {hit_ids:?}"
+    );
+    // Every hit carries trust_class for explainability
+    for hit in payload["hits"].as_array().expect("hits array") {
+        assert_eq!(
+            hit["trust_class"], "document_ingested",
+            "hit must carry trust_class=document_ingested: {hit}"
+        );
+    }
+}
+
+#[test]
+fn trust_dial_user_only_returns_only_findings() {
+    // provenance_classes = [user_authored] → only finding.
+    let mut server = server_with_trust_fixture();
+    let response = call(
+        &mut server,
+        "tdw.kg.search",
+        &json!({
+            "query": "equity research AAPL momentum",
+            "top_k": 8,
+            "provenance_classes": ["user_authored"],
+        }),
+    );
+    let result = &response["result"]["content"][0]["text"];
+    let payload: serde_json::Value = serde_json::from_str(result.as_str().expect("text content"))
+        .expect("structured result parses");
+
+    let hit_ids: Vec<&str> = payload["hits"]
+        .as_array()
+        .expect("hits array")
+        .iter()
+        .filter_map(|h| h["id"].as_str())
+        .collect();
+    assert_eq!(
+        hit_ids,
+        vec!["trust-doc-finding"],
+        "only the finding doc must appear under user_authored filter"
+    );
+    assert_eq!(
+        payload["hits"][0]["trust_class"], "user_authored",
+        "hit must carry trust_class=user_authored"
+    );
+}
+
+#[test]
+fn trust_dial_zero_hits_reports_honest_scope_not_error() {
+    // provenance_classes = [rule_derived] → nothing in fixture → 0 hits, not error.
+    let mut server = server_with_trust_fixture();
+    let response = call(
+        &mut server,
+        "tdw.kg.search",
+        &json!({
+            "query": "equity research AAPL momentum",
+            "top_k": 8,
+            "provenance_classes": ["rule_derived"],
+        }),
+    );
+    let result = &response["result"]["content"][0]["text"];
+    let payload: serde_json::Value = serde_json::from_str(result.as_str().expect("text content"))
+        .expect("structured result parses");
+
+    assert_eq!(
+        payload["hits"].as_array().expect("hits array").len(),
+        0,
+        "rule_derived filter must yield 0 hits"
+    );
+    assert_eq!(
+        payload["trust_scope"]["filtered"], true,
+        "zero-hit response must still report filtered=true: {payload}"
+    );
+    let note = payload["trust_scope"]["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("0 hits at this trust level"),
+        "zero-hit note must say '0 hits at this trust level': {note}"
+    );
+}
+
+#[test]
+fn trust_dial_unknown_class_is_tool_error() {
+    // An unrecognized provenance_class token must be a tool error, not a panic.
+    let mut server = server_with_trust_fixture();
+    let response = call(
+        &mut server,
+        "tdw.kg.search",
+        &json!({
+            "query": "equity",
+            "provenance_classes": ["not_a_real_class"],
+        }),
+    );
+    let text = response.to_string();
+    assert!(
+        text.contains("unknown provenance_class") || text.contains("isError"),
+        "unknown class must be a tool error: {text}"
+    );
+}

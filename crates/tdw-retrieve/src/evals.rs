@@ -179,6 +179,7 @@ pub async fn run_eval(
                 entity_kinds: None,
                 plane: None,
                 as_of: case.as_of.clone(),
+                provenance_classes: None,
             },
             None,
         )?;

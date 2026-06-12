@@ -404,16 +404,36 @@ pub fn validate_document(document: &KnowledgeDocument) -> Result<()> {
 
 /// The B4 retrieval payload contract for one document.
 ///
-/// `entity_id`, `tags`, `entity_kind`, `content_hash`, plus `plane`/`as_of`
-/// ONLY when present (`as_of` normalized to a timestamp). Shared by the
-/// vector point and the lexical co-index so the two channels can never drift.
+/// `entity_id`, `tags`, `entity_kind`, `content_hash`, `provenance_class`
+/// (K-X3 trust-dial stamp), plus `plane`/`as_of` ONLY when present (`as_of`
+/// normalized to a timestamp).  Shared by the vector point and the lexical
+/// co-index so the two channels can never drift.
+///
+/// ## Provenance-class stamp (K-X3)
+///
+/// The `provenance_class` field encodes the trust bucket this document belongs
+/// to.  The mapping is purely structural — derived from the document's entity
+/// kind and source lineage, never from caller input:
+///
+/// | Condition                               | `provenance_class`   |
+/// |-----------------------------------------|----------------------|
+/// | `entity_kind == finding`                | `"user_authored"`    |
+/// | all other documents                     | `"document_ingested"`|
+///
+/// `rule_derived` and `agent_proposed` classes are reserved for future
+/// document kinds stamped by those paths; they do not appear in this function
+/// today.  The field is always present so no reindex is needed for filtering
+/// on new indexes; old index points without it fall back to
+/// `DocumentIngested` in the retriever (see `tdw-retrieve::effective_trust_class`).
 #[must_use]
 pub fn document_payload(document: &KnowledgeDocument) -> serde_json::Value {
+    let provenance_class = provenance_class_token(document.entity.kind);
     let mut payload = json!({
         "entity_id": document.entity.entity_id,
         "tags": document.tags,
         "entity_kind": kind_token(document.entity.kind),
         "content_hash": indexer::content_hash(document),
+        "provenance_class": provenance_class,
     });
     if let Some(plane) = &document.plane {
         payload["plane"] = json!(plane);
@@ -422,6 +442,19 @@ pub fn document_payload(document: &KnowledgeDocument) -> serde_json::Value {
         payload["as_of"] = json!(tdw_tags::date_to_timestamp(as_of));
     }
     payload
+}
+
+/// Map a document's entity kind to its K-X3 `provenance_class` payload token.
+///
+/// `Finding` nodes are user-authored (written with `Provenance::Agent { gated:
+/// false }` via `tdw.kg.finding`).  All other indexable entity kinds are
+/// externally sourced and enter the index via the ingestion path.
+fn provenance_class_token(kind: tdw_kg::EntityKind) -> &'static str {
+    if kind == tdw_kg::EntityKind::Finding {
+        "user_authored"
+    } else {
+        "document_ingested"
+    }
 }
 
 /// The taxonomy kind's lowercase serde token (e.g. `instrument`) — the

@@ -13,6 +13,7 @@ use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_retrieve::{
     Channel, ChannelEvidence, GraphExpansion, KnowledgeQuery, PathStep, QueryFilter, Retriever,
+    TrustClass,
 };
 use tdw_storage_graph::InMemoryGraphEngine;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
@@ -264,6 +265,7 @@ async fn hybrid_fusion_combines_vector_lexical_and_tag_channels() {
             entity_kinds: Some(vec![EntityKind::Instrument]),
             plane: Some("platform".to_string()),
             as_of: Some("2026-02-01".to_string()),
+            provenance_classes: None,
         },
         None,
     )
@@ -438,4 +440,245 @@ async fn query_validation_rejects_bad_input() {
             "expansion ({k_hop}, {per_hit_limit}, {decay}) must be rejected"
         );
     }
+}
+
+// ── K-X3 Trust-dial tests ────────────────────────────────────────────────────
+
+/// Build a minimal trust-dial fixture: three documents with different
+/// `provenance_class` stamps in their payload, and one LEGACY document
+/// (no `provenance_class` field at all — simulates a pre-stamp index point).
+async fn trust_fixture() -> (Arc<HashEmbeddingProvider>, Arc<InMemoryVectorEngine>) {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+
+    let docs: &[(&str, &str, &str)] = &[
+        ("doc-ingested", "instrument:acme", "document_ingested"),
+        ("doc-user", "finding:abc123", "user_authored"),
+        ("doc-agent", "instrument:beta", "agent_proposed"),
+        // legacy: no provenance_class field — treated as document_ingested
+        ("doc-legacy", "instrument:gamma", ""),
+    ];
+
+    let mut points = Vec::new();
+    for (doc_id, entity_id, class) in docs {
+        let embedding = embedder.embed(doc_id).await.expect("embed");
+        let mut payload = json!({
+            "entity_id": entity_id,
+            "tags": [],
+            "entity_kind": "instrument",
+        });
+        if !class.is_empty() {
+            payload["provenance_class"] = json!(class);
+        }
+        points.push(VectorPoint {
+            id: doc_id.to_string(),
+            vector: embedding.vector,
+            payload,
+        });
+    }
+    vectors
+        .upsert(COLLECTION, points)
+        .await
+        .expect("vector upsert");
+    (embedder, vectors)
+}
+
+fn trust_retriever(
+    embedder: Arc<HashEmbeddingProvider>,
+    vectors: Arc<InMemoryVectorEngine>,
+) -> Retriever {
+    Retriever::new(embedder, vectors, COLLECTION)
+}
+
+#[tokio::test]
+async fn default_filter_returns_all_classes_unchanged() {
+    // No provenance_classes filter → all four docs may surface (regression
+    // safety: pre-K-X3 callers must see unchanged behaviour).
+    let (embedder, vectors) = trust_fixture().await;
+    let retriever = trust_retriever(embedder, vectors);
+    let query =
+        KnowledgeQuery::try_new("document", 16, QueryFilter::default(), None).expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        ids.contains("doc-ingested"),
+        "ingested doc must appear: {ids:?}"
+    );
+    assert!(ids.contains("doc-user"), "user doc must appear: {ids:?}");
+    assert!(ids.contains("doc-agent"), "agent doc must appear: {ids:?}");
+    assert!(
+        ids.contains("doc-legacy"),
+        "legacy (no stamp) doc must appear: {ids:?}"
+    );
+    // Every hit that has a stamp carries its trust_class for explainability.
+    for hit in &hits {
+        if hit.id == "doc-ingested" {
+            assert_eq!(
+                hit.trust_class,
+                Some(TrustClass::DocumentIngested),
+                "doc-ingested must carry DocumentIngested trust_class"
+            );
+        }
+        if hit.id == "doc-user" {
+            assert_eq!(
+                hit.trust_class,
+                Some(TrustClass::UserAuthored),
+                "doc-user must carry UserAuthored trust_class"
+            );
+        }
+        if hit.id == "doc-agent" {
+            assert_eq!(
+                hit.trust_class,
+                Some(TrustClass::AgentProposed),
+                "doc-agent must carry AgentProposed trust_class"
+            );
+        }
+        if hit.id == "doc-legacy" {
+            // Legacy (missing stamp) → defaults to DocumentIngested.
+            assert_eq!(
+                hit.trust_class,
+                Some(TrustClass::DocumentIngested),
+                "legacy doc without stamp must default to DocumentIngested"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn document_only_filter_excludes_user_and_agent_hits() {
+    // provenance_classes = [document_ingested] must exclude user_authored and
+    // agent_proposed hits; legacy (no stamp) must still qualify.
+    let (embedder, vectors) = trust_fixture().await;
+    let retriever = trust_retriever(embedder, vectors);
+    let query = KnowledgeQuery::try_new(
+        "document",
+        16,
+        QueryFilter {
+            provenance_classes: Some(vec![TrustClass::DocumentIngested]),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        ids.contains("doc-ingested"),
+        "ingested doc must pass: {ids:?}"
+    );
+    assert!(
+        ids.contains("doc-legacy"),
+        "legacy doc (no stamp → document_ingested) must pass: {ids:?}"
+    );
+    assert!(
+        !ids.contains("doc-user"),
+        "user_authored must be excluded: {ids:?}"
+    );
+    assert!(
+        !ids.contains("doc-agent"),
+        "agent_proposed must be excluded: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn user_only_filter_returns_only_findings() {
+    // provenance_classes = [user_authored] must return only the finding doc.
+    let (embedder, vectors) = trust_fixture().await;
+    let retriever = trust_retriever(embedder, vectors);
+    let query = KnowledgeQuery::try_new(
+        "document",
+        16,
+        QueryFilter {
+            provenance_classes: Some(vec![TrustClass::UserAuthored]),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        std::collections::BTreeSet::from(["doc-user"]),
+        "only user_authored doc must appear"
+    );
+    assert_eq!(
+        hits[0].trust_class,
+        Some(TrustClass::UserAuthored),
+        "hit must carry UserAuthored class for explainability"
+    );
+}
+
+#[tokio::test]
+async fn restrictive_filter_with_zero_matches_returns_empty_not_error() {
+    // A filter that matches no indexed classes must yield an empty result, not an error.
+    // Use rule_derived — no docs in the fixture carry that class.
+    let (embedder, vectors) = trust_fixture().await;
+    let retriever = trust_retriever(embedder, vectors);
+    let query = KnowledgeQuery::try_new(
+        "document",
+        16,
+        QueryFilter {
+            provenance_classes: Some(vec![TrustClass::RuleDerived]),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits = retriever
+        .search(&query)
+        .await
+        .expect("search must succeed, not error");
+    assert!(
+        hits.is_empty(),
+        "0 hits at rule_derived trust level — not an error: {hits:?}"
+    );
+}
+
+#[tokio::test]
+async fn empty_provenance_classes_vec_is_same_as_none() {
+    // An explicitly empty Vec is treated as "all classes" — same as None.
+    let (embedder, vectors) = trust_fixture().await;
+    let retriever = trust_retriever(embedder, vectors);
+    let query = KnowledgeQuery::try_new(
+        "document",
+        16,
+        QueryFilter {
+            provenance_classes: Some(vec![]),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+    // All four docs must appear (empty set = all classes).
+    assert!(ids.contains("doc-ingested"), "{ids:?}");
+    assert!(ids.contains("doc-user"), "{ids:?}");
+    assert!(ids.contains("doc-agent"), "{ids:?}");
+    assert!(ids.contains("doc-legacy"), "{ids:?}");
+}
+
+#[tokio::test]
+async fn trust_class_token_round_trip() {
+    // All four TrustClass variants serialise to their payload tokens and
+    // parse back exactly — no unknown tokens leak through.
+    for (class, token) in [
+        (TrustClass::DocumentIngested, "document_ingested"),
+        (TrustClass::RuleDerived, "rule_derived"),
+        (TrustClass::AgentProposed, "agent_proposed"),
+        (TrustClass::UserAuthored, "user_authored"),
+    ] {
+        assert_eq!(class.payload_token(), token, "token mismatch for {class:?}");
+        assert_eq!(
+            TrustClass::from_payload_token(token),
+            Some(class),
+            "round-trip failed for {token}"
+        );
+    }
+    assert_eq!(
+        TrustClass::from_payload_token("unknown_garbage"),
+        None,
+        "unknown tokens must return None"
+    );
 }
