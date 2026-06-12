@@ -31,14 +31,54 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tdw_core::{
-    Direction, Error, GraphEngine, LexicalEngine, PayloadCondition, PayloadFilter, Result,
-    TextQuery, TraversalFilter, VectorEngine, VectorQuery,
+    ConfidenceScore, Direction, EdgeConfidenceInput, Error, GraphEngine, LexicalEngine,
+    PayloadCondition, PayloadFilter, Result, TextQuery, TraversalFilter, VectorEngine, VectorQuery,
+    compute_confidence,
 };
 use tdw_embed::EmbeddingProvider;
 use tdw_tags::{TagEngine, date_to_timestamp};
 use tdw_taxonomy::EntityKind;
 
 pub use rrf::{Fused, RRF_K, RankedEntry, rrf_fuse};
+
+/// Confidence ranking weight for hybrid retrieval.
+///
+/// Blends `confidence` into the fused RRF score:
+/// `final_score = rrf_score × (1 - weight) + confidence × weight`.
+///
+/// Set to `0.0` to disable (pure relevance ranking); [`tdw_core::DEFAULT_CONFIDENCE_WEIGHT`]
+/// is the platform default.  Values must be in `[0.0, 1.0]`.
+///
+/// K-M3 seam: when `tdw.kg.answer` is built, pass the confidence scores alongside
+/// retrieved hits and weight answer candidates by `score.confidence`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConfidenceRankingWeight(pub f64);
+
+impl Default for ConfidenceRankingWeight {
+    fn default() -> Self {
+        Self(tdw_core::DEFAULT_CONFIDENCE_WEIGHT)
+    }
+}
+
+impl ConfidenceRankingWeight {
+    /// Zero weight — confidence does not influence ranking.
+    pub const OFF: Self = Self(0.0);
+
+    /// Clamp the weight to `[0.0, 1.0]`.
+    #[must_use]
+    pub const fn clamped(self) -> Self {
+        Self(self.0.clamp(0.0, 1.0))
+    }
+
+    /// Blend an RRF score with a confidence score using this weight.
+    ///
+    /// `blended = rrf_score × (1 - w) + confidence × w`
+    #[must_use]
+    pub fn blend(self, rrf_score: f64, confidence: f64) -> f64 {
+        let w = self.0.clamp(0.0, 1.0);
+        rrf_score.mul_add(1.0 - w, confidence * w)
+    }
+}
 
 /// The relationship linking an entity node to a document node in the graph.
 pub const DESCRIBED_BY: &str = "described_by";
@@ -100,6 +140,12 @@ pub struct RetrievedHit {
     pub score: f64,
     pub tags: Vec<String>,
     pub explanation: HitExplanation,
+    /// Per-fact confidence score (K-R6).  `None` when the graph engine is not
+    /// attached or the entity has no graph edges (e.g. pure-vector hits without
+    /// graph expansion).  When present, `score` already incorporates the
+    /// confidence weight via [`ConfidenceRankingWeight::blend`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<ConfidenceScore>,
 }
 
 /// Structured filters applied across every channel.
@@ -147,6 +193,16 @@ pub struct KnowledgeQuery {
     pub filter: QueryFilter,
     #[serde(default)]
     pub expand: Option<GraphExpansion>,
+    /// Confidence ranking weight (K-R6).
+    ///
+    /// Blends per-fact confidence into the final RRF score:
+    /// `final_score = rrf × (1 - w) + confidence × w`.
+    ///
+    /// Default: [`ConfidenceRankingWeight::default`] (low, so relevance dominates).
+    /// Set to [`ConfidenceRankingWeight::OFF`] to disable.
+    /// Requires the graph engine to be attached; absent graph → weight effectively 0.
+    #[serde(default)]
+    pub confidence_weight: ConfidenceRankingWeight,
 }
 
 impl KnowledgeQuery {
@@ -206,7 +262,17 @@ impl KnowledgeQuery {
             channel_top_k: top_k * 4,
             filter,
             expand,
+            confidence_weight: ConfidenceRankingWeight::default(),
         })
+    }
+
+    /// Override the confidence ranking weight (K-R6).
+    ///
+    /// The weight is clamped to `[0.0, 1.0]`.
+    #[must_use]
+    pub const fn with_confidence_weight(mut self, weight: ConfidenceRankingWeight) -> Self {
+        self.confidence_weight = weight.clamped();
+        self
     }
 }
 
@@ -322,7 +388,8 @@ impl Retriever {
         // 2. Channel fan-out, 3. fuse, 4. explained hits.
         let run = self.run_channels(query, &expanded_tags).await?;
         let fused = rrf_fuse(&run.channels, RRF_K);
-        let mut hits = assemble_hits(&fused, &run, &expanded_tags);
+        let mut hits =
+            assemble_hits(&fused, &run, &expanded_tags, self.graph.as_deref(), query).await?;
 
         // 5. Graph expansion of the top fused hits.
         if let (Some(expansion), Some(graph)) = (&query.expand, &self.graph) {
@@ -516,6 +583,10 @@ impl Retriever {
                             score: 0.0,
                             tags: Vec::new(),
                             explanation: HitExplanation::default(),
+                            // Graph-expanded hits do not carry confidence (no direct
+                            // entity→document ingest edge to score); the seed hit's
+                            // confidence already reflects the anchor fact's trust.
+                            confidence: None,
                         });
                         entry.score += contribution;
                         if entry.explanation.graph_path.is_none() {
@@ -536,11 +607,20 @@ impl Retriever {
 }
 
 /// Turn fused candidates into explained hits keyed by document id.
-fn assemble_hits(
+///
+/// When a graph engine is attached and `query.confidence_weight` is nonzero,
+/// each hit's RRF score is blended with its per-fact confidence.  The
+/// confidence is computed from the `described_by` edges of the hit's entity
+/// (the same one that produced the document link), using all edges of that
+/// relation type as the corroboration pool (bounded by
+/// [`tdw_core::MAX_CORROBORATION_CAP`]).
+async fn assemble_hits(
     fused: &[Fused],
     run: &ChannelRun,
     expanded_tags: &[String],
-) -> BTreeMap<String, RetrievedHit> {
+    graph: Option<&dyn GraphEngine>,
+    query: &KnowledgeQuery,
+) -> Result<BTreeMap<String, RetrievedHit>> {
     let mut hits = BTreeMap::new();
     for candidate in fused {
         let doc_meta = run.meta.get(&candidate.id).cloned().unwrap_or_default();
@@ -550,12 +630,17 @@ fn assemble_hits(
             .filter(|tag| expanded_tags.contains(tag))
             .cloned()
             .collect();
+
+        // K-R6: compute confidence when graph is attached and weight is nonzero.
+        let (confidence, final_score) =
+            compute_hit_confidence(graph, query, &doc_meta.entity_id, candidate.score).await?;
+
         hits.insert(
             candidate.id.clone(),
             RetrievedHit {
                 id: candidate.id.clone(),
                 entity_id: doc_meta.entity_id.clone(),
-                score: candidate.score,
+                score: final_score,
                 tags: doc_meta.tags.clone(),
                 explanation: HitExplanation {
                     channels: candidate
@@ -571,10 +656,58 @@ fn assemble_hits(
                     graph_path: None,
                     seed_hit: None,
                 },
+                confidence,
             },
         );
     }
-    hits
+    Ok(hits)
+}
+
+/// Compute the confidence score for one hit and return `(score, blended_rrf_score)`.
+///
+/// When the graph is absent or the entity id is empty or the weight is zero,
+/// returns `(None, rrf_score)` — confidence does not affect ranking.
+///
+/// The corroboration pool is the slice of `described_by` neighbors of the
+/// entity (outgoing edges).  These carry the provenance of the document
+/// ingestion, which is the correct pool for corroboration counting.
+async fn compute_hit_confidence(
+    graph: Option<&dyn GraphEngine>,
+    query: &KnowledgeQuery,
+    entity_id: &str,
+    rrf_score: f64,
+) -> Result<(Option<ConfidenceScore>, f64)> {
+    let weight = query.confidence_weight.0;
+    let Some(graph) = graph else {
+        return Ok((None, rrf_score));
+    };
+    if weight <= 0.0 || entity_id.is_empty() {
+        return Ok((None, rrf_score));
+    }
+
+    // Fetch outgoing `described_by` edges of the entity — these are the
+    // ingestion provenance edges used as the corroboration pool.
+    let traversal = TraversalFilter {
+        rels: Some(vec![DESCRIBED_BY.to_string()]),
+        direction: Direction::Out,
+        max_hops: 1,
+        ..TraversalFilter::default()
+    };
+    let neighbors = graph.neighbors(entity_id, &traversal).await?;
+    if neighbors.is_empty() {
+        return Ok((None, rrf_score));
+    }
+
+    // Use the first edge as the subject (the fact being scored is the entity's
+    // existence in the graph, proxied by its ingest provenance).
+    let (ref edge, _) = neighbors[0];
+    let pool: Vec<&tdw_core::GraphEdge> = neighbors.iter().map(|(e, _)| e).collect();
+    let subject = EdgeConfidenceInput::from_edge(edge);
+
+    // K-R3 seam: no source_reliability yet → None (→ NEUTRAL).
+    let score = compute_confidence(&subject, &pool, None);
+    let blended = query.confidence_weight.blend(rrf_score, score.confidence);
+    Ok((Some(score), blended))
 }
 
 /// Documents described by an entity (via `described_by` edges to
