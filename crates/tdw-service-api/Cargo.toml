@@ -141,6 +141,7 @@ provider-government-us = [
     "tdw-provider-government-us/http",
 ]
 provider-imf = ["dep:tdw-provider-imf", "tdw-provider-imf/http"]
+provider-econdb = ["dep:tdw-provider-econdb", "tdw-provider-econdb/http"]
 provider-geckoterminal = [
     "dep:tdw-provider-geckoterminal",
     "tdw-provider-geckoterminal/http",
@@ -240,6 +241,7 @@ all-http-providers = [
     "provider-fred",
     "provider-government-us",
     "provider-imf",
+    "provider-econdb",
     "provider-geckoterminal",
     "provider-glassnode",
     "provider-huggingface",
@@ -329,6 +331,7 @@ tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-government-us = { path = "../tdw-provider-government-us", optional = true }
 tdw-provider-imf = { path = "../tdw-provider-imf", optional = true }
+tdw-provider-econdb = { path = "../tdw-provider-econdb", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
 tdw-provider-glassnode = { path = "../tdw-provider-glassnode", optional = true }
 tdw-provider-huggingface = { path = "../tdw-provider-huggingface", optional = true }

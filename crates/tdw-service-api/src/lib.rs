@@ -148,6 +148,8 @@ use tdw_provider_deribit::{
 };
 #[cfg(feature = "provider-ecb")]
 use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
+#[cfg(feature = "provider-econdb")]
+use tdw_provider_econdb::EcondbHttpMacroSeriesFetcher;
 #[cfg(feature = "provider-eia")]
 use tdw_provider_eia::{
     EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
@@ -410,6 +412,9 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     // Catalog-facing IMF SDMX-JSON macro fetcher (OpenBB-parity P3W3).
     #[cfg(feature = "provider-imf")]
     registry.register(ImfHttpMacroSeriesFetcher::registry_entry())?;
+    // Catalog-facing EconDB macro fetcher (OpenBB-parity P3W4).
+    #[cfg(feature = "provider-econdb")]
+    registry.register(EcondbHttpMacroSeriesFetcher::registry_entry())?;
     register_extended_providers(&mut registry)?;
     Ok(registry)
 }
@@ -751,6 +756,13 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         ) => {
             dispatch!(ImfHttpMacroSeriesFetcher::default())
         }
+        // EcondbHttpMacroSeriesFetcher — the single EconDB series route; the
+        // catalog `command` rides in `params` (injected by the dispatcher
+        // FetchBinding).
+        #[cfg(feature = "provider-econdb")]
+        ("econdb", "economy_econdb_series") => {
+            dispatch!(EcondbHttpMacroSeriesFetcher::default())
+        }
         // SeekingAlphaArticlesHttpFetcher (PROVIDER_ID = "seeking-alpha")
         #[cfg(feature = "provider-seeking-alpha")]
         ("seeking-alpha", "articles") => dispatch!(SeekingAlphaArticlesHttpFetcher::default()),
@@ -933,6 +945,8 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
         target!("imf", "economy_imf_direction_of_trade");
         target!("imf", "economy_imf_balance_of_payments");
     }
+    #[cfg(feature = "provider-econdb")]
+    target!("econdb", "economy_econdb_series");
     #[cfg(feature = "provider-seeking-alpha")]
     {
         target!("seeking-alpha", "articles");
@@ -2039,6 +2053,7 @@ mod tests {
         feature = "provider-fred",
         feature = "provider-government-us",
         feature = "provider-imf",
+        feature = "provider-econdb",
         feature = "provider-geckoterminal",
         feature = "provider-glassnode",
         feature = "provider-huggingface",

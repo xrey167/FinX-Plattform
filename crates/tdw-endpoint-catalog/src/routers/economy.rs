@@ -70,6 +70,12 @@ const ECONOMY_IMF_BOP: &[ProviderCandidate] = &[ProviderCandidate::new(
     "imf",
     "economy_imf_balance_of_payments",
 )];
+/// `EconDB` candidate (OpenBB-parity **P3W4**) — standardized cross-country macro
+/// series fetched by `EconDB` ticker. The endpoint key is the route's `'/'→'_'`
+/// form, matching `endpoint_key_for_route` and the `(provider="econdb",
+/// endpoint=…)` dispatch binding registered under `provider-econdb`.
+const ECONOMY_ECONDB_SERIES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("econdb", "economy_econdb_series")];
 /// Keyless Federal Reserve candidate for the full H.6 money-measures table
 /// (gap-matrix item **L3.1**) — distinct from the FRED-backed single-series
 /// `economy/money_measures/{m1,m2}` routes above.
@@ -184,6 +190,11 @@ pub fn entries() -> Vec<CatalogEntry> {
             "economy/imf/balance_of_payments",
             ECONOMY_IMF_BOP,
             "IMF Balance of Payments time series, SDMX-JSON macro series.",
+        ),
+        macro_entry(
+            "economy/econdb/series",
+            ECONOMY_ECONDB_SERIES,
+            "EconDB economic time series by ticker (standardized cross-country macro series).",
         ),
         CatalogEntry {
             route: "economy/fred_search",
