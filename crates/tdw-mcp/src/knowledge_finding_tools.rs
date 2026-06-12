@@ -1,8 +1,8 @@
-//! MCP tools for first-class research findings (knowledge-system K-X6).
+//! MCP tools for first-class research findings and theses (K-X6 + K-X7).
 //!
 //! # Trust class: USER knowledge
 //!
-//! Findings are authored and attributed to the calling user — they are NOT
+//! Findings and theses are authored and attributed to the calling user — they are NOT
 //! operator-gated like B9 agent proposals.  The distinction matters:
 //!
 //! * **Agent proposals** (`tdw.kg.annotate` / `tdw.tags.define` / …) flow
@@ -32,11 +32,59 @@
 //!      retrievals to `provenance: agent:<user_id>` so callers can distinguish
 //!      personal findings from ingested or operator-materialized facts.
 //!
-//! # Tools
+//! # Thesis vs. Finding (K-X7 kind decision)
+//!
+//! A thesis is represented as a **`Finding` node with `props.kind_hint =
+//! "thesis"`** — NOT as a 54th `EntityKind` variant. The reasons:
+//!
+//! 1. `EntityKind::ALL` is a const array ([52]); adding a 54th variant is a
+//!    safe-but-disruptive ordinal shift for every downstream match.
+//! 2. A thesis carries identical trust-class semantics to a finding: user
+//!    provenance, host-bound identity, same caps, same `supports`/`contradicts`
+//!    edge vocabulary.  Encoding this as a property saves an entire taxonomy
+//!    extension for a single distinction.
+//! 3. The `supports`/`contradicts` edge vocabulary from K-X6 is already the
+//!    correct evidence stream — no new relation types are needed.
+//!
+//! The thesis capture tool (`tdw.kg.thesis`) is a thin wrapper over
+//! `capture_finding` that injects `kind_hint = "thesis"` and validates the
+//! `falsifiable_statement` field.  Health is read back via
+//! `tdw.kg.thesis_health` and surfaced in `tdw.kg.status`.
+//!
+//! # Tools (K-X6)
 //!
 //! * `tdw.kg.finding` — capture a finding (create entity + index + auto-link).
 //! * `tdw.kg.link`    — add a typed relation edge between two findings or
 //!   between a finding and any graph entity.
+//!
+//! # Tools (K-X7)
+//!
+//! * `tdw.kg.thesis`        — capture a falsifiable thesis (Finding node with
+//!   `kind_hint="thesis"` + optional `horizon_date`).
+//! * `tdw.kg.thesis_health` — read-only: compute evidence-aggregation health
+//!   for one thesis at an optional `as_of` date; returns supports count,
+//!   contradicts count, evidence freshness, and balance trend.
+//!
+//! # K-M4 seam (contradiction detection hook)
+//!
+//! When K-M4's contradiction-detection pass finds a new fact that contradicts
+//! a thesis's supporting evidence, it must be able to create the corresponding
+//! `contradicts` edge from the finding to the thesis via `tdw.kg.link`.
+//!
+//! **Documented contract** (no dead code — K-M4 implements this):
+//! ```text
+//! POST tools/call { "name": "tdw.kg.link", "arguments": {
+//!   "from_finding_id": "<finding-id>",
+//!   "to": "<thesis-id>",
+//!   "rel": "contradicts",
+//!   "note": "<why-this-contradicts>"
+//! }}
+//! ```
+//! `tdw.kg.link` already exists (K-X6) and accepts `contradicts`. K-M4 calls
+//! it with the thesis id as the `to` target. No additional seam code is required
+//! in this module; the `VALID_RELS` vocabulary and duplicate-detection logic in
+//! `link_finding` are the complete interface. The only K-M4 obligation is to
+//! resolve the `thesis_id` from a fact's provenance chain before calling link.
 //!
 //! # Relation vocabulary (K-X6)
 //!
@@ -64,7 +112,12 @@ use crate::{ToolDescriptor, ToolExecution, ToolFailure, structured, tool_with_an
 // ── Tool names ────────────────────────────────────────────────────────────────
 
 /// The names this module owns.
-pub const TOOL_NAMES: &[&str] = &["tdw.kg.finding", "tdw.kg.link"];
+pub const TOOL_NAMES: &[&str] = &[
+    "tdw.kg.finding",
+    "tdw.kg.link",
+    "tdw.kg.thesis",
+    "tdw.kg.thesis_health",
+];
 
 /// Whether `name` is one of the finding tools.
 #[must_use]
@@ -94,10 +147,15 @@ const VALID_RELS: &[&str] = &["relates_to", "supports", "contradicts"];
 
 // ── Descriptors ───────────────────────────────────────────────────────────────
 
-/// Descriptors for the two finding tools.
+/// Descriptors for the finding and thesis tools (K-X6 + K-X7).
 #[must_use]
 pub fn descriptors() -> Vec<ToolDescriptor> {
-    vec![finding_descriptor(), link_descriptor()]
+    vec![
+        finding_descriptor(),
+        link_descriptor(),
+        thesis_descriptor(),
+        thesis_health_descriptor(),
+    ]
 }
 
 fn finding_tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
@@ -209,6 +267,103 @@ fn link_descriptor() -> ToolDescriptor {
     )
 }
 
+fn thesis_descriptor() -> ToolDescriptor {
+    // Theses write into the graph (same posture as tdw.kg.finding).
+    finding_tool(
+        "tdw.kg.thesis",
+        "Capture Thesis",
+        "Capture a falsifiable research thesis — a claim the analyst wants to accumulate \
+         evidence for or against over time. A thesis is stored as a Finding node with \
+         `props.kind_hint = \"thesis\"` so it inherits all Finding trust-class semantics \
+         (user provenance, host-bound identity, same caps) while remaining a plain \
+         EntityKind::Finding for the taxonomy (no new variant needed).\n\
+         \n\
+         Evidence accumulates via `tdw.kg.link` `supports` / `contradicts` edges pointing \
+         TO the thesis id.  Health is read via `tdw.kg.thesis_health`.\n\
+         \n\
+         Optional `horizon_date` (YYYY-MM-DD): the date by which the thesis should be \
+         confirmed or refuted.  Stored in `props.horizon_date`; surfaced in health output.\n\
+         \n\
+         Trust class: USER knowledge — lands immediately with user provenance, no eval gate. \
+         Requires graph engine + bound user id.\n\
+         \n\
+         Caps: falsifiable_statement ≤ 256 chars (same as finding title); body ≤ 8 192 chars; \
+         tags ≤ 32; no control characters.",
+        json!({
+            "type": "object",
+            "properties": {
+                "falsifiable_statement": {
+                    "type": "string",
+                    "description": "The thesis claim (≤ 256 chars, no control chars). Must be non-empty after trim."
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Extended rationale (optional, ≤ 8 192 chars)."
+                },
+                "horizon_date": {
+                    "type": "string",
+                    "description": "Date by which this thesis should be confirmed/refuted (optional, YYYY-MM-DD)."
+                },
+                "source_url": {
+                    "type": "string",
+                    "description": "URL of the source that prompted this thesis (optional, validated)."
+                },
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional taxonomy tags (≤ 32, colon-separated identifiers)."
+                },
+                "as_of": {
+                    "type": "string",
+                    "description": "Effective date YYYY-MM-DD (optional, defaults to today)."
+                }
+            },
+            "required": ["falsifiable_statement"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn thesis_health_descriptor() -> ToolDescriptor {
+    // Health is read-only and idempotent.
+    tool_with_annotations(
+        "tdw.kg.thesis_health",
+        "Thesis Evidence Health",
+        "Compute evidence-accumulation health for one thesis at an optional `as_of` date. \
+         Scans the graph for `supports` and `contradicts` edges pointing TO the thesis id, \
+         counting only edges whose `valid_from ≤ as_of` (temporal honesty — no future-evidence \
+         leakage). Returns:\n\
+         * `supports_count` / `contradicts_count` — exact counts at `as_of`.\n\
+         * `evidence_freshness_days` — age in days of the newest evidence edge at `as_of` \
+           (`null` when no evidence exists).\n\
+         * `balance` — `\"bullish\"` (supports > contradicts), `\"bearish\"` (contradicts > \
+           supports), or `\"neutral\"` (equal or zero).\n\
+         * `horizon_date` — from the thesis node's props (may be absent).\n\
+         * `horizon_overdue` — true when `as_of ≥ horizon_date` and no clear majority.\n\
+         \n\
+         Health is computed deterministically from the graph at read time (bounded scan of \
+         inbound `supports`/`contradicts` edges, capped at 1 024). Read-only, idempotent. \
+         Requires graph engine.",
+        json!({
+            "type": "object",
+            "properties": {
+                "thesis_id": {
+                    "type": "string",
+                    "description": "The thesis node id (e.g. finding:abc123 with kind_hint=thesis)."
+                },
+                "as_of": {
+                    "type": "string",
+                    "description": "Temporal point of view (YYYY-MM-DD). Defaults to today."
+                }
+            },
+            "required": ["thesis_id"],
+            "additionalProperties": false
+        }),
+        true, // readOnlyHint
+        true, // idempotentHint
+    )
+}
+
 // ── Dispatch ──────────────────────────────────────────────────────────────────
 
 /// Dispatch one finding tool.  Every failure is a tool error.
@@ -229,6 +384,8 @@ pub fn execute(
     match name {
         "tdw.kg.finding" => capture_finding(runtime, arguments, now),
         "tdw.kg.link" => link_finding(runtime, arguments, now),
+        "tdw.kg.thesis" => capture_thesis(runtime, arguments, now),
+        "tdw.kg.thesis_health" => thesis_health(runtime, arguments, now),
         other => Err(execution(format!("unknown finding tool: {other}"))),
     }
 }
@@ -545,6 +702,281 @@ fn link_finding(
         "note": note,
         "created_at": as_of_ts,
     })))
+}
+
+// ── tdw.kg.thesis ─────────────────────────────────────────────────────────────
+
+/// Capture a falsifiable thesis (K-X7).
+///
+/// A thesis is a Finding node with `props.kind_hint = "thesis"`.  All
+/// validation mirrors `capture_finding`; the only additions are:
+/// * `falsifiable_statement` is used as the finding title (same 256-char cap).
+/// * `horizon_date` (optional YYYY-MM-DD) is stored in `props.horizon_date`.
+/// * `props.kind_hint = "thesis"` is always written so health and why tools
+///   can identify the node as a thesis without a taxonomy variant.
+fn capture_thesis(
+    runtime: &KnowledgeRuntime,
+    arguments: &Map<String, Value>,
+    now: &str,
+) -> Result<ToolExecution, ToolFailure> {
+    // Rewrite the incoming arguments to use `title` = falsifiable_statement
+    // so the shared `capture_finding` path handles the rest uniformly.
+    let statement = require_str(arguments, "falsifiable_statement")?;
+    validate_title(statement)?;
+
+    // Horizon date — optional, validated before we build the rewritten map.
+    let horizon_date = optional_str(arguments, "horizon_date");
+    if let Some(h) = horizon_date {
+        validate_date(h)?;
+    }
+
+    // Build a synthetic argument map that capture_finding accepts.
+    let mut synthetic: Map<String, Value> = Map::new();
+    synthetic.insert("title".to_string(), Value::String(statement.to_string()));
+    if let Some(body) = optional_str(arguments, "body") {
+        synthetic.insert("body".to_string(), Value::String(body.to_string()));
+    }
+    if let Some(url) = optional_str(arguments, "source_url") {
+        synthetic.insert("source_url".to_string(), Value::String(url.to_string()));
+    }
+    if let Some(tags_val) = arguments.get("tags") {
+        synthetic.insert("tags".to_string(), tags_val.clone());
+    }
+    if let Some(as_of) = optional_str(arguments, "as_of") {
+        synthetic.insert("as_of".to_string(), Value::String(as_of.to_string()));
+    }
+
+    // Run the shared capture path (validates + writes the Finding node).
+    let result = capture_finding(runtime, &synthetic, now)?;
+
+    // Extract the finding_id so we can patch the node with thesis-specific props.
+    let finding_id = result
+        .structured
+        .get("finding_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| execution("thesis: capture_finding returned no finding_id".to_string()))?
+        .to_string();
+
+    let graph = require_graph(runtime)?;
+    let user_id = require_user_id(runtime)?;
+
+    let as_of_str =
+        optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
+    let as_of_ts = tdw_tags::date_to_timestamp(&as_of_str);
+
+    // Patch the existing node to add kind_hint and horizon_date.
+    block_on(async {
+        let maybe_node = graph
+            .node(&finding_id)
+            .await
+            .map_err(|e| execution(e.to_string()))?;
+        let mut node = maybe_node.ok_or_else(|| {
+            execution(format!("thesis node {finding_id:?} vanished after insert"))
+        })?;
+
+        node.props["kind_hint"] = json!("thesis");
+        if let Some(h) = horizon_date {
+            node.props["horizon_date"] = json!(h);
+        }
+        node.props["thesis_user_id"] = json!(user_id);
+
+        graph
+            .upsert_nodes(vec![node])
+            .await
+            .map_err(|e| execution(e.to_string()))
+    })?;
+
+    Ok(structured(json!({
+        "thesis_id": finding_id,
+        "falsifiable_statement": statement,
+        "horizon_date": horizon_date,
+        "as_of": as_of_str,
+        "as_of_ts": as_of_ts,
+        "kind_hint": "thesis",
+        "auto_links": result.structured.get("auto_links").cloned().unwrap_or_else(|| json!([])),
+        "auto_links_count": result.structured.get("auto_links_count").cloned().unwrap_or_else(|| json!(0)),
+    })))
+}
+
+// ── tdw.kg.thesis_health ──────────────────────────────────────────────────────
+
+/// Maximum number of inbound evidence edges scanned for a single thesis health
+/// query.  Keeps the read bounded regardless of graph size.
+const THESIS_HEALTH_EDGE_CAP: usize = 1_024;
+
+/// Health computation for one thesis (K-X7).
+///
+/// Scans inbound `supports` and `contradicts` edges TO the thesis id.
+/// Uses `active_at(valid_from, valid_to, as_of_ts)` exclusively — the same
+/// predicate the graph engine and diff tool use, so temporal-leakage bugs
+/// cannot be introduced here independently.
+///
+/// # Temporal honesty (`as_of` leakage regression contract)
+///
+/// Only edges with `valid_from ≤ as_of` (open or within window) are counted.
+/// Edges with `valid_from > as_of` are silently skipped — they represent
+/// evidence that did not yet exist at the queried point in time.  The
+/// `evidence_freshness_days` field is computed from the newest edge that is
+/// active at `as_of`, not from edges that became valid after it.
+fn thesis_health(
+    runtime: &KnowledgeRuntime,
+    arguments: &Map<String, Value>,
+    now: &str,
+) -> Result<ToolExecution, ToolFailure> {
+    let graph = require_graph(runtime)?;
+    let thesis_id = require_str(arguments, "thesis_id")?;
+    let as_of = optional_str(arguments, "as_of").unwrap_or(now);
+    validate_date(as_of)?;
+
+    let as_of_ts = tdw_tags::date_to_timestamp(as_of);
+
+    // Verify the thesis node exists and carry its props.
+    let node = block_on(async {
+        graph
+            .node(thesis_id)
+            .await
+            .map_err(|e| execution(e.to_string()))
+    })?
+    .ok_or_else(|| execution(format!("thesis {thesis_id:?} not found")))?;
+
+    // Verify it is indeed a thesis (kind_hint prop).
+    let kind_hint = node
+        .props
+        .get("kind_hint")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if kind_hint != "thesis" {
+        return Err(execution(format!(
+            "{thesis_id:?} is not a thesis (kind_hint={kind_hint:?}); \
+             use tdw.kg.finding for plain findings"
+        )));
+    }
+
+    let horizon_date = node
+        .props
+        .get("horizon_date")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+
+    // Collect inbound supports/contradicts edges to this thesis.
+    // We use a paginated scan of ALL inbound edges via `neighbors` (Direction::In)
+    // and filter to the two relevant rels, bounded by THESIS_HEALTH_EDGE_CAP.
+    let (supports_count, contradicts_count, newest_active_ts) =
+        block_on(async { compute_thesis_health_counts(graph, thesis_id, &as_of_ts).await })?;
+
+    // Evidence freshness in days: age of newest evidence edge at as_of.
+    let evidence_freshness_days = newest_active_ts
+        .as_deref()
+        .map(|newest_ts| compute_age_days(newest_ts, &as_of_ts));
+
+    // Balance signal.
+    let balance = match supports_count.cmp(&contradicts_count) {
+        std::cmp::Ordering::Greater => "bullish",
+        std::cmp::Ordering::Less => "bearish",
+        std::cmp::Ordering::Equal => "neutral",
+    };
+
+    // Horizon overdue: as_of >= horizon_date AND no clear majority.
+    let horizon_overdue = horizon_date
+        .as_deref()
+        .is_some_and(|h| as_of >= h && balance == "neutral");
+
+    Ok(structured(json!({
+        "thesis_id": thesis_id,
+        "falsifiable_statement": node.props.get("title").cloned().unwrap_or(Value::Null),
+        "as_of": as_of,
+        "supports_count": supports_count,
+        "contradicts_count": contradicts_count,
+        "evidence_freshness_days": evidence_freshness_days,
+        "balance": balance,
+        "horizon_date": horizon_date,
+        "horizon_overdue": horizon_overdue,
+        "edge_scan_cap": THESIS_HEALTH_EDGE_CAP,
+        "health_note": "Computed deterministically from graph at read time; \
+                        only edges active at as_of are counted (temporal honesty)."
+    })))
+}
+
+/// Scan inbound `supports` and `contradicts` edges to `thesis_id` that are
+/// active at `as_of_ts`, bounded by [`THESIS_HEALTH_EDGE_CAP`].
+///
+/// Returns `(supports_count, contradicts_count, newest_valid_from)` where
+/// `newest_valid_from` is the `valid_from` timestamp of the most recently
+/// created active evidence edge.
+async fn compute_thesis_health_counts(
+    graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
+    thesis_id: &str,
+    as_of_ts: &str,
+) -> Result<(usize, usize, Option<String>), ToolFailure> {
+    use tdw_core::{Direction, TraversalFilter, active_at};
+
+    let filter = TraversalFilter {
+        rels: Some(vec!["supports".to_string(), "contradicts".to_string()]),
+        direction: Direction::In,
+        max_hops: 1,
+        ..TraversalFilter::default()
+    };
+
+    // neighbors returns (edge, node) pairs — edge.to == thesis_id for In direction.
+    let neighbors = graph
+        .neighbors(thesis_id, &filter)
+        .await
+        .map_err(|e| execution(e.to_string()))?;
+
+    let mut supports_count: usize = 0;
+    let mut contradicts_count: usize = 0;
+    let mut newest_active_ts: Option<String> = None;
+
+    for (i, (edge, _node)) in neighbors.iter().enumerate() {
+        if i >= THESIS_HEALTH_EDGE_CAP {
+            break;
+        }
+
+        // Temporal honesty: only count edges active at as_of_ts.
+        if !active_at(
+            edge.valid_from.as_deref(),
+            edge.valid_to.as_deref(),
+            as_of_ts,
+        ) {
+            continue;
+        }
+
+        match edge.rel.as_str() {
+            "supports" => supports_count += 1,
+            "contradicts" => contradicts_count += 1,
+            _ => {}
+        }
+
+        // Track the newest valid_from among active evidence edges.
+        if let Some(vf) = edge.valid_from.as_deref() {
+            match newest_active_ts.as_deref() {
+                None => newest_active_ts = Some(vf.to_string()),
+                Some(current) if vf > current => newest_active_ts = Some(vf.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    Ok((supports_count, contradicts_count, newest_active_ts))
+}
+
+/// Approximate age in days between two UTC timestamps (lexicographic comparison,
+/// Julian-day arithmetic — same approach as `timestamp_span_days` in the diff
+/// tool; precise enough for observability output).
+fn compute_age_days(from_ts: &str, to_ts: &str) -> i64 {
+    fn parse_ymd(ts: &str) -> Option<(i64, i64, i64)> {
+        let y: i64 = ts.get(0..4)?.parse().ok()?;
+        let m: i64 = ts.get(5..7)?.parse().ok()?;
+        let d: i64 = ts.get(8..10)?.parse().ok()?;
+        Some((y, m, d))
+    }
+    const fn julian(y: i64, m: i64, d: i64) -> i64 {
+        365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + d
+    }
+    match (parse_ymd(from_ts), parse_ymd(to_ts)) {
+        (Some((fy, fm, fd)), Some((ty, tm, td))) => (julian(ty, tm, td) - julian(fy, fm, fd)).abs(),
+        _ => 0,
+    }
 }
 
 // ── Auto-link scan ────────────────────────────────────────────────────────────

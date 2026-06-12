@@ -6,7 +6,7 @@ pub mod proposals;
 pub mod reindex;
 pub mod runtime;
 
-pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus};
+pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus};
 
 use std::sync::Arc;
 

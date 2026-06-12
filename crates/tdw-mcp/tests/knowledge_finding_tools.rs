@@ -1,11 +1,19 @@
-//! End-to-end tests for the MCP finding tools (knowledge-system K-X6).
+//! End-to-end tests for the MCP finding and thesis tools (K-X6 + K-X7).
 //!
-//! Tests drive `tdw.kg.finding` and `tdw.kg.link` through the same JSON-RPC
-//! `tools/call` surface a real client uses, using fully in-memory engines.
-//! Contract: capture → auto-links reported → retrievable via `tdw.kg.search`
-//! → link tool → duplicate rejection → dangling-target rejection → evidence
-//! pinned and visible via `tdw.kg.why` → tombstoned entity excluded from
-//! auto-links → descriptors absent without required attachment.
+//! Tests drive `tdw.kg.finding`, `tdw.kg.link`, `tdw.kg.thesis`, and
+//! `tdw.kg.thesis_health` through the same JSON-RPC `tools/call` surface a
+//! real client uses, using fully in-memory engines.
+//!
+//! K-X6 contract: capture → auto-links reported → retrievable via
+//! `tdw.kg.search` → link tool → duplicate rejection → dangling-target
+//! rejection → evidence pinned and visible via `tdw.kg.why` → tombstoned
+//! entity excluded from auto-links → descriptors absent without required
+//! attachment.
+//!
+//! K-X7 contract: thesis capture → kind_hint stored → supports/contradicts
+//! links → health math (hand-computed) → as_of leakage regression → why on
+//! thesis walks evidence edges → status line count → non-thesis rejected by
+//! thesis_health.
 
 #![deny(clippy::pedantic, clippy::nursery)]
 
@@ -673,5 +681,448 @@ fn why_on_finding_without_evidence_emits_provenance_not_evidence() {
     assert!(
         !chain.iter().any(|s| s["kind"] == "evidence"),
         "must NOT contain evidence step when no evidence was pinned"
+    );
+}
+
+// ── K-X7 Thesis tests ─────────────────────────────────────────────────────────
+
+/// Thesis capture: response contains thesis_id, kind_hint="thesis", and
+/// falsifiable_statement round-trips correctly (K-X7 capture e2e).
+#[test]
+fn thesis_capture_e2e() {
+    let (mut server, _graph) = server_with_findings();
+
+    let resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "AAPL will outperform SPX by 10pp over 12 months",
+            "body": "Based on margin expansion and services acceleration.",
+            "horizon_date": "2027-06-12",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(
+        resp["result"]["isError"], false,
+        "thesis capture should succeed: {resp}"
+    );
+    let sc = &resp["result"]["structuredContent"];
+    assert!(
+        sc["thesis_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("finding:")),
+        "thesis_id must start with 'finding:' prefix: {sc}"
+    );
+    assert_eq!(sc["kind_hint"], "thesis", "kind_hint must be 'thesis'");
+    assert_eq!(
+        sc["falsifiable_statement"],
+        "AAPL will outperform SPX by 10pp over 12 months"
+    );
+    assert_eq!(sc["horizon_date"], "2027-06-12");
+}
+
+/// Thesis capture rejects an empty falsifiable_statement.
+#[test]
+fn thesis_capture_rejects_empty_statement() {
+    let (mut server, _graph) = server_with_findings();
+
+    let resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({ "falsifiable_statement": "   " }),
+    );
+    assert_eq!(
+        resp["result"]["isError"], true,
+        "empty statement should be a tool error: {resp}"
+    );
+}
+
+/// Thesis capture rejects an invalid horizon_date.
+#[test]
+fn thesis_capture_rejects_bad_horizon_date() {
+    let (mut server, _graph) = server_with_findings();
+
+    let resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Some thesis",
+            "horizon_date": "not-a-date"
+        }),
+    );
+    assert_eq!(
+        resp["result"]["isError"], true,
+        "invalid horizon_date should be a tool error: {resp}"
+    );
+}
+
+/// Health math: hand-computed supports=2, contradicts=1 → balance=bullish.
+///
+/// Graph state (set up before the health call):
+///   finding:f1 --supports-->    thesis T
+///   finding:f2 --supports-->    thesis T    (valid_from=NOW)
+///   finding:f3 --contradicts--> thesis T    (valid_from=NOW)
+///
+/// Expected health at as_of=NOW:
+///   supports_count=2, contradicts_count=1, balance="bullish"
+#[test]
+fn thesis_health_math_hand_computed() {
+    let (mut server, graph) = server_with_findings();
+
+    // Capture the thesis.
+    let thesis_resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Health math test thesis",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(thesis_resp["result"]["isError"], false);
+    let thesis_id = thesis_resp["result"]["structuredContent"]["thesis_id"]
+        .as_str()
+        .expect("thesis_id")
+        .to_string();
+
+    // Capture three evidence findings.
+    let f1 = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({ "title": "Evidence finding sup1", "as_of": NOW }),
+    );
+    assert_eq!(f1["result"]["isError"], false);
+    let f1_id = f1["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("f1_id")
+        .to_string();
+
+    let f2 = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({ "title": "Evidence finding sup2", "as_of": NOW }),
+    );
+    assert_eq!(f2["result"]["isError"], false);
+    let f2_id = f2["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("f2_id")
+        .to_string();
+
+    let f3 = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({ "title": "Evidence finding con1", "as_of": NOW }),
+    );
+    assert_eq!(f3["result"]["isError"], false);
+    let f3_id = f3["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("f3_id")
+        .to_string();
+
+    // Link f1 supports thesis.
+    let l1 = call(
+        &mut server,
+        "tdw.kg.link",
+        &json!({ "from_finding_id": f1_id, "to": thesis_id, "rel": "supports" }),
+    );
+    assert_eq!(
+        l1["result"]["isError"], false,
+        "link f1→thesis supports: {l1}"
+    );
+
+    // Link f2 supports thesis.
+    let l2 = call(
+        &mut server,
+        "tdw.kg.link",
+        &json!({ "from_finding_id": f2_id, "to": thesis_id, "rel": "supports" }),
+    );
+    assert_eq!(
+        l2["result"]["isError"], false,
+        "link f2→thesis supports: {l2}"
+    );
+
+    // Link f3 contradicts thesis.
+    let l3 = call(
+        &mut server,
+        "tdw.kg.link",
+        &json!({ "from_finding_id": f3_id, "to": thesis_id, "rel": "contradicts" }),
+    );
+    assert_eq!(
+        l3["result"]["isError"], false,
+        "link f3→thesis contradicts: {l3}"
+    );
+
+    // Now query health.
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": thesis_id, "as_of": NOW }),
+    );
+    assert_eq!(
+        health["result"]["isError"], false,
+        "health should succeed: {health}"
+    );
+    let sc = &health["result"]["structuredContent"];
+
+    // Hand-computed: supports=2, contradicts=1.
+    assert_eq!(sc["supports_count"], 2, "supports_count should be 2: {sc}");
+    assert_eq!(
+        sc["contradicts_count"], 1,
+        "contradicts_count should be 1: {sc}"
+    );
+    assert_eq!(
+        sc["balance"], "bullish",
+        "balance should be bullish (2 > 1): {sc}"
+    );
+    // evidence_freshness_days must be present (edges exist).
+    assert!(
+        sc["evidence_freshness_days"].is_number(),
+        "evidence_freshness_days must be a number: {sc}"
+    );
+
+    // Suppress the unused-variable warning — graph is kept alive to prevent
+    // the in-memory engine from being dropped while the server still holds it.
+    let _ = graph;
+}
+
+/// As-of leakage regression: evidence edges created AFTER the query as_of
+/// must NOT be counted.
+///
+/// Setup: thesis captured on 2026-06-12; we query health at 2026-01-01
+/// (before the evidence was created). Hand-computed result: supports=0,
+/// contradicts=0 — even though the links exist in the graph.
+#[test]
+fn thesis_health_as_of_leakage_regression() {
+    let (mut server, _graph) = server_with_findings();
+
+    // Capture thesis at NOW (2026-06-12).
+    let thesis_resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Leakage regression thesis",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(thesis_resp["result"]["isError"], false);
+    let thesis_id = thesis_resp["result"]["structuredContent"]["thesis_id"]
+        .as_str()
+        .expect("thesis_id")
+        .to_string();
+
+    // Capture and link evidence AT NOW (2026-06-12).
+    let f = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({ "title": "Future evidence finding", "as_of": NOW }),
+    );
+    assert_eq!(f["result"]["isError"], false);
+    let f_id = f["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("f_id")
+        .to_string();
+
+    let lnk = call(
+        &mut server,
+        "tdw.kg.link",
+        &json!({ "from_finding_id": f_id, "to": thesis_id, "rel": "supports" }),
+    );
+    assert_eq!(lnk["result"]["isError"], false);
+
+    // Query health at a DATE BEFORE the evidence was written (2026-01-01).
+    // The edge valid_from is 2026-06-12T... which is > 2026-01-01T...
+    // active_at(valid_from="2026-06-12...", valid_to=None, as_of="2026-01-01...")
+    // → false. Therefore supports_count must be 0.
+    let past_date = "2026-01-01";
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": thesis_id, "as_of": past_date }),
+    );
+    assert_eq!(
+        health["result"]["isError"], false,
+        "health call at past date should succeed: {health}"
+    );
+    let sc = &health["result"]["structuredContent"];
+    assert_eq!(
+        sc["supports_count"], 0,
+        "supports_count must be 0 at past as_of (leakage guard): {sc}"
+    );
+    assert_eq!(
+        sc["contradicts_count"], 0,
+        "contradicts_count must be 0 at past as_of: {sc}"
+    );
+    assert!(
+        sc["evidence_freshness_days"].is_null(),
+        "evidence_freshness_days must be null when no active evidence: {sc}"
+    );
+}
+
+/// `tdw.kg.why` on a thesis node walks the thesis's evidence edges and
+/// includes the user_provenance chain step (K-X7 why-integration).
+#[test]
+fn why_on_thesis_includes_provenance_step() {
+    let (mut server, _graph) = server_with_findings();
+
+    let thesis_resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Why-integration thesis",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(thesis_resp["result"]["isError"], false);
+    let thesis_id = thesis_resp["result"]["structuredContent"]["thesis_id"]
+        .as_str()
+        .expect("thesis_id")
+        .to_string();
+
+    // why should surface user_provenance for the thesis node.
+    let why = call(
+        &mut server,
+        "tdw.kg.why",
+        &json!({ "entity_id": thesis_id }),
+    );
+    assert_eq!(why["result"]["isError"], false, "why should succeed: {why}");
+    let chain = why["result"]["structuredContent"]["chain"]
+        .as_array()
+        .expect("chain array");
+
+    assert!(
+        chain.iter().any(|s| s["kind"] == "user_provenance"),
+        "why chain on thesis must contain user_provenance step: {chain:?}"
+    );
+}
+
+/// `tdw.kg.status` theses field counts thesis nodes correctly (K-X7 status line).
+#[test]
+fn status_line_counts_theses() {
+    let (mut server, _graph) = server_with_findings();
+
+    // Before any thesis, count must be 0 (or None if no graph).
+    let status_before = call(&mut server, "tdw.kg.status", &json!({}));
+    assert_eq!(status_before["result"]["isError"], false);
+    let sc_before = &status_before["result"]["structuredContent"];
+    // theses field should exist (graph is attached).
+    let theses_before = &sc_before["theses"];
+    let count_before = theses_before["count"].as_u64().unwrap_or(0);
+
+    // Capture two theses.
+    for stmt in &[
+        "Thesis Alpha for status test",
+        "Thesis Beta for status test",
+    ] {
+        let r = call(
+            &mut server,
+            "tdw.kg.thesis",
+            &json!({ "falsifiable_statement": stmt, "as_of": NOW }),
+        );
+        assert_eq!(r["result"]["isError"], false, "capture {stmt}: {r}");
+    }
+
+    let status_after = call(&mut server, "tdw.kg.status", &json!({}));
+    assert_eq!(status_after["result"]["isError"], false);
+    let sc_after = &status_after["result"]["structuredContent"];
+    let count_after = sc_after["theses"]["count"].as_u64().unwrap_or(0);
+
+    assert_eq!(
+        count_after,
+        count_before + 2,
+        "status theses.count should increase by 2 after capturing two theses: before={count_before} after={count_after}"
+    );
+}
+
+/// `tdw.kg.thesis_health` rejects a plain finding (not a thesis node).
+#[test]
+fn thesis_health_rejects_non_thesis_node() {
+    let (mut server, _graph) = server_with_findings();
+
+    // Capture a plain finding (no kind_hint=thesis).
+    let f = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({ "title": "Plain finding not a thesis", "as_of": NOW }),
+    );
+    assert_eq!(f["result"]["isError"], false);
+    let finding_id = f["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("finding_id")
+        .to_string();
+
+    // Querying thesis_health on a plain finding must be a tool error.
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": finding_id, "as_of": NOW }),
+    );
+    assert_eq!(
+        health["result"]["isError"], true,
+        "thesis_health on plain finding should be a tool error: {health}"
+    );
+    let msg = health["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        msg.contains("not a thesis"),
+        "error should mention 'not a thesis': {msg}"
+    );
+}
+
+/// `tdw.kg.thesis_health` on a thesis with no evidence returns zero counts
+/// and null freshness (honest empty state).
+#[test]
+fn thesis_health_zero_evidence_is_neutral() {
+    let (mut server, _graph) = server_with_findings();
+
+    let thesis_resp = call(
+        &mut server,
+        "tdw.kg.thesis",
+        &json!({
+            "falsifiable_statement": "Empty evidence thesis",
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(thesis_resp["result"]["isError"], false);
+    let thesis_id = thesis_resp["result"]["structuredContent"]["thesis_id"]
+        .as_str()
+        .expect("thesis_id")
+        .to_string();
+
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": thesis_id, "as_of": NOW }),
+    );
+    assert_eq!(health["result"]["isError"], false);
+    let sc = &health["result"]["structuredContent"];
+    assert_eq!(sc["supports_count"], 0);
+    assert_eq!(sc["contradicts_count"], 0);
+    assert_eq!(sc["balance"], "neutral");
+    assert!(
+        sc["evidence_freshness_days"].is_null(),
+        "freshness must be null with no evidence: {sc}"
+    );
+}
+
+/// Thesis descriptors appear in tools/list when the finding surface is wired.
+#[test]
+fn thesis_descriptors_present_with_full_attachment() {
+    let (mut server, _graph) = server_with_findings();
+    let listed = decode(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+    );
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        names.contains(&"tdw.kg.thesis"),
+        "tdw.kg.thesis must appear in tools/list: {names:?}"
+    );
+    assert!(
+        names.contains(&"tdw.kg.thesis_health"),
+        "tdw.kg.thesis_health must appear in tools/list: {names:?}"
     );
 }
