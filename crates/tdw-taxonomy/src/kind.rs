@@ -1,4 +1,4 @@
-//! The entity-kind registry: the 53 classified kinds and their manifest groups.
+//! The entity-kind registry: the 54 classified kinds and their manifest groups.
 //!
 //! Serialized form matches the registry's lowercase token convention (e.g. `agentrouter`,
 //! `knowledgegraph`, `resourcedefinition`). `storage_mapping` is intentionally absent — it
@@ -141,12 +141,53 @@ pub enum EntityKind {
     /// status note is emitted at every tick when disabled — this is honest,
     /// not silent.
     Pattern,
+    /// A standing open question (knowledge-system K-X8): a first-class
+    /// "I need to find out X" node that parks an analyst's unresolved
+    /// question alongside match criteria so the cron engine can fire an
+    /// alert when incoming facts satisfy it.
+    ///
+    /// # Node anatomy
+    ///
+    /// * `props.question`        — the question text (≤ 256 chars, required).
+    /// * `props.match_entity_id` — optional graph entity id the answer is
+    ///   expected to be about (deterministic primary match).
+    /// * `props.match_tag`       — optional tag id the answering fact must
+    ///   carry (deterministic secondary match).
+    /// * `props.match_predicate` — optional relation name the answering fact
+    ///   must use (deterministic tertiary match).
+    /// * `props.semantic_anchor` — optional free-text phrase used for
+    ///   embedder-powered semantic matching when a deterministic criterion is
+    ///   absent (requires embedder in the runtime).
+    /// * `props.user_id`         — host-bound user identity (K-L5).
+    /// * `props.as_of`           — creation timestamp (injected-now).
+    /// * `props.status`          — `"open"` | `"resolved"` | `"dismissed"`.
+    /// * `props.resolved_by`     — id of the fact/finding that answered the
+    ///   question (set on resolution).
+    /// * `props.resolution_note` — free text written when resolving/dismissing.
+    ///
+    /// # Negative knowledge (dismiss path)
+    ///
+    /// Dismissing a question as "checked and absent" records a
+    /// `checked_absent` edge from the `OpenQuestion` node to the target
+    /// entity (when `match_entity_id` is set) so future extraction and
+    /// asks can consult it and avoid re-deriving the same false conclusion.
+    /// The dismissal is stored as
+    /// `props.status = "dismissed"` + `props.dismissal_as_of` on the node
+    /// and a `checked_absent` edge with the dismissal provenance so it is
+    /// queryable via `tdw.kg.traverse`.
+    ///
+    /// # Trust class
+    ///
+    /// Same as `Finding`: user provenance (`Provenance::Agent { gated: false }`),
+    /// host-bound identity (K-L5), instant-write.  `DeriveEdge` rules do NOT
+    /// consume `OpenQuestion` edges by default.
+    OpenQuestion,
 }
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order (domain appended last; see the
     /// declaration-order note on the enum).
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 54] = [
         Self::Agent,
         Self::Personality,
         Self::Prompt,
@@ -202,6 +243,8 @@ impl EntityKind {
         Self::Finding,
         // Pattern appended after Finding so existing ordinals stay stable (K-R4).
         Self::Pattern,
+        // OpenQuestion appended after Pattern so existing ordinals stay stable (K-X8).
+        Self::OpenQuestion,
     ];
 
     /// The manifest group this kind belongs to.
@@ -242,7 +285,9 @@ impl EntityKind {
             // Finding is retrievable user-authored research (K-X6).
             | Self::Finding
             // Pattern is a mined subgraph shape (K-R4).
-            | Self::Pattern => Group::Knowledge,
+            | Self::Pattern
+            // OpenQuestion is a standing query that self-answers (K-X8).
+            | Self::OpenQuestion => Group::Knowledge,
             Self::Guardrail
             | Self::Rule
             | Self::Evaluation
@@ -284,6 +329,8 @@ impl EntityKind {
                 | Self::Finding
                 // Pattern carries mined-shape content facets (canonical, support, window) — K-R4.
                 | Self::Pattern
+                // OpenQuestion carries content facets (as_of, status, match criteria) — K-X8.
+                | Self::OpenQuestion
         )
     }
 
@@ -305,7 +352,7 @@ mod tests {
         for kind in EntityKind::ALL {
             assert!(seen.insert(kind), "duplicate kind: {kind:?}");
         }
-        assert_eq!(seen.len(), 53);
+        assert_eq!(seen.len(), 54);
     }
 
     #[test]
@@ -319,7 +366,7 @@ mod tests {
         assert_eq!(count(Group::Core), 10);
         assert_eq!(count(Group::Tools), 6);
         assert_eq!(count(Group::Orchestration), 7);
-        assert_eq!(count(Group::Knowledge), 10); // +Finding (K-X6) +Pattern (K-R4)
+        assert_eq!(count(Group::Knowledge), 11); // +Finding (K-X6) +Pattern (K-R4) +OpenQuestion (K-X8)
         assert_eq!(count(Group::Governance), 6);
         assert_eq!(count(Group::Infra), 5);
         assert_eq!(count(Group::Meta), 1);
@@ -347,6 +394,7 @@ mod tests {
         check(EntityKind::Tag, "tag");
         check(EntityKind::Finding, "finding"); // K-X6
         check(EntityKind::Pattern, "pattern"); // K-R4
+        check(EntityKind::OpenQuestion, "openquestion"); // K-X8
     }
 
     #[test]
@@ -399,5 +447,14 @@ mod tests {
         assert_eq!(EntityKind::ALL[52], EntityKind::Pattern);
         assert_eq!(EntityKind::Pattern.group(), Group::Knowledge);
         assert!(EntityKind::Pattern.is_data_kind());
+    }
+
+    #[test]
+    fn open_question_kind_is_in_knowledge_group_at_expected_ordinal() {
+        // OpenQuestion is appended at index 53 (after Pattern at 52) so the 53
+        // pre-existing kinds keep their ordinals stable (K-X8).
+        assert_eq!(EntityKind::ALL[53], EntityKind::OpenQuestion);
+        assert_eq!(EntityKind::OpenQuestion.group(), Group::Knowledge);
+        assert!(EntityKind::OpenQuestion.is_data_kind());
     }
 }

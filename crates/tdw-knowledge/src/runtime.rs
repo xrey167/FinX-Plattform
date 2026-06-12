@@ -124,6 +124,11 @@ pub struct KnowledgeRuntime {
     /// `None` when the watchlist scheduler is not running (status field omitted
     /// from JSON so agents see the absence explicitly).
     watchlist_freshness: Option<Arc<std::sync::Mutex<WatchlistFreshness>>>,
+    /// Live questions-freshness cell (K-X8). Shared with the spawned questions
+    /// cron task, which writes [`QuestionsFreshness`] after each tick.
+    /// `None` when the question scheduler is not running (status field omitted
+    /// from JSON so agents see the absence explicitly).
+    questions_freshness: Option<Arc<std::sync::Mutex<QuestionsFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -153,6 +158,7 @@ impl KnowledgeRuntime {
             auto_materialize_freshness: None,
             feed_freshness_cells: Vec::new(),
             watchlist_freshness: None,
+            questions_freshness: None,
         }
     }
 
@@ -468,6 +474,33 @@ impl KnowledgeRuntime {
     ) -> Option<&Arc<std::sync::Mutex<WatchlistFreshness>>> {
         self.watchlist_freshness.as_ref()
     }
+
+    /// Attach the questions freshness cell (K-X8).
+    ///
+    /// Pass the `Arc<std::sync::Mutex<QuestionsFreshness>>` constructed by the
+    /// composition root (`tdw-backend`) so the questions cron task and
+    /// `tdw.kg.status` share the same live cell. Consumes and returns `self`
+    /// for builder use.
+    #[must_use]
+    pub fn with_questions_freshness(
+        mut self,
+        cell: Arc<std::sync::Mutex<QuestionsFreshness>>,
+    ) -> Self {
+        self.questions_freshness = Some(cell);
+        self
+    }
+
+    /// The questions-freshness cell, when attached.
+    ///
+    /// The questions cron task in `tdw-backend` writes [`QuestionsFreshness`]
+    /// after every tick via this handle. `None` when the scheduler is not wired
+    /// (status field is omitted from JSON).
+    #[must_use]
+    pub const fn questions_freshness_cell(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<QuestionsFreshness>>> {
+        self.questions_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -686,6 +719,35 @@ impl Default for WatchlistFreshness {
             last_check_ms: 0,
             total_alerts_fired: 0,
             note: "no watchlists configured".to_string(),
+        }
+    }
+}
+
+/// Live freshness snapshot for the open-question matching engine (K-X8).
+///
+/// Updated by the cron task after each tick; read by `status()` without
+/// blocking (`try_lock`).  `None` in `KgStatus` when the scheduler is not
+/// running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionsFreshness {
+    /// Number of open (not yet resolved/dismissed) questions.
+    pub open_count: usize,
+    /// Unix-epoch ms of the last matching-engine tick.  `0` = never checked.
+    pub last_check_ms: i64,
+    /// Cumulative candidate-match alerts fired since process start.
+    pub total_matches_fired: u64,
+    /// Human-readable note when zero open questions are present.
+    #[serde(default)]
+    pub note: String,
+}
+
+impl Default for QuestionsFreshness {
+    fn default() -> Self {
+        Self {
+            open_count: 0,
+            last_check_ms: 0,
+            total_matches_fired: 0,
+            note: "no open questions".to_string(),
         }
     }
 }
@@ -910,6 +972,16 @@ pub struct KgStatus {
     /// fired since daemon start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watchlist_status: Option<WatchlistFreshness>,
+
+    // --- Open-question matching-engine freshness (K-X8) ---
+    /// Live open-question matching-engine freshness snapshot (K-X8).
+    ///
+    /// `None` when the question scheduler is not running — field is omitted
+    /// from JSON so absence is explicit (loud by design). When present, carries
+    /// the count of open questions, last-check timestamp, and cumulative
+    /// candidate-match alerts fired since daemon start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questions_status: Option<QuestionsFreshness>,
 }
 
 impl KnowledgeRuntime {
@@ -1073,6 +1145,17 @@ impl KnowledgeRuntime {
                     Err(std::sync::TryLockError::WouldBlock) => WatchlistFreshness::default(),
                 });
 
+        // Questions freshness (K-X8): read the shared cell if wired, else None.
+        // Same `try_lock` discipline as watchlist — never block `status()`.
+        let questions_status =
+            self.questions_freshness
+                .as_ref()
+                .map(|cell| match cell.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
+                    Err(std::sync::TryLockError::WouldBlock) => QuestionsFreshness::default(),
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1094,6 +1177,7 @@ impl KnowledgeRuntime {
             feed_statuses,
             feed_note,
             watchlist_status,
+            questions_status,
         }
     }
 }

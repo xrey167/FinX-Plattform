@@ -23,6 +23,7 @@ pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
 pub(crate) mod knowledge_pattern_tools;
+pub mod knowledge_question_tools;
 pub(crate) mod knowledge_tools;
 pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
@@ -217,6 +218,13 @@ pub struct McpServer {
     /// `tdw.kg.watchlist` tools are exposed via `tools/list` and dispatched in
     /// `tools/call`. `None` keeps the watchlist surface off entirely.
     watchlist_store: Option<Arc<std::sync::Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
+    /// Optional open-question store (knowledge-system K-X8).
+    ///
+    /// When attached AND a knowledge runtime with a graph engine and bound user
+    /// id is present, the `tdw.kg.ask` / `tdw.kg.resolve` / `tdw.kg.dismiss` /
+    /// `tdw.kg.questions` tools are exposed via `tools/list` and dispatched in
+    /// `tools/call`. `None` keeps the question surface off entirely.
+    question_store: Option<Arc<std::sync::Mutex<knowledge_question_tools::OpenQuestionStore>>>,
 }
 
 impl Default for McpServer {
@@ -238,6 +246,7 @@ impl Default for McpServer {
             contradiction_detector: None,
             contradiction_totals: None,
             watchlist_store: None,
+            question_store: None,
         }
     }
 }
@@ -267,6 +276,7 @@ impl McpServer {
             contradiction_detector: None,
             contradiction_totals: None,
             watchlist_store: None,
+            question_store: None,
         }
     }
 
@@ -409,6 +419,22 @@ impl McpServer {
         self
     }
 
+    /// Attach the open-question store (knowledge-system K-X8).
+    ///
+    /// When attached AND a knowledge runtime with a graph engine and bound user
+    /// id is present, the `tdw.kg.ask`, `tdw.kg.resolve`, `tdw.kg.dismiss`, and
+    /// `tdw.kg.questions` tools are exposed via `tools/list` and dispatched in
+    /// `tools/call`. `None` keeps the question surface off entirely. Consumes
+    /// and returns `self` for builder use.
+    #[must_use]
+    pub fn with_question_store(
+        mut self,
+        store: Arc<std::sync::Mutex<knowledge_question_tools::OpenQuestionStore>>,
+    ) -> Self {
+        self.question_store = Some(store);
+        self
+    }
+
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
     /// exposed via `tools/list`.
     ///
@@ -524,6 +550,13 @@ impl McpServer {
         // are all attached. Absent any → off.
         if self.knowledge_watchlist_available() {
             descriptors.extend(knowledge_watchlist_tools::descriptors());
+        }
+        // The knowledge QUESTION tools (knowledge-system K-X8): tdw.kg.ask,
+        // tdw.kg.resolve, tdw.kg.dismiss, tdw.kg.questions are appended only
+        // when a question store AND a knowledge runtime with a graph engine and
+        // bound user id are all attached. Absent any → off.
+        if self.knowledge_questions_available() {
+            descriptors.extend(knowledge_question_tools::descriptors());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -704,6 +737,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_watchlist_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_question_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1141,6 +1178,69 @@ impl McpServer {
         Some(messages)
     }
 
+    /// True when the question store AND a knowledge runtime with a graph engine
+    /// and bound user id are all attached (knowledge-system K-X8).
+    fn knowledge_questions_available(&self) -> bool {
+        self.question_store.is_some()
+            && self
+                .knowledge
+                .as_ref()
+                .is_some_and(|rt| rt.graph().is_some() && rt.bound_user_id().is_some())
+    }
+
+    /// Dispatch a knowledge question tool (`tdw.kg.ask` / `tdw.kg.resolve` /
+    /// `tdw.kg.dismiss` / `tdw.kg.questions`, knowledge-system K-X8).
+    ///
+    /// Returns `Some(messages)` when `name` is a question tool — a tool error
+    /// (never a protocol error) when the question surface is unavailable (no
+    /// runtime, no graph engine, no bound user id, or no question store),
+    /// otherwise the [`knowledge_question_tools::execute`] result. Returns
+    /// `None` when `name` is not a question tool so the caller falls through
+    /// to the registry and built-in dispatch paths.
+    fn dispatch_knowledge_question_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_question_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_questions_available() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result(
+                    "knowledge question surface not attached \
+                     (requires graph engine + user id + question store)",
+                ),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let store = self.question_store.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages = match knowledge_question_tools::execute(
+            runtime,
+            store,
+            name,
+            &arguments_object,
+            &now,
+        ) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
+    }
+
     /// Dispatch a knowledge watchlist tool (`tdw.kg.watch` / `tdw.kg.unwatch` /
     /// `tdw.kg.watchlist`, knowledge-system K-X5).
     ///
@@ -1389,6 +1489,7 @@ pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32
 /// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
 /// behaves identically to [`run_stdio_json_rpc_with_daemon`] for those surfaces.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn run_stdio_json_rpc_with_knowledge(
     daemon: Option<DaemonClientConfig>,
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
@@ -1397,6 +1498,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
     watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
+    questions: Option<Arc<Mutex<knowledge_question_tools::OpenQuestionStore>>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1427,6 +1529,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(wl) = watchlist {
         base.with_watchlist_store(wl)
+    } else {
+        base
+    };
+    let base = if let Some(qs) = questions {
+        base.with_question_store(qs)
     } else {
         base
     };
@@ -1932,7 +2039,7 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
 /// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
 /// behaves identically to [`run_streamable_http_with_daemon`] for those surfaces.
 #[must_use]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn run_streamable_http_with_knowledge(
     bind: &str,
     daemon: Option<DaemonClientConfig>,
@@ -1942,6 +2049,7 @@ pub fn run_streamable_http_with_knowledge(
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
     watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
+    questions: Option<Arc<Mutex<knowledge_question_tools::OpenQuestionStore>>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1993,6 +2101,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(wl) = watchlist {
         base.with_watchlist_store(wl)
+    } else {
+        base
+    };
+    let base = if let Some(qs) = questions {
+        base.with_question_store(qs)
     } else {
         base
     };

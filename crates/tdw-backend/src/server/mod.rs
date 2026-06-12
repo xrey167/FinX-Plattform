@@ -729,6 +729,9 @@ fn run_mcp_loop(
     watchlist: Option<
         std::sync::Arc<std::sync::Mutex<tdw_mcp::knowledge_watchlist_tools::WatchlistStore>>,
     >,
+    questions: Option<
+        std::sync::Arc<std::sync::Mutex<tdw_mcp::knowledge_question_tools::OpenQuestionStore>>,
+    >,
 ) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
@@ -743,6 +746,7 @@ fn run_mcp_loop(
             infer,
             contradiction,
             watchlist,
+            questions,
         ),
         McpTransport::Http(bind) => tdw_mcp::run_streamable_http_with_knowledge(
             bind,
@@ -753,6 +757,7 @@ fn run_mcp_loop(
             infer,
             contradiction,
             watchlist,
+            questions,
         ),
     }
 }
@@ -792,9 +797,16 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             let watchlist = Some(std::sync::Arc::new(std::sync::Mutex::new(
                 tdw_mcp::knowledge_watchlist_tools::load_store_from_env(),
             )));
+            // K-X8: load the question store from TDW_QUESTIONS_DIR so that
+            // parked questions created in a previous session survive the restart.
+            let questions = Some(std::sync::Arc::new(std::sync::Mutex::new(
+                tdw_mcp::knowledge_question_tools::load_store_from_env(),
+            )));
             let transport = cfg.mcp_transport.clone();
             let code = tokio::task::block_in_place(|| {
-                run_mcp_loop(&transport, None, None, None, None, None, None, watchlist)
+                run_mcp_loop(
+                    &transport, None, None, None, None, None, None, watchlist, questions,
+                )
             });
             exit_code_to_result(code)
         }
@@ -822,6 +834,7 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
     let infer = Some(backend.infer_engine_handle());
     let contradiction_detector = backend.contradiction_detector_handle();
     let watchlist = Some(backend.watchlist_store_handle());
+    let questions = Some(backend.question_store_handle());
 
     // Optional catalog-derived REST surface, env-gated on TDW_DAEMON_REST_BIND.
     // In Both mode the co-resident knowledge runtime is wired so
@@ -845,6 +858,7 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
                 infer,
                 Some(contradiction_detector),
                 watchlist,
+                questions,
             )
         })
         .map_err(BackendError::Io)?;
