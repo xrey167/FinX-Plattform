@@ -1062,6 +1062,32 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// Eagerly validate and log the graph backend at daemon startup (K-E1).
+///
+/// Called by `server::run_daemon` immediately after `AppState::from_config` so
+/// the `"[tdw] knowledge graph: bolt backend connected"` line (or the in-memory
+/// NOTICE) appears in daemon logs at boot time — before any op is dispatched.
+/// This lets the CI guard in `live-stack.yml` assert the correct backend without
+/// waiting for a knowledge op to trigger lazy construction.
+///
+/// The returned engine is dropped after logging; the authoritative engine for
+/// dispatched knowledge ops is still built inside `Backend::from_config` when
+/// the `tdw-backend` binary or embedded surface is used. For the standalone
+/// `tdw-service` binary this call is the only graph-engine construction, so a
+/// misconfigured or unreachable bolt endpoint fails the daemon at boot rather
+/// than silently succeeding and dying on first knowledge use.
+///
+/// # Errors
+///
+/// Forwards [`build_graph_engine`] errors unchanged — unknown backend, missing
+/// bolt URI, missing `bolt` build feature, or a Bolt connection failure.
+pub(crate) async fn validate_graph_backend(cfg: &tdw_config::GraphConfig) -> BackendResult<()> {
+    // Build (and immediately drop) the engine — the log lines and any hard
+    // Init errors are the only side effects we need here.
+    let _engine = build_graph_engine(cfg).await?;
+    Ok(())
+}
+
 /// Build the graph engine from `knowledge.graph` config (knowledge-system F1).
 ///
 /// `backend = "in-memory"` → [`InMemoryGraphEngine`] (always compiled). When

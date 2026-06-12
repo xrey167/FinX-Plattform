@@ -580,6 +580,16 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
 
     warn_on_unauthenticated_nonloopback_bind(config, &state);
 
+    // K-E1: eagerly validate the graph backend at boot so the bolt-connected
+    // log line (or in-memory NOTICE) appears before any op is dispatched.
+    // A misconfigured or unreachable backend fails the daemon here, at startup,
+    // rather than silently succeeding and dying on first knowledge use.
+    crate::data::validate_graph_backend(&config.knowledge.graph)
+        .await
+        .map_err(|e| -> ServerError {
+            format!("graph backend startup check failed: {e}").into()
+        })?;
+
     let metrics = DaemonMetrics::new();
     let (handle, events_rx, service_loop) = service_channel(state.clone(), state.clone());
     let service_loop = service_loop.with_metrics(metrics.clone());
