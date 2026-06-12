@@ -243,8 +243,8 @@ the vendor's public API docs.
 |---|---|---|---|---|
 | L3.1 | **tdw-provider-federal-reserve** · U.S. Fed data portal · no key | money_measures, central_bank_holdings, primary_dealer_*, fomc_documents, treasury_rates, overnight rates | M | done |
 | L3.2 | **tdw-provider-government-us** · US Treasury Fiscal/Direct · no key | treasury_prices, treasury_auctions, treasury yield data | S | done |
-| L3.3 | **tdw-provider-imf** · IMF SDMX · no key | indicators, direction_of_trade, balance_of_payments, shipping/*, imf_utils dataflow discovery | M | todo |
-| L3.4 | **tdw-provider-econdb** · EconDB · optional key | gdp/real+nominal, indicators, country_profile, export_destinations | M | todo |
+| L3.3 | **tdw-provider-imf** · IMF SDMX · no key | indicators, direction_of_trade, balance_of_payments, shipping/*, imf_utils dataflow discovery | M | done (P3W3, #367; `economy/imf/{international_financial_statistics,direction_of_trade,balance_of_payments}`. shipping/imf_utils discovery deferred) |
+| L3.4 | **tdw-provider-econdb** · EconDB · optional key | gdp/real+nominal, indicators, country_profile, export_destinations | M | done (P3W4; `economy/econdb/series` — series-by-ticker → MacroSeries, optional token. country_profile/export_destinations deferred) |
 | L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | todo |
 | L3.6 | **tdw-provider-finviz** · Finviz · no key | screener, compare/groups, price/performance, metrics, price_target | M | todo |
 | L3.7 | **tdw-provider-cftc** · CFTC (Socrata) · app token | regulators/cftc/cot + cot_search | S | todo |
@@ -347,7 +347,7 @@ slice; none blocks the delivered surface.
 | D1 | `tdw-provider-famafrench` (Ken French factors) | — | **DONE** (P2W6, route `economy/factors/famafrench`; pure-Rust zip/miniz_oxide, no C). Portfolio-returns variant still deferred. |
 | D2 | `tdw-provider-{stockgrid,wsj,biztoc}` (short_volume / etf-discovery / news-world) | Niche providers whose exact public API shapes cannot be verified clean-room without vendor-doc access — building blind risks invented endpoints | todo (deferred) |
 | D3 | `tdw-provider-intrinio` (options unusual/snapshots/surface, reported_financials) | Paid key; lower priority than the keyless surface | todo (deferred) |
-| D4 | `tdw-provider-{imf,econdb,finviz}` (W5 remainder: SDMX macro / gdp+indicators / screener+price_target) | Net-new niche crates; macro breadth already broad via FRED (32 routes) | todo (deferred) |
+| D4 | `tdw-provider-{imf,econdb,finviz}` (W5 remainder: SDMX macro / gdp+indicators / screener+price_target) | Net-new niche crates; macro breadth already broad via FRED (32 routes) | **imf DONE** (P3W3, #367; `economy/imf/*` SDMX-JSON → MacroSeries). **econdb DONE** (P3W4; `economy/econdb/series` → MacroSeries, optional token). finviz screener/price_target still todo (deferred). |
 | D5 | Parquet + XLSX export from any `ResultEnvelope` (L5.4) | Needs a heavy native dep (`arrow`/`parquet` + an xlsx writer); the platform has avoided native deps everywhere (charting/analytics used zero). CSV + JSON export already shipped (G013) | todo (deferred — needs a dep decision) |
 | D6 | `tdw-analytics-portfolio` (returns/drawdown/allocation/attribution, L4.4) | Beyond OpenBB parity; pure-compute, can be added on the L4.2 quant base any time | todo (deferred) |
 | D7 | Estimates breadth: `equity/estimates/price_target` + forward estimates (W7) | consensus + historical_eps shipped; price_target/forward need a keyed estimates provider | todo (deferred) |
