@@ -1,0 +1,16 @@
+[
+  {
+    "rule_id": "tag-filing-docs",
+    "tag_id": "filing:sec",
+    "predicate": {
+      "LabelContains": { "label": "10-Q" }
+    }
+  },
+  {
+    "rule_id": "tag-supply-chain",
+    "tag_id": "supply-chain:participant",
+    "predicate": {
+      "HasTag": { "tag": "supply-chain:foundry", "include_descendants": false }
+    }
+  }
+]

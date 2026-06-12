@@ -16,7 +16,10 @@ tdw-embed = { path = "../tdw-embed" }
 tdw-embed-google = { path = "../tdw-embed-google", optional = true }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
+tdw-infer = { path = "../tdw-infer" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+tdw-tag-rules = { path = "../tdw-tag-rules" }
+tdw-tags = { path = "../tdw-tags" }
 tdw-protocol = { workspace = true }
 rust_xlsxwriter = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }

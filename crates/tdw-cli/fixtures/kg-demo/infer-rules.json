@@ -1,0 +1,13 @@
+[
+  {
+    "DeriveEdge": {
+      "rule_id": "supply-chain-peer",
+      "stratum": 0,
+      "when": [
+        { "rel": "mentions" },
+        { "rel": "mentions" }
+      ],
+      "derived_type": "supply_chain_peer"
+    }
+  }
+]
