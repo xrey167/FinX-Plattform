@@ -610,6 +610,76 @@ async fn forged_index_cannot_delete_base_edges() {
     assert_eq!(rel_count(&graph, "exposed_to").await, 1, "base edge intact");
 }
 
+/// K-X6 F4 regression: a user-authored edge (`Provenance::Agent { gated: false }`)
+/// that matches a `DeriveEdge` pattern must NOT produce a derived fact when
+/// `exclude_user_authored = true` (the default). Enabling opt-in via
+/// `with_user_authored_inference(true)` DOES allow derivation.
+#[tokio::test]
+async fn user_authored_edges_excluded_from_derive_edge_by_default() {
+    // user -researched-> company -listed_on-> exchange
+    // Rule: researched + listed_on => watches
+    // The "researched" edge is user-authored (Agent provenance, gated=false) —
+    // represents a finding edge. By default it must NOT drive derivation.
+    let graph = seed_graph(
+        &["user1", "company1", "exchange1"],
+        vec![
+            // user-authored finding edge
+            {
+                let mut e = edge("user1", "researched", "company1");
+                e.provenance = Provenance::Agent {
+                    agent_id: "user:analyst".to_string(),
+                    gated: false,
+                };
+                e
+            },
+            // ordinary ingest edge
+            edge("company1", "listed_on", "exchange1"),
+        ],
+    )
+    .await;
+    let tags: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+
+    // Default engine: exclude_user_authored = true → no derivation.
+    let mut default_engine = InferEngine::default();
+    default_engine
+        .hot_reload(vec![InferRule::DeriveEdge {
+            rule_id: "watches".to_string(),
+            stratum: 0,
+            when: pattern(&["researched", "listed_on"]),
+            derived_type: "watches".to_string(),
+        }])
+        .expect("reload");
+    let report = default_engine
+        .run_full(&graph, &tags, NOW)
+        .await
+        .expect("run");
+    assert_eq!(
+        report.derived_edges, 0,
+        "user-authored edge excluded: no derivation by default"
+    );
+    assert_eq!(rel_count(&graph, "watches").await, 0);
+
+    // Opt-in engine: with_user_authored_inference(true) → derivation fires.
+    let mut opt_in_engine = InferEngine::default().with_user_authored_inference(true);
+    opt_in_engine
+        .hot_reload(vec![InferRule::DeriveEdge {
+            rule_id: "watches".to_string(),
+            stratum: 0,
+            when: pattern(&["researched", "listed_on"]),
+            derived_type: "watches".to_string(),
+        }])
+        .expect("reload");
+    let opt_in_report = opt_in_engine
+        .run_full(&graph, &tags, NOW)
+        .await
+        .expect("opt-in run");
+    assert_eq!(
+        opt_in_report.derived_edges, 1,
+        "opt-in: user-authored edge participates in derivation"
+    );
+    assert_eq!(rel_count(&graph, "watches").await, 1);
+}
+
 /// 3-lens review N1: `max_derived` bounds each RUN, not the engine lifetime —
 /// two runs each under the limit must both succeed.
 #[tokio::test]

@@ -40,6 +40,7 @@ tdw-core = { workspace = true }
 # routes — it only reads catalog() to advertise and dispatch them.
 tdw-endpoint-catalog = { workspace = true }
 tdw-infer = { path = "../tdw-infer" }
+tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-protocol = { workspace = true }
 tdw-retrieve = { path = "../tdw-retrieve" }

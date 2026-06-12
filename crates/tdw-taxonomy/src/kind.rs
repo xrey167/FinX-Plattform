@@ -1,4 +1,4 @@
-//! The entity-kind registry: the 51 classified kinds and their manifest groups.
+//! The entity-kind registry: the 52 classified kinds and their manifest groups.
 //!
 //! Serialized form matches the registry's lowercase token convention (e.g. `agentrouter`,
 //! `knowledgegraph`, `resourcedefinition`). `storage_mapping` is intentionally absent — it
@@ -102,12 +102,33 @@ pub enum EntityKind {
     /// A taxonomy tag, stored as a first-class graph node from A5 on (children
     /// via `subtag_of` edges, assignments via temporal `tagged` edges).
     Tag,
+    /// A first-class analyst finding (knowledge-system K-X6): a user-authored
+    /// research note with optional evidence pinning and typed links to other
+    /// entities or findings. Findings belong to the `Knowledge` group and are
+    /// retrievable via hybrid search. They carry user provenance
+    /// (`Provenance::Agent { gated: false }`) and are trust-dial-filterable.
+    ///
+    /// # Inference boundary (F4)
+    ///
+    /// * **`PropagateTag` rules CAN reach findings** — tag propagation walks
+    ///   existing graph edges *from* tag-holders outward; it does not consume
+    ///   a finding's own edges as chain-join inputs.  Auto-tagging of findings
+    ///   is therefore fine and aids retrieval.
+    ///
+    /// * **`DeriveEdge` rules do NOT consume finding edges by default** —
+    ///   [`tdw_infer::InferEngine`] sets `exclude_user_authored = true` so
+    ///   edges with `Provenance::Agent { gated: false }` are excluded from
+    ///   chain matching.  An operator may opt in via
+    ///   [`InferEngine::with_user_authored_inference(true)`].  This default
+    ///   prevents user findings from silently minting derived facts the
+    ///   operator never sanctioned.
+    Finding,
 }
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order (domain appended last; see the
     /// declaration-order note on the enum).
-    pub const ALL: [Self; 51] = [
+    pub const ALL: [Self; 52] = [
         Self::Agent,
         Self::Personality,
         Self::Prompt,
@@ -159,6 +180,8 @@ impl EntityKind {
         Self::Symbol,
         Self::Venue,
         Self::Tag,
+        // Finding appended after Tag so existing ordinals stay stable (K-X6).
+        Self::Finding,
     ];
 
     /// The manifest group this kind belongs to.
@@ -195,7 +218,9 @@ impl EntityKind {
             | Self::Memory
             | Self::FeatureStore
             | Self::Feature
-            | Self::FeatureList => Group::Knowledge,
+            | Self::FeatureList
+            // Finding is retrievable user-authored research (K-X6).
+            | Self::Finding => Group::Knowledge,
             Self::Guardrail
             | Self::Rule
             | Self::Evaluation
@@ -233,6 +258,8 @@ impl EntityKind {
                 | Self::FeatureStore
                 | Self::Feature
                 | Self::FeatureList
+                // Finding carries content facets (as_of, plane) — K-X6.
+                | Self::Finding
         )
     }
 
@@ -254,7 +281,7 @@ mod tests {
         for kind in EntityKind::ALL {
             assert!(seen.insert(kind), "duplicate kind: {kind:?}");
         }
-        assert_eq!(seen.len(), 51);
+        assert_eq!(seen.len(), 52);
     }
 
     #[test]
@@ -268,7 +295,7 @@ mod tests {
         assert_eq!(count(Group::Core), 10);
         assert_eq!(count(Group::Tools), 6);
         assert_eq!(count(Group::Orchestration), 7);
-        assert_eq!(count(Group::Knowledge), 8);
+        assert_eq!(count(Group::Knowledge), 9); // +Finding (K-X6)
         assert_eq!(count(Group::Governance), 6);
         assert_eq!(count(Group::Infra), 5);
         assert_eq!(count(Group::Meta), 1);
@@ -294,6 +321,7 @@ mod tests {
         check(EntityKind::Instrument, "instrument");
         check(EntityKind::Venue, "venue");
         check(EntityKind::Tag, "tag");
+        check(EntityKind::Finding, "finding"); // K-X6
     }
 
     #[test]
@@ -328,5 +356,14 @@ mod tests {
         assert!(EntityKind::ResourceDefinition < EntityKind::Instrument);
         assert_eq!(EntityKind::ALL[42], EntityKind::ResourceDefinition);
         assert_eq!(EntityKind::ALL[43], EntityKind::Instrument);
+    }
+
+    #[test]
+    fn finding_kind_is_in_knowledge_group_at_expected_ordinal() {
+        // Finding is appended at index 51 (after Tag at 50) so existing 51 kinds
+        // keep their ordinals. It is data-kind and Knowledge-group (K-X6).
+        assert_eq!(EntityKind::ALL[51], EntityKind::Finding);
+        assert_eq!(EntityKind::Finding.group(), Group::Knowledge);
+        assert!(EntityKind::Finding.is_data_kind());
     }
 }

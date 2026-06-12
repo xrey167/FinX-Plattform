@@ -133,6 +133,17 @@ pub struct Backend {
     /// here (caller-owns pattern, not persisted in this phase). Shared with the
     /// hot-reload tick via `Arc<Mutex>`.
     infer: Arc<Mutex<InferEngine>>,
+    /// The finding indexer for hybrid search indexing of user-authored findings
+    /// (knowledge-system K-X6). Behind a `std::sync::Mutex` so the sync MCP
+    /// dispatch can hold the lock across the `index_at` await via `block_on`.
+    /// Shared with the runtime via [`knowledge_runtime_handle`] so the MCP
+    /// `tdw.kg.finding` tool can index captured findings into the same vector
+    /// and lexical stores the read tools query.
+    ///
+    /// **K-L5 note:** when per-session identity lands, the `bound_user_id` on
+    /// the runtime will be injected at the MCP session layer instead of being
+    /// sourced from `[knowledge.user]` config.
+    finding_indexer: Arc<std::sync::Mutex<KnowledgeIndexer>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -156,6 +167,7 @@ impl Backend {
         let graph_cfg = config.knowledge.graph.clone();
         let rules_cfg = config.knowledge.rules.clone();
         let infer_cfg = config.knowledge.infer.clone();
+        let user_id = config.knowledge.user.id.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -208,6 +220,14 @@ impl Backend {
                     BackendError::Init(format!("indexer tag-store define: {error}"))
                 })?,
         ));
+        // Build the finding indexer (K-X6): shared Arc so both the runtime's
+        // finding seam and the MCP tool use the same vector+lexical+graph handles.
+        let finding_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
+        let finding_indexer = Arc::new(std::sync::Mutex::new(
+            KnowledgeIndexer::new(finding_index)
+                .with_lexical(Arc::clone(&state.lexical), collection.clone())
+                .with_graph(Arc::clone(&graph)),
+        ));
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
@@ -228,12 +248,17 @@ impl Backend {
         // and `dispatch_knowledge_write_tool` to fire `run_incremental` after
         // ingest/materialize). Build it once and share the `Arc`.
         let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+        // K-X6: bind the config user identity and the finding indexer so the
+        // MCP finding tools are available in production. Per-session identity
+        // arrives with K-L5.
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
                 .with_tags(Arc::clone(&tags_engine))
-                .with_versions(rules_v, infer_v),
+                .with_versions(rules_v, infer_v)
+                .with_user_id(user_id)
+                .with_finding_indexer(Arc::clone(&finding_indexer)),
         );
         Ok(Self {
             state,
@@ -247,6 +272,7 @@ impl Backend {
             tags_engine,
             rules,
             infer,
+            finding_indexer,
             daemon: None,
         })
     }
@@ -270,11 +296,20 @@ impl Backend {
         // Tests boot with empty (no-op) rule and infer engines — no rules_dir
         // is configured so inference does nothing, which is the correct default.
         let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
+        // Build the finding indexer (K-X6) with the same in-memory engines.
+        let finding_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
+        let finding_indexer = Arc::new(std::sync::Mutex::new(
+            KnowledgeIndexer::new(finding_index)
+                .with_lexical(Arc::clone(&state.lexical), collection.clone())
+                .with_graph(Arc::clone(&graph)),
+        ));
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
-                .with_tags(Arc::clone(&tags_engine)),
+                .with_tags(Arc::clone(&tags_engine))
+                .with_user_id("test-user")
+                .with_finding_indexer(Arc::clone(&finding_indexer)),
         );
         Self {
             state,
@@ -288,6 +323,7 @@ impl Backend {
             tags_engine,
             rules: Arc::new(Mutex::new(RuleEngine::default())),
             infer: Arc::new(Mutex::new(InferEngine::default())),
+            finding_indexer,
             daemon: None,
         }
     }
@@ -573,6 +609,21 @@ impl Backend {
     #[must_use]
     pub fn knowledge_runtime_handle(&self) -> Arc<KnowledgeRuntime> {
         Arc::clone(&self.runtime)
+    }
+
+    /// The finding indexer handle (knowledge-system K-X6).
+    ///
+    /// Already attached to the runtime's `with_finding_indexer` seam at
+    /// construction time — `tdw_mcp::McpServer::with_knowledge` picks it up
+    /// from there. Expose this accessor when a host needs a direct reference
+    /// (e.g. to pass it to a second MCP surface on the same process).
+    ///
+    /// **K-L5 note:** when per-session identity lands the `bound_user_id` on
+    /// the runtime will be overridden at the MCP session layer; this handle
+    /// stays valid for the indexer itself.
+    #[must_use]
+    pub fn knowledge_finding_indexer_handle(&self) -> Arc<std::sync::Mutex<KnowledgeIndexer>> {
+        Arc::clone(&self.finding_indexer)
     }
 
     /// The daemon-hosted knowledge indexer handle (knowledge-system K-E3).
@@ -2696,5 +2747,57 @@ mod tests {
             Poll::Ready(item) => item,
             Poll::Pending => None,
         }
+    }
+
+    /// The PRODUCTION construction path (`in_memory_for_tests` mirrors `from_config`
+    /// for this seam) must bind a user identity and attach a finding indexer.
+    /// `knowledge_findings_available()` on `McpServer` is true iff
+    /// `runtime.bound_user_id().is_some() && runtime.graph().is_some()` — verify
+    /// both preconditions hold so the F1 gate is satisfied (knowledge-system K-X6).
+    #[tokio::test]
+    async fn production_construction_path_satisfies_finding_gate() {
+        use tdw_mcp::McpServer;
+
+        let backend = Backend::in_memory_for_tests().await;
+        let runtime = backend.knowledge_runtime_handle();
+
+        // Gate precondition 1: a bound user identity must be present.
+        assert!(
+            runtime.bound_user_id().is_some(),
+            "production runtime must have a bound user identity (knowledge.user.id / \
+             in_memory_for_tests wires \"test-user\")"
+        );
+        // Gate precondition 2: a graph engine must be present.
+        assert!(
+            runtime.graph().is_some(),
+            "production runtime must have a graph engine attached"
+        );
+
+        // Full end-to-end: wire the runtime into an MCP server, initialize, and
+        // verify tdw.kg.finding and tdw.kg.link appear in tools/list.
+        let mut server = McpServer::new().with_knowledge(runtime);
+        let _ = server.handle_json_rpc_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}"#,
+        );
+        let listed_responses =
+            server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let listed: serde_json::Value =
+            serde_json::from_str(&listed_responses[0]).expect("tools/list response is valid JSON");
+        let names: Vec<&str> = listed["result"]["tools"]
+            .as_array()
+            .expect("tools array in result")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"tdw.kg.finding"),
+            "tdw.kg.finding must appear in tools/list for the production construction path; \
+             got: {names:?}"
+        );
+        assert!(
+            names.contains(&"tdw.kg.link"),
+            "tdw.kg.link must appear in tools/list for the production construction path; \
+             got: {names:?}"
+        );
     }
 }

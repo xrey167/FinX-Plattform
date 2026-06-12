@@ -630,11 +630,11 @@ fn kg_status_returns_all_fields() {
         "document_count_note present: {s}"
     );
 
-    // Taxonomy — exactly 51 EntityKind variants in the current taxonomy.
+    // Taxonomy — exactly 52 EntityKind variants in the current taxonomy (51 + Finding added by K-X6).
     assert_eq!(
         s["taxonomy_kind_count"].as_u64(),
-        Some(51),
-        "taxonomy_kind_count is 51: {s}"
+        Some(52),
+        "taxonomy_kind_count is 52: {s}"
     );
 
     // Versions seeded via with_versions(Some(7), Some(3)).
