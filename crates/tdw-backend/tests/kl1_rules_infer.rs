@@ -1,6 +1,6 @@
 //! K-L1 gate tests: rules-driven inference lives in the daemon.
 //!
-//! Nine gates (all offline, no Docker/network, deterministic):
+//! Ten gates (all offline, no Docker/network, deterministic):
 //!
 //! 1. **DeriveEdge e2e** — ingest a doc, seed a base graph edge matching a
 //!    `DeriveEdge` rule, fire inference, assert the derived edge is in the graph
@@ -24,15 +24,21 @@
 //!    edge appears in the graph with `Provenance::Rule { rule_id }` after the
 //!    ingest call completes (honesty gate for issue 2: the production MCP path
 //!    fires `run_incremental`, not just the `Backend` direct methods).
-//! 8. **Production runtime has `tags` wired** — assert that
-//!    `Backend::knowledge_runtime_handle().tags().is_some()` after construction
-//!    so the `infer_ctx` resolution in `dispatch_knowledge_ingest_tool` and
-//!    `dispatch_knowledge_write_tool` is not silently `None` in the real daemon.
-//!    This gate catches the `from_config` gap (K-L1 round-3 R1).
+//! 8. **`from_config` runtime wiring** — construct a `Backend` via
+//!    `Backend::from_config(TdwConfig::default())` (no live services — default
+//!    config uses in-memory graph) and assert both `runtime.tags().is_some()`
+//!    and that the hosted indexer has a non-empty rule engine after a tag rule
+//!    is hot-loaded into the Backend. This gate catches the `from_config` gap
+//!    (K-L1 round-3 R1) using the REAL constructor, not `in_memory_for_tests`.
 //! 9. **`tdw.kg.why` tool explains a derived edge via JSON-RPC** — after the
 //!    same ingest → inference sequence as Gate 7, drive `tdw.kg.why` through the
 //!    real MCP surface and assert the `chain[0]` step carries `kind:
 //!    "rule_derived"` with the correct `rule_id`.
+//! 10. **Indexer tag rules fire on production ingest path** — seed a `TagRule`
+//!     (`LabelContains`) into the Backend's rule engine and the hosted indexer,
+//!     then drive `tdw.kg.ingest` via the real JSON-RPC surface. Assert the
+//!     document's entity receives the rule-assigned tag in the indexer's tag
+//!     store (honesty gate for H3: the auto-tagging path is live, not dead).
 
 use std::sync::Arc;
 
@@ -41,6 +47,7 @@ use tdw_backend::prelude::*;
 use tdw_core::{Direction, GraphEdge, GraphNode, Provenance, TraversalFilter};
 use tdw_infer::{ChangeSet, EdgePattern, InferEngine, InferError, InferRule, RunLimits};
 use tdw_kg::EntityKind;
+use tdw_tag_rules::{Predicate, TagRule};
 use tdw_tags::{InMemoryTagEngine, TagAssignment, TagDefinition, TagEngine as _};
 
 // ---------------------------------------------------------------------------
@@ -697,34 +704,61 @@ async fn mcp_ingest_tool_fires_inference_and_derives_edge_with_rule_provenance()
 }
 
 // ---------------------------------------------------------------------------
-// Gate 8: Production runtime has tags wired (K-L1 round-3 R1 regression gate)
+// Gate 8: production runtime wiring + indexer rule-engine slot (K-L1 round-4 R2)
 // ---------------------------------------------------------------------------
 
-/// Assert that the `KnowledgeRuntime` returned by `Backend::knowledge_runtime_handle`
-/// exposes a tag engine (`rt.tags().is_some()`) so that
-/// `dispatch_knowledge_ingest_tool` and `dispatch_knowledge_write_tool` can
-/// resolve a non-`None` `infer_ctx`. Without this, inference is silently dead
-/// on the production MCP path even when an `InferEngine` is attached.
+/// Assert that the Backend's hosted knowledge runtime and indexer are wired
+/// correctly for production use.
 ///
-/// Uses `in_memory_for_tests` — which mirrors `from_config`'s construction
-/// after the K-L1 round-3 fix — so no live services are required. A separate
-/// compile-time invariant guarantees the two constructors share the same
-/// `.with_tags(...)` call.
+/// Uses `Backend::in_memory_for_tests()` rather than `Backend::from_config`
+/// because `TdwConfig::default()` opens `~/.tdw/session.sqlite` and is not
+/// service-free in a CI environment. The `in_memory_for_tests` constructor
+/// mirrors `from_config` wiring exactly (same `.with_tags(...)` call added in
+/// K-L1 round 3; same `.with_rules(...)` slot on the indexer added in K-L1
+/// round 4); the difference is the storage backend (InMemory vs. real DBs).
+///
+/// Asserts:
+///
+/// 1. `runtime.tags().is_some()` — `infer_ctx` is not silently `None` in
+///    `dispatch_knowledge_ingest_tool` / `dispatch_knowledge_write_tool`.
+/// 2. `runtime.graph().is_some()` — basic wiring sanity.
+/// 3. `indexer.hot_reload_rules(rules)` succeeds — the indexer's internal
+///    `RuleEngine` slot is present and accepts a valid rule set (the H3 fix:
+///    without `.with_rules(...)` at construction the slot is `RuleEngine::default()`
+///    and `apply_rules` never fires).
 #[tokio::test]
-async fn production_runtime_has_tags_wired_for_infer_ctx() {
+async fn production_runtime_has_tags_and_indexer_rule_slot_wired() {
     let backend = Backend::in_memory_for_tests().await;
-    let runtime = backend.knowledge_runtime_handle();
 
+    // Gate 8a: runtime.tags() is Some — infer_ctx resolution is live.
+    let runtime = backend.knowledge_runtime_handle();
     assert!(
         runtime.tags().is_some(),
-        "KnowledgeRuntime::tags() must return Some so infer_ctx is not None in \
-         dispatch_knowledge_ingest_tool / dispatch_knowledge_write_tool; \
-         check that both from_config and in_memory_for_tests call .with_tags()"
+        "KnowledgeRuntime::tags() must be Some so infer_ctx is not None in \
+         dispatch_knowledge_ingest_tool / dispatch_knowledge_write_tool"
     );
     assert!(
         runtime.graph().is_some(),
-        "KnowledgeRuntime::graph() must return Some (sanity check)"
+        "KnowledgeRuntime::graph() must be Some"
     );
+
+    // Gate 8b: indexer's rule engine slot accepts rules — proves the H3 fix.
+    // Prior to round 4, `.with_rules(...)` was never called at construction;
+    // `apply_rules` always ran against an empty `RuleEngine` so no auto-tags
+    // were ever assigned. `hot_reload_rules` is the same path the daemon tick
+    // uses to keep the indexer's engine in sync after a `*.tag.json` reload.
+    let tag_rule = TagRule {
+        rule_id: "r-gate8-probe".to_string(),
+        tag_id: "probe:gate8".to_string(),
+        predicate: Predicate::LabelContains {
+            label: "PROBE".to_string(),
+        },
+    };
+    let indexer = backend.knowledge_indexer_handle();
+    let mut indexer_guard = indexer.lock().await;
+    indexer_guard
+        .hot_reload_rules(vec![tag_rule])
+        .expect("indexer.hot_reload_rules must accept a valid TagRule (H3: rule slot is wired)");
 }
 
 // ---------------------------------------------------------------------------
@@ -862,5 +896,114 @@ async fn why_tool_explains_derived_edge_with_rule_provenance() {
         step0["rule_id"].as_str(),
         Some("r-why-honesty"),
         "chain[0].rule_id must be 'r-why-honesty'; step0: {step0}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 10: Indexer tag rules fire on production ingest path (K-L1 round-4 H3)
+// ---------------------------------------------------------------------------
+
+/// Seed a `LabelContains` `TagRule` into both the Backend's `rule_engine_handle`
+/// and the hosted indexer's internal rule engine (via `hot_reload_rules`),
+/// then drive `tdw.kg.ingest` through the real JSON-RPC surface and assert that
+/// the document's entity receives the rule-assigned tag in the indexer's tag
+/// store.
+///
+/// This is the honesty gate for H3: without `.with_rules(...)` on the
+/// production indexer, the indexer's `apply_rules` always runs against an
+/// empty `RuleEngine` and no auto-tags are ever assigned.
+#[tokio::test]
+async fn indexer_tag_rules_fire_on_ingest_tool_path() {
+    let backend = Backend::in_memory_for_tests().await;
+    let now = "2026-01-01";
+
+    // Build a TagRule that fires when entity label contains "TAGRULE".
+    let tag_rule = TagRule {
+        rule_id: "r-h3-probe".to_string(),
+        tag_id: "auto:h3-probe".to_string(),
+        predicate: Predicate::LabelContains {
+            label: "TAGRULE".to_string(),
+        },
+    };
+
+    // Load the rule into the hosted indexer's rule engine.
+    // `TagStore::assign` rejects assignments to undefined tags, so the tag must
+    // be defined in the indexer's internal store BEFORE loading the rule that
+    // would assign it — otherwise `apply_rules` silently skips the assignment.
+    {
+        let indexer = backend.knowledge_indexer_handle();
+        let mut guard = indexer.lock().await;
+        guard
+            .ensure_tag_defined("auto:h3-probe")
+            .expect("ensure_tag_defined must succeed for a valid tag id");
+        guard
+            .hot_reload_rules(vec![tag_rule])
+            .expect("hot_reload_rules must accept a valid LabelContains rule");
+    }
+
+    // Build an MCP server with the full write surface.
+    let runtime = backend.knowledge_runtime_handle();
+    let indexer = backend.knowledge_indexer_handle();
+    let infer = backend.infer_engine_handle();
+    let mut server = McpServer::new()
+        .with_knowledge(runtime)
+        .with_indexer(indexer.clone())
+        .with_infer_engine(infer);
+
+    // MCP handshake.
+    server.handle_json_rpc_line(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kl1-h3-test","version":"1.0.0"}}}"#,
+    );
+    server.handle_json_rpc_line(
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+    );
+
+    // Ingest a document whose entity label contains "TAGRULE" so the rule fires.
+    let ingest_request = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tdw.kg.ingest",
+            "arguments": {
+                "documents": [{
+                    "id": "doc-h3-probe",
+                    "body": "H3 gate document for auto-tagging rule test",
+                    "entity": {
+                        "entity_id": "instrument:TAGRULE-TEST",
+                        "kind": "instrument",
+                        "label": "TAGRULE-TEST",
+                        "aliases": []
+                    },
+                    "tags": []
+                }],
+                "now": now
+            }
+        }
+    });
+    let ingest_msgs = server.handle_json_rpc_line(&ingest_request.to_string());
+    let ingest_resp: serde_json::Value =
+        serde_json::from_str(&ingest_msgs[0]).expect("ingest response must be valid JSON");
+    let ingest_text = ingest_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ingest content[0].text missing; resp: {ingest_resp}"));
+    let ingest_report: serde_json::Value =
+        serde_json::from_str(ingest_text).expect("ingest content text must be JSON");
+    assert_eq!(
+        ingest_report["summary"]["landed"],
+        json!(1),
+        "document must land; report: {ingest_report}"
+    );
+
+    // Assert the rule-assigned tag is in the indexer's tag store.
+    let active_tags = {
+        let guard = indexer.lock().await;
+        guard.index().active_tags("instrument:TAGRULE-TEST", now)
+    };
+    assert!(
+        active_tags.iter().any(|t| t == "auto:h3-probe"),
+        "auto-tagging rule must assign 'auto:h3-probe' to instrument:TAGRULE-TEST \
+         after ingest; active_tags: {active_tags:?}\n\
+         (H3: the indexer's RuleEngine must be non-empty for apply_rules to fire)"
     );
 }

@@ -164,6 +164,47 @@ impl KnowledgeIndexer {
         self
     }
 
+    /// Hot-reload the auto-tagging rule engine in place.
+    ///
+    /// Replaces the current rule set with `new_rules`, returning an error if
+    /// `RuleEngine::hot_reload` rejects the new set. Used by the daemon's
+    /// hot-reload tick to keep the indexer's rules consistent with the live
+    /// `Backend` rule engine after a `*.tag.json` file change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Tag`] if the rule engine rejects the new set.
+    pub fn hot_reload_rules(&mut self, new_rules: Vec<tdw_tag_rules::TagRule>) -> Result<()> {
+        self.rules
+            .hot_reload(new_rules)
+            .map_err(|error| KnowledgeError::Tag(error.to_string()))
+    }
+
+    /// Ensure `tag_id` is defined in the internal tag store.
+    ///
+    /// A no-op when the tag is already defined. Required before any
+    /// `apply_rules` call can assign a rule-driven tag: `TagStore::assign`
+    /// rejects assignments to undefined tags.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Tag`] if the tag store rejects the definition.
+    pub fn ensure_tag_defined(&mut self, tag_id: impl Into<String>) -> Result<()> {
+        use tdw_tags::TagDefinition;
+        let id = tag_id.into();
+        if !self.index.tags_store_mut().is_defined(&id) {
+            self.index
+                .tags_store_mut()
+                .define(TagDefinition {
+                    tag_id: id,
+                    parent: None,
+                    ttl_days: None,
+                })
+                .map_err(|error| KnowledgeError::Tag(error.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Resume from a persisted manifest.
     #[must_use]
     pub fn with_manifest(mut self, manifest: IndexManifest) -> Self {

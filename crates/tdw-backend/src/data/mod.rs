@@ -185,19 +185,26 @@ impl Backend {
         // plus the B5 write-side pipeline (manifest, rules, lexical co-index, durable
         // graph). All engine Arcs are shared with the runtime below.
         let collection = tdw_knowledge::collection_name(embedder.model_id());
+        // Boot-load tag rules and the inference engine (K-L1) BEFORE building
+        // the indexer so the boot-loaded RuleEngine is available to pass into
+        // `.with_rules(...)`. Without this the indexer's internal rule engine
+        // is always empty — auto-tagging rules from `*.tag.json` never fire.
+        let (rule_engine, infer_engine) = boot_load_rules(&rules_cfg, &infer_cfg)?;
+        let rules_version = rule_engine.version();
+        let infer_version = infer_engine.version();
+        // Clone the rule engine for the indexer before wrapping it in Arc<Mutex>.
+        // The indexer owns its own copy; the hot-reload tick updates BOTH the
+        // Arc<Mutex<RuleEngine>> AND the indexer's internal engine atomically.
+        let indexer_rules = rule_engine.clone();
+        let rules = Arc::new(Mutex::new(rule_engine));
+        let infer = Arc::new(Mutex::new(infer_engine));
         let inner_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
         let indexer = Arc::new(Mutex::new(
             KnowledgeIndexer::new(inner_index)
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
-                .with_graph(Arc::clone(&graph)),
+                .with_graph(Arc::clone(&graph))
+                .with_rules(indexer_rules),
         ));
-        // Boot-load tag rules and the inference engine (K-L1).
-        // Absent rules_dir → no rules loaded; logged loudly so the operator knows.
-        let (rule_engine, infer_engine) = boot_load_rules(&rules_cfg, &infer_cfg)?;
-        let rules_version = rule_engine.version();
-        let infer_version = infer_engine.version();
-        let rules = Arc::new(Mutex::new(rule_engine));
-        let infer = Arc::new(Mutex::new(infer_engine));
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
@@ -432,6 +439,7 @@ impl Backend {
             &cfg.tdw.knowledge.infer,
             self.rules.clone(),
             self.infer.clone(),
+            self.indexer.clone(),
             Arc::clone(&self.runtime),
             cancel.clone(),
         );
@@ -954,6 +962,12 @@ impl Backend {
     /// and lexical engine. Callers own the returned indexer; the daemon's
     /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
     ///
+    /// The returned indexer is seeded with a snapshot of the daemon's current
+    /// live tag-rule set so offline re-index runs apply the same rules as the
+    /// live path. The snapshot is taken at construction time; subsequent
+    /// hot-reloads are NOT reflected — for a live-updating indexer use
+    /// [`knowledge_index_at`](Self::knowledge_index_at) instead.
+    ///
     /// Use this to construct an offline or caller-scoped indexer with its own
     /// manifest (e.g. the `tdw kg reindex` offline command). For live daemon
     /// ingestion use [`knowledge_index_at`](Self::knowledge_index_at) or
@@ -963,9 +977,18 @@ impl Backend {
     pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
         let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
         let collection = tdw_knowledge::collection_name(self.embedder.model_id());
+        // Snapshot the live rule set; fall back to an empty engine when the
+        // lock is poisoned (extremely unlikely — treat as "no rules" rather
+        // than panicking an offline build).
+        let rules_snapshot = self
+            .rules
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
         KnowledgeIndexer::new(index)
             .with_lexical(Arc::clone(&self.state.lexical), collection)
             .with_graph(Arc::clone(&self.graph))
+            .with_rules(rules_snapshot)
     }
 
     /// Search the embedded knowledge index for the `top_k` nearest hits to
@@ -1620,6 +1643,7 @@ fn spawn_rules_reload_tick(
     infer_cfg: &tdw_config::InferLimitsConfig,
     rules: Arc<Mutex<RuleEngine>>,
     infer: Arc<Mutex<InferEngine>>,
+    indexer: Arc<Mutex<KnowledgeIndexer>>,
     runtime: Arc<KnowledgeRuntime>,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
@@ -1694,9 +1718,13 @@ fn spawn_rules_reload_tick(
             let infer_count = loaded.infer_rules.len();
 
             // --- Swap: both validations passed — acquire locks and replace. --
-            // Lock order: rules first, then infer. Must be consistent at every
-            // call site to avoid deadlocks.
+            // Lock order: rules first, then infer, then indexer. Must be
+            // consistent at every call site to avoid deadlocks.
             {
+                // Keep a clone for the indexer reload (loaded.tag_rules is
+                // consumed by rule_guard.hot_reload below).
+                let tag_rules_for_indexer = loaded.tag_rules.clone();
+
                 let mut rule_guard = rules.lock().await;
                 let mut infer_guard = infer.lock().await;
                 // These hot_reload calls on the live engines cannot fail —
@@ -1720,6 +1748,20 @@ fn spawn_rules_reload_tick(
                 let infer_v = infer_guard.version();
                 drop(infer_guard);
                 drop(rule_guard);
+
+                // Also reload the hosted indexer's internal rule engine so
+                // auto-tagging rules applied during index_at match the live
+                // engine. The indexer lock is acquired AFTER the rule/infer
+                // locks are dropped (consistent ordering; indexer is a leaf).
+                {
+                    let mut indexer_guard = indexer.lock().await;
+                    if let Err(error) = indexer_guard.hot_reload_rules(tag_rules_for_indexer) {
+                        eprintln!(
+                            "tdw-backend: rules hot-reload INTERNAL ERROR — indexer rule \
+                             engine rejected pre-validated rules (bug): {error}"
+                        );
+                    }
+                }
 
                 // Update the version triple on the live KnowledgeRuntime so MCP
                 // search responses reflect the new rule-set versions.
