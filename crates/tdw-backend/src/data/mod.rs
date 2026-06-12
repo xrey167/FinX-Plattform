@@ -37,6 +37,7 @@ use tdw_knowledge::runtime::{
 };
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
+use tdw_patterns::{MiningLimits, PatternEngine, PatternIndex};
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
 use tdw_service_api::{AppState, fetch_equity_historical};
@@ -72,6 +73,9 @@ struct DaemonHandle {
     /// The K-L4 gated auto-materialization sweep task.
     /// `None` when `knowledge.proposals.auto_materialize = false`.
     auto_mat_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R4 scheduled pattern-mining worker task.
+    /// `None` when `knowledge.patterns.enabled = false` (default).
+    pattern_mining_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -589,6 +593,12 @@ impl Backend {
             Some(Arc::clone(&self.infer)),
             cancel.clone(),
         );
+        // K-R4 — spawn the pattern-mining worker when enabled.
+        let pattern_mining_task = spawn_pattern_mining_worker(
+            &cfg.tdw.knowledge.patterns,
+            Arc::clone(&self.graph),
+            cancel.clone(),
+        );
 
         self.daemon = Some(DaemonHandle {
             cancel,
@@ -598,6 +608,7 @@ impl Backend {
             rules_reload_task,
             eval_worker_task,
             auto_mat_task,
+            pattern_mining_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -656,6 +667,11 @@ impl Backend {
         if let Some(auto_mat) = daemon.auto_mat_task {
             auto_mat.abort();
             let _ = auto_mat.await;
+        }
+        // The pattern-mining worker observes the same token; abort if it lingers.
+        if let Some(pattern_task) = daemon.pattern_mining_task {
+            pattern_task.abort();
+            let _ = pattern_task.await;
         }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
@@ -2635,6 +2651,125 @@ async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<
             "unknown knowledge.graph.backend {other:?}; valid values: bolt | in-memory"
         ))),
     }
+}
+
+/// Spawn the K-R4 pattern-mining worker (knowledge-system K-R4).
+///
+/// On each cron slot the worker calls [`PatternEngine::run_pattern_mining_at`]
+/// on the daemon's graph engine and logs the resulting [`MiningReport`].
+/// A hard budget error (B7) is logged and the worker keeps running — it fires
+/// again on the next scheduled slot.
+///
+/// Returns `None` when `knowledge.patterns.enabled = false` (the default) so
+/// the worker is off unless the operator explicitly opts in. A loud NOTICE is
+/// emitted when the config is present but `enabled` is `false` so the operator
+/// knows the feature exists and how to turn it on.
+fn spawn_pattern_mining_worker(
+    cfg: &tdw_config::PatternConfig,
+    graph: Arc<dyn GraphEngine>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R4 pattern mining is disabled \
+             (knowledge.patterns.enabled = false). \
+             Set enabled = true in your daemon TOML to activate scheduled motif mining."
+        );
+        return None;
+    }
+
+    let limits = MiningLimits {
+        min_support: cfg.min_support,
+        max_motif_edges: cfg.max_motif_edges,
+        max_candidates: cfg.max_candidates,
+        max_instance_scan: cfg.max_instance_scan,
+        ..MiningLimits::default()
+    };
+
+    let schedule = CronSchedule::parse(&cfg.cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 2 * * *").expect("fallback parse"));
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: "tdw-pattern-mining".to_string(),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: {
+                use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+                OpEnvelope::new(
+                    SessionId::new("tdw-pattern-worker").expect("session id"),
+                    1,
+                    ActorRef {
+                        actor_id: "pattern-actor".to_string(),
+                        kind: ActorKind::Worker,
+                        tenant_id: None,
+                    },
+                    Op::Shutdown,
+                )
+            },
+            queue: "tdw-patterns".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let handle = tokio::spawn(async move {
+        let engine = PatternEngine::with_limits(limits);
+        let mut index = PatternIndex::default();
+
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            // Cron slot fired — run pattern mining.
+            let now_ts = chrono::Utc::now().to_rfc3339();
+            let window = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+            match engine
+                .run_pattern_mining_at(&graph, &mut index, &now_ts, &window)
+                .await
+            {
+                Ok(report) => {
+                    eprintln!(
+                        "[tdw] K-R4 pattern mining complete: \
+                         created={} updated={} motifs_examined={} instance_edges={}",
+                        report.patterns_created,
+                        report.patterns_updated,
+                        report.motifs_examined,
+                        report.instance_edges_written,
+                    );
+                }
+                Err(error) => {
+                    eprintln!("[tdw] K-R4 pattern mining error (will retry next slot): {error}");
+                }
+            }
+        }
+    });
+    Some(handle)
 }
 
 #[cfg(test)]

@@ -1371,7 +1371,10 @@ fn spec_schema_for(kind: EntityKind) -> Option<Value> {
         | EntityKind::Tag
         // Finding is a first-class knowledge kind (K-X6) with no dedicated
         // Rust spec type yet; schema will land with a future spec crate.
-        | EntityKind::Finding => return None,
+        // Pattern is a first-class knowledge kind (K-R4) with no dedicated
+        // Rust spec type yet; schema will land with a future spec crate.
+        | EntityKind::Finding
+        | EntityKind::Pattern => return None,
         EntityKind::Agent => schema_json::<AgentCard>(),
         EntityKind::Skill => schema_json::<AgentSkill>(),
         EntityKind::Tool => schema_json::<Tool>(),

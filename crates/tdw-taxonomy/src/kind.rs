@@ -123,12 +123,30 @@ pub enum EntityKind {
     ///   prevents user findings from silently minting derived facts the
     ///   operator never sanctioned.
     Finding,
+    /// A mined subgraph pattern (knowledge-system K-R4): a frequent motif
+    /// shape discovered by the deterministic motif-mining pass.  Pattern nodes
+    /// are persisted by the `tdw-patterns` engine with
+    /// `Provenance::System { detail: "pattern-mining:v0" }`.  They carry
+    /// their canonical motif string, support count, temporal window, and
+    /// capped instance provenance edges (`pattern_instance_of`).
+    ///
+    /// Pattern nodes belong to the `Knowledge` group and are why-explainable
+    /// via `tdw.kg.why` (the chain composer walks `pattern_instance_of` edges
+    /// to the supporting instances).
+    ///
+    /// # Mining posture
+    ///
+    /// Mining is disabled by default (`[knowledge.patterns] enabled = false`).
+    /// The operator must flip the flag before the cron trigger fires.  A loud
+    /// status note is emitted at every tick when disabled — this is honest,
+    /// not silent.
+    Pattern,
 }
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order (domain appended last; see the
     /// declaration-order note on the enum).
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::Agent,
         Self::Personality,
         Self::Prompt,
@@ -182,6 +200,8 @@ impl EntityKind {
         Self::Tag,
         // Finding appended after Tag so existing ordinals stay stable (K-X6).
         Self::Finding,
+        // Pattern appended after Finding so existing ordinals stay stable (K-R4).
+        Self::Pattern,
     ];
 
     /// The manifest group this kind belongs to.
@@ -220,7 +240,9 @@ impl EntityKind {
             | Self::Feature
             | Self::FeatureList
             // Finding is retrievable user-authored research (K-X6).
-            | Self::Finding => Group::Knowledge,
+            | Self::Finding
+            // Pattern is a mined subgraph shape (K-R4).
+            | Self::Pattern => Group::Knowledge,
             Self::Guardrail
             | Self::Rule
             | Self::Evaluation
@@ -260,6 +282,8 @@ impl EntityKind {
                 | Self::FeatureList
                 // Finding carries content facets (as_of, plane) — K-X6.
                 | Self::Finding
+                // Pattern carries mined-shape content facets (canonical, support, window) — K-R4.
+                | Self::Pattern
         )
     }
 
@@ -281,7 +305,7 @@ mod tests {
         for kind in EntityKind::ALL {
             assert!(seen.insert(kind), "duplicate kind: {kind:?}");
         }
-        assert_eq!(seen.len(), 52);
+        assert_eq!(seen.len(), 53);
     }
 
     #[test]
@@ -295,7 +319,7 @@ mod tests {
         assert_eq!(count(Group::Core), 10);
         assert_eq!(count(Group::Tools), 6);
         assert_eq!(count(Group::Orchestration), 7);
-        assert_eq!(count(Group::Knowledge), 9); // +Finding (K-X6)
+        assert_eq!(count(Group::Knowledge), 10); // +Finding (K-X6) +Pattern (K-R4)
         assert_eq!(count(Group::Governance), 6);
         assert_eq!(count(Group::Infra), 5);
         assert_eq!(count(Group::Meta), 1);
@@ -322,6 +346,7 @@ mod tests {
         check(EntityKind::Venue, "venue");
         check(EntityKind::Tag, "tag");
         check(EntityKind::Finding, "finding"); // K-X6
+        check(EntityKind::Pattern, "pattern"); // K-R4
     }
 
     #[test]
@@ -365,5 +390,14 @@ mod tests {
         assert_eq!(EntityKind::ALL[51], EntityKind::Finding);
         assert_eq!(EntityKind::Finding.group(), Group::Knowledge);
         assert!(EntityKind::Finding.is_data_kind());
+    }
+
+    #[test]
+    fn pattern_kind_is_in_knowledge_group_at_expected_ordinal() {
+        // Pattern is appended at index 52 (after Finding at 51) so the 52 pre-existing
+        // kinds keep their ordinals stable (K-R4).
+        assert_eq!(EntityKind::ALL[52], EntityKind::Pattern);
+        assert_eq!(EntityKind::Pattern.group(), Group::Knowledge);
+        assert!(EntityKind::Pattern.is_data_kind());
     }
 }

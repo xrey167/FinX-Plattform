@@ -457,6 +457,44 @@ fn append_finding_steps(chain: &mut Vec<Value>, props: &Value) {
     }
 }
 
+/// Append mining-provenance and instance chain steps for a `Pattern` node (K-R4).
+///
+/// Surfaces the canonical motif string, support count, mining window, and the
+/// system provenance tag (`pattern-mining:v0`) drawn directly from the node's
+/// stored `props`. No LLM inference — all data is read from stored structured fields.
+fn append_pattern_steps(chain: &mut Vec<Value>, props: &Value) {
+    let canonical = props
+        .get("canonical")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let support = props.get("support").cloned().unwrap_or(Value::Null);
+    let window = props
+        .get("window")
+        .and_then(Value::as_str)
+        .unwrap_or("<unknown>");
+    let mined_at = props.get("mined_at").cloned().unwrap_or(Value::Null);
+    let instance_count = props.get("instance_count").cloned().unwrap_or(Value::Null);
+    let instance_cap = props.get("instance_cap").cloned().unwrap_or(Value::Null);
+    let min_support = props.get("min_support").cloned().unwrap_or(Value::Null);
+
+    chain.push(json!({
+        "step": chain.len(),
+        "kind": "pattern_mining_provenance",
+        "provenance": "Provenance::System { detail: \"pattern-mining:v0\" }",
+        "canonical": canonical,
+        "support": support,
+        "window": window,
+        "mined_at": mined_at,
+        "instance_count": instance_count,
+        "instance_cap": instance_cap,
+        "min_support": min_support,
+        "summary": format!(
+            "Pattern {canonical:?} mined by pattern-mining:v0 at window {window:?}; \
+             support={support}, instance_count={instance_count}, min_support={min_support}.",
+        )
+    }));
+}
+
 /// Build a why-chain for an entity node.
 async fn why_entity(
     graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
@@ -504,6 +542,11 @@ async fn why_entity(
         append_finding_steps(&mut chain, &node.props);
     }
 
+    // K-R4: for Pattern nodes emit mining-provenance + instance steps.
+    if node.kind == EntityKind::Pattern {
+        append_pattern_steps(&mut chain, &node.props);
+    }
+
     let crosswalk_capped = append_crosswalk_steps(&mut chain, &crosswalk_neighbors);
     append_merge_steps(&mut chain, entity_id, &merge_neighbors);
 
@@ -518,6 +561,21 @@ async fn why_entity(
             "Finding {entity_id} captured by user {user_id:?}, label {:?}; evidence_pinned={}.",
             node.label,
             node.props.get("evidence").is_some()
+        )
+    } else if node.kind == EntityKind::Pattern {
+        let canonical = node
+            .props
+            .get("canonical")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let support = node
+            .props
+            .get("support")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        format!(
+            "Pattern {entity_id}: motif {canonical:?}, support={support}, \
+             mined by Provenance::System {{ detail: \"pattern-mining:v0\" }}."
         )
     } else if merged {
         format!(
