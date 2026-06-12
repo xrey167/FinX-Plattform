@@ -6,6 +6,7 @@ mod params;
 mod reindex;
 mod render;
 mod routine;
+mod status;
 mod tree;
 
 use std::net::SocketAddr;
@@ -54,6 +55,15 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "reindex")
     {
         return reindex::run(&args).await;
+    }
+
+    // kg status: query daemon REST surface for KnowledgeRuntime observability
+    // snapshot (knowledge-system K-E2).
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "status")
+    {
+        return status::run(&args).await;
     }
 
     // kg ingest: public ingestion surface through the KnowledgeIndexer seam
@@ -227,7 +237,9 @@ fn terminal_result(events: &[EventMsg]) -> Option<&serde_json::Value> {
     })
 }
 
-/// Write `records` to a file in `format` (`csv` | `json`), returning the path.
+/// Write `records` to a file in `format` (`csv` | `json` | `xlsx`), returning
+/// the path. Text formats (`csv`/`json`) serialize to a `String` and are written
+/// as their UTF-8 bytes; `xlsx` is a binary workbook produced directly as bytes.
 fn export_records(
     route: &str,
     records: &[serde_json::Map<String, serde_json::Value>],
@@ -239,12 +251,15 @@ fn export_records(
         .get_one::<String>("out")
         .cloned()
         .unwrap_or(default_name);
-    let body = match format {
-        "csv" => render::to_csv(records),
-        "json" => render::to_json(records).map_err(|e| format!("json export: {e}"))?,
+    let bytes: Vec<u8> = match format {
+        "csv" => render::to_csv(records).into_bytes(),
+        "json" => render::to_json(records)
+            .map_err(|e| format!("json export: {e}"))?
+            .into_bytes(),
+        "xlsx" => render::to_xlsx(records).map_err(|e| format!("xlsx export: {e}"))?,
         other => return Err(format!("unsupported export format: {other}").into()),
     };
-    std::fs::write(&path, body).map_err(|e| format!("write {path}: {e}"))?;
+    std::fs::write(&path, bytes).map_err(|e| format!("write {path}: {e}"))?;
     Ok(path)
 }
 

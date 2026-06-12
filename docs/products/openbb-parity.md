@@ -12,14 +12,18 @@ artifact** — the endpoint catalog (`tdw-endpoint-catalog`) — so the REST rou
 the OpenAPI document, the Workspace widgets, the MCP tools, and the warehouse
 ingest paths all stay in lock-step with a single typed source of truth.
 
-As of **2026-06-11** (after P2's data-breadth + warehouse waves), the catalog
-exposes **119 routes / 91 provider candidates** (`xtask catalog-check` green):
-**77 `Fetch` routes** + **`technical/`, `quantitative/`, `econometrics/` `Compute`
-routes**. The generated OpenAPI 3.1 document carries **77 paths / 28 schemas**
-(`xtask openapi-check` green). P2 added FMP fundamentals completion + discovery +
-screener, CFTC Commitments of Traders, a benzinga news cluster, the technical
-long-tail indicators, dynamic per-route MCP tools, and warehouse landing tables;
-the per-wave detail and the deferred backlog live in the
+As of **2026-06-12** (after P3's deferred-backlog burn-down), the catalog
+exposes **131 routes / 98 provider candidates** (`xtask catalog-check` green):
+**84 `Fetch` routes** + **47 `technical/`, `quantitative/`, `econometrics/`,
+`portfolio/` `Compute` routes**. The generated OpenAPI 3.1 document carries
+**84 paths / 29 schemas** (`xtask openapi-check` green). On top of P2 (FMP
+completion, CFTC Commitments of Traders, a benzinga news cluster, the technical
+long-tail, dynamic per-route MCP tools, warehouse landing tables), P3 added
+portfolio analytics (returns/drawdown/allocation/contribution), the IMF SDMX-JSON
+and EconDB macro providers, FMP analyst-estimate breadth (price_target + forward),
+and XLSX export — while deferring, with documented decisions, Parquet export and
+the niche providers (stockgrid/wsj/finviz/biztoc/intrinio) that lack a verifiable
+public API. The per-wave detail and the deferred backlog live in the
 [gap matrix](../roadmap/openbb-gap-matrix.md).
 
 ---
@@ -28,7 +32,7 @@ the per-wave detail and the deferred backlog live in the
 
 | Capability | OpenBB | FinX equivalent | Pointer |
 |---|---|---|---|
-| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 119 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
+| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 131 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
 | REST API | auto-generated FastAPI, `/docs` | catalog-derived `GET /api/v1/{route...}` → policy-guarded `Op::FetchData` → `ResultEnvelope` | [rest-api.md](./rest-api.md) |
 | OpenAPI spec | FastAPI-generated | programmatic OpenAPI 3.1 at `GET /openapi.json`, checked in + drift-gated (`openapi-sync`/`openapi-check`) | [rest-api.md](./rest-api.md), [`docs/schemas/openapi.json`](../schemas/openapi.json) |
 | Provider interchange | `provider=` selects a source | ordered candidates per route; no `provider=` → declaration-order fallback with a `provider_fallback` warning; explicit `provider=` never falls back | [rest-api.md](./rest-api.md) |

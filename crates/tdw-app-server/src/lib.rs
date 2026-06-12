@@ -39,7 +39,7 @@ pub use functions_route::{FunctionEntry, FunctionsHandler, HandlerError, Signing
 #[cfg(all(feature = "rest-api-route", not(loom)))]
 pub mod rest_route;
 #[cfg(all(feature = "rest-api-route", not(loom)))]
-pub use rest_route::{RestApiHandler, RestError, serve_rest_http};
+pub use rest_route::{KnowledgeStatusHandler, RestApiHandler, RestError, serve_rest_http};
 
 #[cfg(all(feature = "workspace-route", not(loom)))]
 pub mod workspace_route;

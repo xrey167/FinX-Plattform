@@ -14,7 +14,8 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tdw_app_server::{RestApiHandler, RestError};
+use tdw_app_server::{KnowledgeStatusHandler, RestApiHandler, RestError};
+use tdw_knowledge::runtime::KnowledgeRuntime;
 
 use crate::AppState;
 use crate::dispatcher::{RestFetchError, rest_fetch_data};
@@ -54,5 +55,38 @@ impl RestApiHandler for RestApiState {
                 RestFetchError::InvalidParams(message) => RestError::InvalidParams(message),
                 RestFetchError::Provider(message) => RestError::Provider(message),
             })
+    }
+}
+
+/// Implements [`KnowledgeStatusHandler`] over a shared [`KnowledgeRuntime`].
+///
+/// Construct via [`KnowledgeStatusAdapter::new`] and pass an
+/// `Arc<dyn KnowledgeStatusHandler>` to `tdw_app_server::serve_rest_http` to
+/// enable `GET /api/v1/knowledge/status`. The daemon's `spawn_daemon_rest`
+/// builds this from `backend.knowledge_runtime_handle()`.
+pub struct KnowledgeStatusAdapter {
+    runtime: Arc<KnowledgeRuntime>,
+}
+
+impl KnowledgeStatusAdapter {
+    /// Wrap a [`KnowledgeRuntime`] as a [`KnowledgeStatusHandler`].
+    #[must_use]
+    pub const fn new(runtime: Arc<KnowledgeRuntime>) -> Self {
+        Self { runtime }
+    }
+
+    /// Build an `Arc<dyn KnowledgeStatusHandler>` ready to hand to
+    /// `tdw_app_server::serve_rest_http`.
+    #[must_use]
+    pub fn into_handler(self) -> Arc<dyn KnowledgeStatusHandler> {
+        Arc::new(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl KnowledgeStatusHandler for KnowledgeStatusAdapter {
+    async fn knowledge_status(&self) -> Result<Value, String> {
+        let snapshot = self.runtime.status().await;
+        serde_json::to_value(&snapshot).map_err(|error| error.to_string())
     }
 }

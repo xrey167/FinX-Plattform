@@ -1388,6 +1388,14 @@ fn insert_fmp_completion_fetch_bindings(
         fetch_binding::<crate::FmpHttpEarningsFetcher, _, _>(),
     );
     table.insert(
+        ("fmp", crate::FmpHttpPriceTargetFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpPriceTargetFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpAnalystEstimatesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpAnalystEstimatesFetcher, _, _>(),
+    );
+    table.insert(
         ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpPeersFetcher, _, _>(),
     );
@@ -2929,6 +2937,14 @@ fn insert_fmp_completion_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpEarningsFetcher::ENDPOINT),
         binding::<crate::FmpHttpEarningsFetcher, _, _>("raw.estimate"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpPriceTargetFetcher::ENDPOINT),
+        binding::<crate::FmpHttpPriceTargetFetcher, _, _>("raw.estimate"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpAnalystEstimatesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpAnalystEstimatesFetcher, _, _>("raw.estimate"),
     );
     table.insert(
         ("fmp", crate::FmpHttpPeersFetcher::ENDPOINT),

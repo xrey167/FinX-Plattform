@@ -49,13 +49,17 @@ facts changed materially:
   (pure `ArgMatches` → `Op::FetchData` params builder), `render` (aligned table /
   JSON / CSV export + RFC-4180 escaping), `routine` (local-file event-spine
   record/run/list under `.tdw/routines/<name>.jsonl`).
-- In-crate unit tests now exist (27 total) covering tree generation, schema→arg
-  mapping, table/CSV rendering, and routine round trips; the live daemon
+- In-crate unit tests now exist (30 total) covering tree generation, schema→arg
+  mapping, table/CSV/XLSX rendering, and routine round trips; the live daemon
   end-to-end remains covered by the offline `--smoke` path (no daemon in CI).
 - Legacy entrypoints (`run-query`, `--smoke`, `kg reindex`, the default shutdown
   probe) are dispatched ahead of clap and are unchanged.
 - Quickstart documented at `docs/products/cli.md`.
-- Export scope is CSV + JSON only; XLSX/Parquet stay with L5.4.
+- Export scope is CSV + JSON (hand-rolled, no dep) plus **XLSX** (P3W6, gap-matrix
+  L5.4): `--export xlsx` writes a single-sheet `data` workbook from any envelope via
+  the pure-Rust `rust_xlsxwriter` (MIT, `default-features = false`, C-free tree,
+  `cargo deny` green), reusing the CSV column model with typed cells. Parquet stays
+  deferred (see gap-matrix L5.4 / D5 rationale).
 
 ## Verification
 

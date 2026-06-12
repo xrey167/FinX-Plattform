@@ -18,6 +18,8 @@
 //!   - [`FmpHttpEarningsFetcher`] — historical EPS (`/historical/earning_calendar`)
 //!   - [`FmpHttpDiscoveryFetcher`] — market movers (`/stock_market/{gainers,losers,actives}`)
 //!   - [`FmpHttpScreenerFetcher`] — equity screener (`/stock-screener`)
+//!   - [`FmpHttpPriceTargetFetcher`] — analyst price-target consensus (`/v4/price-target-consensus`)
+//!   - [`FmpHttpAnalystEstimatesFetcher`] — forward analyst estimates (`/analyst-estimates`)
 //!
 //! Live calls require `TDW_FMP_API_KEY`. The live integration test is
 //! additionally gated by `TDW_FMP_LIVE=1` so unattended CI stays offline.
@@ -1288,6 +1290,210 @@ impl Fetcher<FmpScreenerQuery, ScreenerRow> for FmpHttpScreenerFetcher {
             .collect();
         let _ = query;
         Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpPriceTargetFetcher — /v4/price-target-consensus → Estimate (price_target)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP price-target-consensus fetcher.
+    ///
+    /// Calls `/v4/price-target-consensus?symbol=` and normalizes the consensus
+    /// row to a single [`Estimate`] with `kind = "price_target"`: `value` and
+    /// `mean` carry the consensus target, with `high`/`low` from the analyst
+    /// range.
+    pub FmpHttpPriceTargetFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/price-target-consensus` entry.
+#[derive(Deserialize)]
+struct FmpPriceTargetRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "targetHigh", default)]
+    target_high: Option<f64>,
+    #[serde(rename = "targetLow", default)]
+    target_low: Option<f64>,
+    #[serde(rename = "targetConsensus", default)]
+    target_consensus: Option<f64>,
+    #[serde(rename = "targetMedian", default)]
+    target_median: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpPriceTargetFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "price_target";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        // The price-target-consensus endpoint lives at the v4 root, not v3;
+        // derive it from the configured base URL so mock servers still work.
+        let url = format!("{}/price-target-consensus", peers_base(self.base_url()));
+        fmp_get(
+            &url,
+            &[("symbol", query.symbol.clone())],
+            "fmp price_target",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<Estimate>> {
+        let entries: Vec<FmpPriceTargetRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp price_target parse_json: {e}")))?;
+        let estimates = entries
+            .into_iter()
+            .map(|entry| {
+                let consensus = entry.target_consensus.or(entry.target_median);
+                Estimate {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    kind: "price_target".to_string(),
+                    fiscal_period: None,
+                    date: None,
+                    analyst: None,
+                    recommendation: None,
+                    value: consensus,
+                    low: entry.target_low,
+                    high: entry.target_high,
+                    mean: consensus,
+                    number_of_analysts: None,
+                    currency: None,
+                }
+            })
+            .collect();
+        Ok(estimates)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpAnalystEstimatesFetcher — /analyst-estimates/{symbol} → Estimate (forward_*)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP forward analyst-estimates fetcher.
+    ///
+    /// Calls `/analyst-estimates/{symbol}?period=annual` and emits one
+    /// [`Estimate`] row per forward metric per period: `forward_eps` (from the
+    /// `estimatedEps*` triplet), `forward_sales` (`estimatedRevenue*`), and
+    /// `forward_ebitda` (`estimatedEbitda*`). Each row carries `fiscal_period`
+    /// = the period date and `value`/`low`/`high`/`mean` from the
+    /// `*Avg`/`*Low`/`*High` fields; a metric whose `*Avg` is absent is skipped.
+    pub FmpHttpAnalystEstimatesFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/analyst-estimates/{symbol}` period entry.
+#[derive(Deserialize)]
+struct FmpAnalystEstimateRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(rename = "estimatedRevenueLow", default)]
+    estimated_revenue_low: Option<f64>,
+    #[serde(rename = "estimatedRevenueHigh", default)]
+    estimated_revenue_high: Option<f64>,
+    #[serde(rename = "estimatedRevenueAvg", default)]
+    estimated_revenue_avg: Option<f64>,
+    #[serde(rename = "estimatedEpsLow", default)]
+    estimated_eps_low: Option<f64>,
+    #[serde(rename = "estimatedEpsHigh", default)]
+    estimated_eps_high: Option<f64>,
+    #[serde(rename = "estimatedEpsAvg", default)]
+    estimated_eps_avg: Option<f64>,
+    #[serde(rename = "estimatedEbitdaLow", default)]
+    estimated_ebitda_low: Option<f64>,
+    #[serde(rename = "estimatedEbitdaHigh", default)]
+    estimated_ebitda_high: Option<f64>,
+    #[serde(rename = "estimatedEbitdaAvg", default)]
+    estimated_ebitda_avg: Option<f64>,
+    #[serde(rename = "numberAnalystEstimatedRevenue", default)]
+    number_analyst_revenue: Option<u32>,
+    #[serde(rename = "numberAnalystsEstimatedEps", default)]
+    number_analyst_eps: Option<u32>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpAnalystEstimatesFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "analyst_estimates";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/analyst-estimates/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(
+            &url,
+            &[("period", "annual".to_string())],
+            "fmp analyst_estimates",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<Estimate>> {
+        let entries: Vec<FmpAnalystEstimateRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp analyst_estimates parse_json: {e}")))?;
+        let mut estimates = Vec::new();
+        for entry in entries {
+            let symbol = entry.symbol.unwrap_or_else(|| query.symbol.clone());
+            let period = entry.date;
+            let mut push = |kind: &str,
+                            avg: Option<f64>,
+                            low: Option<f64>,
+                            high: Option<f64>,
+                            analysts: Option<u32>| {
+                if let Some(value) = avg {
+                    estimates.push(Estimate {
+                        symbol: symbol.clone(),
+                        kind: kind.to_string(),
+                        fiscal_period: period.clone(),
+                        date: None,
+                        analyst: None,
+                        recommendation: None,
+                        value: Some(value),
+                        low,
+                        high,
+                        mean: Some(value),
+                        number_of_analysts: analysts,
+                        currency: None,
+                    });
+                }
+            };
+            push(
+                "forward_eps",
+                entry.estimated_eps_avg,
+                entry.estimated_eps_low,
+                entry.estimated_eps_high,
+                entry.number_analyst_eps,
+            );
+            push(
+                "forward_sales",
+                entry.estimated_revenue_avg,
+                entry.estimated_revenue_low,
+                entry.estimated_revenue_high,
+                entry.number_analyst_revenue,
+            );
+            push(
+                "forward_ebitda",
+                entry.estimated_ebitda_avg,
+                entry.estimated_ebitda_low,
+                entry.estimated_ebitda_high,
+                None,
+            );
+        }
+        Ok(estimates)
     }
 }
 

@@ -53,7 +53,7 @@ pub use policy::{
     service_hook_policy,
 };
 #[cfg(feature = "rest-api-route")]
-pub use rest_handler::RestApiState;
+pub use rest_handler::{KnowledgeStatusAdapter, RestApiState};
 pub use stream_ingest::{run_stream_ingest, run_ws_ingest};
 pub use tdw_hooks::HookExecutionPolicy;
 
@@ -165,8 +165,9 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
+    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
+    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
     FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
     FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
 };
@@ -383,6 +384,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpSplitsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpEarningsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpPriceTargetFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpAnalystEstimatesFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpPeersFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]

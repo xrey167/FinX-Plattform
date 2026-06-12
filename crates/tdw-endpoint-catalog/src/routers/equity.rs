@@ -82,6 +82,13 @@ const EQUITY_FUNDAMENTAL_DIVIDENDS: &[ProviderCandidate] = &[
 const EQUITY_FUNDAMENTAL_SPLITS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "splits")];
 const EQUITY_ESTIMATES_HISTORICAL_EPS: &[ProviderCandidate] =
     &[ProviderCandidate::new("fmp", "historical_eps")];
+// Analyst-estimate breadth (openbb-parity P3W5, gap-matrix D7). FMP-keyed:
+// price-target consensus and forward analyst estimates, each its own FMP
+// fetcher keyed by its `ENDPOINT` const.
+const EQUITY_ESTIMATES_PRICE_TARGET: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "price_target")];
+const EQUITY_ESTIMATES_FORWARD: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "analyst_estimates")];
 const EQUITY_COMPARE_PEERS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "peers")];
 const EQUITY_DISCOVERY_GAINERS: &[ProviderCandidate] =
     &[ProviderCandidate::new("fmp", "discovery_gainers")];
@@ -345,6 +352,20 @@ fn completion_entries() -> Vec<CatalogEntry> {
             EQUITY_ESTIMATES_HISTORICAL_EPS,
             "raw.estimate",
             "Historical reported vs estimated EPS per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/price_target",
+            estimate,
+            EQUITY_ESTIMATES_PRICE_TARGET,
+            "raw.estimate",
+            "Analyst price-target consensus (high/low/consensus) for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/forward",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD,
+            "raw.estimate",
+            "Forward analyst estimates per period (EPS, sales, EBITDA), FMP-backed.",
         ),
         flat_entry(
             "equity/compare/peers",

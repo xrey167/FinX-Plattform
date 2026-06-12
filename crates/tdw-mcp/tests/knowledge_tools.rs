@@ -252,7 +252,7 @@ fn server_with_runtime() -> McpServer {
 
 #[test]
 fn descriptors_gated_on_attachment() {
-    // Without a runtime, none of the five tools are listed.
+    // Without a runtime, none of the six tools are listed.
     let mut bare = McpServer::new();
     initialize(&mut bare);
     let listed =
@@ -269,11 +269,12 @@ fn descriptors_gated_on_attachment() {
         "tdw.kg.traverse",
         "tdw.kg.path",
         "tdw.tags.query",
+        "tdw.kg.status",
     ] {
         assert!(!names.contains(&name.to_string()), "{name} must be absent");
     }
 
-    // With a runtime, all five appear with read-only annotations.
+    // With a runtime, all six appear with read-only annotations.
     let mut server = server_with_runtime();
     let listed = decode(
         &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
@@ -287,6 +288,7 @@ fn descriptors_gated_on_attachment() {
         "tdw.kg.traverse",
         "tdw.kg.path",
         "tdw.tags.query",
+        "tdw.kg.status",
     ] {
         let descriptor = tools
             .iter()
@@ -503,6 +505,7 @@ fn every_tool_without_runtime_is_a_tool_error_not_protocol() {
         ("tdw.kg.traverse", json!({ "seeds": ["instrument:AAPL"] })),
         ("tdw.kg.path", json!({ "from": "a", "to": "b" })),
         ("tdw.tags.query", json!({ "tag_id": "asset:equity" })),
+        ("tdw.kg.status", json!({})),
     ];
     for (name, arguments) in cases {
         let response = call(&mut server, name, &arguments);
@@ -596,6 +599,101 @@ async fn search_rejects_oversized_queries() {
     assert!(
         text.contains("8192"),
         "oversized query must be a tool error naming the cap: {text}"
+    );
+}
+
+/// K-E2: `tdw.kg.status` returns a snapshot with every observability field
+/// populated for the seeded runtime (`with_versions(Some(7), Some(3))`).
+#[test]
+fn kg_status_returns_all_fields() {
+    let mut server = server_with_runtime();
+    let response = call(&mut server, "tdw.kg.status", &json!({}));
+    assert_eq!(
+        response["result"]["isError"], false,
+        "status must succeed: {response}"
+    );
+    let s = &response["result"]["structuredContent"];
+
+    // Vector / document channel — assert exact seeded values, not just presence.
+    assert_eq!(
+        s["embedder_model"], "local-hash-8",
+        "embedder_model seeded: {s}"
+    );
+    assert!(
+        s["vector_collection"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("tdw_knowledge__")),
+        "vector_collection namespaced: {s}"
+    );
+    assert!(
+        s["document_count_note"].is_string(),
+        "document_count_note present: {s}"
+    );
+
+    // Taxonomy — exactly 51 EntityKind variants in the current taxonomy.
+    assert_eq!(
+        s["taxonomy_kind_count"].as_u64(),
+        Some(51),
+        "taxonomy_kind_count is 51: {s}"
+    );
+
+    // Versions seeded via with_versions(Some(7), Some(3)).
+    assert_eq!(s["versions"]["rules_version"], 7, "rules_version");
+    assert_eq!(s["versions"]["infer_version"], 3, "infer_version");
+    assert_eq!(
+        s["versions"]["embedder_model"], "local-hash-8",
+        "versions.embedder_model seeded: {s}"
+    );
+
+    // Language-model grade — no resolver/agent_id in the test runtime → stub.
+    assert!(
+        s["language_model_grade"]
+            .as_str()
+            .is_some_and(|g| g.contains("stub")),
+        "language_model_grade is stub: {s}"
+    );
+}
+
+/// K-E2: `tdw.kg.status` with graph attached reports graph health and the
+/// explicit backend name set via `with_graph_name`.
+#[test]
+fn kg_status_reports_graph_health_when_attached() {
+    let (runtime, _graph) = block(build_runtime());
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let response = call(&mut server, "tdw.kg.status", &json!({}));
+    assert_eq!(response["result"]["isError"], false);
+    let s = &response["result"]["structuredContent"];
+    // The in-memory graph is always reachable.
+    let health = &s["graph_health"];
+    assert!(health.is_object(), "graph_health present: {s}");
+    assert_eq!(health["reachable"], true, "in-memory graph reachable");
+    // build_runtime() does not call with_graph_name → sentinel "graph-engine".
+    assert_eq!(
+        health["backend_name"], "graph-engine",
+        "sentinel name when not explicitly set: {s}"
+    );
+}
+
+/// K-E2: `tdw.kg.status` on a vector-only runtime (no graph) returns `null`
+/// `graph_health` and `null` proposals.
+#[test]
+fn kg_status_null_optionals_on_vector_only_runtime() {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    let runtime = Arc::new(KnowledgeRuntime::new(embedder, vectors));
+    let mut server = McpServer::new().with_knowledge(runtime);
+    initialize(&mut server);
+    let response = call(&mut server, "tdw.kg.status", &json!({}));
+    assert_eq!(response["result"]["isError"], false);
+    let s = &response["result"]["structuredContent"];
+    assert!(
+        s["graph_health"].is_null(),
+        "no graph → graph_health is null: {s}"
+    );
+    assert!(
+        s["proposals"].is_null(),
+        "no proposal queue → proposals is null: {s}"
     );
 }
 
