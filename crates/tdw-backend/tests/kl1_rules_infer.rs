@@ -1,6 +1,6 @@
 //! K-L1 gate tests: rules-driven inference lives in the daemon.
 //!
-//! Seven gates (all offline, no Docker/network, deterministic):
+//! Nine gates (all offline, no Docker/network, deterministic):
 //!
 //! 1. **DeriveEdge e2e** — ingest a doc, seed a base graph edge matching a
 //!    `DeriveEdge` rule, fire inference, assert the derived edge is in the graph
@@ -24,6 +24,15 @@
 //!    edge appears in the graph with `Provenance::Rule { rule_id }` after the
 //!    ingest call completes (honesty gate for issue 2: the production MCP path
 //!    fires `run_incremental`, not just the `Backend` direct methods).
+//! 8. **Production runtime has `tags` wired** — assert that
+//!    `Backend::knowledge_runtime_handle().tags().is_some()` after construction
+//!    so the `infer_ctx` resolution in `dispatch_knowledge_ingest_tool` and
+//!    `dispatch_knowledge_write_tool` is not silently `None` in the real daemon.
+//!    This gate catches the `from_config` gap (K-L1 round-3 R1).
+//! 9. **`tdw.kg.why` tool explains a derived edge via JSON-RPC** — after the
+//!    same ingest → inference sequence as Gate 7, drive `tdw.kg.why` through the
+//!    real MCP surface and assert the `chain[0]` step carries `kind:
+//!    "rule_derived"` with the correct `rule_id`.
 
 use std::sync::Arc;
 
@@ -684,5 +693,174 @@ async fn mcp_ingest_tool_fires_inference_and_derives_edge_with_rule_provenance()
         "derived edge must carry Provenance::Rule {{ rule_id: \"r-mcp-honesty\" }}, \
          got {:?}",
         edge.provenance
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 8: Production runtime has tags wired (K-L1 round-3 R1 regression gate)
+// ---------------------------------------------------------------------------
+
+/// Assert that the `KnowledgeRuntime` returned by `Backend::knowledge_runtime_handle`
+/// exposes a tag engine (`rt.tags().is_some()`) so that
+/// `dispatch_knowledge_ingest_tool` and `dispatch_knowledge_write_tool` can
+/// resolve a non-`None` `infer_ctx`. Without this, inference is silently dead
+/// on the production MCP path even when an `InferEngine` is attached.
+///
+/// Uses `in_memory_for_tests` — which mirrors `from_config`'s construction
+/// after the K-L1 round-3 fix — so no live services are required. A separate
+/// compile-time invariant guarantees the two constructors share the same
+/// `.with_tags(...)` call.
+#[tokio::test]
+async fn production_runtime_has_tags_wired_for_infer_ctx() {
+    let backend = Backend::in_memory_for_tests().await;
+    let runtime = backend.knowledge_runtime_handle();
+
+    assert!(
+        runtime.tags().is_some(),
+        "KnowledgeRuntime::tags() must return Some so infer_ctx is not None in \
+         dispatch_knowledge_ingest_tool / dispatch_knowledge_write_tool; \
+         check that both from_config and in_memory_for_tests call .with_tags()"
+    );
+    assert!(
+        runtime.graph().is_some(),
+        "KnowledgeRuntime::graph() must return Some (sanity check)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Gate 9: tdw.kg.why explains a derived edge via real JSON-RPC (R3)
+// ---------------------------------------------------------------------------
+
+/// After seeding a base edge and loading a DeriveEdge rule, drive `tdw.kg.ingest`
+/// through the MCP surface (as Gate 7 does) then call `tdw.kg.why` on the
+/// derived edge and assert that `chain[0].kind == "rule_derived"` with the
+/// correct `rule_id`. This proves the explain surface is honest about
+/// inference-derived provenance, not just the graph-neighbor check.
+#[tokio::test]
+async fn why_tool_explains_derived_edge_with_rule_provenance() {
+    let backend = Backend::in_memory_for_tests().await;
+    let graph = backend.graph_engine();
+    let now = "2026-01-01";
+
+    // Seed a base described_by edge so the rule fires after ingest.
+    seed_edge(&graph, "instrument:WHY-TEST", "described_by", "doc-why").await;
+
+    // Wire DeriveEdge rule: described_by => attested_by
+    {
+        let infer = backend.infer_engine_handle();
+        let mut guard = infer.lock().await;
+        guard
+            .hot_reload(vec![derive_rule(
+                "r-why-honesty",
+                "described_by",
+                "attested_by",
+            )])
+            .expect("hot_reload should accept valid rule");
+    }
+
+    // Build an MCP server with knowledge + indexer + infer engine.
+    let runtime = backend.knowledge_runtime_handle();
+    let indexer = backend.knowledge_indexer_handle();
+    let infer = backend.infer_engine_handle();
+    let mut server = McpServer::new()
+        .with_knowledge(runtime)
+        .with_indexer(indexer)
+        .with_infer_engine(infer);
+
+    // MCP handshake.
+    server.handle_json_rpc_line(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"kl1-why-test","version":"1.0.0"}}}"#,
+    );
+    server.handle_json_rpc_line(
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}"#,
+    );
+
+    // Ingest to trigger inference (described_by → attested_by).
+    let ingest_request = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "tdw.kg.ingest",
+            "arguments": {
+                "documents": [{
+                    "id": "doc-why",
+                    "body": "why-gate document for K-L1 explain honesty test",
+                    "entity": {
+                        "entity_id": "instrument:WHY-TEST",
+                        "kind": "instrument",
+                        "label": "WHY-TEST",
+                        "aliases": []
+                    },
+                    "tags": []
+                }],
+                "now": now
+            }
+        }
+    });
+    let ingest_msgs = server.handle_json_rpc_line(&ingest_request.to_string());
+    let ingest_resp: serde_json::Value =
+        serde_json::from_str(&ingest_msgs[0]).expect("ingest response must be valid JSON");
+    let ingest_content = ingest_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("ingest result.content[0].text missing; resp: {ingest_resp}"));
+    let ingest_report: serde_json::Value =
+        serde_json::from_str(ingest_content).expect("ingest content text must be JSON");
+    assert_eq!(
+        ingest_report["summary"]["landed"],
+        json!(1),
+        "document must land before why test; report: {ingest_report}"
+    );
+
+    // Call tdw.kg.why on the derived attested_by edge.
+    let why_request = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "tdw.kg.why",
+            "arguments": {
+                "edge": {
+                    "from": "instrument:WHY-TEST",
+                    "rel":  "attested_by",
+                    "to":   "doc-why"
+                }
+            }
+        }
+    });
+    let why_msgs = server.handle_json_rpc_line(&why_request.to_string());
+    assert_eq!(
+        why_msgs.len(),
+        1,
+        "tdw.kg.why must return exactly one message"
+    );
+
+    let why_resp: serde_json::Value =
+        serde_json::from_str(&why_msgs[0]).expect("why response must be valid JSON");
+    let why_content = why_resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("why result.content[0].text missing; resp: {why_resp}"));
+    let why_body: serde_json::Value =
+        serde_json::from_str(why_content).expect("why content text must be JSON");
+
+    // The chain must have at least one step and the first step must be rule_derived.
+    let chain = why_body["chain"]
+        .as_array()
+        .unwrap_or_else(|| panic!("why chain must be an array; body: {why_body}"));
+    assert!(
+        !chain.is_empty(),
+        "why chain must not be empty for a rule-derived edge; body: {why_body}"
+    );
+    let step0 = &chain[0];
+    assert_eq!(
+        step0["kind"].as_str(),
+        Some("rule_derived"),
+        "chain[0].kind must be 'rule_derived' for a Provenance::Rule edge; \
+         step0: {step0}"
+    );
+    assert_eq!(
+        step0["rule_id"].as_str(),
+        Some("r-why-honesty"),
+        "chain[0].rule_id must be 'r-why-honesty'; step0: {step0}"
     );
 }

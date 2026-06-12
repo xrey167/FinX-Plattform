@@ -212,13 +212,19 @@ impl Backend {
         } else {
             None
         };
+        // The tag engine is shared between the indexer (rule-driven auto-tagging
+        // in `apply_rules`) and the MCP server's `infer_ctx` resolution
+        // (`rt.tags()` must return `Some` for `dispatch_knowledge_ingest_tool`
+        // and `dispatch_knowledge_write_tool` to fire `run_incremental` after
+        // ingest/materialize). Build it once and share the `Arc`.
+        let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
+                .with_tags(Arc::clone(&tags_engine))
                 .with_versions(rules_v, infer_v),
         );
-        let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
         Ok(Self {
             state,
             runner,
