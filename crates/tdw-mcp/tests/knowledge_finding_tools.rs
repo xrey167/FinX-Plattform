@@ -231,8 +231,9 @@ fn descriptors_absent_without_required_attachment() {
 #[test]
 fn descriptors_present_with_full_attachment() {
     let (mut server, _graph) = server_with_findings();
-    let listed =
-        decode(&server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0]);
+    let listed = decode(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+    );
     let names: Vec<&str> = listed["result"]["tools"]
         .as_array()
         .expect("tools array")
@@ -443,7 +444,10 @@ fn evidence_pinned_and_visible_via_why() {
         capture["result"]["isError"], false,
         "capture with evidence should succeed: {capture}"
     );
-    assert_eq!(capture["result"]["structuredContent"]["evidence_pinned"], true);
+    assert_eq!(
+        capture["result"]["structuredContent"]["evidence_pinned"],
+        true
+    );
     let finding_id = capture["result"]["structuredContent"]["finding_id"]
         .as_str()
         .expect("finding_id")
@@ -455,19 +459,14 @@ fn evidence_pinned_and_visible_via_why() {
         "tdw.kg.why",
         &json!({ "entity_id": finding_id }),
     );
-    assert_eq!(
-        why["result"]["isError"], false,
-        "why should succeed: {why}"
-    );
+    assert_eq!(why["result"]["isError"], false, "why should succeed: {why}");
     let chain = why["result"]["structuredContent"]["chain"]
         .as_array()
         .expect("chain array");
 
     // Must contain a user_provenance step.
     assert!(
-        chain
-            .iter()
-            .any(|step| step["kind"] == "user_provenance"),
+        chain.iter().any(|step| step["kind"] == "user_provenance"),
         "why chain must contain a user_provenance step; chain={chain:?}"
     );
 
@@ -576,11 +575,7 @@ fn link_tool_rejects_invalid_relation() {
 fn capture_rejects_empty_title() {
     let (mut server, _graph) = server_with_findings();
 
-    let response = call(
-        &mut server,
-        "tdw.kg.finding",
-        &json!({ "title": "   " }),
-    );
+    let response = call(&mut server, "tdw.kg.finding", &json!({ "title": "   " }));
     assert_eq!(
         response["result"]["isError"], true,
         "empty title should be a tool error: {response}"
@@ -618,8 +613,9 @@ fn finding_tool_returns_tool_error_when_surface_unavailable() {
     initialize(&mut server);
 
     // tools/list must NOT show finding tools.
-    let listed =
-        decode(&server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0]);
+    let listed = decode(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+    );
     let names: Vec<&str> = listed["result"]["tools"]
         .as_array()
         .expect("tools array")
@@ -632,17 +628,16 @@ fn finding_tool_returns_tool_error_when_surface_unavailable() {
     );
 
     // Direct call must return a tool error (not a protocol error -32601).
-    let resp = call(
-        &mut server,
-        "tdw.kg.finding",
-        &json!({ "title": "test" }),
-    );
+    let resp = call(&mut server, "tdw.kg.finding", &json!({ "title": "test" }));
     assert_eq!(
         resp["result"]["isError"], true,
         "should be tool error when surface unavailable: {resp}"
     );
     // Must NOT be a protocol -32601 error.
-    assert!(resp["error"].is_null(), "must not be a protocol error: {resp}");
+    assert!(
+        resp["error"].is_null(),
+        "must not be a protocol error: {resp}"
+    );
 }
 
 /// `tdw.kg.why` on a Finding without evidence still emits `user_provenance`
@@ -662,7 +657,11 @@ fn why_on_finding_without_evidence_emits_provenance_not_evidence() {
         .expect("finding_id")
         .to_string();
 
-    let why = call(&mut server, "tdw.kg.why", &json!({ "entity_id": finding_id }));
+    let why = call(
+        &mut server,
+        "tdw.kg.why",
+        &json!({ "entity_id": finding_id }),
+    );
     assert_eq!(why["result"]["isError"], false, "why should succeed: {why}");
     let chain = why["result"]["structuredContent"]["chain"]
         .as_array()

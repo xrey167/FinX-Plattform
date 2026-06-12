@@ -20,6 +20,7 @@ use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, Plan
 
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
+pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
 pub(crate) mod knowledge_tools;
 pub(crate) mod knowledge_write_tools;
@@ -429,6 +430,12 @@ impl McpServer {
         if self.knowledge_ingest_available() {
             descriptors.push(knowledge_ingest_tools::descriptor());
         }
+        // The knowledge FINDING tools (knowledge-system K-X6): tdw.kg.finding
+        // and tdw.kg.link require the graph engine AND a bound user identity.
+        // They are appended only when both are present.
+        if self.knowledge_findings_available() {
+            descriptors.extend(knowledge_finding_tools::descriptors());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -596,6 +603,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_ingest_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_finding_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -893,6 +904,59 @@ impl McpServer {
                     .with_data(json!({ "tool": name })),
             )],
         };
+        Some(messages)
+    }
+
+    /// True when the finding surface is available (knowledge-system K-X6): a
+    /// knowledge runtime is attached with a graph engine AND a bound user identity.
+    fn knowledge_findings_available(&self) -> bool {
+        self.knowledge
+            .as_ref()
+            .is_some_and(|runtime| runtime.graph().is_some() && runtime.bound_user_id().is_some())
+    }
+
+    /// Dispatch a knowledge finding tool (`tdw.kg.finding` / `tdw.kg.link`,
+    /// knowledge-system K-X6).
+    ///
+    /// Returns `Some(messages)` when `name` is a finding tool — a tool error
+    /// (never a protocol error) when the finding surface is unavailable (no
+    /// runtime, no graph engine, or no bound user id), otherwise the
+    /// [`knowledge_finding_tools::execute`] result. Returns `None` when `name`
+    /// is not a finding tool so the caller falls through to the next dispatch.
+    fn dispatch_knowledge_finding_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_finding_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_findings_available() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result(
+                    "knowledge finding surface not attached (requires graph engine + user id)",
+                ),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages =
+            match knowledge_finding_tools::execute(runtime, name, &arguments_object, &now) {
+                Ok(ToolExecution { structured, .. }) => {
+                    vec![success_message(id, &tool_result(&structured))]
+                }
+                Err(ToolFailure::Execution(message)) => {
+                    vec![success_message(id, &tool_error_result(&message))]
+                }
+                Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                    problem
+                        .with_id(id.clone())
+                        .with_data(json!({ "tool": name })),
+                )],
+            };
         Some(messages)
     }
 

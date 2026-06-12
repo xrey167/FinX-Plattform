@@ -501,7 +501,9 @@ impl InferEngine {
             return Ok(Derived::default());
         };
 
-        let matches = self.match_chain(graph, when, self.exclude_user_authored).await?;
+        let matches = self
+            .match_chain(graph, when, self.exclude_user_authored)
+            .await?;
         // Existing (from, to) pairs of the derived type — base facts, or facts
         // derived by earlier runs. A derived edge NEVER re-asserts an existing
         // triple: upserting over a same-identity base edge would silently

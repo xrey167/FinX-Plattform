@@ -100,12 +100,7 @@ pub fn descriptors() -> Vec<ToolDescriptor> {
     vec![finding_descriptor(), link_descriptor()]
 }
 
-fn finding_tool(
-    name: &str,
-    title: &str,
-    description: &str,
-    input_schema: Value,
-) -> ToolDescriptor {
+fn finding_tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
     // Findings write into the graph (not read-only) but are idempotent on
     // the same title+body combination (content-hash based).
     tool_with_annotations(name, title, description, input_schema, false, false)
@@ -274,7 +269,8 @@ fn capture_finding(
         validate_tag_id(tag)?;
     }
 
-    let as_of = optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
+    let as_of =
+        optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
     validate_date(&as_of)?;
 
     // Evidence pin (optional).
@@ -572,8 +568,7 @@ async fn scan_auto_links(
     body: &str,
 ) -> Result<Vec<String>, ToolFailure> {
     // Collect a bounded sample of entity ids from the graph by scanning edges.
-    let mut entity_ids: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut entity_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut offset = 0usize;
     let page_size = 256usize;
 
@@ -676,10 +671,9 @@ fn contains_token(text: &str, token: &str) -> bool {
     while start + tlen <= text_bytes.len() {
         if let Some(pos) = text[start..].find(token) {
             let abs = start + pos;
-            let left_ok = abs == 0
-                || !text_bytes[abs - 1].is_ascii_alphanumeric();
-            let right_ok = abs + tlen >= text_bytes.len()
-                || !text_bytes[abs + tlen].is_ascii_alphanumeric();
+            let left_ok = abs == 0 || !text_bytes[abs - 1].is_ascii_alphanumeric();
+            let right_ok =
+                abs + tlen >= text_bytes.len() || !text_bytes[abs + tlen].is_ascii_alphanumeric();
             if left_ok && right_ok {
                 return true;
             }
@@ -760,7 +754,9 @@ fn validate_tag_id(tag: &str) -> Result<(), ToolFailure> {
             .chars()
             .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
     {
-        return Err(execution(format!("invalid tag id {tag:?}: only [A-Za-z0-9:._-] allowed")));
+        return Err(execution(format!(
+            "invalid tag id {tag:?}: only [A-Za-z0-9:._-] allowed"
+        )));
     }
     Ok(())
 }

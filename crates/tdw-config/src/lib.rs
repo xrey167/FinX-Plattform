@@ -157,7 +157,42 @@ pub struct ProtocolConfig {
     pub replay_enabled: bool,
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1).
+/// Single-user identity for the knowledge finding surface (knowledge-system K-X6).
+///
+/// Until K-L5 delivers per-session identity negotiation this is a single
+/// operator-configured id that binds to every `tdw.kg.finding` / `tdw.kg.link`
+/// tool call on this daemon. The id is validated at config load with the same
+/// grammar as [`tdw_knowledge::proposals::validate_agent_id`]:
+/// `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+///
+/// Set `[knowledge.user] id = "analyst"` in your daemon TOML (default).
+/// When K-L5 lands, per-session identity will be injected at the MCP layer
+/// and this config key will be superseded — note that in the transition plan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UserConfig {
+    /// The operator-configured user identity bound to the finding tools.
+    ///
+    /// Grammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+    /// Default: `"analyst"`.
+    #[serde(default = "UserConfig::default_id")]
+    pub id: String,
+}
+
+impl UserConfig {
+    fn default_id() -> String {
+        "analyst".to_string()
+    }
+}
+
+impl Default for UserConfig {
+    fn default() -> Self {
+        Self {
+            id: Self::default_id(),
+        }
+    }
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-X6).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -189,6 +224,12 @@ pub struct KnowledgeConfig {
     /// [`RunLimits`]: `max_iterations = 32`, `max_derived = 10 000`.
     #[serde(default)]
     pub infer: InferLimitsConfig,
+    /// Single-user identity for the finding tools (knowledge-system K-X6).
+    ///
+    /// Defaults to `id = "analyst"`. Override in `[knowledge.user]` in your
+    /// daemon TOML. Per-session identity arrives with K-L5.
+    #[serde(default)]
+    pub user: UserConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -551,6 +592,8 @@ impl TdwConfig {
         }
 
         validate_rules_infer(&self.knowledge.rules, &self.knowledge.infer)?;
+        // User identity: grammar [A-Za-z0-9:._-]+, non-empty, ≤128 bytes.
+        validate_user_id(&self.knowledge.user.id)?;
 
         Ok(())
     }
@@ -607,6 +650,35 @@ fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Resul
         return Err(ConfigError::Validation(
             "knowledge.infer.max_derived must be greater than 0 when set".to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Validate a `knowledge.user.id` value.
+///
+/// Grammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+/// Mirrors `tdw_knowledge::proposals::validate_agent_id` — kept inline so
+/// `tdw-config` stays free of that cross-crate dependency.
+fn validate_user_id(user_id: &str) -> Result<()> {
+    if user_id.is_empty() {
+        return Err(ConfigError::Validation(
+            "knowledge.user.id must not be empty".to_string(),
+        ));
+    }
+    if user_id.len() > 128 {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.user.id is too long ({} bytes, max 128)",
+            user_id.len()
+        )));
+    }
+    if let Some(bad) = user_id
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
+    {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.user.id {user_id:?} contains invalid character {bad:?} \
+             — only [A-Za-z0-9:._-] allowed"
+        )));
     }
     Ok(())
 }
