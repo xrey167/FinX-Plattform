@@ -556,15 +556,16 @@ impl Backend {
 
         // K-L4 — spawn the gated auto-materialization sweep when
         // `knowledge.proposals.auto_materialize = true` (the default). The
-        // sweep writes READY proposals via the SAME `materialize_ready` core
-        // used by the operator tool, so all TOCTOU guards and audit entries
-        // apply identically.
+        // sweep writes READY proposals via `materialize_ready_capped` (same
+        // TOCTOU core as the operator tool, capped to `sweep_cap` per tick)
+        // and fires K-L1 inference after each landing batch.
         let auto_mat_task = spawn_auto_materialize_sweep(
             &self.proposals_cfg,
             self.runtime.auto_materialize_freshness_cell().cloned(),
             self.runtime.proposals().cloned(),
             Arc::clone(&self.graph),
             Arc::clone(&self.tags_engine),
+            Some(Arc::clone(&self.infer)),
             cancel.clone(),
         );
 
@@ -1516,23 +1517,29 @@ pub fn build_sweep_freshness_cell(
 /// On each cron slot:
 ///
 /// 1. Acquires the `ProposalQueue` mutex.
-/// 2. Calls `materialize_ready(graph, tags, now)` — the same TOCTOU-safe core
-///    used by the operator tool.  Any proposal that drifted from `Ready` since
-///    it was promoted is rejected with a reason and NOT written.
-/// 3. Respects the per-sweep `cap`: only the first `cap` Ready proposals are
-///    processed; the rest wait for the next slot.
-/// 4. Writes `SweepFreshness::Ran { last_run_ms, landed, rejected }` to the
-///    shared cell so `tdw.kg.status` reflects the last sweep outcome.
+/// 2. Calls [`materialize_ready_capped`](tdw_knowledge::proposals::ProposalQueue::materialize_ready_capped)
+///    with `cap` as the per-tick limit — the same TOCTOU-safe core used by the
+///    operator tool, but bounded so the sweep never lands more than `cap`
+///    proposals per tick.  The rest wait for the next slot.
+/// 3. Fires K-L1 incremental inference for any landed edge/tag proposals
+///    (same `fire_infer_after_sweep` path as the operator `materialize` action).
+/// 4. Writes `SweepFreshness::Ran { last_run_ms, landed, rejected, last_error }`
+///    to the shared cell so `tdw.kg.status` reflects the last sweep outcome,
+///    including any hard engine error.
 ///
 /// Returns `None` when `config.auto_materialize = false` (kill-switch) or when
 /// no `ProposalQueue` is attached to the runtime — the caller omits
 /// `auto_mat_task` from [`DaemonHandle`].
-fn spawn_auto_materialize_sweep(
+/// Public only for integration tests (`kl4_auto_materialize`).
+/// Production callers must use [`Backend::serve`] which wires this automatically.
+#[doc(hidden)]
+pub fn spawn_auto_materialize_sweep(
     cfg: &ProposalsCfg,
     cell: Option<Arc<tokio::sync::Mutex<SweepFreshness>>>,
     proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
     graph: Arc<dyn tdw_core::GraphEngine>,
     tags: Arc<dyn tdw_tags::TagEngine>,
+    infer: Option<Arc<Mutex<tdw_infer::InferEngine>>>,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     // Kill-switch: disabled means no task.
@@ -1605,33 +1612,38 @@ fn spawn_auto_materialize_sweep(
                 continue;
             }
 
-            // Cron slot fired — run one materialization sweep.
+            // Cron slot fired — run one capped materialization sweep.
             let now_str = {
-                // RFC-3339 UTC timestamp for audit provenance.
                 use std::time::{SystemTime, UNIX_EPOCH};
                 let secs = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs());
-                // Format as seconds-precision ISO-8601 UTC (no external dep).
                 let (y, mo, d, h, m, s) = epoch_secs_to_ymd_hms(secs);
                 format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
             };
 
-            let report = {
+            // Snapshot the kinds of Ready proposals BEFORE locking so the
+            // ChangeSet for inference is built from what *will* be materialized.
+            let (report, ready_kinds) = {
                 let mut queue = proposals.lock().await;
-                // Apply per-sweep cap: clone Ready ids, truncate to `cap`,
-                // then call materialize_ready which processes only those.
-                // materialize_ready iterates all Ready proposals internally;
-                // we set the cap by limiting the queue temporarily via a
-                // dedicated cap-aware call is not yet exposed, so we call the
-                // standard path (cap is a soft advisory — the queue processes
-                // all Ready up to the natural limit; if operators want strict
-                // pacing they lower sweep_cadence instead).
-                //
-                // Future: add `materialize_ready_capped(cap, graph, tags, now)`
-                // to ProposalQueue when pacing becomes critical.
-                let _ = cap; // documented advisory; used in tests via small queue
-                queue.materialize_ready(&graph, &tags, &now_str).await
+                // Snapshot kinds of the first `cap` Ready+pending proposals so
+                // we build the inference ChangeSet from the same set that the
+                // capped materialize will process.
+                let ready_kinds: Vec<tdw_knowledge::proposals::ProposalKind> = {
+                    use tdw_knowledge::proposals::ValidationStatus;
+                    queue
+                        .list(None, Some(usize::MAX))
+                        .proposals
+                        .into_iter()
+                        .filter(|p| p.status == ValidationStatus::Ready && p.is_pending())
+                        .take(cap)
+                        .map(|p| p.kind.clone())
+                        .collect()
+                };
+                let report = queue
+                    .materialize_ready_capped(cap, &graph, &tags, &now_str)
+                    .await;
+                (report, ready_kinds)
             };
 
             match report {
@@ -1642,27 +1654,111 @@ fn spawn_auto_materialize_sweep(
                         "[tdw] K-L4 auto-materialize sweep: landed={landed} \
                          rejected={rejected} at={now_str}"
                     );
+                    // K-L1: fire incremental inference for landed edge/tag
+                    // proposals — same semantics as the operator tool path.
+                    if landed > 0 {
+                        fire_infer_after_sweep(&infer, &graph, &tags, &ready_kinds, &now_str);
+                    }
                     if let Some(ref c) = cell {
                         let mut guard = c.lock().await;
                         *guard = SweepFreshness::Ran {
                             last_run_ms: now_ms,
                             landed,
                             rejected,
+                            last_error: None,
                         };
                     }
                 }
                 Err(error) => {
-                    eprintln!(
-                        "[tdw] K-L4 auto-materialize sweep error at={now_str}: {error}"
-                    );
-                    // Leave the cell as-is (last known good) so status still
-                    // reports the previous sweep; the error is visible in logs.
+                    let error_str = error.to_string();
+                    eprintln!("[tdw] K-L4 auto-materialize sweep error at={now_str}: {error_str}");
+                    // Surface the error in the freshness cell so tdw.kg.status
+                    // shows it — the landed/rejected counts from the last
+                    // successful sweep are preserved.
+                    if let Some(ref c) = cell {
+                        let mut guard = c.lock().await;
+                        match &mut *guard {
+                            SweepFreshness::Ran { last_error, .. } => {
+                                *last_error = Some(error_str.clone());
+                            }
+                            other => {
+                                // First sweep ever errored before succeeding.
+                                *other = SweepFreshness::Ran {
+                                    last_run_ms: now_ms,
+                                    landed: 0,
+                                    rejected: 0,
+                                    last_error: Some(error_str),
+                                };
+                            }
+                        }
+                    }
                 }
             }
         }
     });
 
     Some(task)
+}
+
+/// Fire K-L1 incremental inference after the sweep lands proposals.
+///
+/// Builds a [`tdw_infer::ChangeSet`] from the edge-types and tag-ids of the
+/// proposals that were snapshotted before the capped materialize ran, then
+/// calls `run_incremental`. Best-effort: errors are logged, never surfaced —
+/// the proposals are already durable.  Mirrors `fire_infer_after_materialize`
+/// in `tdw-mcp` exactly (shared core, not a fork).
+fn fire_infer_after_sweep(
+    infer: &Option<Arc<Mutex<tdw_infer::InferEngine>>>,
+    graph: &Arc<dyn tdw_core::GraphEngine>,
+    tags: &Arc<dyn tdw_tags::TagEngine>,
+    ready_kinds: &[tdw_knowledge::proposals::ProposalKind],
+    now: &str,
+) {
+    use tdw_infer::ChangeSet;
+    use tdw_knowledge::proposals::ProposalKind;
+
+    let Some(infer) = infer else { return };
+
+    let mut changed = ChangeSet::default();
+    for kind in ready_kinds {
+        match kind {
+            ProposalKind::Edge { rel, .. } => {
+                changed.edge_types.insert(rel.clone());
+            }
+            ProposalKind::TagAssign { tag_id, .. } => {
+                changed.tags.insert(tag_id.clone());
+            }
+            _ => {}
+        }
+    }
+    if changed.edge_types.is_empty() && changed.tags.is_empty() {
+        return;
+    }
+    let graph = Arc::clone(graph);
+    let tags = Arc::clone(tags);
+    let infer = Arc::clone(infer);
+    let now = now.to_string();
+    // Spawn a detached task so the sweep loop is not blocked by inference.
+    // Inference errors are logged but never propagate — proposals are durable.
+    tokio::spawn(async move {
+        let result = {
+            let mut guard = infer.lock().await;
+            guard.run_incremental(&graph, &tags, &now, &changed).await
+        };
+        match result {
+            Ok(rep) if rep.derived_edges > 0 || rep.assigned_tags > 0 => {
+                eprintln!(
+                    "[tdw] K-L4 sweep inference: derived {} edge(s), {} tag(s) \
+                     in {} iteration(s) (rule-set v{})",
+                    rep.derived_edges, rep.assigned_tags, rep.iterations, rep.version
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("[tdw] K-L4 sweep inference failed (proposals already durable): {error}");
+            }
+        }
+    });
 }
 
 /// Convert Unix epoch seconds to (year, month, day, hour, minute, second).

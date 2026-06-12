@@ -147,6 +147,10 @@ tdw-eval-runner = { path = "../tdw-eval-runner" }
 # dev-dep makes the type available to integration tests without widening the
 # production dependency surface.
 tdw-taxonomy = { path = "../tdw-taxonomy" }
+# K-L4 spawned-task test: CancellationToken for driving the real sweep task.
+tdw-app-server = { path = "../tdw-app-server" }
+# K-L4 inference test: wire a real InferEngine to assert derived edges after sweep.
+tdw-infer = { path = "../tdw-infer" }
 
 [lints]
 workspace = true

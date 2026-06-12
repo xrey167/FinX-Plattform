@@ -366,7 +366,7 @@ pub struct ProposalsConfig {
 
     /// Maximum number of proposals the sweep lands in a single invocation.
     ///
-    /// The sweep processes proposals in deterministic (BTreeMap insertion) order
+    /// The sweep processes proposals in deterministic (`BTreeMap` insertion) order
     /// and stops after landing `sweep_cap` of them. Proposals that were `Ready`
     /// but not reached in this sweep will be landed on the next tick.
     ///

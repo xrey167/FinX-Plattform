@@ -513,6 +513,12 @@ pub enum SweepFreshness {
         /// Number of `Ready` proposals that failed TOCTOU re-validation and
         /// were rejected rather than landed.
         rejected: usize,
+        /// First engine error from the last sweep, if any.  Set when
+        /// `materialize_ready_capped` returns `Err(…)` (i.e. a hard engine
+        /// failure mid-sweep, distinct from per-proposal TOCTOU rejection).
+        /// `None` means the sweep completed without a hard error.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
     },
 }
 
@@ -735,13 +741,13 @@ impl KnowledgeRuntime {
         // wired. `None` cell → `Disabled` (sweep was not registered, meaning
         // `auto_materialize = false`). `try_lock` avoids blocking when the
         // sweep worker is mid-write — report the last known state instead.
-        let auto_materialize_freshness = self
-            .auto_materialize_freshness
-            .as_ref()
-            .map_or(SweepFreshness::Disabled, |cell| {
-                cell.try_lock()
-                    .map_or(SweepFreshness::Pending, |guard| guard.clone())
-            });
+        let auto_materialize_freshness =
+            self.auto_materialize_freshness
+                .as_ref()
+                .map_or(SweepFreshness::Disabled, |cell| {
+                    cell.try_lock()
+                        .map_or(SweepFreshness::Pending, |guard| guard.clone())
+                });
 
         KgStatus {
             vector_collection,
