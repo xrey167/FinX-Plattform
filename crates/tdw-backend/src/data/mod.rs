@@ -22,6 +22,7 @@ use tdw_core::{
 use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
+use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
@@ -30,6 +31,8 @@ use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
 use tdw_service_api::{AppState, fetch_equity_historical};
 use tdw_storage_graph::InMemoryGraphEngine;
+use tdw_tag_rules::{RuleEngine, TagRule};
+use tdw_tags::{InMemoryTagEngine, TagEngine};
 use tokio::sync::Mutex;
 
 use crate::config::BackendConfig;
@@ -42,7 +45,7 @@ use crate::error::{BackendError, BackendResult};
 /// cleanly (the [`CancellationToken`] plus the spawned task handles). Created by
 /// [`Backend::serve`] and cleared by [`Backend::shutdown`].
 struct DaemonHandle {
-    /// Cancels the service loop, relay, and transport on shutdown.
+    /// Cancels the service loop, relay, transport, and hot-reload tick on shutdown.
     cancel: CancellationToken,
     /// In-process op submission into the running service loop (no socket).
     submission: SubmissionHandle,
@@ -50,6 +53,9 @@ struct DaemonHandle {
     serve_task: tokio::task::JoinHandle<()>,
     /// The periodic memory-consolidation scheduler task (Phase B).
     consolidation_task: tokio::task::JoinHandle<()>,
+    /// The hot-reload tick for tag-rules + inference rules (knowledge-system K-L1).
+    /// `None` when `knowledge.rules.rules_dir` is absent — no rules, no reload loop.
+    rules_reload_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -108,6 +114,25 @@ pub struct Backend {
     /// engine and embedder in `from_config` (knowledge-system F1). Shared with
     /// the MCP server via [`knowledge_runtime_handle`](Self::knowledge_runtime_handle).
     runtime: Arc<KnowledgeRuntime>,
+    /// The tag engine backing the inference engine (knowledge-system K-L1 / B7).
+    ///
+    /// An in-process [`InMemoryTagEngine`] that the inference engine reads when
+    /// running `PropagateTag` rules. Distinct from any external tag store the
+    /// broader daemon wires; inference operates on the in-process knowledge graph.
+    tags_engine: Arc<dyn TagEngine>,
+    /// The auto-tagging rule engine (knowledge-system K-L1).
+    ///
+    /// Loaded from `knowledge.rules.rules_dir` at boot; hot-reloaded by a
+    /// periodic tick during `serve`. `None` when no `rules_dir` is configured
+    /// (logged loudly at boot). Shared with the hot-reload tick via `Arc<Mutex>`.
+    rules: Arc<Mutex<RuleEngine>>,
+    /// The forward-chaining inference engine (knowledge-system K-L1 / B7).
+    ///
+    /// Loaded at boot with rules from `knowledge.rules.rules_dir` and run
+    /// incrementally after every ingest batch. The `DerivationIndex` is owned
+    /// here (caller-owns pattern, not persisted in this phase). Shared with the
+    /// hot-reload tick via `Arc<Mutex>`.
+    infer: Arc<Mutex<InferEngine>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -129,6 +154,8 @@ impl Backend {
     pub async fn from_config(config: TdwConfig) -> BackendResult<Self> {
         let embedding = config.knowledge.embedding.clone();
         let graph_cfg = config.knowledge.graph.clone();
+        let rules_cfg = config.knowledge.rules.clone();
+        let infer_cfg = config.knowledge.infer.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -158,19 +185,55 @@ impl Backend {
         // plus the B5 write-side pipeline (manifest, rules, lexical co-index, durable
         // graph). All engine Arcs are shared with the runtime below.
         let collection = tdw_knowledge::collection_name(embedder.model_id());
+        // Boot-load tag rules and the inference engine (K-L1) BEFORE building
+        // the indexer so the boot-loaded RuleEngine is available to pass into
+        // `.with_rules(...)`. Without this the indexer's internal rule engine
+        // is always empty — auto-tagging rules from `*.tag.json` never fire.
+        let (rule_engine, infer_engine) = boot_load_rules(&rules_cfg, &infer_cfg)?;
+        let rules_version = rule_engine.version();
+        let infer_version = infer_engine.version();
+        // Clone the rule engine for the indexer before wrapping it in Arc<Mutex>.
+        // The indexer owns its own copy; the hot-reload tick updates BOTH the
+        // Arc<Mutex<RuleEngine>> AND the indexer's internal engine atomically.
+        let indexer_rules = rule_engine.clone();
+        let rules = Arc::new(Mutex::new(rule_engine));
+        let infer = Arc::new(Mutex::new(infer_engine));
         let inner_index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&state.vector));
         let indexer = Arc::new(Mutex::new(
             KnowledgeIndexer::new(inner_index)
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
-                .with_graph(Arc::clone(&graph)),
+                .with_graph(Arc::clone(&graph))
+                .with_rules(indexer_rules)
+                .map_err(|error| {
+                    BackendError::Init(format!("indexer tag-store define: {error}"))
+                })?,
         ));
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
+        // Stamp rule/infer versions — these reflect what was loaded at boot.
+        let rules_v = if rules_version > 0 {
+            Some(rules_version)
+        } else {
+            None
+        };
+        let infer_v = if infer_version > 0 {
+            Some(infer_version)
+        } else {
+            None
+        };
+        // The tag engine is shared between the indexer (rule-driven auto-tagging
+        // in `apply_rules`) and the MCP server's `infer_ctx` resolution
+        // (`rt.tags()` must return `Some` for `dispatch_knowledge_ingest_tool`
+        // and `dispatch_knowledge_write_tool` to fire `run_incremental` after
+        // ingest/materialize). Build it once and share the `Arc`.
+        let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
-                .with_graph(Arc::clone(&graph)),
+                .with_graph(Arc::clone(&graph))
+                .with_tags(Arc::clone(&tags_engine))
+                .with_versions(rules_v, infer_v),
         );
         Ok(Self {
             state,
@@ -181,6 +244,9 @@ impl Backend {
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             graph,
             runtime,
+            tags_engine,
+            rules,
+            infer,
             daemon: None,
         })
     }
@@ -201,10 +267,14 @@ impl Backend {
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph)),
         ));
+        // Tests boot with empty (no-op) rule and infer engines — no rules_dir
+        // is configured so inference does nothing, which is the correct default.
+        let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
-                .with_graph(Arc::clone(&graph)),
+                .with_graph(Arc::clone(&graph))
+                .with_tags(Arc::clone(&tags_engine)),
         );
         Self {
             state,
@@ -215,6 +285,9 @@ impl Backend {
             feedback: Arc::new(Mutex::new(RetrievalFeedbackStore::new())),
             graph,
             runtime,
+            tags_engine,
+            rules: Arc::new(Mutex::new(RuleEngine::default())),
+            infer: Arc::new(Mutex::new(InferEngine::default())),
             daemon: None,
         }
     }
@@ -361,11 +434,25 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-L1 — co-spawn the rules hot-reload tick. The tick reads `rules_dir`
+        // from config and fires on the same cancellation token so it stops with
+        // the rest of the daemon. `None` when no rules_dir is configured.
+        let rules_reload_task = spawn_rules_reload_tick(
+            &cfg.tdw.knowledge.rules,
+            &cfg.tdw.knowledge.infer,
+            self.rules.clone(),
+            self.infer.clone(),
+            self.indexer.clone(),
+            Arc::clone(&self.runtime),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
             serve_task,
             consolidation_task,
+            rules_reload_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -409,6 +496,11 @@ impl Backend {
         // next select; abort if it lingers so shutdown stays bounded.
         daemon.consolidation_task.abort();
         let _ = daemon.consolidation_task.await;
+        // The rules hot-reload tick observes the same token; abort if it lingers.
+        if let Some(reload_task) = daemon.rules_reload_task {
+            reload_task.abort();
+            let _ = reload_task.await;
+        }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
         daemon.transport_task.abort();
@@ -798,9 +890,17 @@ impl Backend {
     /// Returns [`BackendError::Knowledge`] if the document is invalid or any
     /// embedding/storage/tag/graph step fails.
     pub async fn knowledge_index_at(&self, doc: KnowledgeDocument, now: &str) -> BackendResult<()> {
+        // Capture the entity_id and tags BEFORE taking the indexer lock so the
+        // change set is built from the document's declared state, not a post-ingest
+        // scan (cheaper and correct — only one entity changes per single-doc index).
+        let entity_id = doc.entity.entity_id.clone();
+        let doc_tags: Vec<String> = doc.tags.clone();
         let mut indexer = self.indexer.lock().await;
         indexer.index_at(doc, now).await?;
         drop(indexer);
+        // K-L1: fire incremental inference over the entity just ingested.
+        self.run_infer_after_ingest(&entity_id, &doc_tags, now)
+            .await;
         Ok(())
     }
 
@@ -836,9 +936,28 @@ impl Backend {
         docs: Vec<KnowledgeDocument>,
         now: &str,
     ) -> BackendResult<()> {
+        // Capture the batch's entity ids and tag sets BEFORE the indexer lock.
+        let batch_info: Vec<(String, Vec<String>)> = docs
+            .iter()
+            .map(|doc| (doc.entity.entity_id.clone(), doc.tags.clone()))
+            .collect();
         let mut indexer = self.indexer.lock().await;
         indexer.index_batch_at(docs, now).await?;
         drop(indexer);
+        // K-L1: fire incremental inference over the batch's collective change set.
+        // All entity tags from the batch are folded into one ChangeSet so rules
+        // that join entities within the same batch can fire in a single pass.
+        let mut entity_ids: Vec<String> = Vec::new();
+        let mut all_tags: Vec<String> = Vec::new();
+        for (entity_id, tags) in batch_info {
+            entity_ids.push(entity_id);
+            all_tags.extend(tags);
+        }
+        // Use the first entity_id as the batch identifier for logging; inference
+        // operates on the graph/tag engines directly (not per-entity).
+        let batch_label = entity_ids.first().map_or("(empty)", String::as_str);
+        self.run_infer_after_ingest(batch_label, &all_tags, now)
+            .await;
         Ok(())
     }
 
@@ -846,18 +965,44 @@ impl Backend {
     /// and lexical engine. Callers own the returned indexer; the daemon's
     /// `embedder`, `graph`, and `lexical` handles are shared (`Arc` clones).
     ///
+    /// The returned indexer is seeded with a snapshot of the daemon's current
+    /// live tag-rule set so offline re-index runs apply the same rules as the
+    /// live path. Rule-target tags are pre-defined in the indexer's internal
+    /// [`TagStore`] (idempotent, root placement) so `apply_rules` can assign
+    /// them without hitting `TagError::UnknownTag`. The snapshot is taken at
+    /// construction time; subsequent hot-reloads are NOT reflected — for a
+    /// live-updating indexer use [`knowledge_index_at`](Self::knowledge_index_at)
+    /// instead.
+    ///
     /// Use this to construct an offline or caller-scoped indexer with its own
     /// manifest (e.g. the `tdw kg reindex` offline command). For live daemon
     /// ingestion use [`knowledge_index_at`](Self::knowledge_index_at) or
     /// [`knowledge_ingest_at`](Self::knowledge_ingest_at), which route through
     /// the daemon-hosted indexer with the shared manifest.
-    #[must_use]
-    pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
+    ///
+    /// [`TagStore`]: tdw_tags::TagStore
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the tag store rejects a rule-target
+    /// tag definition (e.g. due to a taxonomy cycle — extremely unlikely for
+    /// root-level auto-defined tags).
+    pub fn knowledge_indexer(&self) -> BackendResult<KnowledgeIndexer> {
         let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
         let collection = tdw_knowledge::collection_name(self.embedder.model_id());
+        // Snapshot the live rule set; fall back to an empty engine when the
+        // lock is poisoned (extremely unlikely — treat as "no rules" rather
+        // than panicking an offline build).
+        let rules_snapshot = self
+            .rules
+            .try_lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
         KnowledgeIndexer::new(index)
             .with_lexical(Arc::clone(&self.state.lexical), collection)
             .with_graph(Arc::clone(&self.graph))
+            .with_rules(rules_snapshot)
+            .map_err(|error| BackendError::Init(format!("indexer tag-store define: {error}")))
     }
 
     /// Search the embedded knowledge index for the `top_k` nearest hits to
@@ -874,6 +1019,119 @@ impl Backend {
     ) -> BackendResult<Vec<KnowledgeHit>> {
         let indexer = self.indexer.lock().await;
         Ok(indexer.index().search(query, top_k).await?)
+    }
+
+    // --- Inference engine (K-L1) --------------------------------------------
+
+    /// The tag-rule engine handle (cloned `Arc`).
+    ///
+    /// Exposed for tests that need to inspect the loaded rule set or supply
+    /// their own rules. Production callers should prefer the ingest-triggered
+    /// and hot-reload paths.
+    #[must_use]
+    pub fn rule_engine_handle(&self) -> Arc<Mutex<RuleEngine>> {
+        Arc::clone(&self.rules)
+    }
+
+    /// The inference engine handle (cloned `Arc`).
+    ///
+    /// Exposed for tests. Production callers should prefer the ingest-triggered
+    /// path; the engine is not thread-safe for concurrent `run_incremental` calls.
+    #[must_use]
+    pub fn infer_engine_handle(&self) -> Arc<Mutex<InferEngine>> {
+        Arc::clone(&self.infer)
+    }
+
+    /// Retract a derived fact by its key and propagate the support-set closure.
+    ///
+    /// Drives [`InferEngine::retract`] on the daemon-hosted inference engine.
+    /// Derived edges whose support transitively includes `fact_key` are removed
+    /// from the graph via the surgical `replace_edges` path (only
+    /// `Provenance::Rule` edges are deleted — base facts are never touched).
+    ///
+    /// Derived tag assignments cannot be retracted (the tag store is
+    /// append-only); they are returned in [`RetractReport::unremovable_tags`].
+    /// The operator's documented fallback is a full re-run from a clean graph.
+    ///
+    /// Limit and graph errors are logged loudly before being surfaced as
+    /// [`BackendError::Init`] (B7 contract: never silent truncation).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the graph engine rejects the retraction.
+    pub async fn retract_knowledge_fact(&self, fact_key: &str) -> BackendResult<RetractReport> {
+        let mut infer = self.infer.lock().await;
+        let report = infer
+            .retract(&self.graph, &self.tags_engine, fact_key)
+            .await
+            .map_err(|error| {
+                eprintln!("tdw-backend: knowledge retraction error for fact {fact_key:?}: {error}");
+                BackendError::Init(format!("knowledge retraction: {error}"))
+            })?;
+        drop(infer); // release mutex before returning (significant_drop_tightening)
+        if !report.unremovable_tags.is_empty() {
+            eprintln!(
+                "tdw-backend: retraction of {fact_key:?} left {} unremovable derived tag(s) \
+                 (append-only store); a full re-run from a clean graph is needed to reconcile: {:?}",
+                report.unremovable_tags.len(),
+                report.unremovable_tags
+            );
+        }
+        Ok(report)
+    }
+
+    /// Fire [`InferEngine::run_incremental`] after an ingest batch completes.
+    ///
+    /// Builds a [`ChangeSet`] from the entity's declared tags and the edge types
+    /// that the daemon's `describes_by` / `mentions` graph edges introduce. Errors
+    /// are logged loudly and never surfaced to the caller (inference is best-effort;
+    /// the ingested document is already durable). This is intentional: inference
+    /// failures must never roll back an ingest that succeeded (B7 contract).
+    async fn run_infer_after_ingest(&self, label: &str, tags: &[String], now: &str) {
+        let mut changed = ChangeSet::default();
+        // Standard graph edge types written by the K-E3 indexer.
+        changed.edge_types.insert("described_by".to_string());
+        changed.edge_types.insert("mentions".to_string());
+        for tag in tags {
+            changed.tags.insert(tag.clone());
+        }
+        let mut infer = self.infer.lock().await;
+        match infer
+            .run_incremental(&self.graph, &self.tags_engine, now, &changed)
+            .await
+        {
+            Ok(report) if report.derived_edges > 0 || report.assigned_tags > 0 => {
+                eprintln!(
+                    "tdw-backend: inference after ingest of {label:?}: derived {} edge(s), \
+                     {} tag(s) in {} iteration(s) (rule-set v{})",
+                    report.derived_edges, report.assigned_tags, report.iterations, report.version
+                );
+            }
+            Ok(_) => {}
+            Err(InferError::JoinBoundExceeded { bound }) => {
+                eprintln!(
+                    "tdw-backend: inference after ingest of {label:?}: chain-join bound \
+                     exceeded ({bound}); reduce rule fan-out or increase max_derived"
+                );
+            }
+            Err(InferError::DerivedLimitExceeded { limit }) => {
+                eprintln!(
+                    "tdw-backend: inference after ingest of {label:?}: max_derived limit \
+                     exceeded ({limit}); a full re-run from a clean graph may be needed"
+                );
+            }
+            Err(InferError::IterationLimitExceeded { limit }) => {
+                eprintln!(
+                    "tdw-backend: inference after ingest of {label:?}: max_iterations limit \
+                     exceeded ({limit}); check for rule stratification issues"
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "tdw-backend: inference after ingest of {label:?}: engine error: {error}"
+                );
+            }
+        }
     }
 }
 
@@ -1086,6 +1344,478 @@ pub(crate) async fn validate_graph_backend(cfg: &tdw_config::GraphConfig) -> Bac
     // Init errors are the only side effects we need here.
     let _engine = build_graph_engine(cfg).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// K-L1: rules boot-load, directory parsing, hot-reload scheduler
+// ---------------------------------------------------------------------------
+
+/// Default limits for the rules directory loader.
+const DEFAULT_MAX_FILES: usize = 64;
+const DEFAULT_MAX_FILE_SIZE_KB: u64 = 256;
+const DEFAULT_MAX_TOTAL_RULES: usize = 1_000;
+
+/// Parsed rule sets from a rules directory (both tag and infer rules).
+struct LoadedRules {
+    tag_rules: Vec<TagRule>,
+    infer_rules: Vec<tdw_infer::InferRule>,
+}
+
+/// Load both `*.tag.json` (tag rules) and `*.infer.json` (inference rules)
+/// from `dir` with enforced limits.
+///
+/// # File convention
+///
+/// - `*.tag.json` — JSON array of [`tdw_tag_rules::TagRule`] objects.
+/// - `*.infer.json` — JSON array of [`tdw_infer::InferRule`] objects
+///   (`DeriveEdge` / `PropagateTag` serde shapes).
+/// - Files with any other extension (e.g. plain `.json`, `.md`) are silently
+///   ignored so README files and JSON schemas don't accidentally parse as rules.
+/// - Symlinks are followed (documented); operators should not place symlink
+///   cycles in the rules directory.
+///
+/// # Limits
+///
+/// Exceeding `max_files`, `max_file_size_kb`, or `max_total_rules` is a hard
+/// error. Unreadable files are a hard error (no silent skip — every file that
+/// matches the suffix must be readable and valid JSON).
+///
+/// # Errors
+///
+/// Returns [`BackendError::Init`] on any limit violation, I/O failure, or
+/// parse failure. The error message always names the offending file.
+#[allow(clippy::too_many_lines)] // directory scan + per-file read + limit checks; splitting adds indirection without clarity
+fn load_rules_from_dir(
+    dir: &std::path::Path,
+    cfg: &tdw_config::RulesConfig,
+) -> BackendResult<LoadedRules> {
+    /// Read and size-check a single rule file.
+    fn read_file(path: &std::path::Path, max_bytes: u64) -> BackendResult<String> {
+        let meta = std::fs::metadata(path).map_err(|e| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: cannot stat {}: {e}",
+                path.display()
+            ))
+        })?;
+        if meta.len() > max_bytes {
+            return Err(BackendError::Init(format!(
+                "knowledge.rules.rules_dir: file {} is {} KiB, limit is {} KiB \
+                 (set knowledge.rules.max_file_size_kb to raise)",
+                path.display(),
+                meta.len() / 1024,
+                max_bytes / 1024,
+            )));
+        }
+        std::fs::read_to_string(path).map_err(|e| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: cannot read {}: {e}",
+                path.display()
+            ))
+        })
+    }
+
+    let max_files = cfg.max_files.unwrap_or(DEFAULT_MAX_FILES);
+    let max_file_size_kb = cfg.max_file_size_kb.unwrap_or(DEFAULT_MAX_FILE_SIZE_KB);
+    let max_total_rules = cfg.max_total_rules.unwrap_or(DEFAULT_MAX_TOTAL_RULES);
+
+    // Collect all *.tag.json and *.infer.json paths, sorted for determinism.
+    let mut tag_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut infer_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
+
+    let read_dir = std::fs::read_dir(dir).map_err(|error| {
+        BackendError::Init(format!(
+            "knowledge.rules.rules_dir {} cannot be read: {error}",
+            dir.display()
+        ))
+    })?;
+
+    for entry in read_dir {
+        match entry {
+            Err(error) => {
+                // Non-fatal directory entry read failure — warn loudly but
+                // keep going so a single bad entry doesn't abort the load.
+                unreadable.push(format!("directory entry error: {error}"));
+            }
+            Ok(entry) => {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if name.ends_with(".tag.json") {
+                    tag_paths.push(path);
+                } else if name.ends_with(".infer.json") {
+                    infer_paths.push(path);
+                }
+                // other extensions silently ignored
+            }
+        }
+    }
+
+    if !unreadable.is_empty() {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {}: {} unreadable dir entr{}: {}",
+            dir.display(),
+            unreadable.len(),
+            if unreadable.len() == 1 { "y" } else { "ies" },
+            unreadable.join(", ")
+        )));
+    }
+
+    tag_paths.sort();
+    infer_paths.sort();
+
+    let total_files = tag_paths.len() + infer_paths.len();
+    if total_files > max_files {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {}: {total_files} rule files found, \
+             limit is {max_files} (set knowledge.rules.max_files to raise)",
+            dir.display()
+        )));
+    }
+
+    let max_bytes = max_file_size_kb * 1024;
+
+    let mut tag_rules: Vec<TagRule> = Vec::new();
+    for path in &tag_paths {
+        let text = read_file(path, max_bytes)?;
+        let file_rules: Vec<TagRule> = serde_json::from_str(&text).map_err(|error| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir: malformed tag-rule file {}: {error}",
+                path.display()
+            ))
+        })?;
+        tag_rules.extend(file_rules);
+    }
+
+    let mut infer_rules: Vec<tdw_infer::InferRule> = Vec::new();
+    for path in &infer_paths {
+        let text = read_file(path, max_bytes)?;
+        let file_rules: Vec<tdw_infer::InferRule> =
+            serde_json::from_str(&text).map_err(|error| {
+                BackendError::Init(format!(
+                    "knowledge.rules.rules_dir: malformed infer-rule file {}: {error}",
+                    path.display()
+                ))
+            })?;
+        infer_rules.extend(file_rules);
+    }
+
+    let total_rules = tag_rules.len() + infer_rules.len();
+    if total_rules > max_total_rules {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {}: {total_rules} total rules loaded, \
+             limit is {max_total_rules} (set knowledge.rules.max_total_rules to raise)",
+            dir.display()
+        )));
+    }
+
+    Ok(LoadedRules {
+        tag_rules,
+        infer_rules,
+    })
+}
+
+/// Compute a content hash over all `*.tag.json` and `*.infer.json` files in
+/// `dir` for hot-reload change detection.
+///
+/// Hashes the sorted-by-path file **contents** (not mtime/size). This correctly
+/// detects same-second, same-size edits. Unreadable files are logged as
+/// warnings and excluded from the hash (a partial read is not a reliable signal;
+/// the actual parse error will surface on the next reload attempt).
+///
+/// Symlinks are followed (consistent with `load_rules_from_dir`).
+fn dir_content_hash(dir: &std::path::Path) -> Option<u64> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let read_dir = std::fs::read_dir(dir).ok()?;
+    let mut paths: Vec<std::path::PathBuf> = read_dir
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let name = path.file_name()?.to_str().unwrap_or_default().to_string();
+            if name.ends_with(".tag.json") || name.ends_with(".infer.json") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    paths.sort();
+
+    let mut hasher = DefaultHasher::new();
+    for path in &paths {
+        path.hash(&mut hasher);
+        match std::fs::read(path) {
+            Ok(contents) => contents.hash(&mut hasher),
+            Err(error) => {
+                // Warn loudly; exclude this file from the hash so the tick can
+                // still detect changes in other files. The actual parse error
+                // will surface in load_rules_from_dir on the next reload.
+                eprintln!(
+                    "tdw-backend: rules dir_content_hash: cannot read {}: {error} \
+                     — this file is excluded from the change-detection hash",
+                    path.display()
+                );
+            }
+        }
+    }
+    Some(hasher.finish())
+}
+
+/// Boot-load both tag rules and inference rules; build both engines.
+///
+/// Absent `rules_dir` → both engines are empty (version 0); logs loudly.
+/// A configured but nonexistent directory, a malformed file, or a limit
+/// violation is a **hard [`BackendError::Init`]**.
+///
+/// # Errors
+///
+/// Returns [`BackendError::Init`] on directory/file issues, limit violations,
+/// or rule validation/stratification failure inside `hot_reload`.
+fn boot_load_rules(
+    rules_cfg: &tdw_config::RulesConfig,
+    infer_cfg: &tdw_config::InferLimitsConfig,
+) -> BackendResult<(RuleEngine, InferEngine)> {
+    let limits = RunLimits {
+        max_iterations: infer_cfg
+            .max_iterations
+            .unwrap_or_else(|| RunLimits::default().max_iterations),
+        max_derived: infer_cfg
+            .max_derived
+            .unwrap_or_else(|| RunLimits::default().max_derived),
+    };
+    let mut infer_engine = InferEngine::with_limits(limits);
+
+    let Some(rules_dir) = rules_cfg
+        .rules_dir
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+    else {
+        eprintln!(
+            "tdw-backend: knowledge.rules.rules_dir is not configured — \
+             auto-tagging AND inference are DISABLED; set [knowledge.rules] rules_dir \
+             in your config to enable rule-driven derivation (K-L1)"
+        );
+        return Ok((RuleEngine::default(), infer_engine));
+    };
+
+    let dir = std::path::Path::new(rules_dir);
+    if !dir.exists() {
+        return Err(BackendError::Init(format!(
+            "knowledge.rules.rules_dir {} does not exist — \
+             refusing to boot with a missing rules directory; create it or unset the config key",
+            dir.display()
+        )));
+    }
+
+    let loaded = load_rules_from_dir(dir, rules_cfg)?;
+    let tag_count = loaded.tag_rules.len();
+    let infer_count = loaded.infer_rules.len();
+
+    let mut rule_engine = RuleEngine::default();
+    rule_engine.hot_reload(loaded.tag_rules).map_err(|error| {
+        BackendError::Init(format!(
+            "knowledge.rules.rules_dir {}: tag-rule validation failed: {error}",
+            dir.display()
+        ))
+    })?;
+
+    infer_engine
+        .hot_reload(loaded.infer_rules)
+        .map_err(|error| {
+            BackendError::Init(format!(
+                "knowledge.rules.rules_dir {}: infer-rule validation failed: {error}",
+                dir.display()
+            ))
+        })?;
+
+    eprintln!(
+        "tdw-backend: loaded {tag_count} tag rule(s) and {infer_count} infer rule(s) \
+         from {} (tag-set v{}, infer-set v{})",
+        dir.display(),
+        rule_engine.version(),
+        infer_engine.version()
+    );
+    Ok((rule_engine, infer_engine))
+}
+
+/// The hot-reload tick interval, from `TDW_RULES_RELOAD_TICK_SECS`
+/// (default 60 s). A zero/unparseable value falls back to the default
+/// so the scheduler never busy-spins.
+fn rules_reload_tick() -> std::time::Duration {
+    const DEFAULT_SECS: u64 = 60;
+    let secs = std::env::var("TDW_RULES_RELOAD_TICK_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(DEFAULT_SECS);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Spawn the rules hot-reload tick task (K-L1).
+///
+/// On each tick, computes the `rules_dir` content hash (hashing file CONTENTS)
+/// and compares it to the last-seen hash. When changed, both `*.tag.json` and
+/// `*.infer.json` files are re-parsed. The new rule sets are staged and
+/// FULLY VALIDATED before either engine is mutated:
+///
+/// - If tag-rule validation fails → both engines stay UNCHANGED, loud log.
+/// - If infer-rule stratification fails → both engines stay UNCHANGED, loud log.
+/// - Only when BOTH validations pass are the locks acquired and both engines
+///   swapped atomically (rules-lock first, then infer-lock — consistent order).
+///
+/// Returns `None` when `rules_dir` is absent — no task is spawned.
+#[allow(clippy::too_many_lines)] // async hot-reload tick: validate → swap both engines atomically; splitting loses the invariant commentary
+fn spawn_rules_reload_tick(
+    rules_cfg: &tdw_config::RulesConfig,
+    infer_cfg: &tdw_config::InferLimitsConfig,
+    rules: Arc<Mutex<RuleEngine>>,
+    infer: Arc<Mutex<InferEngine>>,
+    indexer: Arc<Mutex<KnowledgeIndexer>>,
+    runtime: Arc<KnowledgeRuntime>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let rules_dir = rules_cfg.rules_dir.as_deref()?.trim().to_string();
+    if rules_dir.is_empty() {
+        return None;
+    }
+    let tick = rules_reload_tick();
+    let dir = std::path::PathBuf::from(rules_dir);
+    let rules_cfg = rules_cfg.clone();
+    // Read the infer limits once — they are config-static for the lifetime of
+    // the daemon process; hot-reload only swaps rule files, not limit config.
+    let infer_limits = RunLimits {
+        max_iterations: infer_cfg
+            .max_iterations
+            .unwrap_or_else(|| RunLimits::default().max_iterations),
+        max_derived: infer_cfg
+            .max_derived
+            .unwrap_or_else(|| RunLimits::default().max_derived),
+    };
+
+    let handle = tokio::spawn(async move {
+        // Seed with the current hash so the first tick only fires on a real change.
+        let mut last_hash: Option<u64> = dir_content_hash(&dir);
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+            let now_hash = dir_content_hash(&dir);
+            if now_hash == last_hash {
+                continue;
+            }
+
+            // --- Stage: parse both rule sets from disk. ---------------------
+            // Do this OUTSIDE the locks: parsing may be slow and we must not
+            // hold engine locks during I/O.
+            let loaded = match load_rules_from_dir(&dir, &rules_cfg) {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    eprintln!(
+                        "tdw-backend: rules hot-reload from {} failed (I/O/parse/limit): \
+                         {error} — keeping the CURRENT rule sets active",
+                        dir.display()
+                    );
+                    continue;
+                }
+            };
+
+            // --- Stage: validate BOTH new rule sets before touching engines. -
+            // Pre-validate tag rules by running a throw-away RuleEngine.
+            let mut staged_rule_engine = RuleEngine::default();
+            if let Err(error) = staged_rule_engine.hot_reload(loaded.tag_rules.clone()) {
+                eprintln!(
+                    "tdw-backend: rules hot-reload from {}: tag-rule validation \
+                     rejected — BOTH engines stay UNCHANGED: {error}",
+                    dir.display()
+                );
+                continue;
+            }
+
+            // Pre-validate infer rules with the correct limits in a throw-away engine.
+            let mut staged_infer_engine = InferEngine::with_limits(infer_limits);
+            if let Err(error) = staged_infer_engine.hot_reload(loaded.infer_rules.clone()) {
+                eprintln!(
+                    "tdw-backend: rules hot-reload from {}: infer-rule stratification \
+                     rejected — BOTH engines stay UNCHANGED: {error}",
+                    dir.display()
+                );
+                continue;
+            }
+
+            let tag_count = loaded.tag_rules.len();
+            let infer_count = loaded.infer_rules.len();
+
+            // --- Swap: both validations passed — acquire locks and replace. --
+            // Lock order: rules first, then infer, then indexer. Must be
+            // consistent at every call site to avoid deadlocks.
+            {
+                // Keep a clone for the indexer reload (loaded.tag_rules is
+                // consumed by rule_guard.hot_reload below).
+                let tag_rules_for_indexer = loaded.tag_rules.clone();
+
+                let mut rule_guard = rules.lock().await;
+                let mut infer_guard = infer.lock().await;
+                // These hot_reload calls on the live engines cannot fail —
+                // we already validated the same rule sets above. If they do
+                // (internal engine bug), log loudly rather than panicking.
+                if let Err(error) = rule_guard.hot_reload(loaded.tag_rules) {
+                    eprintln!(
+                        "tdw-backend: rules hot-reload INTERNAL ERROR — tag engine rejected \
+                         pre-validated rules (bug): {error}"
+                    );
+                    continue;
+                }
+                if let Err(error) = infer_guard.hot_reload(loaded.infer_rules) {
+                    eprintln!(
+                        "tdw-backend: rules hot-reload INTERNAL ERROR — infer engine rejected \
+                         pre-validated rules (bug): {error}"
+                    );
+                    continue;
+                }
+                let rules_v = rule_guard.version();
+                let infer_v = infer_guard.version();
+                drop(infer_guard);
+                drop(rule_guard);
+
+                // Also reload the hosted indexer's internal rule engine so
+                // auto-tagging rules applied during index_at match the live
+                // engine. The indexer lock is acquired AFTER the rule/infer
+                // locks are dropped (consistent ordering; indexer is a leaf).
+                {
+                    let mut indexer_guard = indexer.lock().await;
+                    if let Err(error) = indexer_guard.hot_reload_rules(tag_rules_for_indexer) {
+                        eprintln!(
+                            "tdw-backend: rules hot-reload INTERNAL ERROR — indexer rule \
+                             engine rejected pre-validated rules (bug): {error}"
+                        );
+                    }
+                }
+
+                // Update the version triple on the live KnowledgeRuntime so MCP
+                // search responses reflect the new rule-set versions.
+                // NOTE: `update_versions` only stamps the version numbers that
+                // appear in search response metadata. These version numbers are
+                // NOT written as `valid_from` on any derived graph edge — edges
+                // carry the `now` date of the run that derived them, which is
+                // injected at `run_incremental` call time, not here.
+                runtime.update_versions(Some(rules_v), Some(infer_v));
+                last_hash = now_hash;
+                eprintln!(
+                    "tdw-backend: rules hot-reload from {}: loaded {tag_count} tag \
+                     rule(s) and {infer_count} infer rule(s) \
+                     (tag-set v{rules_v}, infer-set v{infer_v})",
+                    dir.display()
+                );
+            }
+        }
+    });
+    Some(handle)
 }
 
 /// Build the graph engine from `knowledge.graph` config (knowledge-system F1).

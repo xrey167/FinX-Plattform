@@ -157,7 +157,7 @@ pub struct ProtocolConfig {
     pub replay_enabled: bool,
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1).
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -175,6 +175,87 @@ pub struct KnowledgeConfig {
     /// and having Memgraph unreachable is a hard `Init` error at daemon startup.
     #[serde(default)]
     pub graph: GraphConfig,
+    /// Auto-tagging rule-set configuration (knowledge-system K-L1).
+    ///
+    /// When absent (the default), no tag rules are loaded and the fact is
+    /// logged loudly at boot. When present, `rules_dir` must exist and
+    /// contain valid `*.json` rule files — a missing directory or malformed
+    /// file is a **hard `Init` error**.
+    #[serde(default)]
+    pub rules: RulesConfig,
+    /// Inference engine limits (knowledge-system K-L1).
+    ///
+    /// Absent fields fall back to the defaults defined in `tdw-infer`'s
+    /// [`RunLimits`]: `max_iterations = 32`, `max_derived = 10 000`.
+    #[serde(default)]
+    pub infer: InferLimitsConfig,
+}
+
+/// Auto-tagging rule-set configuration (knowledge-system K-L1).
+///
+/// `rules_dir` is optional — absent means "no rules loaded"; the daemon logs
+/// this loudly at boot so the operator knows auto-tagging AND inference are
+/// disabled. When set, the directory must exist and every rule file must parse
+/// correctly; a nonexistent directory or malformed file is a **hard `Init`
+/// error**, never a silent skip.
+///
+/// # File-naming convention (K-L1)
+///
+/// Two distinct rule types live in separate files identified by their suffix:
+///
+/// - **`*.tag.json`** — [`tdw_tag_rules::TagRule`] array; drives auto-tagging
+///   via the `RuleEngine`. These run synchronously inside the indexer.
+/// - **`*.infer.json`** — [`tdw_infer::InferRule`] array (serde shapes
+///   `DeriveEdge` / `PropagateTag` as documented in `tdw-infer`); drives
+///   forward-chaining inference via the `InferEngine`. These fire after every
+///   ingest batch via `run_incremental`.
+///
+/// Files with any other extension (e.g. plain `.json`) are **ignored** so
+/// `README.json` or schema files don't accidentally parse as rules. Lexicographic
+/// sort order within each group is deterministic.
+///
+/// # Load limits
+///
+/// `max_files`, `max_file_size_kb`, and `max_total_rules` cap the total rules
+/// loaded at boot and on every hot-reload tick. Exceeding any limit is a **hard
+/// `Init` error** at boot and a loud log + keep-old on reload.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RulesConfig {
+    /// Directory containing `*.tag.json` (tag rules) and `*.infer.json`
+    /// (inference rules) files.  `None` disables all rule-driven derivation.
+    #[serde(default)]
+    pub rules_dir: Option<String>,
+    /// Maximum number of rule files (tag + infer combined) permitted in the
+    /// directory. A hard `Init` error (or loud reload rejection) beyond this.
+    /// Default: 64.
+    #[serde(default)]
+    pub max_files: Option<usize>,
+    /// Maximum size of any single rule file in kilobytes. A hard `Init` error
+    /// (or loud reload rejection) if any file exceeds this. Default: 256 KiB.
+    #[serde(default)]
+    pub max_file_size_kb: Option<u64>,
+    /// Maximum total number of rules (tag + infer combined) loaded from the
+    /// directory. A hard `Init` error (or loud reload rejection) beyond this.
+    /// Default: 1 000.
+    #[serde(default)]
+    pub max_total_rules: Option<usize>,
+}
+
+/// Inference-engine run limits (knowledge-system K-L1).
+///
+/// Both fields are optional and default to the constants defined in `tdw-infer`
+/// (`max_iterations = 32`, `max_derived = 10 000`). Exceeding either bound is
+/// logged as an error, never silently truncated (B7 contract).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InferLimitsConfig {
+    /// Maximum stratum-iterations across one inference run.
+    /// Defaults to `tdw-infer`'s `RunLimits::default().max_iterations` (32).
+    #[serde(default)]
+    pub max_iterations: Option<usize>,
+    /// Maximum new facts (edges + tags) one run may derive.
+    /// Defaults to `tdw-infer`'s `RunLimits::default().max_derived` (10 000).
+    #[serde(default)]
+    pub max_derived: Option<usize>,
 }
 
 /// Which graph-database backend the knowledge graph uses.
@@ -469,8 +550,65 @@ impl TdwConfig {
             }
         }
 
+        validate_rules_infer(&self.knowledge.rules, &self.knowledge.infer)?;
+
         Ok(())
     }
+}
+
+/// Validate `[knowledge.rules]` and `[knowledge.infer]` config sub-sections (K-L1).
+///
+/// Extracted from [`TdwConfig::validate`] so that function stays under the
+/// 100-line function-length lint limit.
+fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Result<()> {
+    // Rules dir: when set, the path must not be empty; existence is checked at
+    // daemon boot (a nonexistent configured dir is a hard Init error there —
+    // validate() only rejects structurally invalid values like whitespace-only).
+    if let Some(dir) = &rules.rules_dir
+        && dir.trim().is_empty()
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.rules_dir must be a non-empty path when set".to_string(),
+        ));
+    }
+    // Load limits: when set, values must be greater than zero.
+    if let Some(max_files) = rules.max_files
+        && max_files == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_files must be greater than 0 when set".to_string(),
+        ));
+    }
+    if let Some(max_kb) = rules.max_file_size_kb
+        && max_kb == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_file_size_kb must be greater than 0 when set".to_string(),
+        ));
+    }
+    if let Some(max_total) = rules.max_total_rules
+        && max_total == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.rules.max_total_rules must be greater than 0 when set".to_string(),
+        ));
+    }
+    // Infer limits: when set, values must be greater than zero.
+    if let Some(max_iter) = infer.max_iterations
+        && max_iter == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.infer.max_iterations must be greater than 0 when set".to_string(),
+        ));
+    }
+    if let Some(max_derived) = infer.max_derived
+        && max_derived == 0
+    {
+        return Err(ConfigError::Validation(
+            "knowledge.infer.max_derived must be greater than 0 when set".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[must_use]
@@ -991,6 +1129,45 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         let bundle = schema_bundle();
         assert!(bundle.contains_key("tdw_config"));
         assert!(bundle.contains_key("config_layer_descriptor"));
+    }
+
+    #[test]
+    fn rules_config_defaults_absent_and_validates_whitespace_dir() {
+        let cfg = TdwConfig::default();
+        assert!(cfg.knowledge.rules.rules_dir.is_none());
+        assert!(cfg.validate().is_ok());
+
+        // A whitespace-only rules_dir is rejected at config validation.
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.rules.rules_dir = Some("   ".to_string());
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // A real path string is accepted (existence is checked at daemon boot, not here).
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.rules.rules_dir = Some("/tmp/rules".to_string());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn infer_limits_config_defaults_absent_and_rejects_zero() {
+        let cfg = TdwConfig::default();
+        assert!(cfg.knowledge.infer.max_iterations.is_none());
+        assert!(cfg.knowledge.infer.max_derived.is_none());
+        assert!(cfg.validate().is_ok());
+
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.infer.max_iterations = Some(0);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.infer.max_derived = Some(0);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+
+        // Valid non-zero overrides both pass.
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.infer.max_iterations = Some(10);
+        cfg.knowledge.infer.max_derived = Some(500);
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

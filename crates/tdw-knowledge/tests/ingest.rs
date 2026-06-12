@@ -106,7 +106,7 @@ async fn rules_auto_tag_and_payload_sees_the_tags() {
         }])
         .expect("valid rule");
     let (indexer, _graph) = indexer_with_graph();
-    let mut indexer = indexer.with_rules(rules);
+    let mut indexer = indexer.with_rules(rules).expect("with rules");
     // Rule tags must be DEFINED before any rule fires (rules assign, they
     // never define); a setup document carrying the tag defines it through
     // the public index path.
@@ -307,7 +307,7 @@ async fn rule_tags_do_not_duplicate_across_reindexes() {
         }])
         .expect("valid rule");
     let (indexer, _graph) = indexer_with_graph();
-    let mut indexer = indexer.with_rules(rules);
+    let mut indexer = indexer.with_rules(rules).expect("with rules");
     let mut seed = acme_doc();
     seed.id = "doc-taxonomy-seed".to_string();
     seed.tags = vec!["topic:earnings".to_string()];

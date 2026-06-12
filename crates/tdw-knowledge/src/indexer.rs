@@ -158,10 +158,44 @@ impl KnowledgeIndexer {
     }
 
     /// Attach the auto-tagging rule engine.
-    #[must_use]
-    pub fn with_rules(mut self, rules: RuleEngine) -> Self {
+    ///
+    /// Every tag id referenced by a rule is defined in the internal
+    /// [`TagStore`] (idempotent, root placement). This is required because
+    /// [`TagStore::assign`] rejects assignments to undefined tags
+    /// (`TagError::UnknownTag`), so without pre-definition the first rule
+    /// match in `apply_rules` would return an error in production.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Tag`] if the tag store rejects a definition.
+    pub fn with_rules(mut self, rules: RuleEngine) -> Result<Self> {
+        define_rule_tags(rules.tag_ids(), self.index.tags_store_mut())?;
         self.rules = rules;
-        self
+        Ok(self)
+    }
+
+    /// Hot-reload the auto-tagging rule engine in place.
+    ///
+    /// Atomically replaces the current rule set with `new_rules` and defines
+    /// every tag id the new rules reference in the internal [`TagStore`]
+    /// (idempotent, root placement). The store pre-definition is required
+    /// because [`TagStore::assign`] rejects assignments to undefined tags —
+    /// without it the first rule match in `apply_rules` would error. Used by
+    /// the daemon's hot-reload tick to keep the indexer's rules consistent with
+    /// the live `Backend` rule engine after a `*.tag.json` file change.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KnowledgeError::Tag`] if the rule engine rejects the new set
+    /// or if the tag store rejects a definition.
+    pub fn hot_reload_rules(&mut self, new_rules: Vec<tdw_tag_rules::TagRule>) -> Result<()> {
+        define_rule_tags(
+            new_rules.iter().map(|r| r.tag_id.as_str()),
+            self.index.tags_store_mut(),
+        )?;
+        self.rules
+            .hot_reload(new_rules)
+            .map_err(|error| KnowledgeError::Tag(error.to_string()))
     }
 
     /// Resume from a persisted manifest.
@@ -319,6 +353,43 @@ impl KnowledgeIndexer {
             .apply_at(&ctx, now, self.index.tags_store_mut())
             .map_err(|error| KnowledgeError::Tag(error.to_string()))
     }
+}
+
+/// Pre-define every tag id a rule set will assign in `store`.
+///
+/// [`TagStore::assign`] rejects assignments to undefined tags with
+/// [`TagError::UnknownTag`]. This helper ensures every target tag is defined
+/// (root placement, no TTL) before the rule engine can assign it, so
+/// `apply_rules` never errors on an undefined tag in production.
+///
+/// The define call is idempotent via the `is_defined` guard — existing tags
+/// are left untouched (re-defining with `parent: None` would silently
+/// re-parent a taxonomy node, which B5 explicitly prohibits). Each
+/// auto-defined tag is announced on `eprintln!` so operators know which tags
+/// were created by rule loading rather than explicit taxonomy management.
+fn define_rule_tags(
+    rules: impl Iterator<Item = impl AsRef<str>>,
+    store: &mut tdw_tags::TagStore,
+) -> Result<()> {
+    use tdw_tags::TagDefinition;
+    for tag_id in rules {
+        let tag_id = tag_id.as_ref();
+        if !store.is_defined(tag_id) {
+            eprintln!(
+                "tdw-knowledge: auto-defining rule-target tag {tag_id:?} \
+                 (root placement, no TTL) — add it to your taxonomy config \
+                 to assign a parent or TTL (K-L1 U1)"
+            );
+            store
+                .define(TagDefinition {
+                    tag_id: tag_id.to_string(),
+                    parent: None,
+                    ttl_days: None,
+                })
+                .map_err(|error| KnowledgeError::Tag(error.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 /// One-hop neighborhood as the sync rule engine's pre-fetched view.

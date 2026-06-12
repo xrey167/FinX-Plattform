@@ -13,7 +13,7 @@
 //! subcommand all present. Honest notes are inlined where the underlying
 //! engine trait offers no cheap query (e.g. `VectorEngine` has no `count`).
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tdw_core::{GraphEngine, LexicalEngine, VectorEngine};
@@ -59,7 +59,13 @@ pub struct KnowledgeRuntime {
     /// heuristic.
     graph_name: Option<String>,
     tags: Option<Arc<dyn TagEngine>>,
-    versions: KnowledgeVersions,
+    /// Version triple reported on every search response.
+    ///
+    /// Wrapped in [`RwLock`] so hot-reload (K-L1) can update the
+    /// rule/infer versions atomically after the engines reload —
+    /// multiple concurrent readers (`versions()`) see a consistent
+    /// snapshot while one writer (`update_versions`) holds the lock briefly.
+    versions: RwLock<KnowledgeVersions>,
     /// The gated write queue (knowledge-system B9). Behind a
     /// [`tokio::sync::Mutex`] so the async MCP write tools can hold it across
     /// the `submit`/`materialize_ready` awaits. `None` keeps the write surface
@@ -98,7 +104,7 @@ impl KnowledgeRuntime {
             graph: None,
             graph_name: None,
             tags: None,
-            versions,
+            versions: RwLock::new(versions),
             proposals: None,
             adaptivity_resolver: None,
             operator_authority: false,
@@ -149,14 +155,28 @@ impl KnowledgeRuntime {
 
     /// Stamp the rule/infer versions reported by `tdw.kg.search`.
     #[must_use]
-    pub const fn with_versions(
-        mut self,
-        rules_version: Option<u64>,
-        infer_version: Option<u64>,
-    ) -> Self {
-        self.versions.rules_version = rules_version;
-        self.versions.infer_version = infer_version;
+    pub fn with_versions(mut self, rules_version: Option<u64>, infer_version: Option<u64>) -> Self {
+        let versions = self
+            .versions
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        versions.rules_version = rules_version;
+        versions.infer_version = infer_version;
         self
+    }
+
+    /// Update the rule/infer versions atomically after a hot-reload (K-L1).
+    ///
+    /// Acquires the write lock briefly; all concurrent `versions()` readers see a
+    /// consistent snapshot. This is the live-daemon counterpart to `with_versions`
+    /// (which is builder-only and cannot be called after `Arc` wrapping).
+    pub fn update_versions(&self, rules_version: Option<u64>, infer_version: Option<u64>) {
+        let mut guard = self
+            .versions
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.rules_version = rules_version;
+        guard.infer_version = infer_version;
     }
 
     /// The hybrid retriever.
@@ -177,10 +197,16 @@ impl KnowledgeRuntime {
         self.tags.as_ref()
     }
 
-    /// The version triple stamped onto search responses.
+    /// A snapshot of the version triple stamped onto search responses.
+    ///
+    /// Acquires the read lock briefly. Callers that need a stable snapshot across
+    /// multiple fields should clone the returned value.
     #[must_use]
-    pub const fn versions(&self) -> &KnowledgeVersions {
-        &self.versions
+    pub fn versions(&self) -> KnowledgeVersions {
+        self.versions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Attach the gated [`ProposalQueue`] (knowledge-system B9) — enables the
@@ -381,7 +407,12 @@ impl KnowledgeRuntime {
     /// probe failures are captured inside [`KgGraphHealth::error`] so the full
     /// snapshot is always returned.
     pub async fn status(&self) -> KgStatus {
-        let vector_collection = crate::collection_name(&self.versions.embedder_model);
+        let versions_snapshot = self
+            .versions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let vector_collection = crate::collection_name(&versions_snapshot.embedder_model);
 
         let graph_health = if let Some(graph) = self.graph.as_ref() {
             let probe = graph.edges(None, 0, 1).await;
@@ -444,13 +475,13 @@ impl KnowledgeRuntime {
 
         KgStatus {
             vector_collection,
-            embedder_model: self.versions.embedder_model.clone(),
+            embedder_model: versions_snapshot.embedder_model.clone(),
             document_count_note: "VectorEngine has no count() in this version; \
                                   use Qdrant dashboard or lexical engine for a precise count"
                 .to_string(),
             taxonomy_kind_count: EntityKind::ALL.len(),
             graph_health,
-            versions: self.versions.clone(),
+            versions: versions_snapshot,
             proposals,
             language_model_grade,
         }

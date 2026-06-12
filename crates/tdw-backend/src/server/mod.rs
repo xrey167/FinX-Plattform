@@ -723,6 +723,7 @@ fn run_mcp_loop(
     knowledge: Option<std::sync::Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<std::sync::Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_knowledge::indexer::KnowledgeIndexer>>>,
+    infer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_infer::InferEngine>>>,
 ) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
@@ -730,11 +731,11 @@ fn run_mcp_loop(
     });
     match transport {
         McpTransport::Stdio => {
-            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback, indexer)
+            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback, indexer, infer)
         }
-        McpTransport::Http(bind) => {
-            tdw_mcp::run_streamable_http_with_knowledge(bind, daemon, knowledge, feedback, indexer)
-        }
+        McpTransport::Http(bind) => tdw_mcp::run_streamable_http_with_knowledge(
+            bind, daemon, knowledge, feedback, indexer, infer,
+        ),
     }
 }
 
@@ -766,8 +767,9 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             // (the standalone surface reaches knowledge via the daemon's loopback
             // transport, not in-process injection).
             let transport = cfg.mcp_transport.clone();
-            let code =
-                tokio::task::block_in_place(|| run_mcp_loop(&transport, None, None, None, None));
+            let code = tokio::task::block_in_place(|| {
+                run_mcp_loop(&transport, None, None, None, None, None)
+            });
             exit_code_to_result(code)
         }
 
@@ -785,11 +787,13 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
         .map(str::to_string)
         .ok_or_else(|| BackendError::Init("daemon did not expose a bound address".to_string()))?;
 
-    // Inject the co-resident knowledge runtime, feedback store, and indexer into
-    // the embedded MCP server (knowledge-system F1/K-E3). All are cheap Arc clones.
+    // Inject the co-resident knowledge runtime, feedback store, indexer, and
+    // inference engine into the embedded MCP server (knowledge-system F1/K-E3/K-L1).
+    // All are cheap Arc clones from the Backend composition root.
     let knowledge = Some(backend.knowledge_runtime_handle());
     let feedback = Some(backend.feedback_store_handle());
     let indexer = Some(backend.knowledge_indexer_handle());
+    let infer = Some(backend.infer_engine_handle());
 
     // Optional catalog-derived REST surface, env-gated on TDW_DAEMON_REST_BIND.
     // In Both mode the co-resident knowledge runtime is wired so
@@ -803,7 +807,16 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
     let transport = cfg.mcp_transport.clone();
     let mcp_thread = std::thread::Builder::new()
         .name("tdw-backend-mcp".to_string())
-        .spawn(move || run_mcp_loop(&transport, Some(&daemon_addr), knowledge, feedback, indexer))
+        .spawn(move || {
+            run_mcp_loop(
+                &transport,
+                Some(&daemon_addr),
+                knowledge,
+                feedback,
+                indexer,
+                infer,
+            )
+        })
         .map_err(BackendError::Io)?;
 
     // Wait for the MCP loop to finish on a blocking thread so we do not stall
