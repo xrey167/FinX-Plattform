@@ -42,7 +42,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tdw_core::{GraphEdge, GraphEngine, GraphNode, Provenance, validate_graph_edge};
 use tdw_tags::{TagAssignment, TagDefinition, TagEngine, validate_definition_shape};
-use tdw_taxonomy::{Adaptivity, EntityKind, ValidationStatus};
+use tdw_taxonomy::{Adaptivity, EntityKind};
+// Re-export so `tdw-backend` (which cannot take `tdw-taxonomy` as a prod dep)
+// can reference `ValidationStatus` via `tdw_knowledge::proposals::ValidationStatus`.
+pub use tdw_taxonomy::ValidationStatus;
 
 use crate::{KnowledgeError, Result};
 
@@ -431,6 +434,60 @@ impl ProposalQueue {
             // unconditional upsert would CLOBBER, overwriting that fact's
             // provenance: exactly the B7-review hazard). A proposal that no
             // longer validates is rejected here, never written.
+            if let Err(error) = validate_kind(&proposal.kind, graph, tags).await {
+                let reason = error.to_string();
+                if let Some(proposal) = self.proposals.get_mut(&id) {
+                    proposal.rejected = Some(reason.clone());
+                    proposal
+                        .history
+                        .push(format!("{now} rejected at materialize: {reason}"));
+                }
+                report.rejected_at_materialize.push((id, reason));
+                continue;
+            }
+            write_proposal(&proposal, graph, tags, now).await?;
+            if let Some(proposal) = self.proposals.get_mut(&id) {
+                proposal.materialized = true;
+                proposal.history.push(format!("{now} materialized"));
+            }
+            report.materialized.push(id);
+        }
+        Ok(report)
+    }
+
+    /// Capped variant of [`materialize_ready`](Self::materialize_ready) for the
+    /// K-L4 auto-sweep.
+    ///
+    /// Processes at most `cap` Ready proposals per call in deterministic
+    /// (`BTreeMap` insertion order, i.e. ascending proposal id) order; the rest
+    /// wait for the next sweep slot.  This is the **only** correct entry point
+    /// for the sweep — calling the uncapped `materialize_ready` from an
+    /// automated path would land the entire queue in one tick, defeating the
+    /// pacing knob `sweep_cap` that operators tune.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`materialize_ready`](Self::materialize_ready).
+    pub async fn materialize_ready_capped(
+        &mut self,
+        cap: usize,
+        graph: &Arc<dyn GraphEngine>,
+        tags: &Arc<dyn TagEngine>,
+        now: &str,
+    ) -> Result<MaterializeReport> {
+        // Collect Ready ids in deterministic BTreeMap order, then truncate to cap.
+        let ready: Vec<String> = self
+            .proposals
+            .values()
+            .filter(|proposal| proposal.status == ValidationStatus::Ready && proposal.is_pending())
+            .map(|proposal| proposal.id.clone())
+            .take(cap)
+            .collect();
+        let mut report = MaterializeReport::default();
+        for id in ready {
+            let proposal = self.proposals.get(&id).cloned().ok_or_else(|| {
+                KnowledgeError::Storage(format!("proposal {id:?} vanished mid-sweep"))
+            })?;
             if let Err(error) = validate_kind(&proposal.kind, graph, tags).await {
                 let reason = error.to_string();
                 if let Some(proposal) = self.proposals.get_mut(&id) {

@@ -415,12 +415,18 @@ fn why_edge_agent_gated_chain() {
     assert_eq!(step0["kind"], "agent_gated");
     assert_eq!(step0["agent_id"], "analyst-1");
     assert_eq!(step0["gated"], true);
-    // Honest absence note for ProposalQueue audit trail.
+    // proposal_id is surfaced from edge.props["proposal"] (written by write_proposal).
+    // When props carry no proposal key the chain falls back to "<unknown>".
     assert!(
-        step0["note"]
+        step0["proposal_id"].as_str().is_some(),
+        "proposal_id must be present in agent_gated chain step"
+    );
+    // audit_note must reference the ProposalQueue history for correlation.
+    assert!(
+        step0["audit_note"]
             .as_str()
             .is_some_and(|s| s.contains("ProposalQueue")),
-        "must reference ProposalQueue"
+        "audit_note must reference ProposalQueue; step: {step0}"
     );
 }
 

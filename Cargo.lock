@@ -5190,6 +5190,7 @@ dependencies = [
  "tdw-storage-graph",
  "tdw-tag-rules",
  "tdw-tags",
+ "tdw-taxonomy",
  "tdw-tool-exec",
  "tdw-workflow-engine",
  "thiserror 2.0.18",
