@@ -783,6 +783,7 @@ impl KnowledgeRuntime {
     /// This method is infallible at the `status()` level — individual engine
     /// probe failures are captured inside [`KgGraphHealth::error`] so the full
     /// snapshot is always returned.
+    #[allow(clippy::too_many_lines)] // K-L6 added feed-freshness snapshot; refactor deferred
     pub async fn status(&self) -> KgStatus {
         let versions_snapshot = self
             .versions
