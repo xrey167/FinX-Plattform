@@ -545,9 +545,9 @@ mod tests {
 
     #[test]
     fn entity_kind_is_the_unified_taxonomy() {
-        // The unification itself: tdw-kg's kind IS the 52-kind taxonomy; the
-        // old local 5 variants are members of it, and warehouse kinds beyond
-        // the old enum are usable directly.
+        // The unification itself: tdw-kg's kind IS the 53-kind taxonomy (K-R4
+        // added Pattern as the 53rd); the old local 5 variants are members of
+        // it, and warehouse kinds beyond the old enum are usable directly.
         let venue = Entity {
             kind: EntityKind::Venue,
             ..entity("venue:XNAS", "Nasdaq")
@@ -557,6 +557,6 @@ mod tests {
             serde_json::Value::String("venue".to_string()),
             "kinds serialize to the registry's lowercase tokens"
         );
-        assert_eq!(EntityKind::ALL.len(), 52);
+        assert_eq!(EntityKind::ALL.len(), 53);
     }
 }
