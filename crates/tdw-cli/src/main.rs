@@ -6,6 +6,7 @@ mod params;
 mod reindex;
 mod render;
 mod routine;
+mod status;
 mod tree;
 
 use std::net::SocketAddr;
@@ -54,6 +55,15 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "reindex")
     {
         return reindex::run(&args).await;
+    }
+
+    // kg status: query daemon REST surface for KnowledgeRuntime observability
+    // snapshot (knowledge-system K-E2).
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "status")
+    {
+        return status::run(&args).await;
     }
 
     // kg ingest: public ingestion surface through the KnowledgeIndexer seam

@@ -17,10 +17,14 @@
 //! async `Backend` (the MCP thread has no tokio runtime).
 
 use std::net::SocketAddr;
+#[cfg(feature = "rest-api-route")]
+use std::sync::Arc;
 
 use tdw_app_server::ops::{DaemonMetrics, OpsProvider};
 use tdw_app_server::{CancellationToken, SubmissionHandle, serve, service_channel};
 use tdw_config::{DaemonTransport, TdwConfig};
+#[cfg(feature = "rest-api-route")]
+use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_protocol::EventMsg;
 use tdw_service_api::AppState;
 
@@ -364,6 +368,7 @@ async fn spawn_daemon_ops(
 #[cfg(feature = "rest-api-route")]
 async fn spawn_daemon_rest(
     state: &AppState,
+    knowledge: Option<Arc<KnowledgeRuntime>>,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
     let bind = std::env::var("TDW_DAEMON_REST_BIND")
@@ -378,8 +383,12 @@ async fn spawn_daemon_rest(
     };
     eprintln!("tdw-backend: REST listener on http://{bind} (/api/v1/<route> /openapi.json)");
     let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
+    // Wire the knowledge status handler when a co-resident KnowledgeRuntime is
+    // available so GET /api/v1/knowledge/status returns the live snapshot.
+    let knowledge_status = knowledge
+        .map(|runtime| tdw_service_api::KnowledgeStatusAdapter::new(runtime).into_handler());
     Some(tokio::spawn(async move {
-        tdw_app_server::serve_rest_http(listener, handler, cancel).await
+        tdw_app_server::serve_rest_http(listener, handler, knowledge_status, cancel).await
     }))
 }
 
@@ -611,8 +620,10 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // Optional catalog-derived REST surface (GET /api/v1/<route>, /openapi.json),
     // env-gated on TDW_DAEMON_REST_BIND and off by default. Shares the
     // cancellation token so a graceful drain stops accepting REST requests too.
+    // Standalone daemon (run_daemon) has no co-resident Backend so the
+    // knowledge status endpoint is unavailable (None → 404 for that path).
     #[cfg(feature = "rest-api-route")]
-    let rest_task = spawn_daemon_rest(&state, cancel.clone()).await;
+    let rest_task = spawn_daemon_rest(&state, None, cancel.clone()).await;
 
     // Optional OpenBB Workspace bridge surface (GET /widgets.json, /apps.json,
     // /widget-data/<route>), env-gated on TDW_WORKSPACE_BIND and off by default.
@@ -779,6 +790,15 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
     let knowledge = Some(backend.knowledge_runtime_handle());
     let feedback = Some(backend.feedback_store_handle());
     let indexer = Some(backend.knowledge_indexer_handle());
+
+    // Optional catalog-derived REST surface, env-gated on TDW_DAEMON_REST_BIND.
+    // In Both mode the co-resident knowledge runtime is wired so
+    // GET /api/v1/knowledge/status returns the live snapshot (K-E2).
+    #[cfg(feature = "rest-api-route")]
+    let _rest_task = {
+        let cancel = tdw_app_server::CancellationToken::new();
+        spawn_daemon_rest(backend.app_state(), knowledge.clone(), cancel).await
+    };
 
     let transport = cfg.mcp_transport.clone();
     let mcp_thread = std::thread::Builder::new()

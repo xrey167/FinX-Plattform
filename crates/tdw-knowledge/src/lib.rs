@@ -6,6 +6,8 @@ pub mod proposals;
 pub mod reindex;
 pub mod runtime;
 
+pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus};
+
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};

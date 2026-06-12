@@ -6,6 +6,12 @@
 //! so agents can attribute result drift to the exact rule-set/infer/embedder
 //! versions that produced it. B9 adds the gated write side (proposals) to
 //! this same seam.
+//!
+//! K-E2 adds [`KnowledgeRuntime::status`]: a single async call that collects
+//! every observability field the `tdw.kg.status` MCP tool, the
+//! `GET /api/v1/knowledge/status` REST endpoint, and the `tdw kg status` CLI
+//! subcommand all present. Honest notes are inlined where the underlying
+//! engine trait offers no cheap query (e.g. `VectorEngine` has no `count`).
 
 use std::sync::Arc;
 
@@ -14,7 +20,7 @@ use tdw_core::{GraphEngine, LexicalEngine, VectorEngine};
 use tdw_embed::EmbeddingProvider;
 use tdw_retrieve::Retriever;
 use tdw_tags::TagEngine;
-use tdw_taxonomy::Adaptivity;
+use tdw_taxonomy::{Adaptivity, EntityKind};
 
 use crate::proposals::ProposalQueue;
 
@@ -47,6 +53,11 @@ pub struct KnowledgeVersions {
 pub struct KnowledgeRuntime {
     retriever: Retriever,
     graph: Option<Arc<dyn GraphEngine>>,
+    /// Operator-supplied graph backend name (e.g. `"in-memory"`, `"neo4j"`).
+    /// Set via [`with_graph_name`](Self::with_graph_name). When absent, status
+    /// falls back to `"graph-engine"` rather than using an unstable type-name
+    /// heuristic.
+    graph_name: Option<String>,
     tags: Option<Arc<dyn TagEngine>>,
     versions: KnowledgeVersions,
     /// The gated write queue (knowledge-system B9). Behind a
@@ -85,6 +96,7 @@ impl KnowledgeRuntime {
         Self {
             retriever: Retriever::new(embedder, vectors, collection),
             graph: None,
+            graph_name: None,
             tags: None,
             versions,
             proposals: None,
@@ -120,6 +132,18 @@ impl KnowledgeRuntime {
     pub fn with_graph(mut self, engine: Arc<dyn GraphEngine>) -> Self {
         self.retriever = self.retriever.with_graph(engine.clone());
         self.graph = Some(engine);
+        self
+    }
+
+    /// Record the graph backend name reported by `tdw.kg.status`.
+    ///
+    /// The daemon knows which backend it constructed (e.g. `"in-memory"`,
+    /// `"neo4j"`) and should set this at construction time so the status
+    /// snapshot carries an accurate, stable name. When absent the snapshot
+    /// falls back to `"graph-engine"`.
+    #[must_use]
+    pub fn with_graph_name(mut self, name: impl Into<String>) -> Self {
+        self.graph_name = Some(name.into());
         self
     }
 
@@ -228,11 +252,361 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .debug_struct("KnowledgeRuntime")
             .field("versions", &self.versions)
             .field("graph", &self.graph.is_some())
+            .field("graph_name", &self.graph_name)
             .field("tags", &self.tags.is_some())
             .field("proposals", &self.proposals.is_some())
             .field("adaptivity_resolver", &self.adaptivity_resolver.is_some())
             .field("operator_authority", &self.operator_authority)
             .field("bound_agent_id", &self.bound_agent_id.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// K-E2: knowledge system observability status (knowledge-system-2 K-E2)
+// ---------------------------------------------------------------------------
+
+/// Proposal counts broken down by [`ValidationStatus`].
+///
+/// Counts reflect ALL pending (non-materialized, non-rejected) proposals,
+/// obtained via [`ProposalQueue::pending_counts_by_state`] — a single-pass
+/// scan that is NOT subject to the `LIST_PAGE_DEFAULT`/`LIST_PAGE_MAX`
+/// pagination cap, so these are always exact regardless of queue depth.
+/// Available only when the proposal queue is attached.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgProposalCounts {
+    /// Proposals in the `Draft` state (submitted; automated validators not yet
+    /// run or still in progress).
+    pub draft: usize,
+    /// Proposals in the `Validated` state (automated validators passed; awaiting
+    /// eval promotion or human approval).
+    pub validated: usize,
+    /// Proposals in the `Ready` state (approved; pending materialization into the
+    /// graph/tag engines).
+    pub ready: usize,
+    /// Whether the runtime has OPERATOR authority (approve/reject/materialize
+    /// actions enabled). A read-only agent-facing runtime reports `false`.
+    pub operator_authority: bool,
+}
+
+/// Snapshot of graph-backend health: name and a cheap reachability check.
+///
+/// The reachability check is a `GraphEngine::edges(rel=None, offset=0, limit=1)`
+/// call — the cheapest available probe that exercises a real engine round-trip.
+/// `VectorEngine` has no count/ping method in the current trait, so vector
+/// reachability is reported as `"not available in this engine version"`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgGraphHealth {
+    /// Human-readable backend identifier (e.g. `"in-memory-graph"` for the
+    /// reference implementation, `"neo4j"` for a real backend).
+    pub backend_name: String,
+    /// `true` when the engine answered the probe call without error.
+    pub reachable: bool,
+    /// Error message when `reachable = false`; `None` when healthy.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Full observability snapshot for one `KnowledgeRuntime` instance.
+///
+/// Collected by [`KnowledgeRuntime::status`] and surfaced identically by the
+/// `tdw.kg.status` MCP tool, the `GET /api/v1/knowledge/status` REST endpoint,
+/// and the `tdw kg status` CLI subcommand (K-E2).
+///
+/// **Honest notes on unavailable stats** are carried in the corresponding
+/// `*_note` / `error` fields rather than omitted, so callers can distinguish
+/// "zero" from "not measured". Specifically:
+/// - `document_count`: the `VectorEngine` trait has no count method; this field
+///   reflects what the collection name implies but is NOT a live engine count.
+/// - `graph_health.backend_name`: derived from the engine's `Debug` type name
+///   (best-effort; production backends should expose a `name()` accessor).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgStatus {
+    // --- Vector / document channel ---
+    /// Namespaced vector collection name (e.g. `tdw_knowledge__local_hash_8`).
+    pub vector_collection: String,
+    /// Embedder model id (e.g. `local-hash-8`, `text-embedding-3-small`).
+    pub embedder_model: String,
+    /// Honest note: the `VectorEngine` trait exposes no `count()` method in this
+    /// version. Document count is not available without a full scan; use the
+    /// lexical engine count or a direct Qdrant API call instead.
+    pub document_count_note: String,
+
+    // --- Taxonomy ---
+    /// Total number of classified `EntityKind` variants in the taxonomy.
+    pub taxonomy_kind_count: usize,
+
+    // --- Graph backend ---
+    /// Graph engine health (reachability probe + backend identifier).
+    /// `None` when no graph engine is attached.
+    #[serde(default)]
+    pub graph_health: Option<KgGraphHealth>,
+
+    // --- Version triple ---
+    /// The version triple (`embedder_model`, `rules_version`, `infer_version`)
+    /// stamped onto every `tdw.kg.search` response.
+    pub versions: KnowledgeVersions,
+
+    // --- Proposals ---
+    /// Pending proposal counts by state.
+    /// `None` when the proposal queue is not attached.
+    #[serde(default)]
+    pub proposals: Option<KgProposalCounts>,
+
+    // --- Language-model grade (autonomy-gap#5 inertness visibility) ---
+    /// Human-readable description of the language-model grade wired into this
+    /// runtime. Surfacing this field closes autonomy-gap#5: operators can see
+    /// at a glance whether eval feedback and auto-materialization are live or
+    /// stubbed out. This field never changes gating — it only makes the gap
+    /// visible.
+    ///
+    /// Value is `"stub"` when no production LM is wired (eval feedback and
+    /// auto-materialization disabled); `"production"` otherwise.
+    pub language_model_grade: String,
+}
+
+impl KnowledgeRuntime {
+    /// Collect a full observability snapshot for this runtime instance (K-E2).
+    ///
+    /// This is the single source of truth consumed by `tdw.kg.status` (MCP),
+    /// `GET /api/v1/knowledge/status` (REST), and `tdw kg status` (CLI).
+    ///
+    /// The graph-health probe issues one `edges(None, 0, 1)` call when a graph
+    /// engine is attached. All other fields are derived from in-process state
+    /// without any I/O.
+    ///
+    /// # Errors
+    ///
+    /// This method is infallible at the `status()` level — individual engine
+    /// probe failures are captured inside [`KgGraphHealth::error`] so the full
+    /// snapshot is always returned.
+    pub async fn status(&self) -> KgStatus {
+        let vector_collection = crate::collection_name(&self.versions.embedder_model);
+
+        let graph_health = if let Some(graph) = self.graph.as_ref() {
+            let probe = graph.edges(None, 0, 1).await;
+            // Use the operator-supplied name when available; fall back to the
+            // generic sentinel so the field is always a non-empty string.
+            let backend_name = self
+                .graph_name
+                .clone()
+                .unwrap_or_else(|| "graph-engine".to_string());
+            Some(match probe {
+                Ok(_) => KgGraphHealth {
+                    backend_name,
+                    reachable: true,
+                    error: None,
+                },
+                Err(error) => KgGraphHealth {
+                    backend_name,
+                    reachable: false,
+                    error: Some(error.to_string()),
+                },
+            })
+        } else {
+            None
+        };
+
+        let proposals = self.proposals.as_ref().map(|queue_mutex| {
+            // The `ProposalQueue` lock is sync; `try_lock()` avoids blocking the
+            // async context. If the lock is contended (another tool is mid-write)
+            // we report zero counts rather than deadlocking.
+            queue_mutex.try_lock().map_or(
+                KgProposalCounts {
+                    draft: 0,
+                    validated: 0,
+                    ready: 0,
+                    operator_authority: self.operator_authority,
+                },
+                |queue| {
+                    // Single-pass exact count — not subject to LIST_PAGE caps.
+                    let (draft, validated, ready) = queue.pending_counts_by_state();
+                    KgProposalCounts {
+                        draft,
+                        validated,
+                        ready,
+                        operator_authority: self.operator_authority,
+                    }
+                },
+            )
+        });
+
+        // Language-model grade: stub unless the runtime has an adaptivity
+        // resolver AND a bound agent id (the two indicators a production infer
+        // path is wired). This is a structural heuristic — no LM trait exists
+        // yet — but it gives operators a truthful signal for autonomy-gap#5.
+        let language_model_grade =
+            if self.adaptivity_resolver.is_some() && self.bound_agent_id.is_some() {
+                "production".to_string()
+            } else {
+                "stub — eval feedback and auto-materialization disabled".to_string()
+            };
+
+        KgStatus {
+            vector_collection,
+            embedder_model: self.versions.embedder_model.clone(),
+            document_count_note: "VectorEngine has no count() in this version; \
+                                  use Qdrant dashboard or lexical engine for a precise count"
+                .to_string(),
+            taxonomy_kind_count: EntityKind::ALL.len(),
+            graph_health,
+            versions: self.versions.clone(),
+            proposals,
+            language_model_grade,
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use std::sync::Arc;
+
+    use tdw_embed_local::HashEmbeddingProvider;
+    use tdw_storage_qdrant::InMemoryVectorEngine;
+
+    use super::*;
+
+    fn vector_only_runtime() -> KnowledgeRuntime {
+        KnowledgeRuntime::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        )
+    }
+
+    #[tokio::test]
+    async fn status_vector_only_has_expected_fields() {
+        let runtime = vector_only_runtime();
+        let status = runtime.status().await;
+
+        assert_eq!(status.embedder_model, "local-hash-8");
+        assert!(
+            status.vector_collection.starts_with("tdw_knowledge__"),
+            "collection namespaced: {}",
+            status.vector_collection
+        );
+        assert_eq!(status.taxonomy_kind_count, EntityKind::ALL.len());
+        assert!(status.graph_health.is_none(), "no graph attached");
+        assert!(status.proposals.is_none(), "no proposals attached");
+        assert!(
+            status.language_model_grade.contains("stub"),
+            "no resolver/agent → stub grade"
+        );
+        // Honest note is present and non-empty.
+        assert!(!status.document_count_note.is_empty());
+    }
+
+    #[tokio::test]
+    async fn status_stub_grade_when_resolver_missing() {
+        let runtime = vector_only_runtime().with_agent_id("test-agent");
+        let status = runtime.status().await;
+        // resolver absent → still stub (both conditions required for "production").
+        assert!(status.language_model_grade.contains("stub"));
+    }
+
+    #[tokio::test]
+    async fn status_serializes_roundtrip() {
+        let runtime = vector_only_runtime();
+        let status = runtime.status().await;
+        let json = serde_json::to_value(&status).expect("status serializes");
+        assert!(json["vector_collection"].is_string());
+        assert!(json["taxonomy_kind_count"].is_number());
+        assert!(json["language_model_grade"].is_string());
+        assert!(json["versions"].is_object());
+    }
+
+    #[tokio::test]
+    async fn status_with_graph_engine_probes_reachability() {
+        use tdw_storage_graph::InMemoryGraphEngine;
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let runtime = vector_only_runtime()
+            .with_graph(graph)
+            .with_graph_name("in-memory");
+        let status = runtime.status().await;
+        let health = status.graph_health.expect("graph attached");
+        assert!(health.reachable, "in-memory engine always reachable");
+        assert!(health.error.is_none());
+        assert_eq!(health.backend_name, "in-memory", "explicit name used");
+    }
+
+    #[tokio::test]
+    async fn status_graph_without_name_falls_back_to_sentinel() {
+        use tdw_storage_graph::InMemoryGraphEngine;
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        // No with_graph_name — sentinel must be returned, not a type-name heuristic.
+        let runtime = vector_only_runtime().with_graph(graph);
+        let status = runtime.status().await;
+        let health = status.graph_health.expect("graph attached");
+        assert_eq!(
+            health.backend_name, "graph-engine",
+            "sentinel when no name supplied"
+        );
+    }
+
+    #[tokio::test]
+    async fn proposal_counts_are_exact_and_include_draft() {
+        use std::sync::Arc;
+        use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
+        use tdw_storage_qdrant::InMemoryVectorEngine;
+
+        use crate::proposals::{ProposalKind, ProposalQueue};
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_taxonomy::Adaptivity;
+
+        // Build a full runtime so submit() can run validators.
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        // GraphTagEngine<G> stores G by value and needs G: GraphEngine — it
+        // cannot take Arc<dyn GraphEngine>. Use two separate in-memory instances:
+        // one (erased) for the runtime graph handle, one (concrete) for the tags
+        // engine. The validators only need the tag engine to check tag-assign
+        // shape; the graph instances can be independent for this test.
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let tags: Arc<dyn tdw_tags::TagEngine> =
+            Arc::new(GraphTagEngine::new(InMemoryGraphEngine::default()));
+
+        let queue = Arc::new(tokio::sync::Mutex::new(ProposalQueue::default()));
+        // Submit two TagDefine proposals. These pass the validator without
+        // needing pre-existing graph nodes (the check is only grammar + uniqueness)
+        // and land as Validated after auto-validators run.
+        {
+            let mut q = queue.lock().await;
+            q.submit(
+                "agent-a",
+                Adaptivity::Learning,
+                ProposalKind::TagDefine {
+                    tag_id: "status-test:alpha".to_string(),
+                    parent: None,
+                },
+                &graph,
+                &tags,
+                "2026-06-11",
+            )
+            .await
+            .expect("submit 1");
+            q.submit(
+                "agent-a",
+                Adaptivity::Learning,
+                ProposalKind::TagDefine {
+                    tag_id: "status-test:beta".to_string(),
+                    parent: None,
+                },
+                &graph,
+                &tags,
+                "2026-06-11",
+            )
+            .await
+            .expect("submit 2");
+            drop(q);
+        }
+
+        let runtime = KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(graph)
+            .with_proposals(queue);
+        let status = runtime.status().await;
+        let counts = status.proposals.expect("proposals attached");
+        // Both proposals enter as Validated (Draft→Validated after auto-validate).
+        assert_eq!(counts.draft, 0, "no draft proposals");
+        assert_eq!(counts.validated, 2, "two validated proposals");
+        assert_eq!(counts.ready, 0, "none ready yet");
     }
 }

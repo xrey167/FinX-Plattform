@@ -77,7 +77,7 @@ pub async fn start_rest() -> std::io::Result<RunningServer> {
     let cancel = CancellationToken::new();
     let cancel_srv = cancel.clone();
     let task = tokio::spawn(async move {
-        let _ = serve_rest_http(listener, handler, cancel_srv).await;
+        let _ = serve_rest_http(listener, handler, None, cancel_srv).await;
     });
     Ok(RunningServer { addr, cancel, task })
 }

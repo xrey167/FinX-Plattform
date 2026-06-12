@@ -473,6 +473,29 @@ impl ProposalQueue {
     pub fn get(&self, proposal_id: &str) -> Option<&Proposal> {
         self.proposals.get(proposal_id)
     }
+
+    /// Exact pending proposal counts broken down by [`ValidationStatus`].
+    ///
+    /// Unlike [`list`](Self::list), this is a single-pass scan over the full
+    /// queue and is **not** subject to the `LIST_PAGE_DEFAULT` / `LIST_PAGE_MAX`
+    /// pagination cap, so the counts are always exact regardless of queue depth.
+    ///
+    /// "Pending" means `!materialized && rejected.is_none()` — the same
+    /// predicate as [`Proposal::is_pending`].  Proposals that have been
+    /// materialized or rejected do not appear in any count.
+    #[must_use]
+    pub fn pending_counts_by_state(&self) -> (usize, usize, usize) {
+        use tdw_taxonomy::ValidationStatus;
+        let (mut draft, mut validated, mut ready) = (0usize, 0usize, 0usize);
+        for proposal in self.proposals.values().filter(|p| p.is_pending()) {
+            match proposal.status {
+                ValidationStatus::Draft => draft += 1,
+                ValidationStatus::Validated => validated += 1,
+                ValidationStatus::Ready => ready += 1,
+            }
+        }
+        (draft, validated, ready)
+    }
 }
 
 /// The automated validators (gate step 2). Every check is loud.

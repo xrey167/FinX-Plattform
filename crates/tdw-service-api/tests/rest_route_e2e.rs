@@ -10,10 +10,14 @@
 
 #![cfg(feature = "rest-api-route")]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tdw_app_server::{CancellationToken, serve_rest_http};
-use tdw_service_api::{AppState, RestApiState};
+use tdw_embed_local::HashEmbeddingProvider;
+use tdw_knowledge::runtime::KnowledgeRuntime;
+use tdw_service_api::{AppState, KnowledgeStatusAdapter, RestApiState};
+use tdw_storage_qdrant::InMemoryVectorEngine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -30,7 +34,48 @@ where
     let cancel = CancellationToken::new();
     let cancel_srv = cancel.clone();
     let server = tokio::spawn(async move {
-        serve_rest_http(listener, handler, cancel_srv).await.ok();
+        serve_rest_http(listener, handler, None, cancel_srv)
+            .await
+            .ok();
+    });
+
+    body(addr).await;
+
+    cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(2), server).await;
+}
+
+/// Build a minimal in-memory [`KnowledgeRuntime`] (vector-only, no graph) for
+/// use in REST e2e tests. The runtime uses the same hash embedder as the
+/// knowledge unit tests so the `embedder_model` field is deterministic.
+fn build_test_runtime() -> Arc<KnowledgeRuntime> {
+    Arc::new(KnowledgeRuntime::new(
+        Arc::new(HashEmbeddingProvider::default()),
+        Arc::new(InMemoryVectorEngine::default()),
+    ))
+}
+
+/// Spin up a REST listener with a REAL [`KnowledgeStatusAdapter`] backed by a
+/// minimal in-memory runtime, and run `body(addr)`.
+///
+/// This exercises the real status collection path (not a canned stub) so
+/// the test is an end-to-end proof that the live daemon path works.
+async fn with_status_server<F, Fut>(body: F)
+where
+    F: FnOnce(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let state = AppState::in_memory_for_tests().await;
+    let handler = RestApiState::new(state).into_handler();
+    let ks = KnowledgeStatusAdapter::new(build_test_runtime()).into_handler();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local addr");
+    let cancel = CancellationToken::new();
+    let cancel_srv = cancel.clone();
+    let server = tokio::spawn(async move {
+        serve_rest_http(listener, handler, Some(ks), cancel_srv)
+            .await
+            .ok();
     });
 
     body(addr).await;
@@ -188,6 +233,82 @@ async fn non_catalog_path_returns_404() {
     with_server(|addr| async move {
         let resp = raw_get(addr, "/not/the/api").await;
         assert_eq!(response_status(&resp), 404);
+    })
+    .await;
+}
+
+// --- K-E2: knowledge status REST endpoint ---
+
+/// K-E2: `GET /api/v1/knowledge/status` returns 200 with a parseable JSON
+/// snapshot when a `KnowledgeStatusHandler` is attached to the server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn knowledge_status_returns_200_with_snapshot() {
+    with_status_server(|addr| async move {
+        let resp = raw_get(addr, "/api/v1/knowledge/status").await;
+        assert_eq!(
+            response_status(&resp),
+            200,
+            "response: {}",
+            String::from_utf8_lossy(&resp)
+        );
+        let body = response_body_json(&resp);
+        // Assert seeded values from the real HashEmbeddingProvider runtime —
+        // not presence-only checks. This proves the live path, not a canned stub.
+        assert_eq!(
+            body["embedder_model"], "local-hash-8",
+            "embedder_model seeded value: {body}"
+        );
+        assert!(
+            body["vector_collection"]
+                .as_str()
+                .is_some_and(|s| s.starts_with("tdw_knowledge__")),
+            "vector_collection namespaced: {body}"
+        );
+        assert!(
+            body["document_count_note"].is_string(),
+            "honest count note present: {body}"
+        );
+        assert_eq!(
+            body["taxonomy_kind_count"].as_u64(),
+            Some(51),
+            "taxonomy_kind_count is 51: {body}"
+        );
+        assert!(body["versions"].is_object(), "versions object: {body}");
+        assert_eq!(
+            body["versions"]["embedder_model"], "local-hash-8",
+            "versions.embedder_model: {body}"
+        );
+        // No graph or proposals on this minimal runtime.
+        assert!(body["graph_health"].is_null(), "no graph: {body}");
+        assert!(body["proposals"].is_null(), "no proposals: {body}");
+        assert!(
+            body["language_model_grade"]
+                .as_str()
+                .is_some_and(|s| s.contains("stub")),
+            "language_model_grade is stub for minimal runtime: {body}"
+        );
+    })
+    .await;
+}
+
+/// K-E2: `GET /api/v1/knowledge/status` returns 404 when no
+/// `KnowledgeStatusHandler` is attached (knowledge runtime absent).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn knowledge_status_without_handler_returns_404() {
+    with_server(|addr| async move {
+        let resp = raw_get(addr, "/api/v1/knowledge/status").await;
+        assert_eq!(
+            response_status(&resp),
+            404,
+            "response: {}",
+            String::from_utf8_lossy(&resp)
+        );
+        let body = response_body_json(&resp);
+        let error = body["error"].as_str().expect("error message");
+        assert!(
+            error.contains("knowledge runtime not attached"),
+            "got: {error}"
+        );
     })
     .await;
 }
