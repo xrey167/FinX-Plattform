@@ -394,13 +394,48 @@ pub fn execute(
 
 // ── tdw.kg.finding ────────────────────────────────────────────────────────────
 
-// Validation + graph writes + index pipeline in one function — split would hurt
-// readability more than it helps; lint suppressed per project convention.
-#[allow(clippy::too_many_lines)]
+/// Server-side thesis metadata injected by `capture_thesis` only.
+///
+/// This struct is constructed exclusively from Rust-validated state inside
+/// `capture_thesis` and passed as a typed argument to `capture_finding_inner`.
+/// It is **never** derived from caller-supplied MCP arguments — external callers
+/// cannot forge a thesis or override the id by passing keys in the JSON args.
+///
+/// The K-L5 model: identity and kind are decided by the SERVER (which tool path
+/// executed + which principal is host-bound), not by the client.
+struct ThesisInject<'a> {
+    /// Pre-computed FNV-1a hex for the thesis id namespace (without `"finding:"` prefix).
+    id_hex: String,
+    /// Always `"thesis"` — set by the server path, never the caller.
+    kind_hint: &'a str,
+    /// Validated `YYYY-MM-DD` horizon date, or `None`.
+    horizon_date: Option<String>,
+    /// Host-bound user id attributed as thesis author.
+    thesis_user_id: &'a str,
+}
+
+/// Public entry point for `tdw.kg.finding`.
+///
+/// Strips/ignores ALL internal-only keys before delegating.  External callers
+/// cannot influence `kind_hint`, `_id_override`, `horizon_date`, or
+/// `thesis_user_id` through this path — those fields are silently dropped here
+/// and only flow through the Rust-typed [`ThesisInject`] channel.
 fn capture_finding(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
     now: &str,
+) -> Result<ToolExecution, ToolFailure> {
+    capture_finding_inner(runtime, arguments, now, None)
+}
+
+// Validation + graph writes + index pipeline in one function — split would hurt
+// readability more than it helps; lint suppressed per project convention.
+#[allow(clippy::too_many_lines)]
+fn capture_finding_inner(
+    runtime: &KnowledgeRuntime,
+    arguments: &Map<String, Value>,
+    now: &str,
+    thesis: Option<&ThesisInject<'_>>,
 ) -> Result<ToolExecution, ToolFailure> {
     let graph = require_graph(runtime)?;
     let user_id = require_user_id(runtime)?;
@@ -451,12 +486,11 @@ fn capture_finding(
         validate_url(url)?;
     }
 
-    // --- stable finding id from title hash (or caller-supplied override) ---
-    // `_id_override` is an internal key used by capture_thesis to inject a
-    // namespace-isolated id without going through a separate upsert pass.
-    // It is not exposed in the tool descriptor and is never accepted from
-    // external callers.
-    let (finding_id, document_id) = optional_str(arguments, "_id_override").map_or_else(
+    // --- stable finding id ---
+    // For plain findings: FNV-1a hash of the title.
+    // For theses: server-computed domain-prefixed hash from ThesisInject —
+    // never from caller args (forge guard).
+    let (finding_id, document_id) = thesis.as_ref().map_or_else(
         || {
             let id_hash = fnv1a64(title.as_bytes());
             (
@@ -464,8 +498,8 @@ fn capture_finding(
                 format!("finding-doc:{id_hash:016x}"),
             )
         },
-        |ov| {
-            let hex = ov.strip_prefix("finding:").unwrap_or(ov);
+        |t| {
+            let hex = &t.id_hex;
             (format!("finding:{hex}"), format!("finding-doc:{hex}"))
         },
     );
@@ -497,15 +531,16 @@ fn capture_finding(
     if !tags.is_empty() {
         props["tags"] = json!(tags);
     }
-    // Optional thesis-specific props injected by capture_thesis (single-shot write).
-    if let Some(kind_hint) = optional_str(arguments, "kind_hint") {
-        props["kind_hint"] = json!(kind_hint);
-    }
-    if let Some(horizon_date) = optional_str(arguments, "horizon_date") {
-        props["horizon_date"] = json!(horizon_date);
-    }
-    if let Some(thesis_user_id) = optional_str(arguments, "thesis_user_id") {
-        props["thesis_user_id"] = json!(thesis_user_id);
+    // Thesis-specific props — only written when the call comes through the
+    // server-internal ThesisInject channel (i.e. from capture_thesis).
+    // External callers using tdw.kg.finding cannot set these regardless of
+    // what they pass in the JSON args (forge guard).
+    if let Some(t) = &thesis {
+        props["kind_hint"] = json!(t.kind_hint);
+        if let Some(h) = &t.horizon_date {
+            props["horizon_date"] = json!(h);
+        }
+        props["thesis_user_id"] = json!(t.thesis_user_id);
     }
 
     // Evidence pin: store immutably with the snippet content hash.
@@ -752,11 +787,13 @@ fn link_finding(
 /// thesis statement hashes the title directly and therefore produces a different
 /// `finding:…` id — the two namespaces cannot collide.
 ///
-/// # Single-shot write
+/// # Forge guard (K-L5 model)
 ///
-/// `kind_hint`, `horizon_date`, and `thesis_user_id` are injected into the
-/// synthetic args map passed to `capture_finding`, which now writes them in one
-/// graph upsert.  No read-modify-upsert is needed.
+/// `kind_hint`, `horizon_date`, `thesis_user_id`, and the id override are
+/// never read from the caller-supplied `arguments` map.  They are constructed
+/// here from validated Rust state and passed to [`capture_finding_inner`] via
+/// the typed [`ThesisInject`] channel.  External callers cannot forge a thesis
+/// or override the id by sending internal keys through `tdw.kg.finding`.
 fn capture_thesis(
     runtime: &KnowledgeRuntime,
     arguments: &Map<String, Value>,
@@ -766,7 +803,7 @@ fn capture_thesis(
     let statement = require_str(arguments, "falsifiable_statement")?;
     validate_title(statement)?;
 
-    // Horizon date — validated before building the synthetic map.
+    // Horizon date — validated before building the args map.
     let horizon_date = optional_str(arguments, "horizon_date").map(ToString::to_string);
     if let Some(h) = &horizon_date {
         validate_date(h)?;
@@ -774,47 +811,44 @@ fn capture_thesis(
 
     let user_id = require_user_id(runtime)?;
 
-    // Compute a domain-prefixed id hash so the thesis id namespace is disjoint
-    // from plain findings (which hash the title directly).  A thesis and a
-    // finding with the same text therefore get different `finding:…` ids.
-    let thesis_id_hex = format!("{:016x}", fnv1a64(format!("thesis:{statement}").as_bytes()));
+    // Domain-prefixed id hash — disjoint from plain finding ids.
+    let id_hex = format!("{:016x}", fnv1a64(format!("thesis:{statement}").as_bytes()));
 
-    // Build a synthetic argument map that capture_finding accepts.
-    // Pass the original statement as the title (no control characters).
-    // Inject the pre-computed hex so capture_finding skips its own hash.
-    let mut synthetic: Map<String, Value> = Map::new();
-    synthetic.insert("title".to_string(), Value::String(statement.to_string()));
-    synthetic.insert("_id_override".to_string(), Value::String(thesis_id_hex));
+    // ThesisInject is Rust-typed; it never touches the MCP args map.
+    let inject = ThesisInject {
+        id_hex,
+        kind_hint: "thesis",
+        horizon_date: horizon_date.clone(),
+        thesis_user_id: user_id,
+    };
+
+    // Build the argument map with only the keys the finding tool schema accepts.
+    // Internal keys (_id_override, kind_hint, etc.) are intentionally absent —
+    // they flow through ThesisInject, not through the args map.
+    let mut args: Map<String, Value> = Map::new();
+    args.insert("title".to_string(), Value::String(statement.to_string()));
     if let Some(body) = optional_str(arguments, "body") {
-        synthetic.insert("body".to_string(), Value::String(body.to_string()));
+        args.insert("body".to_string(), Value::String(body.to_string()));
     }
     if let Some(url) = optional_str(arguments, "source_url") {
-        synthetic.insert("source_url".to_string(), Value::String(url.to_string()));
+        args.insert("source_url".to_string(), Value::String(url.to_string()));
     }
     if let Some(tags_val) = arguments.get("tags") {
-        synthetic.insert("tags".to_string(), tags_val.clone());
+        args.insert("tags".to_string(), tags_val.clone());
     }
     if let Some(as_of) = optional_str(arguments, "as_of") {
-        synthetic.insert("as_of".to_string(), Value::String(as_of.to_string()));
+        args.insert("as_of".to_string(), Value::String(as_of.to_string()));
     }
-    // Inject thesis-specific props — capture_finding writes them in the same upsert.
-    synthetic.insert("kind_hint".to_string(), Value::String("thesis".to_string()));
-    if let Some(h) = &horizon_date {
-        synthetic.insert("horizon_date".to_string(), Value::String(h.clone()));
-    }
-    synthetic.insert(
-        "thesis_user_id".to_string(),
-        Value::String(user_id.to_string()),
-    );
 
-    // Run the shared capture path (validates + writes the Finding node in one shot).
-    let result = capture_finding(runtime, &synthetic, now)?;
+    let result = capture_finding_inner(runtime, &args, now, Some(&inject))?;
 
     let finding_id = result
         .structured
         .get("finding_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| execution("thesis: capture_finding returned no finding_id".to_string()))?
+        .ok_or_else(|| {
+            execution("thesis: capture_finding_inner returned no finding_id".to_string())
+        })?
         .to_string();
 
     let as_of_str =

@@ -1218,3 +1218,96 @@ fn thesis_health_cap_does_not_penalise_inactive_edges() {
     );
     assert_eq!(sc["balance"], "bullish", "balance must be bullish: {sc}");
 }
+
+// ── Forge guard regression tests (K-X7 / K-L5) ───────────────────────────────
+
+/// `tdw.kg.finding` with `kind_hint="thesis"` in the args MUST NOT produce a
+/// thesis node.  The `kind_hint` prop must never appear on the stored node
+/// because `capture_finding` ignores unknown internal keys — kind is decided
+/// by which tool path executed, not by the caller.
+#[test]
+fn finding_tool_ignores_caller_supplied_kind_hint() {
+    let (mut server, _graph) = server_with_findings();
+
+    let resp = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({
+            "title": "Forge attempt via kind_hint",
+            "kind_hint": "thesis",
+            "as_of": NOW
+        }),
+    );
+    // The call must succeed as a plain finding (no error).
+    assert_eq!(
+        resp["result"]["isError"], false,
+        "finding call should succeed: {resp}"
+    );
+    let finding_id = resp["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("finding_id")
+        .to_string();
+
+    // thesis_health must reject it — it is NOT a thesis node.
+    let health = call(
+        &mut server,
+        "tdw.kg.thesis_health",
+        &json!({ "thesis_id": finding_id, "as_of": NOW }),
+    );
+    assert_eq!(
+        health["result"]["isError"], true,
+        "thesis_health on caller-forged node must be a tool error: {health}"
+    );
+    let msg = health["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        msg.contains("not a thesis"),
+        "error must say 'not a thesis': {msg}"
+    );
+}
+
+/// `tdw.kg.finding` with `_id_override` in the args MUST NOT override the
+/// stored id — the id is always derived server-side from the title hash.
+/// The node must be stored under the title-hash id, not the attacker's value.
+#[test]
+fn finding_tool_ignores_caller_supplied_id_override() {
+    let (mut server, _graph) = server_with_findings();
+
+    let attacker_hex = "deadbeefdeadbeef";
+    let attacker_id = format!("finding:{attacker_hex}");
+
+    let resp = call(
+        &mut server,
+        "tdw.kg.finding",
+        &json!({
+            "title": "Forge attempt via id override",
+            "_id_override": attacker_hex,
+            "as_of": NOW
+        }),
+    );
+    assert_eq!(
+        resp["result"]["isError"], false,
+        "finding call should succeed: {resp}"
+    );
+    let stored_id = resp["result"]["structuredContent"]["finding_id"]
+        .as_str()
+        .expect("finding_id")
+        .to_string();
+
+    // The returned id must NOT be the attacker's value.
+    assert_ne!(
+        stored_id, attacker_id,
+        "stored id must not match caller-supplied _id_override: stored={stored_id}"
+    );
+    // The title-hash id must be used instead.
+    assert!(
+        stored_id.starts_with("finding:"),
+        "stored id must have finding: prefix: {stored_id}"
+    );
+    assert_ne!(
+        stored_id.trim_start_matches("finding:"),
+        attacker_hex,
+        "hex portion must not be attacker-controlled: {stored_id}"
+    );
+}
