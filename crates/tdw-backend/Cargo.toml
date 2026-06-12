@@ -45,7 +45,11 @@ tdw-knowledge = { path = "../tdw-knowledge" }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-infer = { path = "../tdw-infer" }
+tdw-patterns = { workspace = true }
 tdw-tag-rules = { path = "../tdw-tag-rules" }
+# K-M4: contradiction detector construction reads FunctionalPredicateSet from
+# the taxonomy crate. Already a dev-dep for K-L4 tests; promoted to prod dep.
+tdw-taxonomy = { path = "../tdw-taxonomy" }
 # Phase A1 — the hash embedder injected into the shared knowledge index so it
 # rides on `AppState.vector` (durable when that is a real Qdrant engine).
 tdw-embed = { path = "../tdw-embed" }

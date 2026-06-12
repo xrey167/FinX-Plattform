@@ -1,22 +1,24 @@
 [package]
-name = "tdw-infer"
+name = "tdw-patterns"
 version = "0.1.0"
 edition = "2024"
 publish = false
 license = "MIT OR Apache-2.0"
 
+[lib]
+doctest = false
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 tdw-core = { workspace = true }
-tdw-tags = { path = "../tdw-tags" }
-# K-M4: functional-predicate metadata lives in tdw-taxonomy (leaf crate, no cycles).
 tdw-taxonomy = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tdw-storage-graph = { path = "../tdw-storage-graph" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
 
 [lints]
 workspace = true

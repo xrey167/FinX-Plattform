@@ -5182,6 +5182,7 @@ dependencies = [
  "tdw-llm",
  "tdw-mcp",
  "tdw-outbox",
+ "tdw-patterns",
  "tdw-protocol",
  "tdw-provider-fileset",
  "tdw-retrieve",
@@ -5670,6 +5671,7 @@ dependencies = [
  "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
+ "tdw-patterns",
  "tdw-protocol",
  "tdw-retrieve",
  "tdw-service-api",
@@ -5722,6 +5724,19 @@ dependencies = [
  "tdw-core",
  "tdw-event",
  "tdw-storage-postgres",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-patterns"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-storage-graph",
+ "tdw-taxonomy",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

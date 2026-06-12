@@ -104,6 +104,7 @@ wasmi = "0.31"
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "pool", "tokio1", "tokio1-rustls-tls", "builder"] }
 
 neo4rs = "0.8"
+tdw-patterns = { path = "crates/tdw-patterns" }
 tdw-symbology = { path = "crates/tdw-symbology" }
 tdw-taxonomy = { path = "crates/tdw-taxonomy" }
 tdw-config = { path = "crates/tdw-config" }

@@ -22,6 +22,7 @@ pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
+pub(crate) mod knowledge_pattern_tools;
 pub(crate) mod knowledge_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
@@ -190,6 +191,24 @@ pub struct McpServer {
     /// inference. `None` keeps inference off — safe to omit for read-only or
     /// test deployments.
     infer_engine: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    /// Optional contradiction detector (knowledge-system K-M4).
+    ///
+    /// When attached, fires after each ingest batch and after each
+    /// `tdw.kg.proposals materialize` to close superseded functional-predicate
+    /// edges before inference runs.  `None` keeps contradiction detection off —
+    /// safe to omit for read-only or test deployments where the full daemon
+    /// does not boot.
+    contradiction_detector: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    /// Cumulative contradiction-detection totals (K-M4).
+    ///
+    /// Shared with the `fire_contradiction_after_*` hooks so each scan's
+    /// [`ContradictionReport`] is accumulated here.  Surfaced in
+    /// `tdw.kg.status` as `contradiction_totals`.  `None` when no detector
+    /// is wired (field omitted from the status JSON).
+    ///
+    /// [`ContradictionReport`]: tdw_infer::contradiction::ContradictionReport
+    contradiction_totals:
+        Option<Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>>,
 }
 
 impl Default for McpServer {
@@ -208,6 +227,8 @@ impl Default for McpServer {
             feedback_store: None,
             indexer: None,
             infer_engine: None,
+            contradiction_detector: None,
+            contradiction_totals: None,
         }
     }
 }
@@ -234,6 +255,8 @@ impl McpServer {
             feedback_store: None,
             indexer: None,
             infer_engine: None,
+            contradiction_detector: None,
+            contradiction_totals: None,
         }
     }
 
@@ -337,6 +360,29 @@ impl McpServer {
         self
     }
 
+    /// Attach the contradiction detector (knowledge-system K-M4).
+    ///
+    /// When attached, fires after each ingest batch and after each
+    /// `tdw.kg.proposals materialize` to close superseded functional-predicate
+    /// edges BEFORE inference runs (so inference always sees a consistent graph).
+    /// The `graph` is sourced from the attached [`KnowledgeRuntime`] — it must
+    /// be present for the detector to fire.
+    /// `None` skips contradiction detection (safe for read-only deployments).
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_contradiction_detector(
+        mut self,
+        detector: Arc<tdw_infer::contradiction::ContradictionDetector>,
+    ) -> Self {
+        self.contradiction_detector = Some(detector);
+        // Initialize the shared totals counter so fire_* hooks can accumulate
+        // into it and tdw.kg.status can read out the cumulative counts.
+        self.contradiction_totals = Some(Arc::new(std::sync::Mutex::new(
+            tdw_infer::contradiction::ContradictionReport::default(),
+        )));
+        self
+    }
+
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
     /// exposed via `tools/list`.
     ///
@@ -435,6 +481,16 @@ impl McpServer {
         // They are appended only when both are present.
         if self.knowledge_findings_available() {
             descriptors.extend(knowledge_finding_tools::descriptors());
+        }
+        // The knowledge PATTERN tool (knowledge-system K-R4): tdw.kg.similar
+        // is read-only and requires only the graph engine (same gate as the
+        // explain tools). Absent when no knowledge runtime or no graph engine.
+        if self
+            .knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.graph().is_some())
+        {
+            descriptors.push(knowledge_pattern_tools::descriptor());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -610,6 +666,10 @@ impl McpServer {
             return messages;
         }
 
+        if let Some(messages) = self.dispatch_knowledge_pattern_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
             return messages;
         }
@@ -684,7 +744,13 @@ impl McpServer {
         };
         // `call_tool` already validated `arguments` is an object.
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_tools::execute(runtime, name, &arguments_object) {
+        let contradiction_totals = self.contradiction_totals.clone();
+        let messages = match knowledge_tools::execute(
+            runtime,
+            name,
+            &arguments_object,
+            contradiction_totals,
+        ) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
@@ -745,20 +811,33 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
-        let messages =
-            match knowledge_write_tools::execute(runtime, infer_ctx, name, &arguments_object) {
-                Ok(ToolExecution { structured, .. }) => {
-                    vec![success_message(id, &tool_result(&structured))]
-                }
-                Err(ToolFailure::Execution(message)) => {
-                    vec![success_message(id, &tool_error_result(&message))]
-                }
-                Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                    problem
-                        .with_id(id.clone())
-                        .with_data(json!({ "tool": name })),
-                )],
-            };
+        // K-M4: pass the optional contradiction detector + totals accumulator
+        // so the `materialize` action can close superseded functional-predicate
+        // edges before inference and accumulate counts for tdw.kg.status.
+        let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            Some((Arc::clone(det), graph, self.contradiction_totals.clone()))
+        });
+        let messages = match knowledge_write_tools::execute(
+            runtime,
+            infer_ctx,
+            contradiction_ctx,
+            name,
+            &arguments_object,
+        ) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 
@@ -813,9 +892,21 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
+        // K-M4: contradiction context — detector + graph + totals accumulator.
+        // Present only when the detector is attached AND the knowledge runtime
+        // exposes a graph.
+        let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            Some((Arc::clone(det), graph, self.contradiction_totals.clone()))
+        });
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_ingest_tools::execute(indexer, infer_ctx, &arguments_object)
-        {
+        let messages = match knowledge_ingest_tools::execute(
+            indexer,
+            infer_ctx,
+            contradiction_ctx,
+            &arguments_object,
+        ) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
@@ -962,6 +1053,44 @@ impl McpServer {
                         .with_data(json!({ "tool": name })),
                 )],
             };
+        Some(messages)
+    }
+
+    /// Dispatch the knowledge pattern tool (`tdw.kg.similar`, knowledge-system K-R4).
+    ///
+    /// Returns `Some(messages)` when `name` is the similar tool — a tool error (never a
+    /// protocol error) when the graph engine is unavailable, otherwise the
+    /// [`knowledge_pattern_tools::execute`] result. Returns `None` when `name` is not the
+    /// similar tool so the caller falls through to the registry and built-in dispatch paths.
+    fn dispatch_knowledge_pattern_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_pattern_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_pattern_tools::execute(runtime, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 
@@ -1170,6 +1299,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1190,6 +1320,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(infer_engine) = infer {
         base.with_infer_engine(infer_engine)
+    } else {
+        base
+    };
+    let base = if let Some(detector) = contradiction {
+        base.with_contradiction_detector(detector)
     } else {
         base
     };
@@ -1702,6 +1837,7 @@ pub fn run_streamable_http_with_knowledge(
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1743,6 +1879,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(infer_engine) = infer {
         base.with_infer_engine(infer_engine)
+    } else {
+        base
+    };
+    let base = if let Some(detector) = contradiction {
+        base.with_contradiction_detector(detector)
     } else {
         base
     };
