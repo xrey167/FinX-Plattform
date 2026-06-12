@@ -103,12 +103,13 @@ impl GraphEngine for SharedGraph {
 /// - `annotation:p1`    (Document)
 ///
 /// Fixture edges:
-/// - `instrument:AAPL -listed_on-> venue:XNAS`       Ingest{source:"exchange-feed"} T0..open
-/// - `instrument:AAPL -listed_on-> venue:XNAS-OLD`   Ingest{source:"exchange-feed"} T0..T1 (invalidated)
-/// - `instrument:AAPL -annotated_by-> annotation:p1` Agent{agent_id:"analyst-1",gated:true} T1..open
-/// - `instrument:AAPL -peer_of-> venue:XNAS`         Rule{rule_id:"derived:peer",version:1} T0..open
+/// - `instrument:AAPL -listed_on-> venue:XNAS`       `Ingest{source:"exchange-feed"}` T0..open
+/// - `instrument:AAPL -listed_on-> venue:XNAS-OLD`   `Ingest{source:"exchange-feed"}` T0..T1 (invalidated)
+/// - `instrument:AAPL -annotated_by-> annotation:p1` `Agent{agent_id:"analyst-1",gated:true}` T1..open
+/// - `instrument:AAPL -peer_of-> venue:XNAS`         `Rule{rule_id:"derived:peer",version:1}` T0..open
 ///
-/// Tag `asset:equity` assigned to `instrument:AAPL` at T0_DATE with rule provenance.
+/// Tag `asset:equity` assigned to `instrument:AAPL` at `T0_DATE` with rule provenance.
+#[allow(clippy::too_many_lines)] // flat fixture builder: one edge/tag per line, clearer unsplit
 async fn build_explain_runtime() -> (Arc<KnowledgeRuntime>, Arc<InMemoryGraphEngine>) {
     let embedder = Arc::new(HashEmbeddingProvider::default());
     let vectors = Arc::new(InMemoryVectorEngine::default());
@@ -740,8 +741,8 @@ fn diff_count_is_exact_not_limited() {
     let sc = &response["result"]["structuredContent"];
     // edges_added count >= edges_added items length
     let added = &sc["edges_added"];
-    let count = added["count"].as_u64().unwrap_or(0) as usize;
-    let items_len = added["items"].as_array().map_or(0, |a| a.len());
+    let count = usize::try_from(added["count"].as_u64().unwrap_or(0)).unwrap_or(usize::MAX);
+    let items_len = added["items"].as_array().map_or(0, Vec::len);
     assert!(
         count >= items_len,
         "count ({count}) must be >= items.len() ({items_len})"
@@ -1013,6 +1014,7 @@ fn diff_tombstone_detected_from_real_merge_entities_call() {
 // ── Multi-successor ambiguity ─────────────────────────────────────────────────
 
 #[test]
+#[allow(clippy::too_many_lines)] // flat scenario test: seed/act/assert reads better unsplit
 fn diff_invalidated_multi_successor_sets_ambiguous() {
     // Seed a runtime where one edge is invalidated and TWO successors share
     // (from, rel) at to_ts — ambiguous: true and candidates_count: 2 must be set.
@@ -1113,7 +1115,7 @@ fn diff_invalidated_multi_successor_sets_ambiguous() {
     let runtime = Arc::new(
         KnowledgeRuntime::new(embedder, vectors)
             .with_lexical(lexical, "knowledge")
-            .with_graph(Arc::new(SharedGraph(graph.clone()))),
+            .with_graph(Arc::new(SharedGraph(graph))),
     );
 
     let mut server = McpServer::new().with_knowledge(runtime);
