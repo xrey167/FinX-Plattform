@@ -192,8 +192,80 @@ impl Default for UserConfig {
     }
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-X6).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Scheduled retrieval-eval settings for the in-daemon self-eval (K-L3).
+///
+/// Placed in `tdw-config` (not `tdw-eval-runner`) so operator TOML can configure
+/// it without creating a dependency cycle:
+/// `tdw-cron → tdw-worker → tdw-service-api → tdw-eval-runner → tdw-cron`.
+///
+/// The composition root (`tdw-backend`) converts this into a
+/// `tdw_eval_runner::scheduled_eval::ScheduledEvalConfig` at startup.
+///
+/// # Example (`tdw.toml`)
+///
+/// ```toml
+/// [knowledge.evals]
+/// split_id = "golden-split-v1"
+/// cadence  = "0 3 * * MON"
+/// max_recall_drop = 0.05
+/// max_mrr_drop    = 0.05
+/// max_ndcg_drop   = 0.05
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScheduledEvalConfig {
+    /// The `fixed_split_id` identifying which golden case set to run.
+    ///
+    /// When `None` or empty the daemon registers no cron trigger and status
+    /// reports `Unconfigured` — loudly, not silently.
+    #[serde(default)]
+    pub split_id: Option<String>,
+
+    /// 5-field cron expression for the eval cadence.
+    ///
+    /// Default: `"0 3 * * MON"` (weekly, Monday 03:00 UTC).
+    #[serde(default = "ScheduledEvalConfig::default_cadence")]
+    pub cadence: String,
+
+    /// Maximum allowed absolute drop in mean recall\@k before a regression is
+    /// declared. Must be in `[0.0, 1.0]`. Default: `0.05` (5 percentage points).
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_recall_drop: f64,
+
+    /// Maximum allowed absolute drop in MRR before a regression is declared.
+    /// Must be in `[0.0, 1.0]`. Default: `0.05`.
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_mrr_drop: f64,
+
+    /// Maximum allowed absolute drop in mean nDCG\@k before a regression is
+    /// declared. Must be in `[0.0, 1.0]`. Default: `0.05`.
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_ndcg_drop: f64,
+}
+
+impl ScheduledEvalConfig {
+    fn default_cadence() -> String {
+        "0 3 * * MON".to_string()
+    }
+
+    const fn default_threshold() -> f64 {
+        0.05
+    }
+}
+
+impl Default for ScheduledEvalConfig {
+    fn default() -> Self {
+        Self {
+            split_id: None,
+            cadence: Self::default_cadence(),
+            max_recall_drop: Self::default_threshold(),
+            max_mrr_drop: Self::default_threshold(),
+            max_ndcg_drop: Self::default_threshold(),
+        }
+    }
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -230,6 +302,14 @@ pub struct KnowledgeConfig {
     /// daemon TOML. Per-session identity arrives with K-L5.
     #[serde(default)]
     pub user: UserConfig,
+    /// Scheduled in-daemon retrieval self-eval (K-L3).
+    ///
+    /// When `split_id` is set, the daemon registers a cron trigger that runs a
+    /// golden-split regression test on the configured cadence and surfaces the
+    /// result as `eval_freshness` in `tdw.kg.status`.  When `split_id` is absent
+    /// (the default), no trigger is registered and status reports `Unconfigured`.
+    #[serde(default)]
+    pub evals: ScheduledEvalConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -405,7 +485,7 @@ impl Default for EmbeddingConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TdwConfig {
     pub profile: String,
     pub paths: PathsConfig,

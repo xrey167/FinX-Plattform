@@ -231,25 +231,40 @@ pub struct ScheduledEvalOutcome {
 // run_scheduled_eval — the pure eval+compare logic
 // ---------------------------------------------------------------------------
 
-/// Run the scheduled self-eval: build an in-memory retriever, run the fixed
-/// case set, compare to baseline, return the outcome.
+/// Run the in-memory golden-split regression detection eval and return the
+/// outcome.
+///
+/// This function implements **B11 deterministic regression detection**: it
+/// builds a fresh in-memory retriever seeded with the provided document corpus,
+/// runs the fixed golden case set through it, and compares aggregate metrics
+/// against the persisted baseline.  It does **not** measure live-corpus quality
+/// — the corpus is the same fixed document set used to generate the baseline,
+/// so results are fully deterministic and reproducible offline.  Operators who
+/// want live-corpus quality measurement should run a separate eval against the
+/// production vector store.
 ///
 /// # Parameters
 ///
-/// - `embedder` — the same embedder as the live runtime (injected, not global).
-/// - `documents` — the document corpus to seed the in-memory retriever.
+/// - `embedder` — the same embedder model as the live runtime (injected, not
+///   global); must match the baseline's `drift_key.embedder_model`.
+/// - `documents` — the fixed golden-split document corpus that seeds the
+///   in-memory retriever.  This is the same corpus used to produce the
+///   committed baseline, not the live production corpus.
 /// - `cases` — the fixed golden case set for `config.split_id`.
-/// - `drift_key` — the current version triple.
-/// - `k` — retrieval cutoff.
-/// - `baseline` — the persisted baseline to compare against.
+/// - `drift_key` — the current version triple (embedder model + rule-set +
+///   infer versions).  Stamped on the fresh report; compared against the
+///   baseline key to detect version-bump-caused drift.
+/// - `k` — retrieval cutoff (top-k).
+/// - `baseline` — the persisted golden-split baseline to compare against.
 /// - `config` — the eval config (split id, thresholds).
-/// - `now_ms` — injected current time (epoch ms); nothing here reads the clock.
+/// - `now_ms` — injected current time (epoch ms); nothing here reads the
+///   wall clock.
 ///
 /// # Errors
 ///
 /// Returns a `tdw_core::Error` if the in-memory retriever fails to build or
-/// if the eval runner fails a case.  On error the caller should produce a
-/// [`EvalFreshness::Stale`] status.
+/// if the eval runner fails a case.  On error the caller should write
+/// [`EvalFreshness::Stale`] to the shared cell with the error message.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_scheduled_eval(
     embedder: Arc<dyn EmbeddingProvider>,
@@ -275,6 +290,7 @@ pub async fn run_scheduled_eval(
             last_run_ms: now_ms,
             split_id,
             summary: verdict.summary.clone(),
+            drift_key_changed: verdict.drift_key_changed,
         }
     } else {
         EvalFreshness::Green {
@@ -296,16 +312,24 @@ pub async fn run_scheduled_eval(
 // Alert emission helper
 // ---------------------------------------------------------------------------
 
-/// Format an alert body from a regression verdict, suitable for emission via
-/// `tdw-alerts` or any structured event channel.
+/// Format a human-readable alert body from a regression verdict.
 ///
-/// Includes metric deltas and drift-key information so operators can
-/// immediately see what changed and whether it correlates with a version bump.
+/// Suitable for emission via `tdw-alerts` or any structured event channel.
+/// Includes per-metric deltas and, when the drift key changed between baseline
+/// and current runs, a clearly labelled `[drift-key changed]` note — so
+/// operators can immediately determine whether a metric drop is attributable to
+/// a version bump (embedder model, rules set, or infer version) rather than a
+/// genuine code regression.
+///
+/// When `verdict.drift_key_changed` is `true`, the body carries the old and
+/// new key values so operators can correlate the regression with the specific
+/// component version that changed.
 #[must_use]
 pub fn regression_alert_body(verdict: &RegressionVerdict) -> String {
     let drift_note = if verdict.drift_key_changed {
         format!(
-            " [drift-key changed: {:?} -> {:?}]",
+            " [drift-key changed — version bump may explain metric drop: \
+             {:?} -> {:?}]",
             verdict.baseline_drift_key, verdict.current_drift_key
         )
     } else {
@@ -482,6 +506,7 @@ mod tests {
                 last_run_ms: 0,
                 split_id: "s".to_string(),
                 summary: "REGRESSION".to_string(),
+                drift_key_changed: false,
             }
             .is_alarm()
         );
@@ -653,6 +678,7 @@ mod tests {
                 last_run_ms: 1_749_297_600_000,
                 split_id: "golden-split-v1".to_string(),
                 summary: "REGRESSION on split".to_string(),
+                drift_key_changed: true,
             },
             EvalFreshness::Stale {
                 last_run_ms: 1_749_297_600_000,
@@ -671,7 +697,7 @@ mod tests {
 
     #[test]
     fn config_deserializes_with_defaults_from_empty_object() {
-        let json = r#"{}"#;
+        let json = "{}";
         let cfg: ScheduledEvalConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(cfg.split_id, None);
         assert_eq!(cfg.cadence, "0 3 * * MON");

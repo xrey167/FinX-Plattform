@@ -5166,6 +5166,7 @@ dependencies = [
  "tdw-bus",
  "tdw-config",
  "tdw-core",
+ "tdw-cron",
  "tdw-domain",
  "tdw-embed",
  "tdw-embed-google",

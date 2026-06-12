@@ -417,6 +417,14 @@ pub enum EvalFreshness {
         split_id: String,
         /// Full summary from the regression verdict.
         summary: String,
+        /// `true` when the baseline and current reports have different
+        /// drift-key values (embedder model, rules version, or infer version
+        /// changed between the baseline run and the current run).
+        ///
+        /// A metric drop that correlates with a key change is a *version
+        /// effect* rather than a code regression — this flag lets operators
+        /// distinguish the two causes without re-reading the raw report.
+        drift_key_changed: bool,
     },
 
     /// The last eval run itself failed (engine error or empty case set).
@@ -849,6 +857,7 @@ mod status_tests {
             last_run_ms: 1_749_297_600_000,
             split_id: "golden-split-v1".to_string(),
             summary: "REGRESSION on split".to_string(),
+            drift_key_changed: false,
         }));
         let runtime = vector_only_runtime().with_eval_freshness(cell);
         let status = runtime.status().await;

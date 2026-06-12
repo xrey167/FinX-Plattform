@@ -441,11 +441,14 @@ mod tests {
         assert_eq!(verdict.deltas.len(), restored.deltas.len());
         for (orig, rt) in verdict.deltas.iter().zip(restored.deltas.iter()) {
             assert_eq!(orig.metric, rt.metric);
-            assert_eq!(orig.baseline, rt.baseline);
-            assert_eq!(orig.current, rt.current);
+            // Exact power-of-two inputs: no ULP drift through JSON round-trip.
+            #[allow(clippy::float_cmp)]
+            {
+                assert_eq!(orig.baseline, rt.baseline);
+                assert_eq!(orig.current, rt.current);
+                assert_eq!(orig.delta, rt.delta);
+            }
             assert_eq!(orig.regressed, rt.regressed);
-            // delta is computed from exact power-of-two inputs so no ULP drift.
-            assert_eq!(orig.delta, rt.delta);
         }
     }
 

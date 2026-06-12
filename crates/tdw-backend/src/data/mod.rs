@@ -14,17 +14,23 @@ use tdw_agent_store::{
 };
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
+use tdw_config::ScheduledEvalConfig as EvalsConfig;
 use tdw_config::TdwConfig;
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
 };
+use tdw_cron::{CronSchedule, ScheduleRegistry, ScheduledTrigger, TriggerAction, due_triggers};
 use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
+use tdw_eval_runner::scheduled_eval::{
+    ScheduledEvalConfig as EvalRunnerConfig, eval_trigger_id, regression_alert_body,
+    run_scheduled_eval,
+};
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
-use tdw_knowledge::runtime::KnowledgeRuntime;
+use tdw_knowledge::runtime::{EvalFreshness, KnowledgeRuntime};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
 use tdw_protocol::{EventMsg, OpEnvelope};
@@ -56,6 +62,9 @@ struct DaemonHandle {
     /// The hot-reload tick for tag-rules + inference rules (knowledge-system K-L1).
     /// `None` when `knowledge.rules.rules_dir` is absent — no rules, no reload loop.
     rules_reload_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-L3 scheduled self-eval worker task.
+    /// `None` when `knowledge.evals.split_id` is not configured.
+    eval_worker_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -144,6 +153,11 @@ pub struct Backend {
     /// the runtime will be injected at the MCP session layer instead of being
     /// sourced from `[knowledge.user]` config.
     finding_indexer: Arc<std::sync::Mutex<KnowledgeIndexer>>,
+    /// K-L3 scheduled self-eval configuration, extracted from
+    /// `config.knowledge.evals` in [`Backend::from_config`].  Held here so
+    /// [`Backend::serve`] can register the cron trigger and spawn the eval
+    /// worker without a second round of config parsing.
+    evals_cfg: EvalsConfig,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -168,6 +182,9 @@ impl Backend {
         let rules_cfg = config.knowledge.rules.clone();
         let infer_cfg = config.knowledge.infer.clone();
         let user_id = config.knowledge.user.id.clone();
+        // Extract eval config before `config` is consumed by AppState::from_config
+        // (K-L3: used to initialise the freshness cell and cron trigger).
+        let evals_cfg = config.knowledge.evals.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -228,6 +245,12 @@ impl Backend {
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph)),
         ));
+        // K-L3: build the eval-freshness cell and register the cron trigger when
+        // `knowledge.evals.split_id` is configured.  The cell is shared between the
+        // KnowledgeRuntime (read side: status) and the eval worker (write side).
+        // Initial state: Pending (configured, not yet run) when a split is set;
+        // Unconfigured otherwise (no trigger registered, no cell attached).
+        let eval_freshness_cell = build_eval_freshness_cell(&evals_cfg);
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
@@ -251,15 +274,19 @@ impl Backend {
         // K-X6: bind the config user identity and the finding indexer so the
         // MCP finding tools are available in production. Per-session identity
         // arrives with K-L5.
-        let runtime = Arc::new(
+        // K-L3: attach the eval-freshness cell when configured.
+        let mut knowledge_runtime =
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
                 .with_tags(Arc::clone(&tags_engine))
                 .with_versions(rules_v, infer_v)
                 .with_user_id(user_id)
-                .with_finding_indexer(Arc::clone(&finding_indexer)),
-        );
+                .with_finding_indexer(Arc::clone(&finding_indexer));
+        if let Some(cell) = eval_freshness_cell {
+            knowledge_runtime = knowledge_runtime.with_eval_freshness(cell);
+        }
+        let runtime = Arc::new(knowledge_runtime);
         Ok(Self {
             state,
             runner,
@@ -273,6 +300,7 @@ impl Backend {
             rules,
             infer,
             finding_indexer,
+            evals_cfg,
             daemon: None,
         })
     }
@@ -324,6 +352,7 @@ impl Backend {
             rules: Arc::new(Mutex::new(RuleEngine::default())),
             infer: Arc::new(Mutex::new(InferEngine::default())),
             finding_indexer,
+            evals_cfg: EvalsConfig::default(),
             daemon: None,
         }
     }
@@ -483,12 +512,23 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-L3 — spawn the scheduled self-eval worker when split_id is
+        // configured.  The worker holds the shared freshness cell (also held by
+        // KnowledgeRuntime::status) and writes it after each eval run.
+        let eval_worker_task = spawn_eval_worker(
+            &self.evals_cfg,
+            self.runtime.eval_freshness_cell().cloned(),
+            Arc::clone(&self.embedder),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
             serve_task,
             consolidation_task,
             rules_reload_task,
+            eval_worker_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -536,6 +576,11 @@ impl Backend {
         if let Some(reload_task) = daemon.rules_reload_task {
             reload_task.abort();
             let _ = reload_task.await;
+        }
+        // The eval worker observes the same token; abort if it lingers.
+        if let Some(eval_task) = daemon.eval_worker_task {
+            eval_task.abort();
+            let _ = eval_task.await;
         }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
@@ -1369,6 +1414,199 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
         .filter(|secs| *secs > 0)
         .unwrap_or(DEFAULT_SECS);
     std::time::Duration::from_secs(secs)
+}
+
+/// Build the eval-freshness shared cell for the K-L3 scheduled self-eval (K-L3).
+///
+/// Returns `Some(Arc<Mutex<EvalFreshness>>)` pre-populated with
+/// [`EvalFreshness::Pending`] when `config.split_id` is set (eval is configured
+/// but has not yet run).  Returns `None` when no split is configured — the
+/// caller omits `.with_eval_freshness(...)` and `KnowledgeRuntime::status`
+/// reports [`EvalFreshness::Unconfigured`].
+///
+/// The returned `Arc` is shared between the `KnowledgeRuntime` (read side:
+/// `tdw.kg.status`) and the eval worker task spawned during [`Backend::serve`]
+/// (write side: updates after each cron-triggered run).
+pub fn build_eval_freshness_cell(
+    config: &EvalsConfig,
+) -> Option<Arc<tokio::sync::Mutex<EvalFreshness>>> {
+    let split_id = config.split_id.as_deref().filter(|s| !s.is_empty())?;
+    Some(Arc::new(tokio::sync::Mutex::new(EvalFreshness::Pending {
+        split_id: split_id.to_string(),
+    })))
+}
+
+/// Convert a `tdw-config` [`EvalsConfig`] to the eval-runner's own config type.
+///
+/// The two types are structurally identical; this conversion exists so
+/// `tdw-config` does not depend on `tdw-eval-runner` (which would create a
+/// cycle via `tdw-cron → tdw-worker → tdw-service-api → tdw-eval-runner →
+/// tdw-cron`).  The composition root (`tdw-backend`) owns both crates and
+/// performs the conversion here.
+fn evals_config_to_runner(cfg: &EvalsConfig) -> EvalRunnerConfig {
+    EvalRunnerConfig {
+        split_id: cfg.split_id.clone(),
+        cadence: cfg.cadence.clone(),
+        max_recall_drop: cfg.max_recall_drop,
+        max_mrr_drop: cfg.max_mrr_drop,
+        max_ndcg_drop: cfg.max_ndcg_drop,
+    }
+}
+
+/// Spawn the K-L3 scheduled self-eval worker task.
+///
+/// Registers the eval [`ScheduledTrigger`] in a local [`ScheduleRegistry`] and
+/// starts a tokio task that ticks every [`tdw_cron::cron_tick()`] seconds.  On
+/// each tick, [`due_triggers`] is consulted; when the weekly slot fires the
+/// worker runs [`run_scheduled_eval`] with an empty golden corpus (the golden
+/// documents and cases must be injected at fire time by a future extension),
+/// writes the outcome freshness to the shared cell, and emits an `eprintln!`
+/// alert when `is_alarm()`.
+///
+/// Returns `None` when no `split_id` is configured — the caller omits the task
+/// from [`DaemonHandle`] and status reports [`EvalFreshness::Unconfigured`].
+fn spawn_eval_worker(
+    cfg: &EvalsConfig,
+    cell: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
+    embedder: Arc<dyn EmbeddingProvider>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // Clone before the async move so the task owns all data ('static).
+    let split_id = cfg
+        .split_id
+        .as_deref()
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let runner_cfg = evals_config_to_runner(cfg);
+
+    // Build the ScheduleRegistry with the eval trigger (K-L3 cron registration).
+    // The TriggerAction carries a sentinel Op::Shutdown envelope — the eval
+    // worker fires run_scheduled_eval inline and never dispatches the action.
+    let trigger_id = eval_trigger_id(&split_id);
+    let schedule = CronSchedule::parse(&cfg.cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 3 * * MON").expect("fallback parse"));
+
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-eval-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "eval-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: trigger_id,
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-eval".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            // Cron slot fired — run the golden-split regression detection eval.
+            // The golden documents and cases are currently empty; wiring the
+            // corpus loader is a follow-up (K-L3 extension point).  The worker
+            // already owns the freshness cell, the embedder, and the config;
+            // the outcome is written to the cell even on an empty corpus so that
+            // status reflects the last attempt.
+            let outcome = run_scheduled_eval(
+                Arc::clone(&embedder),
+                Vec::<tdw_knowledge::KnowledgeDocument>::new(),
+                &[],
+                tdw_eval_runner::retrieval_eval::DriftKey {
+                    embedder_model: embedder.model_id().to_string(),
+                    rules_version: None,
+                    infer_version: None,
+                },
+                3,
+                &tdw_eval_runner::retrieval_eval::RetrievalEvalReport {
+                    k: 3,
+                    mean_recall_at_k: 1.0,
+                    mrr: 1.0,
+                    mean_ndcg_at_k: 1.0,
+                    cases: vec![],
+                    drift_key: tdw_eval_runner::retrieval_eval::DriftKey {
+                        embedder_model: embedder.model_id().to_string(),
+                        rules_version: None,
+                        infer_version: None,
+                    },
+                },
+                &runner_cfg,
+                now_ms,
+            )
+            .await;
+
+            match outcome {
+                Ok(result) => {
+                    // Emit alert on regression (Finding 3: alert emission on
+                    // is_alarm()).
+                    if result.freshness.is_alarm() {
+                        let body = regression_alert_body(&result.verdict);
+                        eprintln!(
+                            "[tdw] ALERT: knowledge self-eval regression (split={split_id}): \
+                             {body}"
+                        );
+                    }
+                    if let Some(ref cell) = cell {
+                        let mut guard = cell.lock().await;
+                        *guard = result.freshness;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("[tdw] knowledge self-eval failed (split={split_id}): {error}");
+                    if let Some(ref cell) = cell {
+                        let mut guard = cell.lock().await;
+                        *guard = EvalFreshness::Stale {
+                            last_run_ms: now_ms,
+                            split_id: split_id.to_string(),
+                            error: error.to_string(),
+                        };
+                    }
+                }
+            }
+        }
+    });
+
+    Some(task)
 }
 
 /// Eagerly validate and log the graph backend at daemon startup (K-E1).
