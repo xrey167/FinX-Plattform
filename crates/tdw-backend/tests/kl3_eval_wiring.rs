@@ -21,7 +21,7 @@
 //!   exercised by `spawn_eval_worker` (which logs via `eprintln!` when
 //!   `is_alarm()` is true).
 //!
-//! - **Finding 5 (Pending / Stale)**: `from_config` with a configured split_id
+//! - **Finding 5 (Pending / Stale)**: `from_config` with a configured `split_id`
 //!   sets `Pending` as the initial state; an explicit write of `Stale` to the
 //!   cell is visible to status.
 
@@ -35,12 +35,12 @@ use tdw_knowledge::runtime::EvalFreshness;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a minimal [`TdwConfig`] with in-memory SQLite stores so that
+/// Build a minimal [`TdwConfig`] with in-memory `SQLite` stores so that
 /// `AppState::from_config` does not attempt to open a filesystem path.
 ///
 /// `Backend::from_config` passes config through to `AppState::from_config`
 /// without the `"sqlite::memory:"` override that `server::load_config` injects
-/// for the daemon boot path.  Pointing both stores at the special SQLite
+/// for the daemon boot path.  Pointing both stores at the special `SQLite`
 /// in-memory URI avoids any filesystem dependency in CI.
 fn minimal_config() -> TdwConfig {
     let mut cfg = TdwConfig::default();
@@ -53,6 +53,7 @@ fn minimal_config() -> TdwConfig {
 // Finding 2 + 5: build_eval_freshness_cell is Pending when split_id is set
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::significant_drop_tightening)] // test: guard must outlive the assert! block intentionally
 #[test]
 fn eval_freshness_cell_is_pending_when_split_id_configured() {
     let cfg = ScheduledEvalConfig {
@@ -93,6 +94,7 @@ fn eval_freshness_cell_is_none_when_split_id_empty() {
 // Finding 5: Stale write is visible through the shared cell
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::significant_drop_tightening)] // test: guard must outlive the assert! block intentionally
 #[tokio::test]
 async fn stale_write_to_cell_is_visible_through_cell() {
     let cfg = ScheduledEvalConfig {
