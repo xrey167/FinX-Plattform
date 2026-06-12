@@ -2446,6 +2446,133 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_estimates_forward": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "analyst",
+            "headerName": "Analyst"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "high",
+            "headerName": "High"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "low",
+            "headerName": "Low"
+          },
+          {
+            "cellDataType": "number",
+            "field": "mean",
+            "headerName": "Mean"
+          },
+          {
+            "cellDataType": "number",
+            "field": "number_of_analysts",
+            "headerName": "Number Of Analysts"
+          },
+          {
+            "cellDataType": "text",
+            "field": "recommendation",
+            "headerName": "Recommendation"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Forward analyst estimates per period (EPS, sales, EBITDA), FMP-backed.",
+    "endpoint": "/widget-data/equity/estimates/forward",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_estimates_forward",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Forward",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_estimates_historical_eps": {
     "category": "equity",
     "data": {
@@ -2530,6 +2657,133 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Historical Eps",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_estimates_price_target": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "analyst",
+            "headerName": "Analyst"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "high",
+            "headerName": "High"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "low",
+            "headerName": "Low"
+          },
+          {
+            "cellDataType": "number",
+            "field": "mean",
+            "headerName": "Mean"
+          },
+          {
+            "cellDataType": "number",
+            "field": "number_of_analysts",
+            "headerName": "Number Of Analysts"
+          },
+          {
+            "cellDataType": "text",
+            "field": "recommendation",
+            "headerName": "Recommendation"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Analyst price-target consensus (high/low/consensus) for a symbol, FMP-backed.",
+    "endpoint": "/widget-data/equity/estimates/price_target",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_estimates_price_target",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Price Target",
     "params": [
       {
         "description": "Ticker symbol to query.",

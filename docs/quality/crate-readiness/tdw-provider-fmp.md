@@ -7,7 +7,7 @@ Generated during the 2026-06-07 crate-by-crate release audit after comparing the
 - Manifest: `C:\Users\ReyDa\FinX-Finance\FinX-Plattform-release-1-0-crate-audit\crates\tdw-provider-fmp\Cargo.toml`.
 - Targets: example, lib, test.
 - Features: default; http=[dep:async-trait,dep:bytes,dep:reqwest,dep:serde_json,dep:tdw-core,dep:tdw-domain,dep:tokio].
-- Test attributes found in Rust sources: 19.
+- Test attributes found in Rust sources: 28.
 - Tests directory: True.
 - Docs/examples: README.md, ARCHITECTURE.md, examples/.
 - Scan signal files: 2.
