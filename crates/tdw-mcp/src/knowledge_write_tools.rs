@@ -139,20 +139,21 @@ fn proposals_descriptor() -> ToolDescriptor {
         "tdw.kg.proposals",
         "Manage Gated Proposals",
         "List or act on gated write proposals. action=list returns a bounded page of proposals \
-         (default 100, max 256) with `total` (all matching) and `proposals` (the page). Filtered \
-         by `agent_id` when given; `limit` caps the page. action=approve / action=reject / \
-         action=materialize are OPERATOR actions: they run ONLY on a runtime granted operator \
-         authority, so an agent cannot approve or materialize its own proposals — the whole \
-         point of the gate (B9 security review). approve/reject require proposal_id (approve \
-         also takes approved_by; reject a reason); materialize writes every Ready proposal into \
-         the engines, RE-VALIDATING each at write time, and returns the report. Reads \
-         (tdw.kg.* / tdw.tags.query) exclude pending facts because only materialized facts \
-         exist in the engines.",
+         (default 100, max 256) with `total` (all matching) and `proposals` (the page). \
+         `agent_id` is a QUERY FILTER for list (not an identity claim — caller identity is \
+         always host-bound from config); `limit` caps the page. action=approve / \
+         action=reject / action=materialize are OPERATOR actions: they run ONLY on a runtime \
+         granted operator authority, so an agent cannot approve or materialize its own \
+         proposals — the whole point of the gate (B9 security review). approve/reject require \
+         proposal_id (approve also takes approved_by; reject a reason); materialize writes \
+         every Ready proposal into the engines, RE-VALIDATING each at write time, and returns \
+         the report. Reads (tdw.kg.* / tdw.tags.query) exclude pending facts because only \
+         materialized facts exist in the engines.",
         json!({
             "type": "object",
             "properties": {
                 "action": { "type": "string", "enum": ["list", "approve", "reject", "materialize"], "description": "The proposal action." },
-                "agent_id": { "type": "string", "description": "list: filter to this agent's proposals." },
+                "agent_id": { "type": "string", "description": "list: FILTER proposals to this agent id (query filter only — identity is host-bound, not set by this field)." },
                 "limit": { "type": "integer", "description": "list: page size (default 100, max 256)." },
                 "proposal_id": { "type": "string", "description": "approve/reject: the target proposal id." },
                 "approved_by": { "type": "string", "description": "approve: the operator id (audit trail)." },
