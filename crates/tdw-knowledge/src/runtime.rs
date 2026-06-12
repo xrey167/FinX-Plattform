@@ -407,7 +407,12 @@ impl KnowledgeRuntime {
     /// probe failures are captured inside [`KgGraphHealth::error`] so the full
     /// snapshot is always returned.
     pub async fn status(&self) -> KgStatus {
-        let vector_collection = crate::collection_name(&self.versions.embedder_model);
+        let versions_snapshot = self
+            .versions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let vector_collection = crate::collection_name(&versions_snapshot.embedder_model);
 
         let graph_health = if let Some(graph) = self.graph.as_ref() {
             let probe = graph.edges(None, 0, 1).await;
@@ -470,13 +475,13 @@ impl KnowledgeRuntime {
 
         KgStatus {
             vector_collection,
-            embedder_model: self.versions.embedder_model.clone(),
+            embedder_model: versions_snapshot.embedder_model.clone(),
             document_count_note: "VectorEngine has no count() in this version; \
                                   use Qdrant dashboard or lexical engine for a precise count"
                 .to_string(),
             taxonomy_kind_count: EntityKind::ALL.len(),
             graph_health,
-            versions: self.versions.clone(),
+            versions: versions_snapshot,
             proposals,
             language_model_grade,
         }
