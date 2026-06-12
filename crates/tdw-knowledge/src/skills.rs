@@ -421,24 +421,20 @@ impl SkillRegistry {
             .filter(|s| s.lifecycle == SkillLifecycle::Active)
             .collect();
 
-        let outcome = tournament.evaluate(&candidates, &actives, golden);
-        let TournamentOutcome::Decided {
-            ref winner,
-            ref retired,
-            ..
-        } = outcome
-        else {
-            // Insufficient → fail-closed: nothing transitions.
-            return Ok(outcome);
+        // Destructure the verdict by value up front: `winner`/`retired`/
+        // `scoreboard` become owned, so the later `&mut self` transition calls
+        // don't conflict with a borrow of `outcome`. Insufficient → fail-closed.
+        let (scoreboard, winner, retired) = match tournament.evaluate(&candidates, &actives, golden) {
+            TournamentOutcome::Decided {
+                scoreboard,
+                winner,
+                retired,
+            } => (scoreboard, winner, retired),
+            insufficient @ TournamentOutcome::Insufficient { .. } => return Ok(insufficient),
         };
 
-        // Collect the deterministic scores so the audit records the exact value
-        // that justified each transition.
-        let scoreboard = if let TournamentOutcome::Decided { scoreboard, .. } = &outcome {
-            scoreboard.clone()
-        } else {
-            Vec::new()
-        };
+        // The deterministic scores justify (and the audit records) each
+        // transition.
         let score_of = |skill_id: &str| -> f64 {
             scoreboard
                 .iter()
@@ -467,11 +463,11 @@ impl SkillRegistry {
         }
 
         // Retire regressing active skills (Active -> Retired) through the gate.
-        for retire_id in retired.clone() {
-            let score = score_of(&retire_id);
+        for retire_id in &retired {
+            let score = score_of(retire_id);
             let proposal = self
                 .enqueue_transition(
-                    &retire_id,
+                    retire_id,
                     SkillLifecycle::Retired,
                     score,
                     &skill_node_id,
@@ -483,16 +479,16 @@ impl SkillRegistry {
                     now,
                 )
                 .await?;
-            self.apply_transition(
-                &retire_id,
-                SkillLifecycle::Retired,
-                score,
-                &proposal.id,
-                now,
-            );
+            self.apply_transition(retire_id, SkillLifecycle::Retired, score, &proposal.id, now);
         }
 
-        Ok(outcome)
+        // Reconstruct the verdict for the caller (the scores/decisions are
+        // unchanged; we only moved them out to satisfy the borrow checker).
+        Ok(TournamentOutcome::Decided {
+            scoreboard,
+            winner,
+            retired,
+        })
     }
 
     /// Enqueue ONE lifecycle transition as a gated B9 annotation proposal. This
