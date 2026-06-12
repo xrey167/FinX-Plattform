@@ -554,6 +554,7 @@ impl TdwConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::Validation`] describing the first invalid field.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
@@ -672,6 +673,53 @@ impl TdwConfig {
         }
 
         validate_knowledge(&self.knowledge)?;
+
+        // Scheduled eval: cadence must be a 5-field cron expression; thresholds
+        // must be in [0.0, 1.0].  Validation runs regardless of whether
+        // `split_id` is set so operators catch typos before enabling the eval.
+        let evals = &self.knowledge.evals;
+
+        // Cadence: exactly 5 whitespace-separated fields, each field containing
+        // only cron-legal characters ([0-9*/,\-?LWC#]).  A full semantic parse
+        // requires `tdw-cron` (which would introduce a dependency cycle here);
+        // this structural check catches the most common mistakes (wrong field
+        // count, stray characters) at config-load time.
+        {
+            let fields: Vec<&str> = evals.cadence.split_whitespace().collect();
+            if fields.len() != 5 {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.evals.cadence must be a 5-field cron expression \
+                     (e.g. \"0 3 * * MON\"), got {:?}",
+                    evals.cadence
+                )));
+            }
+            let legal: fn(char) -> bool = |c| {
+                c.is_ascii_digit()
+                    || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+            };
+            for field in &fields {
+                if field.chars().any(|c| !legal(c)) {
+                    return Err(ConfigError::Validation(format!(
+                        "knowledge.evals.cadence contains an invalid cron field {:?} \
+                         in expression {:?}",
+                        field, evals.cadence
+                    )));
+                }
+            }
+        }
+
+        // Regression thresholds must be in [0.0, 1.0].
+        for (name, value) in [
+            ("knowledge.evals.max_recall_drop", evals.max_recall_drop),
+            ("knowledge.evals.max_mrr_drop", evals.max_mrr_drop),
+            ("knowledge.evals.max_ndcg_drop", evals.max_ndcg_drop),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ConfigError::Validation(format!(
+                    "{name} must be in [0.0, 1.0], got {value}"
+                )));
+            }
+        }
 
         Ok(())
     }

@@ -272,3 +272,108 @@ fn schema_bundle_exports_named_schemas() {
     let raw = config_schema();
     assert!(raw.is_object());
 }
+
+// ---------------------------------------------------------------------------
+// knowledge.evals validation
+// ---------------------------------------------------------------------------
+
+fn valid_evals_config() -> TdwConfig {
+    // Default config already has a valid cadence and thresholds.
+    TdwConfig::default()
+}
+
+#[test]
+fn evals_default_config_validates_ok() {
+    valid_evals_config()
+        .validate()
+        .expect("default evals config must validate");
+}
+
+#[test]
+fn evals_cadence_wrong_field_count_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.cadence = "0 3 * *".to_string(); // 4 fields, not 5
+    let error = cfg.validate().expect_err("4-field cadence must fail");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("knowledge.evals.cadence"),
+        "error must name the field; got: {msg}"
+    );
+    assert!(
+        msg.contains("5-field"),
+        "error must mention expected field count; got: {msg}"
+    );
+}
+
+#[test]
+fn evals_cadence_empty_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.cadence = String::new();
+    let error = cfg.validate().expect_err("empty cadence must fail");
+    assert!(
+        error.to_string().contains("knowledge.evals.cadence"),
+        "error must name the field; got: {error}"
+    );
+}
+
+#[test]
+fn evals_cadence_invalid_chars_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.cadence = "0 3 * * $MON".to_string(); // '$' is illegal
+    let error = cfg.validate().expect_err("cadence with $ must fail");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("knowledge.evals.cadence"),
+        "error must name the field; got: {msg}"
+    );
+}
+
+#[test]
+fn evals_recall_drop_above_one_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.max_recall_drop = 1.1;
+    let error = cfg.validate().expect_err("recall drop > 1.0 must fail");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("knowledge.evals.max_recall_drop"),
+        "error must name max_recall_drop; got: {msg}"
+    );
+    assert!(
+        msg.contains("[0.0, 1.0]"),
+        "error must state valid range; got: {msg}"
+    );
+}
+
+#[test]
+fn evals_mrr_drop_negative_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.max_mrr_drop = -0.01;
+    let error = cfg.validate().expect_err("negative mrr drop must fail");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("knowledge.evals.max_mrr_drop"),
+        "error must name max_mrr_drop; got: {msg}"
+    );
+}
+
+#[test]
+fn evals_ndcg_drop_above_one_fails_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.max_ndcg_drop = 2.0;
+    let error = cfg.validate().expect_err("ndcg drop > 1.0 must fail");
+    let msg = error.to_string();
+    assert!(
+        msg.contains("knowledge.evals.max_ndcg_drop"),
+        "error must name max_ndcg_drop; got: {msg}"
+    );
+}
+
+#[test]
+fn evals_threshold_boundary_values_pass_validation() {
+    let mut cfg = valid_evals_config();
+    cfg.knowledge.evals.max_recall_drop = 0.0;
+    cfg.knowledge.evals.max_mrr_drop = 1.0;
+    cfg.knowledge.evals.max_ndcg_drop = 0.5;
+    cfg.validate()
+        .expect("boundary values 0.0 and 1.0 must pass");
+}

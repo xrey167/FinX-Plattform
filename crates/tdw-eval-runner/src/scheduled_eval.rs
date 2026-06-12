@@ -208,6 +208,49 @@ pub fn eval_trigger_id(split_id: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// EvalAlertSink — seam for routing regression alerts
+// ---------------------------------------------------------------------------
+
+/// Receives a formatted regression-alert body after a scheduled eval run
+/// determines that metrics have fallen below threshold.
+///
+/// The sink is called synchronously on the eval-worker task; implementations
+/// must not block indefinitely.  Any error is logged and does **not** abort
+/// the worker — the freshness cell is already written before `notify` is
+/// called.
+///
+/// # Production wiring
+///
+/// The composition root (`tdw-backend`) passes `None` today, which causes the
+/// worker to fall back to an `eprintln!` log line (visible in daemon stdout and
+/// captured by any log aggregator that tails the process).  When a durable
+/// notification channel (e.g. `tdw-alerts` Postgres sink or webhook) is wired
+/// into the daemon, the composition root passes `Some(Arc::new(<impl>))`.
+///
+/// # Testing
+///
+/// Tests pass a `MockEvalAlertSink` that records calls so assertions can verify
+/// that the alert was emitted for a regressed outcome.
+pub trait EvalAlertSink: Send + Sync {
+    /// Receive a formatted alert body for a regression event.
+    ///
+    /// `split_id` identifies which golden split triggered the regression.
+    /// `body` is the output of [`regression_alert_body`].
+    fn notify(&self, split_id: &str, body: &str);
+}
+
+/// A no-op [`EvalAlertSink`] that discards every notification.
+///
+/// Use in production when no external alert channel is configured — the
+/// `eprintln!` fallback in the eval worker still fires.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopEvalAlertSink;
+
+impl EvalAlertSink for NoopEvalAlertSink {
+    fn notify(&self, _split_id: &str, _body: &str) {}
+}
+
+// ---------------------------------------------------------------------------
 // Scheduled eval outcome (caller-owned persistence)
 // ---------------------------------------------------------------------------
 
@@ -702,5 +745,73 @@ mod tests {
         assert_eq!(cfg.split_id, None);
         assert_eq!(cfg.cadence, "0 3 * * MON");
         assert!((cfg.max_recall_drop - 0.05).abs() < f64::EPSILON);
+    }
+
+    // ── EvalAlertSink ─────────────────────────────────────────────────────────
+
+    /// A test-only [`EvalAlertSink`] that records the most recent notification.
+    struct MockEvalAlertSink {
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl MockEvalAlertSink {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded(&self) -> Vec<(String, String)> {
+            self.calls.lock().expect("lock").clone()
+        }
+    }
+
+    impl EvalAlertSink for MockEvalAlertSink {
+        fn notify(&self, split_id: &str, body: &str) {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push((split_id.to_string(), body.to_string()));
+        }
+    }
+
+    #[test]
+    fn eval_alert_sink_mock_receives_regression_alert() {
+        let verdict = RegressionVerdict {
+            is_regression: true,
+            summary: "REGRESSION: recall dropped".to_string(),
+            deltas: vec![],
+            baseline_drift_key: DriftKey {
+                embedder_model: "hash-8".to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+            current_drift_key: DriftKey {
+                embedder_model: "hash-8".to_string(),
+                rules_version: None,
+                infer_version: None,
+            },
+            drift_key_changed: false,
+        };
+
+        let body = regression_alert_body(&verdict);
+        let sink = MockEvalAlertSink::new();
+        sink.notify("golden-split-v1", &body);
+
+        let calls = sink.recorded();
+        assert_eq!(calls.len(), 1, "sink must receive exactly one notification");
+        let (split_id, received_body) = &calls[0];
+        assert_eq!(split_id, "golden-split-v1");
+        assert!(
+            received_body.contains("REGRESSION"),
+            "body must contain REGRESSION; got: {received_body}"
+        );
+    }
+
+    #[test]
+    fn noop_eval_alert_sink_does_not_panic() {
+        let sink = NoopEvalAlertSink;
+        // Must not panic regardless of input.
+        sink.notify("any-split", "any body");
     }
 }

@@ -25,7 +25,7 @@ use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_eval_runner::scheduled_eval::{
-    ScheduledEvalConfig as EvalRunnerConfig, eval_trigger_id, regression_alert_body,
+    EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, eval_trigger_id, regression_alert_body,
     run_scheduled_eval,
 };
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
@@ -515,10 +515,15 @@ impl Backend {
         // K-L3 — spawn the scheduled self-eval worker when split_id is
         // configured.  The worker holds the shared freshness cell (also held by
         // KnowledgeRuntime::status) and writes it after each eval run.
+        // `alert_sink` is `None` today: the worker falls back to `eprintln!`.
+        // When a durable notification channel is wired into the daemon, pass
+        // `Some(Arc::new(<impl EvalAlertSink>))` here.
+        let alert_sink: Option<Arc<dyn EvalAlertSink>> = None;
         let eval_worker_task = spawn_eval_worker(
             &self.evals_cfg,
             self.runtime.eval_freshness_cell().cloned(),
             Arc::clone(&self.embedder),
+            alert_sink,
             cancel.clone(),
         );
 
@@ -1469,6 +1474,7 @@ fn spawn_eval_worker(
     cfg: &EvalsConfig,
     cell: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
     embedder: Arc<dyn EmbeddingProvider>,
+    alert_sink: Option<Arc<dyn EvalAlertSink>>,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     // Clone before the async move so the task owns all data ('static).
@@ -1577,10 +1583,16 @@ fn spawn_eval_worker(
 
             match outcome {
                 Ok(result) => {
-                    // Emit alert on regression (Finding 3: alert emission on
-                    // is_alarm()).
+                    // Emit alert on regression via the wired sink, with an
+                    // eprintln! fallback when no sink is configured.  The sink
+                    // call happens before the cell write so an observer that
+                    // races on the cell always sees the alarm after the
+                    // notification has been dispatched.
                     if result.freshness.is_alarm() {
                         let body = regression_alert_body(&result.verdict);
+                        if let Some(ref sink) = alert_sink {
+                            sink.notify(&split_id, &body);
+                        }
                         eprintln!(
                             "[tdw] ALERT: knowledge self-eval regression (split={split_id}): \
                              {body}"
