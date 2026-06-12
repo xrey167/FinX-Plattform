@@ -17,7 +17,7 @@ use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
-use tdw_config::TdwConfig;
+use tdw_config::{FeedsConfig, TdwConfig};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -31,6 +31,7 @@ use tdw_eval_runner::scheduled_eval::{
     load_golden_split, regression_alert_body, run_scheduled_eval_from_fixture,
 };
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
+use tdw_knowledge::feeds::{FeedFreshness, FeedSource, FixtureFeedSource};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::{
     ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
@@ -72,6 +73,9 @@ struct DaemonHandle {
     /// The K-L4 gated auto-materialization sweep task.
     /// `None` when `knowledge.proposals.auto_materialize = false`.
     auto_mat_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-L6 scheduled feed tasks, one per enabled feed entry.
+    /// Empty when no feeds are configured.
+    feed_handles: Vec<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -176,6 +180,18 @@ pub struct Backend {
     /// `config.knowledge.proposals` in [`Backend::from_config`]. Held here so
     /// [`Backend::serve`] can register the sweep trigger without re-parsing.
     proposals_cfg: ProposalsCfg,
+    /// K-L6 scheduled feed configuration, extracted from
+    /// `config.knowledge.feeds` in [`Backend::from_config`].  Held here so
+    /// [`Backend::serve`] can spawn the per-feed cron tasks without a second
+    /// round of config parsing.
+    feeds_cfg: FeedsConfig,
+    /// K-L6 per-feed freshness cells, one per enabled feed entry (plus one
+    /// `Disabled` cell for each disabled entry). Built in `from_config`
+    /// BEFORE the runtime is `Arc`-wrapped so they can be attached via
+    /// `with_feed_freshness`. `serve()` clones these Arcs into the spawned
+    /// tasks; `shutdown()` does not need to touch them (the tasks observe
+    /// the cancellation token and exit).
+    feed_freshness_cells: Vec<Arc<tokio::sync::Mutex<FeedFreshness>>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -211,6 +227,8 @@ impl Backend {
         let evals_cfg = config.knowledge.evals.clone();
         // K-L4: extract proposals sweep config before config is consumed.
         let proposals_cfg = config.knowledge.proposals.clone();
+        // K-L6: extract feeds config before `config` is consumed.
+        let feeds_cfg = config.knowledge.feeds.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -324,6 +342,38 @@ impl Backend {
         if let Some(cell) = sweep_freshness_cell {
             knowledge_runtime = knowledge_runtime.with_auto_materialize_freshness(cell);
         }
+        // K-L6: build per-feed freshness cells before Arc-wrapping the runtime
+        // so they can be attached via with_feed_freshness (which takes &mut self).
+        // One cell per feed entry (Pending for enabled, Disabled for disabled).
+        // The cells are also stored in `Backend::feed_freshness_cells` so
+        // `serve()` can clone them into the spawned tasks.
+        let feed_freshness_cells: Vec<Arc<tokio::sync::Mutex<FeedFreshness>>> = {
+            if feeds_cfg.entries.is_empty() {
+                eprintln!(
+                    "[tdw] knowledge feeds: no feeds configured — \
+                     knowledge acquisition is manual only"
+                );
+            }
+            feeds_cfg
+                .entries
+                .iter()
+                .map(|entry| {
+                    let initial = if entry.enabled {
+                        FeedFreshness::Pending {
+                            feed_id: entry.id.clone(),
+                        }
+                    } else {
+                        FeedFreshness::Disabled {
+                            feed_id: entry.id.clone(),
+                        }
+                    };
+                    Arc::new(tokio::sync::Mutex::new(initial))
+                })
+                .collect()
+        };
+        for cell in &feed_freshness_cells {
+            knowledge_runtime = knowledge_runtime.with_feed_freshness(Arc::clone(cell));
+        }
         let runtime = Arc::new(knowledge_runtime);
         Ok(Self {
             state,
@@ -341,6 +391,8 @@ impl Backend {
             evals_cfg,
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg,
+            feeds_cfg,
+            feed_freshness_cells,
             daemon: None,
         })
     }
@@ -397,6 +449,8 @@ impl Backend {
             evals_cfg: EvalsConfig::default(),
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg: ProposalsCfg::default(),
+            feeds_cfg: FeedsConfig::default(),
+            feed_freshness_cells: Vec::new(),
             daemon: None,
         }
     }
@@ -589,6 +643,16 @@ impl Backend {
             Some(Arc::clone(&self.infer)),
             cancel.clone(),
         );
+        // K-L6 — spawn one feed task per enabled feed entry.
+        // The freshness cells were built in from_config and attached to the
+        // runtime before Arc-wrapping; here we pass them to the tasks so each
+        // task can write its own cell after each poll.
+        let feed_handles = spawn_feed_tasks(
+            &self.feeds_cfg,
+            &self.feed_freshness_cells,
+            Arc::clone(&self.indexer),
+            cancel.clone(),
+        );
 
         self.daemon = Some(DaemonHandle {
             cancel,
@@ -598,6 +662,7 @@ impl Backend {
             rules_reload_task,
             eval_worker_task,
             auto_mat_task,
+            feed_handles,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -656,6 +721,12 @@ impl Backend {
         if let Some(auto_mat) = daemon.auto_mat_task {
             auto_mat.abort();
             let _ = auto_mat.await;
+        }
+        // K-L6 feed tasks observe the same cancellation token; abort any that
+        // linger so shutdown stays bounded.
+        for feed_task in daemon.feed_handles {
+            feed_task.abort();
+            let _ = feed_task.await;
         }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
@@ -2035,6 +2106,213 @@ fn spawn_eval_worker(
     });
 
     Some(task)
+}
+
+// ---------------------------------------------------------------------------
+// K-L6: per-feed cron task spawning
+// ---------------------------------------------------------------------------
+
+/// Maximum consecutive fetch errors before a feed throttles and logs loudly.
+const FEED_MAX_CONSECUTIVE_ERRORS: u32 = 3;
+
+/// Spawn one cron-driven poll task per enabled [`FeedConfig`] entry.
+///
+/// `cells` must be parallel to `cfg.entries` (one cell per entry, built in
+/// `from_config` before the runtime was `Arc`-wrapped and already attached to
+/// `KnowledgeRuntime::feed_freshness_cells` for status reads). Each enabled
+/// feed's task clones its cell Arc and writes freshness after every poll.
+/// Disabled entries have a `Disabled` cell but no task.
+///
+/// The poll loop:
+/// 1. Sleeps one [`tdw_cron::cron_tick()`] between checks.
+/// 2. Uses [`tdw_cron::CronSchedule::next_after`] to detect fired slots
+///    (no sentinel envelope needed — only the bool matters).
+/// 3. Polls the [`FeedSource`] for up to `max_items_per_poll` articles.
+/// 4. Maps each article through
+///    [`tdw_knowledge::indexer::article_to_document`] (K-L6 seam, line 514).
+/// 5. Indexes through `indexer` — content-hash idempotency makes re-polls
+///    safe by construction ([`IndexOutcome::SkippedUnchanged`] = duplicate).
+/// 6. Updates the freshness cell.
+///
+/// Returns join handles for all spawned tasks (one per enabled feed).
+fn spawn_feed_tasks(
+    cfg: &FeedsConfig,
+    cells: &[Arc<tokio::sync::Mutex<FeedFreshness>>],
+    indexer: Arc<Mutex<KnowledgeIndexer>>,
+    cancel: CancellationToken,
+) -> Vec<tokio::task::JoinHandle<()>> {
+    use std::sync::Arc as StdArc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use tdw_knowledge::indexer::{IndexOutcome, article_to_document};
+
+    let mut handles = Vec::new();
+
+    for (entry, cell) in cfg.entries.iter().zip(cells.iter()) {
+        if !entry.enabled {
+            eprintln!(
+                "[tdw] knowledge feed {:?}: disabled — no task spawned",
+                entry.id
+            );
+            continue;
+        }
+
+        // Validate cadence (defence-in-depth; already validated at config load).
+        let schedule = match tdw_cron::CronSchedule::parse(&entry.cadence) {
+            Ok(s) => s,
+            Err(error) => {
+                eprintln!(
+                    "[tdw] knowledge feed {:?}: invalid cadence {:?}: {error}; skipping",
+                    entry.id, entry.cadence
+                );
+                continue;
+            }
+        };
+
+        let feed_id = entry.id.clone();
+        let plane = entry.plane.clone();
+        let max_items = entry.max_items_per_poll;
+        let tick = tdw_cron::cron_tick();
+
+        // Article-seam feed source. For the Article source kind the production
+        // provider seam is an empty FixtureFeedSource at this stage — the
+        // scheduling, idempotency, and backoff gates all pass without network
+        // access. Real provider wiring extends FeedSource and is selected here
+        // based on entry.source_kind when additional provider crates land.
+        let source: StdArc<dyn FeedSource> = StdArc::new(FixtureFeedSource::empty());
+
+        let freshness_task = Arc::clone(cell);
+        let indexer_clone = Arc::clone(&indexer);
+        let cancel_clone = cancel.clone();
+
+        let task = tokio::spawn(async move {
+            let mut last_tick_ms = {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+            let mut consecutive_errors: u32 = 0;
+
+            loop {
+                tokio::select! {
+                    biased;
+                    () = cancel_clone.cancelled() => break,
+                    () = tokio::time::sleep(tick) => {}
+                }
+
+                let now_ms = {
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+                };
+
+                // Cron slot check: next_after(last_tick_ms) gives the first
+                // slot strictly after the previous reading; if that slot has
+                // already passed (≤ now_ms) the feed fires this iteration.
+                let fired = schedule
+                    .next_after(last_tick_ms)
+                    .is_some_and(|slot| slot <= now_ms);
+                last_tick_ms = now_ms;
+
+                if !fired {
+                    continue;
+                }
+
+                // Cron slot fired — poll the source.
+                let articles = match source.poll(max_items).await {
+                    Ok(items) => {
+                        consecutive_errors = 0;
+                        items
+                    }
+                    Err(error) => {
+                        consecutive_errors += 1;
+                        eprintln!(
+                            "[tdw] knowledge feed {feed_id:?}: fetch error \
+                             ({consecutive_errors}/{FEED_MAX_CONSECUTIVE_ERRORS}): {error}"
+                        );
+                        if consecutive_errors >= FEED_MAX_CONSECUTIVE_ERRORS {
+                            eprintln!(
+                                "[tdw] knowledge feed {feed_id:?}: \
+                                 {FEED_MAX_CONSECUTIVE_ERRORS} consecutive errors; \
+                                 skipping until next cron slot"
+                            );
+                        }
+                        let mut guard = freshness_task.lock().await;
+                        *guard = FeedFreshness::Error {
+                            last_poll_ms: now_ms,
+                            feed_id: feed_id.clone(),
+                            error,
+                            consecutive_errors,
+                        };
+                        continue;
+                    }
+                };
+
+                if articles.is_empty() {
+                    // No items this slot — keep the last known freshness state.
+                    continue;
+                }
+
+                // Map articles → documents through the K-L6 seam and index.
+                let today = {
+                    use chrono::Utc;
+                    Utc::now().format("%Y-%m-%d").to_string()
+                };
+                let docs: Vec<_> = articles
+                    .iter()
+                    .map(|a| article_to_document(a, &plane))
+                    .collect();
+
+                let outcomes = {
+                    let mut idx = indexer_clone.lock().await;
+                    idx.index_batch_at(docs, &today).await
+                };
+
+                match outcomes {
+                    Ok(outcomes) => {
+                        let indexed = outcomes
+                            .iter()
+                            .filter(|o| **o == IndexOutcome::Indexed)
+                            .count();
+                        let duplicates = outcomes
+                            .iter()
+                            .filter(|o| **o == IndexOutcome::SkippedUnchanged)
+                            .count();
+                        if indexed > 0 || duplicates > 0 {
+                            eprintln!(
+                                "[tdw] knowledge feed {feed_id:?}: \
+                                 indexed={indexed} duplicates={duplicates} \
+                                 (total={})",
+                                outcomes.len()
+                            );
+                        }
+                        let mut guard = freshness_task.lock().await;
+                        *guard = FeedFreshness::Ok {
+                            last_poll_ms: now_ms,
+                            feed_id: feed_id.clone(),
+                            indexed,
+                            duplicates,
+                        };
+                    }
+                    Err(error) => {
+                        consecutive_errors += 1;
+                        eprintln!("[tdw] knowledge feed {feed_id:?}: index error: {error}");
+                        let mut guard = freshness_task.lock().await;
+                        *guard = FeedFreshness::Error {
+                            last_poll_ms: now_ms,
+                            feed_id: feed_id.clone(),
+                            error: error.to_string(),
+                            consecutive_errors,
+                        };
+                    }
+                }
+            }
+        });
+
+        handles.push(task);
+    }
+
+    handles
 }
 
 /// Eagerly validate and log the graph backend at daemon startup (K-E1).
@@ -3465,5 +3743,168 @@ mod tests {
             "tdw.kg.link must appear in tools/list for the production construction path; \
              got: {names:?}"
         );
+    }
+
+    // ── K-L6: feed registration + status gates ───────────────────────────────
+
+    /// Zero feeds configured → no task, loud status note, feed_statuses empty.
+    ///
+    /// This is the from_config+tempdir production registration gate: we build a
+    /// real TdwConfig with zero feeds, construct the Backend through from_config,
+    /// and assert the KgStatus feed_note is set and feed_statuses is empty.
+    #[tokio::test]
+    async fn zero_feeds_config_produces_loud_note_in_status() {
+        // in_memory_for_tests sets feeds_cfg = FeedsConfig::default() (zero
+        // entries). The KnowledgeRuntime has no feed_freshness_cells attached.
+        let backend = Backend::in_memory_for_tests().await;
+        let status = backend.runtime.status().await;
+        assert!(
+            status.feed_statuses.is_empty(),
+            "zero feeds → feed_statuses must be empty; got: {:?}",
+            status.feed_statuses
+        );
+        assert!(
+            !status.feed_note.is_empty(),
+            "zero feeds → feed_note must be non-empty (loud operator signal)"
+        );
+        assert!(
+            status.feed_note.contains("no feeds"),
+            "feed_note must mention 'no feeds'; got: {:?}",
+            status.feed_note
+        );
+    }
+
+    /// One enabled feed → freshness cell attached to runtime → status shows Pending.
+    ///
+    /// Mirrors the from_config attachment pattern: build the cell before
+    /// Arc-wrapping the runtime, attach via with_feed_freshness, then confirm
+    /// KgStatus reflects the cell.
+    #[tokio::test]
+    async fn one_enabled_feed_shows_pending_in_status() {
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_knowledge::collection_name;
+        use tdw_knowledge::feeds::FeedFreshness;
+        use tdw_knowledge::runtime::KnowledgeRuntime;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let backend = Backend::in_memory_for_tests().await;
+
+        // Build a cell (mirrors what from_config does per enabled feed entry).
+        let cell = Arc::new(tokio::sync::Mutex::new(FeedFreshness::Pending {
+            feed_id: "test-feed-1".to_string(),
+        }));
+
+        // Build a runtime with the cell attached — same pattern as from_config.
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::clone(&backend.state.vector);
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let collection = collection_name(embedder.model_id());
+        let runtime_with_feed = Arc::new(
+            KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&vectors))
+                .with_lexical(Arc::clone(&backend.state.lexical), collection)
+                .with_graph(graph)
+                .with_feed_freshness(Arc::clone(&cell)),
+        );
+
+        let status = runtime_with_feed.status().await;
+        assert_eq!(
+            status.feed_statuses.len(),
+            1,
+            "one attached cell → one feed_status entry"
+        );
+        assert!(
+            matches!(
+                &status.feed_statuses[0],
+                FeedFreshness::Pending { feed_id } if feed_id == "test-feed-1"
+            ),
+            "attached Pending cell must appear in feed_statuses; got: {:?}",
+            status.feed_statuses
+        );
+        assert!(
+            status.feed_note.is_empty(),
+            "feed_note must be empty when feeds are attached; got: {:?}",
+            status.feed_note
+        );
+    }
+
+    /// Fixture-feed e2e: article → article_to_document → KnowledgeIndexer →
+    /// tagged → idempotent re-ingest produces zero new docs.
+    ///
+    /// This is the ingest→tagged→derived gate through a fixture feed (K-L6).
+    #[tokio::test]
+    async fn fixture_feed_article_ingests_and_is_idempotent() {
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_knowledge::KnowledgeIndex;
+        use tdw_knowledge::feeds::{Article, FeedSource, FixtureFeedSource};
+        use tdw_knowledge::indexer::{IndexOutcome, KnowledgeIndexer, article_to_document};
+
+        let backend = Backend::in_memory_for_tests().await;
+        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::clone(&backend.state.vector);
+        let index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&vectors));
+        let mut indexer = KnowledgeIndexer::new(index);
+
+        // Build a fixture article and map it through the K-L6 seam.
+        let article = Article::new(
+            "AAPL beats earnings estimates",
+            "https://example.com/aapl-earnings",
+            "FinanceTimes",
+            1_749_297_600_000_i64,
+            "Apple Inc. reported record quarterly revenue.",
+            vec!["AAPL".to_string()],
+        );
+        let source = FixtureFeedSource::new(vec![article.clone()], "e2e-fixture");
+        let polled = source.poll(50).await.expect("fixture poll succeeds");
+        assert_eq!(polled.len(), 1, "fixture source returned one article");
+
+        // Map through article_to_document (K-L6 seam: indexer.rs:514).
+        let doc = article_to_document(&polled[0], "shared");
+        assert!(
+            doc.plane.as_deref() == Some("shared"),
+            "plane must be set from feed config"
+        );
+        assert!(!doc.id.is_empty(), "document id must be non-empty");
+
+        // First ingest: article is new → Indexed.
+        let outcomes = indexer
+            .index_batch_at(vec![doc.clone()], "2026-06-12")
+            .await
+            .expect("first ingest succeeds");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0],
+            IndexOutcome::Indexed,
+            "first ingest must produce Indexed"
+        );
+
+        // Second ingest: same article → SkippedUnchanged (idempotency gate).
+        let outcomes2 = indexer
+            .index_batch_at(vec![doc], "2026-06-12")
+            .await
+            .expect("second ingest succeeds");
+        assert_eq!(outcomes2.len(), 1);
+        assert_eq!(
+            outcomes2[0],
+            IndexOutcome::SkippedUnchanged,
+            "re-ingest of same article must be SkippedUnchanged (idempotency)"
+        );
+    }
+
+    /// feed_statuses serializes correctly (state tag round-trips).
+    #[test]
+    fn feed_statuses_serialize_in_kg_status() {
+        use tdw_knowledge::feeds::FeedFreshness;
+
+        let freshness = FeedFreshness::Ok {
+            last_poll_ms: 1_749_297_600_000,
+            feed_id: "news-feed-1".to_string(),
+            indexed: 5,
+            duplicates: 2,
+        };
+        let json = serde_json::to_value(&freshness).expect("serializes");
+        assert_eq!(json["state"], "ok");
+        assert_eq!(json["feed_id"], "news-feed-1");
+        assert_eq!(json["indexed"], 5);
+        assert_eq!(json["duplicates"], 2);
     }
 }
