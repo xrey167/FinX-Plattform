@@ -149,9 +149,10 @@ pub struct Backend {
     /// `tdw.kg.finding` tool can index captured findings into the same vector
     /// and lexical stores the read tools query.
     ///
-    /// **K-L5 note:** when per-session identity lands, the `bound_user_id` on
-    /// the runtime will be injected at the MCP session layer instead of being
-    /// sourced from `[knowledge.user]` config.
+    /// **K-L5 (CLOSED):** agent and user identities are sourced from
+    /// `[knowledge.agent]` and `[knowledge.user]` config and bound at
+    /// `from_config` time — never accepted from tool arguments. Multi-principal
+    /// HTTP (per-connection identity) is explicitly deferred.
     finding_indexer: Arc<std::sync::Mutex<KnowledgeIndexer>>,
     /// K-L3 scheduled self-eval configuration, extracted from
     /// `config.knowledge.evals` in [`Backend::from_config`].  Held here so
@@ -182,6 +183,11 @@ impl Backend {
         let rules_cfg = config.knowledge.rules.clone();
         let infer_cfg = config.knowledge.infer.clone();
         let user_id = config.knowledge.user.id.clone();
+        // K-L5: host-bound agent identity for the write/feedback surface.
+        // Identity is validated at config load (validate_principal_id) so it
+        // is always grammar-valid here. It is bound at runtime construction,
+        // never accepted from tool arguments.
+        let agent_id = config.knowledge.agent.id.clone();
         // Extract eval config before `config` is consumed by AppState::from_config
         // (K-L3: used to initialise the freshness cell and cron trigger).
         let evals_cfg = config.knowledge.evals.clone();
@@ -271,9 +277,9 @@ impl Backend {
         // and `dispatch_knowledge_write_tool` to fire `run_incremental` after
         // ingest/materialize). Build it once and share the `Arc`.
         let tags_engine: Arc<dyn TagEngine> = Arc::new(InMemoryTagEngine::default());
-        // K-X6: bind the config user identity and the finding indexer so the
-        // MCP finding tools are available in production. Per-session identity
-        // arrives with K-L5.
+        // K-X6 + K-L5: bind the config user and agent identities at construction
+        // time. Identity is never accepted from tool arguments — it is fixed
+        // here from the validated config so remote callers cannot spoof it.
         // K-L3: attach the eval-freshness cell when configured.
         let mut knowledge_runtime =
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
@@ -282,6 +288,7 @@ impl Backend {
                 .with_tags(Arc::clone(&tags_engine))
                 .with_versions(rules_v, infer_v)
                 .with_user_id(user_id)
+                .with_agent_id(agent_id)
                 .with_finding_indexer(Arc::clone(&finding_indexer));
         if let Some(cell) = eval_freshness_cell {
             knowledge_runtime = knowledge_runtime.with_eval_freshness(cell);
@@ -668,9 +675,9 @@ impl Backend {
     /// from there. Expose this accessor when a host needs a direct reference
     /// (e.g. to pass it to a second MCP surface on the same process).
     ///
-    /// **K-L5 note:** when per-session identity lands the `bound_user_id` on
-    /// the runtime will be overridden at the MCP session layer; this handle
-    /// stays valid for the indexer itself.
+    /// **K-L5 (CLOSED):** user identity is bound at `from_config` time via
+    /// `[knowledge.user]` config; this handle stays valid for the indexer.
+    /// Multi-principal HTTP (per-session override) is explicitly deferred.
     #[must_use]
     pub fn knowledge_finding_indexer_handle(&self) -> Arc<std::sync::Mutex<KnowledgeIndexer>> {
         Arc::clone(&self.finding_indexer)

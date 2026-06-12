@@ -1,4 +1,4 @@
-//! The MCP knowledge FEEDBACK tool (knowledge-system B10).
+//! The MCP knowledge FEEDBACK tool (knowledge-system B10 + K-L5).
 //!
 //! `tdw.kg.feedback` lets agents record which retrieval hits were helpful, feeding
 //! the usage-aware consolidation planner in `tdw-agent-store`. It is **append-only
@@ -6,35 +6,34 @@
 //!
 //! ## Gating
 //!
-//! The tool appears in `tools/list` only when BOTH conditions hold:
-//! - A [`KnowledgeRuntime`] is attached to [`McpServer`], AND
+//! The tool appears in `tools/list` only when ALL THREE conditions hold:
+//! - A [`KnowledgeRuntime`] with a **bound agent id** is attached, AND
 //! - A [`RetrievalFeedbackStore`] handle is attached to [`McpServer`] via
 //!   [`McpServer::with_feedback_store`] / [`McpServer::set_feedback_store`].
 //!
 //! The store is NOT attached to the runtime; it is a separate field on the server.
-//! Without the store the tool is absent from the catalog; a call to the name
-//! returns a tool error (never a protocol error), matching the B8/B9 posture.
+//! Without the store OR without a bound agent id the tool is absent from the
+//! catalog; a call to the name returns a tool error (never a protocol error),
+//! matching the B8/B9 posture.
 //!
-//! ## Identity and trust model
+//! ## Identity and trust model (K-L5 CLOSED)
 //!
-//! `agent_id` is **caller-supplied** (not host-bound like the B9 write tools)
-//! because feedback recording is a safe append-only operation that does not land
-//! graph mutations. This is a **bounded trust** model: any caller that can reach
-//! the MCP surface can submit events under any valid `agent_id`. The consequence
-//! is a bounded poisoning channel — a rogue caller can submit spurious `used`
-//! events that credit another agent's working-buffer retention, limited by the
-//! per-agent + global caps and the eviction policy. Host-binding of `agent_id`
-//! (making it unforgeable) is deferred to a future session-identity story,
-//! following the B9 deferral precedent for write-tool identity binding.
+//! `agent_id` is **host-bound** (K-L5). It is set on the [`KnowledgeRuntime`] at
+//! construction time from `[knowledge.agent] id` config and is NEVER accepted as a
+//! tool argument. Remote callers cannot forge a different identity via the MCP
+//! surface — any `agent_id` field in the call arguments is an unknown property and
+//! the schema has `additionalProperties: false`, so it is rejected.
+//!
+//! The previous B10 caller-supplied model (bounded poisoning channel) is now
+//! CLOSED: because the bearer token authenticates the one principal bound at
+//! listener construction, a caller that reaches this surface IS that principal.
+//! Multi-principal HTTP (distinct identity per authenticated connection) is
+//! explicitly deferred as a follow-up story.
 //!
 //! The `agent_id` links to a memory name via the convention
 //! `event.agent_id == memory.meta.base.name` OR `event.hit_ids` contains the
 //! memory name. When neither matches, the event silently contributes no credit
 //! to that memory — this is a deliberate no-op, not an error.
-//!
-//! The grammar for `agent_id` is `[A-Za-z0-9:._-]`, validated by
-//! [`tdw_knowledge::proposals::validate_agent_id`]. Note that `:` IS allowed
-//! (it is part of the grammar — it is `;` and control characters that are forbidden).
 //!
 //! ## Sync→async bridge
 //!
@@ -61,9 +60,15 @@ pub fn owns(name: &str) -> bool {
 }
 
 /// Descriptor for `tdw.kg.feedback`. Appended to `tools/list` only when the
-/// runtime has a feedback store attached (gated at the `lib.rs` seam).
-/// Annotated as NOT read-only (it appends a record) and NOT idempotent (each
-/// call creates a new event), matching the B9 write-tool annotation shape.
+/// runtime has a bound agent id AND a feedback store attached (gated at the
+/// `lib.rs` seam). Annotated as NOT read-only (it appends a record) and NOT
+/// idempotent (each call creates a new event), matching the B9 write-tool
+/// annotation shape.
+///
+/// K-L5: `agent_id` is removed from the schema — identity is host-bound from
+/// `[knowledge.agent]` config, never accepted as an argument. The schema has
+/// `additionalProperties: false` so a caller that passes `agent_id` gets a
+/// protocol-level unknown-property rejection, not a silent accept.
 #[must_use]
 pub fn descriptor() -> ToolDescriptor {
     tool_with_annotations(
@@ -71,17 +76,14 @@ pub fn descriptor() -> ToolDescriptor {
         "Record Retrieval Feedback",
         "Record which knowledge-graph hits were helpful. APPEND-ONLY usage stats — does NOT \
          mutate graph nodes, tags, or proposals. Feeds the usage-aware consolidation planner \
-         so actively-referenced memories are retained longer. `agent_id` grammar: \
-         [A-Za-z0-9:._-], max 128 bytes (`:` is allowed; `;` and control characters are not). \
-         `hit_ids` is bounded to 64 entries; excess ids are silently truncated. Requires the \
-         knowledge runtime with a feedback store attached.",
+         so actively-referenced memories are retained longer. Agent identity is HOST-BOUND \
+         (K-L5): it comes from the session principal configured at daemon start, never from \
+         a tool argument. `hit_ids` is bounded to 64 entries; excess ids are silently \
+         truncated. Requires the knowledge runtime with a bound agent id and a feedback \
+         store attached.",
         json!({
             "type": "object",
             "properties": {
-                "agent_id": {
-                    "type": "string",
-                    "description": "The calling agent's id. Grammar: [A-Za-z0-9:._-], max 128 bytes. `:` is allowed; `;` and control characters are not."
-                },
                 "query_fingerprint": {
                     "type": "string",
                     "description": "A short fingerprint for the query (non-empty, max 256 bytes; e.g. a hash or normalised query string)."
@@ -96,7 +98,7 @@ pub fn descriptor() -> ToolDescriptor {
                     "description": "Whether the agent found the hits helpful / used them. Defaults to false."
                 }
             },
-            "required": ["agent_id", "query_fingerprint"],
+            "required": ["query_fingerprint"],
             "additionalProperties": false
         }),
         false, // not read-only
@@ -110,8 +112,8 @@ pub fn descriptor() -> ToolDescriptor {
 /// # Errors
 ///
 /// Returns [`ToolFailure::Execution`] for:
-/// - A missing feedback store attachment.
-/// - Missing or invalid `agent_id` / `query_fingerprint`.
+/// - No agent identity bound to the runtime (K-L5: must come from config).
+/// - Missing or invalid `query_fingerprint`.
 /// - A store validation failure (empty `embedder_model` from the runtime, etc.).
 pub fn execute(
     runtime: &KnowledgeRuntime,
@@ -119,8 +121,14 @@ pub fn execute(
     arguments: &Map<String, Value>,
     now: &str,
 ) -> Result<ToolExecution, ToolFailure> {
-    // Validate agent_id grammar (same rules as B9 proposals).
-    let agent_id = require_str(arguments, "agent_id")?;
+    // K-L5: agent identity is HOST-BOUND — read from the runtime, never from
+    // arguments. The schema has additionalProperties:false so a caller that
+    // passes agent_id gets a protocol-level rejection before reaching here.
+    let agent_id = runtime
+        .bound_agent_id()
+        .ok_or_else(|| execution("no agent identity bound to this feedback surface".to_string()))?;
+    // Grammar is validated at config load (validate_principal_id) but re-check
+    // here so the runtime contract holds even when identity is set programmatically.
     tdw_knowledge::proposals::validate_agent_id(agent_id)
         .map_err(|error| execution(error.to_string()))?;
 
