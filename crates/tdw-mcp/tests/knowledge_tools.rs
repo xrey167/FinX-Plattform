@@ -630,11 +630,11 @@ fn kg_status_returns_all_fields() {
         "document_count_note present: {s}"
     );
 
-    // Taxonomy — exactly 54 EntityKind variants (53 + OpenQuestion added by K-X8).
+    // Taxonomy — exactly 55 EntityKind variants (53 + OpenQuestion (K-X8) + Episode (K-M2)).
     assert_eq!(
         s["taxonomy_kind_count"].as_u64(),
-        Some(54),
-        "taxonomy_kind_count is 54: {s}"
+        Some(55),
+        "taxonomy_kind_count is 55: {s}"
     );
 
     // Versions seeded via with_versions(Some(7), Some(3)).

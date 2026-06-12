@@ -65,6 +65,13 @@ pub enum DocumentSource {
     Provider { provider: String },
     /// Manually authored.
     Manual,
+    /// A windowed slice of an agent session transcript (K-M2).
+    ///
+    /// `session_id` is a stable opaque identifier for the session; `window`
+    /// is the zero-based window index within that session (the Nth group of
+    /// `window_size` turns).  Together they form the stable document id used
+    /// by the content-hash manifest.
+    AgentSession { session_id: String, window: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

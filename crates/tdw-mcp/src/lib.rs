@@ -20,6 +20,7 @@ use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, Plan
 
 pub(crate) mod knowledge_answer_tools;
 pub(crate) mod knowledge_digest_tools;
+pub(crate) mod knowledge_episodic_tools;
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
@@ -579,6 +580,12 @@ impl McpServer {
         if self.knowledge.is_some() {
             descriptors.push(knowledge_answer_tools::descriptor());
         }
+        // The knowledge EPISODIC tool (knowledge-system K-M2): tdw.kg.remember
+        // requires a knowledge runtime with a finding indexer AND a bound user id
+        // (same gate as the K-X6 finding surface — host-bound identity required).
+        if self.knowledge_episodic_available() {
+            descriptors.push(knowledge_episodic_tools::descriptor());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -770,6 +777,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_answer_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_episodic_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1211,6 +1222,59 @@ impl McpServer {
                         .with_data(json!({ "tool": name })),
                 )],
             };
+        Some(messages)
+    }
+
+    /// True when the episodic memory surface is available (knowledge-system K-M2):
+    /// a knowledge runtime is attached with a finding indexer AND a bound user id.
+    /// Same gate as the K-X6 finding surface — host-bound identity is required.
+    fn knowledge_episodic_available(&self) -> bool {
+        self.knowledge.as_ref().is_some_and(|runtime| {
+            runtime.finding_indexer().is_some() && runtime.bound_user_id().is_some()
+        })
+    }
+
+    /// Dispatch the episodic memory tool (`tdw.kg.remember`, knowledge-system K-M2).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.kg.remember` — a tool error
+    /// (never a protocol error) when the episodic surface is unavailable (no
+    /// runtime, no finding indexer, or no bound user id), otherwise the
+    /// [`knowledge_episodic_tools::execute`] result. Returns `None` when `name` is
+    /// not the episodic tool so the caller falls through to the next dispatch.
+    fn dispatch_knowledge_episodic_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_episodic_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_episodic_available() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result(
+                    "episodic memory surface not attached \
+                     (requires finding indexer + bound user id)",
+                ),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages = match knowledge_episodic_tools::execute(runtime, &arguments_object, &now) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 

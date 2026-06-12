@@ -1375,9 +1375,12 @@ fn spec_schema_for(kind: EntityKind) -> Option<Value> {
         // Rust spec type yet; schema will land with a future spec crate.
         // OpenQuestion is a first-class knowledge kind (K-X8) with no dedicated
         // Rust spec type yet; schema will land with a future spec crate.
+        // Episode is a first-class episodic memory kind (K-M2) with no dedicated
+        // Rust spec type yet; it is a data-plane document, not a registry entity.
         | EntityKind::Finding
         | EntityKind::Pattern
-        | EntityKind::OpenQuestion => return None,
+        | EntityKind::OpenQuestion
+        | EntityKind::Episode => return None,
         EntityKind::Agent => schema_json::<AgentCard>(),
         EntityKind::Skill => schema_json::<AgentSkill>(),
         EntityKind::Tool => schema_json::<Tool>(),

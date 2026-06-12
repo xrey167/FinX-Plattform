@@ -37,7 +37,7 @@
 //! A thesis is represented as a **`Finding` node with `props.kind_hint =
 //! "thesis"`** — NOT as a 54th `EntityKind` variant. The reasons:
 //!
-//! 1. `EntityKind::ALL` is a const array ([52]); adding a 54th variant is a
+//! 1. `EntityKind::ALL` is a const array ([54]); adding a 55th variant is a
 //!    safe-but-disruptive ordinal shift for every downstream match.
 //! 2. A thesis carries identical trust-class semantics to a finding: user
 //!    provenance, host-bound identity, same caps, same `supports`/`contradicts`

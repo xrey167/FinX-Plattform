@@ -657,6 +657,120 @@ pub fn article_to_document(article: &Article, plane: &str) -> KnowledgeDocument 
     }
 }
 
+/// Configuration for turn-windowed episode slicing (K-M2).
+///
+/// Controls how agent session transcripts are partitioned into
+/// [`KnowledgeDocument`]s with `plane = "episodic"`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EpisodicWindowConfig {
+    /// Number of turns (user+assistant pairs) per episode window.
+    ///
+    /// Must be ≥ 1.  The last window may be shorter than `window_size` when
+    /// the total turn count is not evenly divisible.  Default: 8.
+    pub window_size: usize,
+}
+
+impl Default for EpisodicWindowConfig {
+    fn default() -> Self {
+        Self { window_size: 8 }
+    }
+}
+
+/// One turn in an agent session transcript.
+///
+/// `role` is `"user"` or `"assistant"` (or any non-empty string for
+/// extensibility).  `text` is the turn content; control characters except `\n`
+/// and `\t` are stripped at ingestion — the same posture as `article_to_document`.
+/// `as_of` is the injected `YYYY-MM-DD` timestamp of this turn; when absent the
+/// window falls back to the ingestion `now`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TranscriptTurn {
+    /// Speaker role — `"user"` or `"assistant"`.
+    pub role: String,
+    /// Turn content (control characters other than `\n`/`\t` will be stripped).
+    pub text: String,
+    /// Injected turn date (`YYYY-MM-DD`).  The window's `as_of` is taken from
+    /// the FIRST turn in the window so replay at any historical `as_of` is safe.
+    pub as_of: Option<String>,
+}
+
+/// Slice a session transcript into turn-windowed [`KnowledgeDocument`]s.
+///
+/// Each window of `config.window_size` turns becomes one document on the
+/// `episodic` plane with:
+/// * `id` = `"episode-{session_id_hash}-{window_index}"` — stable, collision-safe.
+/// * `entity.entity_id` = `"episode:{session_id_hash}-{window_index}"`.
+/// * `entity.kind` = `EntityKind::Episode`.
+/// * `body` = the concatenated `role: text` lines (control-char-stripped).
+/// * `as_of` from the first turn's `as_of`, falling back to `now`.
+/// * `source` = `DocumentSource::AgentSession { session_id, window }`.
+/// * `mentions` is left empty here — the caller may populate it, or the
+///   lexical matcher in [`KnowledgeIndexer::index_at`] will auto-link.
+///
+/// An empty transcript or `window_size = 0` returns an empty Vec.
+#[must_use]
+pub fn transcript_to_episodes(
+    session_id: &str,
+    turns: &[TranscriptTurn],
+    config: &EpisodicWindowConfig,
+    now: &str,
+) -> Vec<KnowledgeDocument> {
+    if turns.is_empty() || config.window_size == 0 {
+        return Vec::new();
+    }
+    // Stable session-id hash: FNV-1a so two sessions with the same string id
+    // always map to the same document ids across process restarts.
+    let session_hash = format!("{:016x}", fnv1a64(session_id.as_bytes()));
+
+    turns
+        .chunks(config.window_size)
+        .enumerate()
+        .map(|(window_idx, chunk)| {
+            // as_of = the first turn's date, with `now` as the fallback.
+            let as_of = chunk
+                .iter()
+                .find_map(|turn| turn.as_of.as_deref())
+                .unwrap_or(now)
+                .to_string();
+
+            // Body: "role: text\n" for each turn, control-char-stripped.
+            // Use fold+push_str to avoid the clippy::format_collect lint
+            // (which fires when format! results are .collect::<String>()d).
+            let body: String = chunk.iter().fold(String::new(), |mut acc, turn| {
+                acc.push_str(&strip_control(&turn.role));
+                acc.push_str(": ");
+                acc.push_str(&strip_control(&turn.text));
+                acc.push('\n');
+                acc
+            });
+
+            let doc_id = format!("episode-{session_hash}-{window_idx}");
+            let entity_id = format!("episode:{session_hash}-{window_idx}");
+            // Derive a human-readable label from the session id and window.
+            let label = format!("Session {session_id} window {window_idx}");
+
+            KnowledgeDocument {
+                id: doc_id,
+                body,
+                entity: tdw_kg::Entity {
+                    entity_id,
+                    kind: EntityKind::Episode,
+                    label,
+                    aliases: Vec::new(),
+                },
+                tags: Vec::new(),
+                source: Some(crate::DocumentSource::AgentSession {
+                    session_id: session_id.to_string(),
+                    window: window_idx,
+                }),
+                plane: Some("episodic".to_string()),
+                as_of: Some(as_of),
+                mentions: Vec::new(),
+            }
+        })
+        .collect()
+}
+
 /// Drop control characters (keep everything printable, including unicode).
 fn strip_control(value: &str) -> String {
     value
