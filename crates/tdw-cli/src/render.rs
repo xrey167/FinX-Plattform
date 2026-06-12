@@ -3,15 +3,15 @@
 //! The daemon returns the terminal `EventMsg::Completed` whose `result` is the
 //! `{ evidence, result: <ResultEnvelope> }` shape `dispatch_fetch_data` builds.
 //! This module digs the standardized rows out of that envelope and renders them
-//! three ways:
+//! several ways:
 //! * a hand-rolled, aligned plain-text table (the default; no table-formatting
 //!   dependency is pulled in),
 //! * the raw envelope as pretty JSON (`--json`), and
-//! * a CSV / JSON file export (`--export`).
+//! * a CSV / JSON / XLSX file export (`--export`).
 //!
-//! Export scope is deliberately CSV + JSON only: Parquet and XLSX are owned by
-//! the `tdw-storage-parquet` / `tdw-table-format` export polish in gap-matrix
-//! item **L5.4** and are out of scope for the CLI transport layer here.
+//! Export scope is CSV + JSON (hand-rolled, no dep) plus XLSX via the pure-Rust
+//! `rust_xlsxwriter` writer (gap-matrix item **L5.4** / OpenBB-parity P3W6).
+//! Parquet stays deferred: see the gap-matrix L5.4 / D5 rows for the rationale.
 
 use std::collections::BTreeSet;
 
@@ -176,6 +176,70 @@ pub fn to_json(records: &[Map<String, Value>]) -> Result<String, serde_json::Err
     serde_json::to_string_pretty(records)
 }
 
+/// Render `records` as an XLSX workbook (one `data` sheet: header row + one row
+/// per record), returning the `.xlsx` file bytes.
+///
+/// Columns use the same first-seen key union as [`to_csv`] so CSV and XLSX agree
+/// on shape and ordering. Cell typing mirrors the JSON value: numbers become
+/// numeric cells, booleans boolean cells, strings string cells, and `null` /
+/// missing keys are left blank. Nested arrays / objects are stringified to their
+/// compact JSON form (matching [`cell`]) so a column never mixes typed and JSON
+/// representations across the two formats.
+///
+/// # Errors
+///
+/// Returns the stringified [`rust_xlsxwriter::XlsxError`] if the workbook fails
+/// to build or serialize (e.g. the column count exceeds Excel's sheet limits).
+pub fn to_xlsx(records: &[Map<String, Value>]) -> Result<Vec<u8>, String> {
+    use rust_xlsxwriter::Workbook;
+
+    let cols = columns(records);
+    let mut workbook = Workbook::new();
+    let sheet = workbook.add_worksheet();
+    sheet.set_name("data").map_err(|e| e.to_string())?;
+
+    // Header row.
+    for (col, name) in cols.iter().enumerate() {
+        let col = u16::try_from(col).map_err(|_| "xlsx: too many columns for a sheet")?;
+        sheet
+            .write_string(0, col, name)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Data rows: row 0 is the header, so records start at row 1.
+    for (record_index, record) in records.iter().enumerate() {
+        let row = u32::try_from(record_index + 1).map_err(|_| "xlsx: too many rows for a sheet")?;
+        for (col_index, key) in cols.iter().enumerate() {
+            let col = u16::try_from(col_index).map_err(|_| "xlsx: too many columns for a sheet")?;
+            write_cell(sheet, row, col, record.get(key)).map_err(|e| e.to_string())?;
+        }
+    }
+
+    workbook.save_to_buffer().map_err(|e| e.to_string())
+}
+
+/// Write one JSON value into an XLSX cell with the closest native cell type.
+///
+/// `null` / missing keys are skipped (left blank); arrays / objects fall back to
+/// their compact JSON string via [`cell`] so the value matches the CSV column.
+fn write_cell(
+    sheet: &mut rust_xlsxwriter::Worksheet,
+    row: u32,
+    col: u16,
+    value: Option<&Value>,
+) -> Result<(), rust_xlsxwriter::XlsxError> {
+    match value {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::Bool(b)) => sheet.write_boolean(row, col, *b).map(|_| ()),
+        Some(Value::Number(n)) => match n.as_f64() {
+            Some(f) => sheet.write_number(row, col, f).map(|_| ()),
+            None => sheet.write_string(row, col, n.to_string()).map(|_| ()),
+        },
+        Some(Value::String(s)) => sheet.write_string(row, col, s).map(|_| ()),
+        other => sheet.write_string(row, col, cell(other)).map(|_| ()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +329,51 @@ mod tests {
         let parsed: Value = serde_json::from_str(&out).expect("parse");
         assert!(parsed.is_array());
         assert_eq!(parsed.as_array().map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn xlsx_export_is_a_nonempty_zip_archive() {
+        let bytes = to_xlsx(&sample_records()).expect("xlsx export");
+        // XLSX is a ZIP container: the file must start with the local-file-header
+        // magic `PK\x03\x04` and carry a non-trivial payload (sheet + parts).
+        assert!(
+            bytes.starts_with(b"PK\x03\x04"),
+            "missing ZIP magic, got {:?}",
+            &bytes[..bytes.len().min(4)]
+        );
+        assert!(
+            bytes.len() > 200,
+            "suspiciously small xlsx: {} bytes",
+            bytes.len()
+        );
+    }
+
+    #[test]
+    fn xlsx_export_handles_mixed_and_empty_cells() {
+        // number / string / bool / null / missing-key / nested array+object must
+        // all round-trip through to_xlsx without erroring and stay a valid ZIP.
+        let records = records_from_result(&json!({
+            "results": [
+                {
+                    "num": 12.5,
+                    "text": "hi",
+                    "flag": true,
+                    "nothing": Value::Null,
+                    "nested": [1, 2, {"k": "v"}]
+                },
+                // second record omits `text` (missing key -> blank cell) and adds
+                // a late-appearing column to exercise the key-union ordering.
+                {"num": 0, "extra": "late"}
+            ]
+        }));
+        let bytes = to_xlsx(&records).expect("mixed-cell xlsx export");
+        assert!(bytes.starts_with(b"PK\x03\x04"));
+        assert!(bytes.len() > 200);
+    }
+
+    #[test]
+    fn xlsx_export_of_empty_records_is_still_a_valid_zip() {
+        let bytes = to_xlsx(&[]).expect("empty xlsx export");
+        assert!(bytes.starts_with(b"PK\x03\x04"));
     }
 }

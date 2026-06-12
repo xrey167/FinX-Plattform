@@ -280,8 +280,8 @@ fn build_leaf(entry: &CatalogEntry, name: &'static str) -> Command {
     .arg(
         Arg::new("export")
             .long("export")
-            .help("Write rows to a file in this format: csv | json")
-            .value_parser(["csv", "json"])
+            .help("Write rows to a file in this format: csv | json | xlsx")
+            .value_parser(["csv", "json", "xlsx"])
             .num_args(1),
     )
     .arg(
