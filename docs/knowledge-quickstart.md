@@ -68,9 +68,8 @@ providers never mixes vector dimensions. See the migration path in step 4.
 
 ## 3. Ingest
 
-Today the public ingest surface is the **Rust `Backend` API** and the **MCP
-`knowledge_index` path**. A public `tdw kg index` CLI/MCP ingest command is
-planned for story K-E3 (not yet merged); do not reference it until that PR lands.
+The public ingest surfaces are the **Rust `Backend` API**, the **MCP
+`knowledge_index` path**, and the **`tdw kg ingest` CLI command** (landed in K-E3).
 
 Index documents via the `Backend` API (Rust):
 
@@ -170,10 +169,14 @@ runs inference (supply-chain peer derivation), and walks you through five steps:
 > **In-memory demo — data is not persisted.** The graph is discarded at exit.
 > To persist data, configure a bolt backend and run `tdw kg reindex`.
 
-Use `--json` for scripted / CI output:
+Use `--json` for scripted / CI output (emits NDJSON — one JSON object per step):
 
 ```bash
-tdw kg demo --json | jq '.steps[] | select(.step == "search")'
+# Print the search step result:
+tdw kg demo --json | jq 'select(.step == "search")'
+
+# Print all step names:
+tdw kg demo --json | jq -r '.step'
 ```
 
 The equivalent production API call for each step is printed alongside the demo

@@ -15,8 +15,8 @@
 //! # `--json` flag
 //!
 //! When `--json` is set narration is suppressed and each step emits a JSON
-//! object to stdout. The process exits non-zero if any step fails — the demo
-//! doubles as an e2e smoke test.
+//! object to stdout (NDJSON — one object per line). The process exits non-zero
+//! if any step fails — the demo doubles as an e2e smoke test.
 //!
 //! # Step equivalences
 //!
@@ -24,16 +24,17 @@
 //! |------|------------------------|
 //! | ingest | `tdw kg ingest <file.jsonl>` |
 //! | search | MCP `tdw.kg.search` |
-//! | why | MCP `tdw.kg.why` (derivation provenance) |
-//! | diff | MCP `tdw.kg.diff` (temporal snapshot diff) |
+//! | why | MCP `tdw.kg.why` |
+//! | diff | MCP `tdw.kg.diff` (temporal graph-state diff) |
 //! | status | `tdw kg status` (offline counts variant) |
 
 #![allow(clippy::too_many_lines)] // demo is intentionally linear and verbose
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tdw_core::{GraphEngine, LexicalEngine, VectorEngine};
+use tdw_core::{GraphEngine, LexicalEngine, VectorEngine, active_at};
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_infer::{ChangeSet, DerivationIndex, InferEngine, InferRule, RunLimits};
@@ -235,12 +236,24 @@ impl DemoRunner {
             );
         }
 
+        // Snapshot the v1 doc ids from the live manifest before ingesting v2.
+        // Used by the diff step to classify changed vs. added documents.
+        let v1_doc_ids: BTreeSet<String> = indexer
+            .manifest()
+            .entries()
+            .map(|(id, _)| id.clone())
+            .collect();
+
         // ================================================================
         // STEP 2 — SEARCH
         // ================================================================
         self.section("Step 2 · Search");
         self.narrate(
-            "Equivalent tool: MCP tdw.kg.search { \"query\": \"AAPL supply chain\", \"limit\": 3 }",
+            "Equivalent tool: MCP tdw.kg.search { \"query\": \"AAPL supply chain\", \"top_k\": 3 }",
+        );
+        self.narrate(
+            "  Note: demo uses the hash embedder (keyword-match, not semantic). \
+             For semantic relevance configure a real embedder (local / openai / google).",
         );
 
         let hits = indexer
@@ -253,7 +266,7 @@ impl DemoRunner {
             return Err("demo smoke: search returned no hits for 'AAPL supply chain'".into());
         }
 
-        self.narrate("  Top hits:");
+        self.narrate("  Top hits (lexical + hash retrieval):");
         let mut hit_values = Vec::new();
         for hit in &hits {
             self.narrate(&format!(
@@ -276,12 +289,27 @@ impl DemoRunner {
         // STEP 3 — WHY (derivation provenance of the DeriveEdge fact)
         // ================================================================
         self.section("Step 3 · Why (derivation provenance)");
-        self.narrate(
-            "Equivalent tool: MCP tdw.kg.why { \"fact\": \"edge:..->supply_chain_peer->..\" }",
-        );
 
         let derivation_index = infer_engine.derivation_index();
         let why_result = explain_derived_edge(derivation_index)?;
+
+        // Emit the exact equivalent MCP invocation using the real tdw.kg.why schema:
+        // { "edge": { "from": "...", "rel": "supply_chain_peer", "to": "..." } }
+        // The schema requires exactly one of entity_id / edge / tag_assignment.
+        let edge_from = why_result
+            .fact_key
+            .split("->supply_chain_peer->")
+            .next()
+            .unwrap_or("");
+        let edge_to = why_result
+            .fact_key
+            .split("->supply_chain_peer->")
+            .nth(1)
+            .unwrap_or("");
+        self.narrate(&format!(
+            "Equivalent tool: MCP tdw.kg.why {{ \"edge\": {{ \"from\": \"{edge_from}\", \
+             \"rel\": \"supply_chain_peer\", \"to\": \"{edge_to}\" }} }}"
+        ));
 
         self.narrate(&format!("  Derived edge: {}", why_result.fact_key));
         self.narrate(&format!(
@@ -299,6 +327,8 @@ impl DemoRunner {
                 "rule_id": why_result.rule_id,
                 "version": why_result.version,
                 "support": why_result.support,
+                "edge_from": edge_from,
+                "edge_to": edge_to,
             }),
         );
 
@@ -307,11 +337,11 @@ impl DemoRunner {
         }
 
         // ================================================================
-        // STEP 4 — INGEST v2 then DIFF
+        // STEP 4 — INGEST v2 then TEMPORAL GRAPH DIFF
         // ================================================================
-        self.section("Step 4 · Diff (two as_of snapshots)");
+        self.section("Step 4 · Diff (two as_of snapshots — temporal graph-state diff)");
         self.narrate(
-            "Equivalent tool: MCP tdw.kg.diff { \"from\": \"2026-01-15\", \"to\": \"2026-04-15\" }",
+            "Equivalent tool: MCP tdw.kg.diff { \"from_as_of\": \"2026-01-15\", \"to_as_of\": \"2026-04-15\" }",
         );
         self.narrate("  Ingesting v2 snapshot (3 updated/new documents)...");
 
@@ -331,26 +361,38 @@ impl DemoRunner {
             }
         }
 
-        // Diff: compare manifest entries by indexed_at date.
-        let diff = compute_manifest_diff(indexer.manifest(), v1_date, v2_date);
+        // Manifest re-index delta (which document ids changed or were added).
+        // v1_doc_ids was snapshotted from the live manifest before v2 ingest.
+        let manifest_diff = compute_manifest_diff(indexer.manifest(), &v1_doc_ids, v2_date);
+
+        // Temporal graph-state diff: edges that became valid in the v1→v2 window,
+        // using the same active_at predicate the real tdw.kg.diff tool uses.
+        let graph_diff = compute_temporal_graph_diff(&graph_arc, v1_date, v2_date)
+            .await
+            .map_err(|e| format!("temporal graph diff: {e}"))?;
 
         self.narrate(&format!(
             "  v2 ingest: landed={landed_v2} unchanged={skipped_v2}"
         ));
         self.narrate(&format!(
-            "  Diff from {v1_date} to {v2_date}: {} changed, {} new",
-            diff.changed.len(),
-            diff.added.len()
+            "  Manifest re-index delta: {} changed document(s), {} new document(s)",
+            manifest_diff.changed.len(),
+            manifest_diff.added.len()
         ));
-        if !diff.changed.is_empty() {
+        self.narrate(&format!(
+            "  Temporal graph diff ({v1_date} → {v2_date}): {} edge(s) added to graph",
+            graph_diff.edges_added
+        ));
+
+        if !manifest_diff.changed.is_empty() {
             self.narrate("  Changed documents:");
-            for id in &diff.changed {
+            for id in &manifest_diff.changed {
                 self.narrate(&format!("    ~ {id}"));
             }
         }
-        if !diff.added.is_empty() {
+        if !manifest_diff.added.is_empty() {
             self.narrate("  Added documents:");
-            for id in &diff.added {
+            for id in &manifest_diff.added {
                 self.narrate(&format!("    + {id}"));
             }
         }
@@ -358,15 +400,17 @@ impl DemoRunner {
         self.emit_step(
             "diff",
             &json!({
-                "from": v1_date,
-                "to": v2_date,
-                "changed": diff.changed,
-                "added": diff.added,
+                "from_as_of": v1_date,
+                "to_as_of": v2_date,
+                "manifest_changed": manifest_diff.changed,
+                "manifest_added": manifest_diff.added,
+                "graph_edges_added": graph_diff.edges_added,
+                "graph_edges_invalidated": graph_diff.edges_invalidated,
                 "landed_v2": landed_v2,
             }),
         );
 
-        if diff.changed.is_empty() && diff.added.is_empty() {
+        if manifest_diff.changed.is_empty() && manifest_diff.added.is_empty() {
             return Err("demo smoke: diff between v1 and v2 snapshots is empty".into());
         }
 
@@ -466,7 +510,7 @@ fn collect_tag_ids(
     docs_v2: &[KnowledgeDocument],
     rules: &[TagRule],
 ) -> Vec<String> {
-    let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut ids: BTreeSet<String> = BTreeSet::new();
     for doc in docs_v1.iter().chain(docs_v2.iter()) {
         ids.extend(doc.tags.iter().cloned());
     }
@@ -480,11 +524,16 @@ fn collect_tag_ids(
 // Why-step: find a supply_chain_peer derived edge in the index and explain it
 // ---------------------------------------------------------------------------
 
-struct WhyResult {
-    fact_key: String,
-    rule_id: String,
-    version: u64,
-    support: Vec<String>,
+/// Output of the why-step explanation.
+pub struct WhyResult {
+    /// The full derivation index key, e.g. `"A->supply_chain_peer->B"`.
+    pub fact_key: String,
+    /// Id of the rule that fired.
+    pub rule_id: String,
+    /// Inference engine version at derivation time.
+    pub version: u64,
+    /// Support-input keys (the edge facts that triggered the rule).
+    pub support: Vec<String>,
 }
 
 fn explain_derived_edge(derivation_index: &DerivationIndex) -> Result<WhyResult, CliError> {
@@ -506,47 +555,31 @@ fn explain_derived_edge(derivation_index: &DerivationIndex) -> Result<WhyResult,
 }
 
 // ---------------------------------------------------------------------------
-// Diff-step: compare manifest entries by indexed_at date
+// Diff-step: manifest re-index delta (changed vs. added document ids)
 // ---------------------------------------------------------------------------
 
 struct ManifestDiff {
-    /// Document ids whose content hash changed between `v1_date` and `v2_date`.
+    /// Document ids whose content hash changed between the v1 snapshot and `v2_date`.
     changed: Vec<String>,
-    /// Document ids first indexed at `v2_date` (not present at `v1_date`).
+    /// Document ids first indexed at `v2_date` (not present in the v1 snapshot).
     added: Vec<String>,
 }
 
-fn compute_manifest_diff(manifest: &IndexManifest, _v1_date: &str, v2_date: &str) -> ManifestDiff {
-    // The manifest records the LAST indexed_at for each doc; we need to know
-    // which docs were updated in the v2 pass vs. which are truly new.
-    // Strategy: a doc is "changed" if it was present at v1_date and its
-    // indexed_at is now v2_date (meaning it was re-indexed with new content).
-    // A doc is "added" if it only appears at v2_date and has no v1 entry.
-    // We distinguish by tracking which ids were seen at v1 before the v2 pass.
-    // Since we only have the CURRENT manifest (post-v2), we rely on the fact
-    // that docs-v1 has ids {aapl-profile, msft-profile, tsm-profile, ...}
-    // and docs-v2 introduces aapl-10q-2026q1 and msft-azure-note as new, while
-    // aapl-profile has updated body.  The manifest's indexed_at tells us which
-    // pass each doc was last updated in.
-    let v1_ids: std::collections::BTreeSet<&str> = [
-        "aapl-profile",
-        "msft-profile",
-        "tsm-profile",
-        "company-aapl",
-        "company-msft",
-        "company-tsmc",
-        "aapl-10q-2025q4",
-        "tsm-supply-note",
-    ]
-    .into_iter()
-    .collect();
-
-    let mut changed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut added: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+/// Compute which document ids changed or were added in the v2 pass.
+///
+/// `v1_doc_ids` is snapshotted from the live manifest **before** the v2 ingest
+/// so that fixture changes never silently desync the changed-vs-added classification.
+fn compute_manifest_diff(
+    manifest: &IndexManifest,
+    v1_doc_ids: &BTreeSet<String>,
+    v2_date: &str,
+) -> ManifestDiff {
+    let mut changed: BTreeSet<String> = BTreeSet::new();
+    let mut added: BTreeSet<String> = BTreeSet::new();
 
     for (id, entry) in manifest.entries() {
         if entry.indexed_at == v2_date {
-            if v1_ids.contains(id.as_str()) {
+            if v1_doc_ids.contains(id) {
                 changed.insert(id.clone());
             } else {
                 added.insert(id.clone());
@@ -561,12 +594,79 @@ fn compute_manifest_diff(manifest: &IndexManifest, _v1_date: &str, v2_date: &str
 }
 
 // ---------------------------------------------------------------------------
-// Integration-test helpers (pub(crate) so the tests module can call them)
+// Diff-step: temporal graph-state diff (mirrors tdw.kg.diff logic)
+// ---------------------------------------------------------------------------
+
+/// Summary counts from a temporal graph-state diff.
+pub struct GraphDiff {
+    /// Edges that became active in the window `(from_date, to_date]`.
+    pub edges_added: usize,
+    /// Edges whose validity window closed in the window.
+    pub edges_invalidated: usize,
+}
+
+/// Temporal graph-state diff between two `as_of` dates.
+///
+/// Uses the same `active_at` predicate as `tdw.kg.diff` — edges added or
+/// invalidated between `from_date` and `to_date`.
+/// Mirrors `knowledge_explain_tools::compute_edge_delta`.
+///
+/// # Errors
+///
+/// Returns an error if the graph engine fails to enumerate edges.
+pub async fn compute_temporal_graph_diff(
+    graph: &Arc<dyn GraphEngine>,
+    from_date: &str,
+    to_date: &str,
+) -> Result<GraphDiff, CliError> {
+    // Paginate all edges from the in-memory graph (same as collect_all_edges in tdw-mcp).
+    let mut all_edges = Vec::new();
+    let mut offset = 0usize;
+    let page_size = 1024usize;
+    loop {
+        let page = graph
+            .edges(None, offset, page_size)
+            .await
+            .map_err(|e| format!("graph.edges: {e}"))?;
+        if page.is_empty() {
+            break;
+        }
+        offset += page.len();
+        all_edges.extend(page);
+    }
+
+    let active_at_from = |e: &tdw_core::GraphEdge| {
+        active_at(e.valid_from.as_deref(), e.valid_to.as_deref(), from_date)
+    };
+    let active_at_to = |e: &tdw_core::GraphEdge| {
+        active_at(e.valid_from.as_deref(), e.valid_to.as_deref(), to_date)
+    };
+
+    // Became valid: NOT active at from_date, IS active at to_date.
+    let edges_added = all_edges
+        .iter()
+        .filter(|e| !active_at_from(e) && active_at_to(e))
+        .count();
+
+    // Validity window closed: WAS active at from_date, NOT at to_date.
+    let edges_invalidated = all_edges
+        .iter()
+        .filter(|e| active_at_from(e) && !active_at_to(e))
+        .count();
+
+    Ok(GraphDiff {
+        edges_added,
+        edges_invalidated,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Integration-test helpers (pub so the tests module can call them)
 // ---------------------------------------------------------------------------
 
 /// Run the full demo in `--json` mode and return `Ok(())` if every step passes.
 ///
-/// Used by integration tests for a programmatic assertion instead of parsing stdout.
+/// Used by integration tests for a programmatic assertion.
 ///
 /// # Errors
 ///
@@ -613,9 +713,14 @@ mod tests {
         let mut m = IndexManifest::default();
         m.record("aapl-profile", "oldhash", "2026-01-15");
         m.record("aapl-profile", "newhash", "2026-04-15"); // overwrite
+
         m.record("new-doc", "somehash", "2026-04-15");
 
-        let diff = compute_manifest_diff(&m, "2026-01-15", "2026-04-15");
+        // v1_doc_ids snapshotted from the manifest BEFORE v2 ingest.
+        let mut v1_ids: BTreeSet<String> = BTreeSet::new();
+        v1_ids.insert("aapl-profile".to_string());
+
+        let diff = compute_manifest_diff(&m, &v1_ids, "2026-04-15");
         assert!(
             diff.changed.contains(&"aapl-profile".to_string()),
             "aapl-profile is a known v1 doc re-indexed at v2 -> changed"
@@ -624,5 +729,83 @@ mod tests {
             diff.added.contains(&"new-doc".to_string()),
             "new-doc first appears at v2 -> added"
         );
+    }
+
+    /// Validate that each demo step's printed MCP invocation uses ONLY parameter
+    /// names present in the real tool schemas (`additionalProperties: false`).
+    ///
+    /// This test parses the exact string literals emitted by `run_all` and checks
+    /// every key against the schema, so documentation cannot drift from reality.
+    #[test]
+    fn demo_mcp_examples_match_real_tool_schemas() {
+        // ── tdw.kg.search schema (from knowledge_tools.rs search_descriptor) ──
+        // Required: query. Optional: top_k, tags_any, entity_kinds, plane, as_of, expand.
+        let search_allowed: BTreeSet<&str> = [
+            "query",
+            "top_k",
+            "tags_any",
+            "entity_kinds",
+            "plane",
+            "as_of",
+            "expand",
+        ]
+        .into_iter()
+        .collect();
+
+        // The demo emits: { "query": "...", "top_k": 3 }
+        let search_example = json!({ "query": "AAPL supply chain", "top_k": 3 });
+        for key in search_example.as_object().unwrap().keys() {
+            assert!(
+                search_allowed.contains(key.as_str()),
+                "demo search example uses unknown key {key:?} — not in tdw.kg.search schema"
+            );
+        }
+
+        // ── tdw.kg.why schema (from knowledge_explain_tools.rs why_descriptor) ──
+        // Allowed top-level: entity_id, edge, tag_assignment, as_of.
+        // edge sub-object required: from, rel, to (additionalProperties: false).
+        let why_allowed: BTreeSet<&str> = ["entity_id", "edge", "tag_assignment", "as_of"]
+            .into_iter()
+            .collect();
+        let why_edge_allowed: BTreeSet<&str> = ["from", "rel", "to"].into_iter().collect();
+
+        // The demo emits: { "edge": { "from": "...", "rel": "supply_chain_peer", "to": "..." } }
+        let why_example = json!({
+            "edge": { "from": "instrument:AAPL", "rel": "supply_chain_peer", "to": "company:TSMC" }
+        });
+        for key in why_example.as_object().unwrap().keys() {
+            assert!(
+                why_allowed.contains(key.as_str()),
+                "demo why example uses unknown top-level key {key:?} — not in tdw.kg.why schema"
+            );
+        }
+        let edge_obj = why_example["edge"].as_object().unwrap();
+        for key in edge_obj.keys() {
+            assert!(
+                why_edge_allowed.contains(key.as_str()),
+                "demo why edge example uses unknown key {key:?} — not in tdw.kg.why edge schema"
+            );
+        }
+
+        // ── tdw.kg.diff schema (from knowledge_explain_tools.rs diff_descriptor) ──
+        // Required: from_as_of, to_as_of. Optional: plane, scope_entity_id, limit.
+        let diff_allowed: BTreeSet<&str> = [
+            "from_as_of",
+            "to_as_of",
+            "plane",
+            "scope_entity_id",
+            "limit",
+        ]
+        .into_iter()
+        .collect();
+
+        // The demo emits: { "from_as_of": "2026-01-15", "to_as_of": "2026-04-15" }
+        let diff_example = json!({ "from_as_of": "2026-01-15", "to_as_of": "2026-04-15" });
+        for key in diff_example.as_object().unwrap().keys() {
+            assert!(
+                diff_allowed.contains(key.as_str()),
+                "demo diff example uses unknown key {key:?} — not in tdw.kg.diff schema"
+            );
+        }
     }
 }
