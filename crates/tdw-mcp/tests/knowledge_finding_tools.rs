@@ -178,6 +178,7 @@ async fn build_runtime_with_graph() -> (Arc<KnowledgeRuntime>, Arc<InMemoryGraph
                 plane: Some("shared".to_string()),
                 as_of: Some(NOW.to_string()),
                 mentions: Vec::new(),
+                author: None,
             },
             NOW,
         )

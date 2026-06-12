@@ -587,9 +587,18 @@ async fn write_durable_graph(graph: &dyn GraphEngine, document: &KnowledgeDocume
     }
     graph.upsert_nodes(nodes).await.map_err(storage)?;
 
-    let provenance = Provenance::Ingest {
-        source: "tdw-knowledge:index".to_string(),
-    };
+    // Episodic documents carry an `author` id so their graph edges receive
+    // `Provenance::Agent` (matching the documented trust_class "agent_memory").
+    // All other planes leave `author: None` and continue to use `Provenance::Ingest`.
+    let provenance = document.author.as_ref().map_or_else(
+        || Provenance::Ingest {
+            source: "tdw-knowledge:index".to_string(),
+        },
+        |agent_id| Provenance::Agent {
+            agent_id: agent_id.clone(),
+            gated: false,
+        },
+    );
     let mut edges = vec![GraphEdge {
         from: document.entity.entity_id.clone(),
         to: format!("document:{}", document.id),
@@ -654,6 +663,7 @@ pub fn article_to_document(article: &Article, plane: &str) -> KnowledgeDocument 
             .iter()
             .map(|symbol| format!("instrument:{symbol}"))
             .collect(),
+        author: None,
     }
 }
 
@@ -766,6 +776,10 @@ pub fn transcript_to_episodes(
                 plane: Some("episodic".to_string()),
                 as_of: Some(as_of),
                 mentions: Vec::new(),
+                // `author` is left None here: the MCP tool stamps it with the
+                // bound principal's id after calling transcript_to_episodes,
+                // so the provenance is set at the call site that knows the user.
+                author: None,
             }
         })
         .collect()

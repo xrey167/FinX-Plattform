@@ -29,6 +29,7 @@ async fn main() {
                 plane: None,
                 as_of: None,
                 mentions: Vec::new(),
+                author: None,
             },
             "2026-05-22",
         )

@@ -112,6 +112,7 @@ fn document(
         plane: Some("shared".to_string()),
         as_of: Some(NOW.to_string()),
         mentions: Vec::new(),
+        author: None,
     }
 }
 

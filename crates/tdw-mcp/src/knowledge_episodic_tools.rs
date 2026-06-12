@@ -218,6 +218,11 @@ pub fn execute(
     }
     doc.mentions.sort();
     doc.tags = tags;
+    // Stamp the bound principal as author so the graph edges land with
+    // Provenance::Agent { agent_id, gated: false } — matching the documented
+    // trust_class "agent_memory".  This makes trust-dial (K-X3) and why-chains
+    // classify episodes correctly as agent/user-authored knowledge.
+    doc.author = Some(user_id.to_string());
 
     let doc_id = doc.id.clone();
     let entity_id = doc.entity.entity_id.clone();
@@ -365,6 +370,7 @@ fn validate_session_id(value: &str) -> Result<(), ToolFailure> {
 }
 
 fn validate_date(value: &str) -> Result<(), ToolFailure> {
+    // Structural check first (fast path, no allocation).
     if value.len() != 10
         || value.as_bytes().get(4) != Some(&b'-')
         || value.as_bytes().get(7) != Some(&b'-')
@@ -377,6 +383,13 @@ fn validate_date(value: &str) -> Result<(), ToolFailure> {
             "as_of must be YYYY-MM-DD, got {value:?}"
         )));
     }
+    // Calendar check: reject structurally-valid but impossible dates such as
+    // 2026-02-31 (pre-existing `is_date` does not catch these — see follow-up).
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
+        execution(format!(
+            "as_of {value:?} is not a valid calendar date (e.g. month/day out of range)"
+        ))
+    })?;
     Ok(())
 }
 
@@ -739,6 +752,101 @@ mod tests {
             outcomes2[0],
             IndexOutcome::SkippedUnchanged,
             "same content must be idempotent"
+        );
+    }
+
+    // ── provenance honesty (K-M2 review blocker) ──────────────────────────────
+    // Episodes are documented as landing with Provenance::Agent { agent_id,
+    // gated: false }.  This test asserts the persisted graph edges carry exactly
+    // that provenance — not Provenance::Ingest — so trust-dial (K-X3) and
+    // why-chains classify episodes as agent/user memory as advertised.
+
+    #[tokio::test]
+    async fn episode_graph_edges_carry_agent_provenance() {
+        use std::sync::Arc;
+
+        use tdw_core::{GraphEngine, Provenance};
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_knowledge::KnowledgeIndex;
+        use tdw_knowledge::indexer::{KnowledgeIndexer, transcript_to_episodes};
+        use tdw_storage_graph::InMemoryGraphEngine;
+        use tdw_storage_qdrant::InMemoryVectorEngine;
+
+        let embedder: Arc<dyn tdw_embed::EmbeddingProvider> =
+            Arc::new(HashEmbeddingProvider::default());
+        let vectors: Arc<dyn tdw_core::VectorEngine> = Arc::new(InMemoryVectorEngine::default());
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let index = KnowledgeIndex::new(Arc::clone(&embedder), Arc::clone(&vectors));
+        let mut indexer = KnowledgeIndexer::new(index).with_graph(Arc::clone(&graph));
+
+        // Build an episodic doc and stamp author = "agent:test-user"
+        let turns = vec![TranscriptTurn {
+            role: "user".to_string(),
+            text: "Provenance honesty check".to_string(),
+            as_of: Some("2026-06-12".to_string()),
+        }];
+        let config = EpisodicWindowConfig { window_size: 1 };
+        let mut docs = transcript_to_episodes("prov-sess", &turns, &config, "2026-06-12");
+        let mut doc = docs.pop().expect("one doc");
+        let expected_agent_id = "agent:test-user".to_string();
+        doc.author = Some(expected_agent_id.clone());
+
+        let entity_id = doc.entity.entity_id.clone();
+        indexer
+            .index_at(doc, "2026-06-12")
+            .await
+            .expect("index succeeds");
+
+        // Fetch the `described_by` edge from the episode entity and assert
+        // it carries Provenance::Agent, not Provenance::Ingest.
+        let filter = tdw_core::TraversalFilter {
+            direction: tdw_core::Direction::Out,
+            max_hops: 1,
+            ..tdw_core::TraversalFilter::default()
+        };
+        let neighbors = graph
+            .neighbors(&entity_id, &filter)
+            .await
+            .expect("neighbors query succeeds");
+
+        let described_by = neighbors
+            .iter()
+            .find(|(edge, _)| edge.rel == "described_by")
+            .map(|(edge, _)| &edge.provenance)
+            .expect("described_by edge must exist");
+
+        assert!(
+            matches!(
+                described_by,
+                Provenance::Agent { agent_id, gated: false } if agent_id == &expected_agent_id
+            ),
+            "episode described_by edge must carry Provenance::Agent{{agent_id={expected_agent_id:?}, \
+             gated=false}}, got {described_by:?}"
+        );
+    }
+
+    // ── validate_date calendar check (K-M2 review LOW) ───────────────────────
+
+    #[test]
+    fn validate_date_rejects_invalid_calendar_date() {
+        // 2026-02-31 is structurally valid YYYY-MM-DD but Feb has no 31st day.
+        assert!(
+            validate_date("2026-02-31").is_err(),
+            "2026-02-31 must be rejected as an invalid calendar date"
+        );
+        // 2026-13-01: month 13 doesn't exist.
+        assert!(
+            validate_date("2026-13-01").is_err(),
+            "2026-13-01 must be rejected (month out of range)"
+        );
+        // Valid dates still pass.
+        assert!(
+            validate_date("2026-02-28").is_ok(),
+            "2026-02-28 must be accepted"
+        );
+        assert!(
+            validate_date("2024-02-29").is_ok(),
+            "2024-02-29 (leap day) must be accepted"
         );
     }
 }

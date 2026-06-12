@@ -1747,6 +1747,7 @@ pub fn llm_knowledge_sample() -> Result<Value> {
             plane: None,
             as_of: None,
             mentions: Vec::new(),
+            author: None,
         },
         "2026-05-22",
     ))

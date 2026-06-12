@@ -661,6 +661,7 @@ fn capture_finding_inner(
             plane: Some("user".to_string()),
             as_of: Some(as_of.clone()),
             mentions: auto_links.clone(),
+            author: None,
         };
         // `std::sync::Mutex::lock` yields a non-Send guard that cannot cross
         // an `async {}` boundary inside the Send-bound `block_on`.  Use
