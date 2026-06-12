@@ -17,6 +17,7 @@
 //! with recall\@k, MRR, and nDCG\@k, stamped with a [`retrieval_eval::DriftKey`].
 
 pub mod baseline_comparator;
+pub mod benchmark;
 pub mod replay_eval;
 pub mod retrieval_eval;
 pub mod scheduled_eval;
