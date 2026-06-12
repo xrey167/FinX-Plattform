@@ -596,13 +596,16 @@ impl Retriever {
                             continue;
                         }
                     }
-                    for doc_id in entity_documents(graph.as_ref(), &entity, &query.filter).await? {
+                    for (doc_id, class_token) in
+                        entity_documents(graph.as_ref(), &entity, &query.filter).await?
+                    {
                         run.meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
                             entity_id: entity.clone(),
                             tags: vec![tag.clone()],
-                            // provenance_class_token is unknown for tag-channel entries
-                            // (no payload round-trip); classified in assemble_hits.
-                            provenance_class_token: None,
+                            // K-X3: class_token is read from the graph document
+                            // node's props.provenance_class (stamped at index time).
+                            // Pre-stamp nodes carry None → effective DocumentIngested.
+                            provenance_class_token: class_token,
                         });
                         entries.push(RankedEntry {
                             id: doc_id,
@@ -656,18 +659,23 @@ impl Retriever {
                         to: edge.to.clone(),
                     });
                     let contribution = seed.score * expansion.decay.powi(i32::from(hop));
-                    for doc_id in entity_documents(graph, &node.id, filter).await? {
+                    for (doc_id, class_token) in entity_documents(graph, &node.id, filter).await? {
                         if doc_id == seed.doc {
                             continue;
                         }
+                        // K-X3: resolve trust_class from the graph document node's
+                        // props.provenance_class (stamped at index time).  Pre-stamp
+                        // nodes carry None → effective DocumentIngested in the
+                        // post-expansion retain pass.
+                        let trust_class = class_token
+                            .as_deref()
+                            .and_then(TrustClass::from_payload_token);
                         let entry = hits.entry(doc_id.clone()).or_insert_with(|| RetrievedHit {
                             id: doc_id.clone(),
                             entity_id: node.id.clone(),
                             score: 0.0,
                             tags: Vec::new(),
-                            // Graph-expanded neighbour hits have no payload round-trip;
-                            // trust_class is absent (None) for these stubs.
-                            trust_class: None,
+                            trust_class,
                             explanation: HitExplanation::default(),
                         });
                         entry.score += contribution;
@@ -744,6 +752,11 @@ fn assemble_hits(
 /// Documents described by an entity (via `described_by` edges to
 /// `document:<id>` nodes) that are VISIBLE under the query filter.
 ///
+/// Returns `(doc_id, provenance_class_token)` pairs.  The class token is read
+/// from the document node's `props.provenance_class` field, which is stamped at
+/// index time by `write_durable_graph` (K-X3).  Absent tokens occur only on
+/// pre-stamp nodes and default to [`TrustClass::DocumentIngested`] in callers.
+///
 /// Graph-derived documents must satisfy the same contract the payload filter
 /// enforces on the vector/lexical channels — otherwise the tag channel and
 /// graph expansion would be the leak around the `as_of` gate.
@@ -751,7 +764,7 @@ async fn entity_documents(
     graph: &dyn GraphEngine,
     entity_id: &str,
     filter: &QueryFilter,
-) -> Result<Vec<String>> {
+) -> Result<Vec<(String, Option<String>)>> {
     let traversal = TraversalFilter {
         rels: Some(vec![DESCRIBED_BY.to_string()]),
         direction: Direction::Out,
@@ -763,7 +776,18 @@ async fn entity_documents(
         .await?
         .into_iter()
         .filter(|(_, node)| document_visible(&node.props, filter))
-        .filter_map(|(_, node)| node.id.strip_prefix(DOCUMENT_PREFIX).map(ToOwned::to_owned))
+        .filter_map(|(_, node)| {
+            let doc_id = node
+                .id
+                .strip_prefix(DOCUMENT_PREFIX)
+                .map(ToOwned::to_owned)?;
+            let class_token = node
+                .props
+                .get("provenance_class")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            Some((doc_id, class_token))
+        })
         .collect())
 }
 

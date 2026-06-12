@@ -317,14 +317,15 @@ fn optional_provenance_classes(
 /// explicit so callers understand why the result is empty — it is not a search
 /// error, just a trust-level constraint.
 fn trust_scope_summary(active_classes: Option<&[TrustClass]>, hit_count: usize) -> Value {
-    active_classes.map_or_else(
-        || {
+    // None OR an empty slice both mean "all classes" — report as unfiltered.
+    match active_classes {
+        None | Some([]) => {
             json!({
                 "filtered": false,
                 "note": "all provenance classes included (no trust-dial filter active)",
             })
-        },
-        |classes| {
+        }
+        Some(classes) => {
             let tokens: Vec<&str> = classes.iter().map(|c| c.payload_token()).collect();
             let note = if hit_count == 0 {
                 format!(
@@ -342,8 +343,8 @@ fn trust_scope_summary(active_classes: Option<&[TrustClass]>, hit_count: usize) 
                 "provenance_classes": tokens,
                 "note": note,
             })
-        },
-    )
+        }
+    }
 }
 
 fn entity(

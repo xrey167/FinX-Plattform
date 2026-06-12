@@ -845,3 +845,158 @@ async fn trust_dial_expand_filter_gates_expanded_neighbors() {
          the post-expansion trust-dial retain pass: {ids_filtered:?}"
     );
 }
+
+/// Fixture for the tag-channel trust-gate e2e test.
+///
+/// Layout:
+/// - `doc-finding` → `finding:tag-test` — vector payload has
+///   `provenance_class: "user_authored"`; graph document node has
+///   `provenance_class: "user_authored"` in props (K-X3 stamp).
+/// - Tag `research:findings` assigned to `finding:tag-test`.
+/// - The tag channel resolves `finding:tag-test` → `doc-finding` and must
+///   carry the `user_authored` class from the graph node props.
+///
+/// With a `document_ingested`-only filter the finding doc must be EXCLUDED
+/// even though it is the ONLY result reachable via the tag channel.
+async fn tag_trust_fixture() -> (
+    Arc<HashEmbeddingProvider>,
+    Arc<InMemoryVectorEngine>,
+    Arc<InMemoryGraphEngine>,
+    Arc<InMemoryTagEngine>,
+) {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    let graph = Arc::new(InMemoryGraphEngine::default());
+    let tags = Arc::new(InMemoryTagEngine::default());
+
+    // Vector point: user_authored finding
+    let emb = embedder
+        .embed("research finding note")
+        .await
+        .expect("embed");
+    vectors
+        .upsert(
+            COLLECTION,
+            vec![VectorPoint {
+                id: "doc-finding".to_string(),
+                vector: emb.vector,
+                payload: json!({
+                    "entity_id": "finding:tag-test",
+                    "tags": ["research:findings"],
+                    "entity_kind": "finding",
+                    "provenance_class": "user_authored",
+                    "as_of": "2026-06-01T00:00:00Z",
+                    "plane": "platform",
+                }),
+            }],
+        )
+        .await
+        .expect("upsert finding");
+
+    // Graph: entity node + document node (with provenance_class in props)
+    let entity_node = node("finding:tag-test", EntityKind::Finding);
+    let mut doc_node = node("document:doc-finding", EntityKind::Document);
+    // K-X3: provenance_class is stamped here by write_durable_graph; we mirror
+    // that in the fixture so the tag channel can read it from node.props.
+    doc_node.props = json!({
+        "provenance_class": "user_authored",
+        "as_of": "2026-06-01T00:00:00Z",
+        "plane": "platform",
+    });
+    graph
+        .upsert_nodes(vec![entity_node, doc_node])
+        .await
+        .expect("upsert nodes");
+    graph
+        .upsert_edges(vec![edge(
+            "finding:tag-test",
+            "document:doc-finding",
+            "described_by",
+        )])
+        .await
+        .expect("upsert edges");
+
+    // Tags: define + assign research:findings to the finding entity
+    tags.define(TagDefinition {
+        tag_id: "research:findings".to_string(),
+        parent: None,
+        ttl_days: None,
+    })
+    .await
+    .expect("define tag");
+    tags.assign(TagAssignment {
+        entity_id: "finding:tag-test".to_string(),
+        tag_id: "research:findings".to_string(),
+        assigned_at: "2026-06-01".to_string(),
+        expires_at: None,
+        provenance: "test:fixture".to_string(),
+    })
+    .await
+    .expect("assign tag");
+
+    (embedder, vectors, graph, tags)
+}
+
+#[tokio::test]
+async fn trust_dial_tag_channel_gates_user_authored_under_document_only_filter() {
+    // K-X3 Gemini review: tag-channel hits must carry their real provenance class
+    // from graph node props, not always default to DocumentIngested.
+    //
+    // Setup: a Finding entity holds tag "research:findings".  Its document node
+    // props carry provenance_class="user_authored" (stamped by write_durable_graph).
+    // With a document_ingested-only filter the tag channel must exclude it.
+    // Without the filter it must appear.
+    let (embedder, vectors, graph, tags) = tag_trust_fixture().await;
+
+    let retriever = Retriever::new(embedder.clone(), vectors.clone(), COLLECTION)
+        .with_graph(graph.clone())
+        .with_tags(tags.clone());
+
+    // --- Without filter: finding appears via tag channel ---
+    let query_no_filter = KnowledgeQuery::try_new(
+        "research finding",
+        16,
+        QueryFilter {
+            tags_any: vec!["research:findings".to_string()],
+            as_of: Some("2026-06-12".to_string()),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits_no_filter = retriever
+        .search(&query_no_filter)
+        .await
+        .expect("search without filter");
+    let ids_no_filter: std::collections::BTreeSet<&str> =
+        hits_no_filter.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        ids_no_filter.contains("doc-finding"),
+        "without filter, tag channel must surface the finding doc: {ids_no_filter:?}"
+    );
+
+    // --- With document_ingested filter: finding excluded (it is user_authored) ---
+    let query_filtered = KnowledgeQuery::try_new(
+        "research finding",
+        16,
+        QueryFilter {
+            tags_any: vec!["research:findings".to_string()],
+            as_of: Some("2026-06-12".to_string()),
+            provenance_classes: Some(vec![TrustClass::DocumentIngested]),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+    let hits_filtered = retriever
+        .search(&query_filtered)
+        .await
+        .expect("search with document_ingested filter");
+    let ids_filtered: std::collections::BTreeSet<&str> =
+        hits_filtered.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        !ids_filtered.contains("doc-finding"),
+        "document_ingested filter must exclude the user_authored finding \
+         that arrives via the tag channel: {ids_filtered:?}"
+    );
+}
