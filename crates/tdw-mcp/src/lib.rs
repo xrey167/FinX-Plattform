@@ -14,10 +14,12 @@ use tdw_app_client::{
 };
 use tdw_app_server::{DaemonEndpoint, DaemonTransport};
 use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
+use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
+pub(crate) mod knowledge_ingest_tools;
 pub(crate) mod knowledge_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
@@ -170,6 +172,13 @@ pub struct McpServer {
     /// AND a knowledge runtime is present, the `tdw.kg.feedback` tool is exposed.
     /// `None` keeps the feedback surface off entirely.
     feedback_store: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+    /// Optional daemon-hosted knowledge indexer (knowledge-system K-E3). When
+    /// attached AND a knowledge runtime is present, the `tdw.kg.ingest` tool is
+    /// exposed. The indexer is the write surface for the public ingestion path;
+    /// its `Arc<tokio::sync::Mutex<KnowledgeIndexer>>` is shared with the
+    /// daemon's `Backend` so the manifest and in-process state persist across
+    /// MCP calls on the same process.
+    indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
 }
 
 impl Default for McpServer {
@@ -186,6 +195,7 @@ impl Default for McpServer {
             expose_sample_tools: sample_tools_enabled(),
             knowledge: None,
             feedback_store: None,
+            indexer: None,
         }
     }
 }
@@ -210,6 +220,7 @@ impl McpServer {
             expose_sample_tools: sample_tools_enabled(),
             knowledge: None,
             feedback_store: None,
+            indexer: None,
         }
     }
 
@@ -280,6 +291,22 @@ impl McpServer {
         store: Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>,
     ) {
         self.feedback_store = Some(store);
+    }
+
+    /// Attach a daemon-hosted [`KnowledgeIndexer`] (knowledge-system K-E3).
+    ///
+    /// When attached AND a knowledge runtime is present, the `tdw.kg.ingest`
+    /// write tool is exposed via `tools/list` and dispatched in `tools/call`.
+    /// `None` keeps the ingestion surface off entirely. Consumes and returns
+    /// `self` for builder use.
+    ///
+    /// The indexer handle is an `Arc<tokio::sync::Mutex<KnowledgeIndexer>>`
+    /// shared with the daemon's `Backend`, so manifest state and in-process
+    /// tag assignments persist across MCP calls in the same process.
+    #[must_use]
+    pub fn with_indexer(mut self, indexer: Arc<tokio::sync::Mutex<KnowledgeIndexer>>) -> Self {
+        self.indexer = Some(indexer);
+        self
     }
 
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
@@ -367,6 +394,13 @@ impl McpServer {
             .is_some_and(|rt| rt.graph().is_some())
         {
             descriptors.extend(knowledge_explain_tools::descriptors());
+        }
+        // The knowledge INGEST tool (knowledge-system K-E3) is appended ONLY when a
+        // knowledge runtime is present AND a hosted indexer handle is attached. The
+        // indexer is the public write surface: content-hash-idempotent batch ingest
+        // through the full B5 pipeline (rules, lexical, durable graph).
+        if self.knowledge_ingest_available() {
+            descriptors.push(knowledge_ingest_tools::descriptor());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -534,6 +568,10 @@ impl McpServer {
             return messages;
         }
 
+        if let Some(messages) = self.dispatch_knowledge_ingest_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_registry_tool(id, name, &arguments) {
             return messages;
         }
@@ -681,6 +719,51 @@ impl McpServer {
     /// knowledge runtime is attached AND a feedback store handle is attached.
     const fn knowledge_feedback_available(&self) -> bool {
         self.knowledge.is_some() && self.feedback_store.is_some()
+    }
+
+    /// True when the ingest surface is available (knowledge-system K-E3): a
+    /// knowledge runtime is attached AND a hosted indexer handle is attached.
+    const fn knowledge_ingest_available(&self) -> bool {
+        self.knowledge.is_some() && self.indexer.is_some()
+    }
+
+    /// Dispatch the knowledge ingest tool (`tdw.kg.ingest`, knowledge-system K-E3).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.kg.ingest` — a tool error
+    /// (never a protocol error) when the ingest surface is unavailable (no
+    /// runtime or no indexer), otherwise the
+    /// [`knowledge_ingest_tools::execute`] result. Returns `None` when `name`
+    /// is not the ingest tool.
+    fn dispatch_knowledge_ingest_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_ingest_tools::owns(name) {
+            return None;
+        }
+        let Some(indexer) = self.indexer.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge ingest surface not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_ingest_tools::execute(indexer, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
     }
 
     /// Dispatch the knowledge feedback tool (`tdw.kg.feedback`, knowledge-system B10).
@@ -949,22 +1032,25 @@ pub fn run_stdio_json_rpc_with_daemon(daemon: Option<DaemonClientConfig>) -> i32
 }
 
 /// Run the blocking stdio JSON-RPC loop with an explicit daemon config **and**
-/// pre-built knowledge handles (knowledge-system F1).
+/// pre-built knowledge handles (knowledge-system F1/K-E3).
 ///
 /// Used by the unified `tdw-backend` binary when running in `Both` (or
 /// `McpOnly`) mode: the in-process `Backend` has already constructed a
-/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime) and a
-/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore); passing
+/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime), a
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore), and a
+/// [`KnowledgeIndexer`](tdw_knowledge::indexer::KnowledgeIndexer); passing
 /// them here injects them into the embedded MCP server so the knowledge read
-/// tools and the `tdw.kg.feedback` write tool are live on the stdio surface.
+/// tools, the `tdw.kg.feedback` write tool, and the `tdw.kg.ingest` tool are
+/// live on the stdio surface.
 ///
-/// When `knowledge` or `feedback` are `None` the server behaves identically to
-/// [`run_stdio_json_rpc_with_daemon`] for those surfaces.
+/// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
+/// behaves identically to [`run_stdio_json_rpc_with_daemon`] for those surfaces.
 #[must_use]
 pub fn run_stdio_json_rpc_with_knowledge(
     daemon: Option<DaemonClientConfig>,
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+    indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -975,6 +1061,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(store) = feedback {
         base.with_feedback_store(store)
+    } else {
+        base
+    };
+    let base = if let Some(idx) = indexer {
+        base.with_indexer(idx)
     } else {
         base
     };
@@ -1466,23 +1557,26 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
 }
 
 /// Run the blocking Streamable HTTP loop with an explicit daemon config **and**
-/// pre-built knowledge handles (knowledge-system F1).
+/// pre-built knowledge handles (knowledge-system F1/K-E3).
 ///
 /// Used by the unified `tdw-backend` binary when running in `Both`/`McpOnly`
 /// mode with an HTTP MCP transport: injects a co-resident
-/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime) and
-/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore) into the
-/// embedded MCP server so the knowledge read tools and `tdw.kg.feedback` are
-/// live on the Streamable HTTP surface without another loopback hop.
+/// [`KnowledgeRuntime`](tdw_knowledge::runtime::KnowledgeRuntime),
+/// [`RetrievalFeedbackStore`](tdw_agent_store::RetrievalFeedbackStore), and
+/// [`KnowledgeIndexer`](tdw_knowledge::indexer::KnowledgeIndexer) into the
+/// embedded MCP server so the knowledge read tools, `tdw.kg.feedback`, and
+/// `tdw.kg.ingest` are live on the Streamable HTTP surface without another
+/// loopback hop.
 ///
-/// When `knowledge` or `feedback` are `None` the server behaves identically to
-/// [`run_streamable_http_with_daemon`] for those surfaces.
+/// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
+/// behaves identically to [`run_streamable_http_with_daemon`] for those surfaces.
 #[must_use]
 pub fn run_streamable_http_with_knowledge(
     bind: &str,
     daemon: Option<DaemonClientConfig>,
     knowledge: Option<Arc<tdw_knowledge::runtime::KnowledgeRuntime>>,
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
+    indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1514,6 +1608,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(store) = feedback {
         base.with_feedback_store(store)
+    } else {
+        base
+    };
+    let base = if let Some(idx) = indexer {
+        base.with_indexer(idx)
     } else {
         base
     };

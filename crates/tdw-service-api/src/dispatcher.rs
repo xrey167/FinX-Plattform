@@ -56,7 +56,7 @@ use crate::{
     SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
     mask_json_response,
 };
-use crate::{econometrics_compute, quant_compute, technical_compute};
+use crate::{econometrics_compute, portfolio_compute, quant_compute, technical_compute};
 
 #[async_trait]
 impl Dispatcher for AppState {
@@ -562,11 +562,18 @@ async fn dispatch_compute(
     params: &Value,
     evidence: &PolicyEnforcementEvidence,
 ) -> Result<Value> {
-    // The `econometrics/*` estimators read their (multi-series) inputs entirely
-    // from the typed params — there is no `data`/`source` value series to
-    // resolve — so they take a parallel, source-less path.
+    // The `econometrics/*` estimators and the `portfolio/*` metrics read their
+    // inputs entirely from the typed params — there is no `data`/`source` value
+    // series to resolve — so they take a parallel, source-less path.
     if econometrics_compute::owns_route(route) {
-        return dispatch_econometrics_compute(route, params, policy, evidence);
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            econometrics_compute::run_compute(route, params)
+        });
+    }
+    if portfolio_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            portfolio_compute::run_compute(route, params)
+        });
     }
 
     // The `technical/*` and `quantitative/*` routes share one value-series
@@ -722,17 +729,22 @@ fn run_quant_compute(
     Ok((rows, None))
 }
 
-/// Run an `econometrics/*` Compute route, whose series live entirely in the
-/// typed params (no `data`/`source` value series). Builds the same
-/// `{ evidence, result }` envelope as the value-series compute path; the result
-/// is never chartable.
-fn dispatch_econometrics_compute(
+/// Run a params-only Compute route (the `econometrics/*` estimators and the
+/// `portfolio/*` metrics), whose inputs live entirely in the typed params (no
+/// `data`/`source` value series). The namespace's `run` closure produces the
+/// result rows. Builds the same `{ evidence, result }` envelope as the
+/// value-series compute path; the result is never chartable.
+fn dispatch_params_only_compute<R>(
     route: &str,
     params: &Value,
     policy: &PolicyEnforcementConfig,
     evidence: &PolicyEnforcementEvidence,
-) -> Result<Value> {
-    let rows = econometrics_compute::run_compute(route, params)?;
+    run: R,
+) -> Result<Value>
+where
+    R: FnOnce(&str, &Value) -> Result<Vec<Value>>,
+{
+    let rows = run(route, params)?;
     let extra = ResultExtra::default().with_route(route);
     let envelope = ResultEnvelope::new(route, rows).with_extra(extra);
     let body = serde_json::to_value(&envelope)
@@ -1473,6 +1485,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -1642,6 +1656,63 @@ fn insert_cftc_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
             tdw_domain::SeriesSearchResult,
         >("regulators/cftc/cot_search"),
     );
+}
+
+/// Build a [`FetchBinding`] for an IMF catalog-backed fetcher that resolves a
+/// fixed `economy/imf/*` `command` to its SDMX database. The command is injected
+/// into the caller's params before the shared fetcher runs, so one fetcher type
+/// serves every IMF route while the dispatch key stays per-command. Mirrors
+/// [`cftc_command_fetch_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_command_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::ImfHttpMacroSeriesFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the IMF catalog fetch bindings (OpenBB-parity **P3W3**) into
+/// `table`, keyed by the route-derived endpoint key (`<route with '/'→'_'>`)
+/// resolved through the catalog so the dispatch key never drifts from the
+/// candidate. Each binding injects its route's `command`.
+#[cfg(feature = "provider-imf")]
+fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    for endpoint in tdw_provider_imf::ENDPOINTS {
+        let Some(key) = imf_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, imf_command_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an IMF `economy/imf/*` `command` to the `'static` `(provider,
+/// endpoint)` dispatch key declared for it in the endpoint catalog. Returns
+/// `None` only if an IMF command is missing its catalog route — a bug the
+/// conformance test catches. Mirrors [`fred_catalog_key`].
+#[cfg(feature = "provider-imf")]
+fn imf_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "imf")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
 }
 
 /// Build a [`FetchBinding`] for a Federal Reserve catalog-backed fetcher that
@@ -2637,6 +2708,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     );
     #[cfg(feature = "provider-cftc")]
     insert_cftc_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_ingest_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -2947,6 +3020,47 @@ fn insert_cftc_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Build an [`IngestBinding`] for an IMF catalog-backed fetcher that injects a
+/// fixed `command` before fetching one batch and persisting it to the shared
+/// `raw.macro_series` bronze table. Mirrors [`cftc_command_ingest_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_command_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::ImfHttpMacroSeriesFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the IMF ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-imf")]
+fn insert_imf_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    for endpoint in tdw_provider_imf::ENDPOINTS {
+        let Some(key) = imf_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            imf_command_ingest_binding(endpoint.command, "raw.macro_series"),
+        );
+    }
+}
+
 /// Build an [`IngestBinding`] for a Federal Reserve catalog-backed fetcher that
 /// injects a fixed `command` before fetching one batch and persisting it.
 #[cfg(feature = "provider-federal-reserve")]
@@ -3067,9 +3181,9 @@ async fn dispatch_tool(
     }
 
     // The analytics tools are the catalog's Compute routes (the `technical/*`,
-    // `quantitative/*`, and `econometrics/*` namespaces) exposed as tools: the
-    // tool name maps to the route by swapping the first `.` for `/`, and
-    // execution reuses the same compute path as `Op::FetchData`. Policy
+    // `quantitative/*`, `econometrics/*`, and `portfolio/*` namespaces) exposed
+    // as tools: the tool name maps to the route by swapping the first `.` for
+    // `/`, and execution reuses the same compute path as `Op::FetchData`. Policy
     // enforcement already ran above; thread its evidence through unchanged.
     if let Some(route) = compute_tool_route(tool_name) {
         return dispatch_compute(state, policy, &route, arguments, &evidence).await;
@@ -3121,7 +3235,10 @@ fn service_tool_registry() -> ToolRegistry {
 /// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
-    if matches!(namespace, "technical" | "quantitative" | "econometrics") {
+    if matches!(
+        namespace,
+        "technical" | "quantitative" | "econometrics" | "portfolio"
+    ) {
         Some(format!("{namespace}/{member}"))
     } else {
         None
@@ -3132,7 +3249,8 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
 ///
 /// The tool name is the route with the namespace separator `/` swapped for `.`
 /// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
-/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`), so
+/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`,
+/// `portfolio/drawdown` → `portfolio.drawdown`), so
 /// `Op::ToolCall` and the MCP tool list expose every metric for free with the
 /// route's own param/model JSON schemas attached. Driving this from
 /// `tdw_endpoint_catalog::catalog()` keeps the tool set in lockstep with the
@@ -3522,6 +3640,7 @@ mod tests {
         feature = "provider-eia",
         feature = "provider-finnhub",
         feature = "provider-fmp",
+        feature = "provider-imf",
         feature = "provider-nasdaq",
         feature = "provider-polygon",
         feature = "provider-sec",
@@ -4026,9 +4145,9 @@ mod tests {
     }
 
     /// Every catalog Compute route (across the `technical/*`, `quantitative/*`,
-    /// and `econometrics/*` namespaces) is registered both as a compute
-    /// implementation and as a `<namespace>.<member>` tool, and vice versa — no
-    /// orphan on either side.
+    /// `econometrics/*`, and `portfolio/*` namespaces) is registered both as a
+    /// compute implementation and as a `<namespace>.<member>` tool, and vice
+    /// versa — no orphan on either side.
     #[test]
     fn compute_routes_tools_and_catalog_agree() {
         use std::collections::BTreeSet;
@@ -4065,6 +4184,11 @@ mod tests {
                 assert!(
                     econometrics_compute::compute_registry().contains_key(route.as_str()),
                     "econometrics compute route {route} has no registered implementation"
+                );
+            } else if portfolio_compute::owns_route(route) {
+                assert!(
+                    portfolio_compute::compute_registry().contains_key(route.as_str()),
+                    "portfolio compute route {route} has no registered implementation"
                 );
             } else {
                 let result = technical_compute::run_compute(route, &bars, &json!({}));
@@ -4454,6 +4578,48 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "federal_reserve candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog <-> IMF `ENDPOINTS` sync (OpenBB-parity **P3W3**): every
+    /// standardized IMF command has a catalog route whose `imf` candidate
+    /// endpoint is the route's `'/'→'_'` form and is dispatchable in both tables
+    /// under `provider-imf`.
+    #[cfg(feature = "provider-imf")]
+    #[test]
+    fn imf_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_imf::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command)
+                .unwrap_or_else(|| panic!("imf command {} has no catalog route", endpoint.command));
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "imf")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no imf candidate", endpoint.command)
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} imf endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "imf candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "imf candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command

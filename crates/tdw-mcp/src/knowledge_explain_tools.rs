@@ -863,14 +863,14 @@ async fn compute_diff(
         let node = block_on_inner(graph.node(&edge.from))
             .await
             .map_err(|e| execution(e.to_string()))?;
-        if let Some(node) = node {
-            if node.props.get("merged_into").is_some() {
-                tombstone_items.push(json!({
-                    "entity_id": edge.from,
-                    "merged_into": edge.to,
-                    "provenance": edge.provenance
-                }));
-            }
+        if let Some(node) = node
+            && node.props.get("merged_into").is_some()
+        {
+            tombstone_items.push(json!({
+                "entity_id": edge.from,
+                "merged_into": edge.to,
+                "provenance": edge.provenance
+            }));
         }
     }
     let entities_tombstoned_count = tombstone_items.len();

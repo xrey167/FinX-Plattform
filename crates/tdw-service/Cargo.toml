@@ -22,6 +22,19 @@ daemon-postgres = ["tdw-service-api/daemon-postgres"]
 ## runtime under per-request `WasmLimits`; without it the deterministic fixture
 ## runtime is used. Built into the `live` compose daemon image.
 udf-wasm = ["tdw-service-api/udf-wasm"]
+## Compile the Bolt/Memgraph graph-database backend into the daemon (forwards to
+## `tdw-backend/bolt`). Required for `knowledge.graph.backend = "bolt"` at
+## runtime; without it the daemon hard-errors at startup when TDW_CONFIG_CONTENT
+## pins `backend = "bolt"`. Built into the `live` compose daemon image via the
+## `real-engines` group below.
+bolt = ["tdw-backend/bolt"]
+## Full production feature set for the `live` compose daemon image. Forwards the
+## real-engines group to `tdw-service-api` (Postgres/ClickHouse/Qdrant/Meilisearch
+## /S3 + daemon-postgres), enables Bolt graph support (`tdw-backend/bolt`), and
+## Postgres-backs the daemon session/rollout stores. This is what the
+## `docker/tdw-service.Dockerfile` `FEATURES: real-engines,udf-wasm` arg
+## activates.
+real-engines = ["tdw-service-api/real-engines", "bolt"]
 
 [dependencies]
 serde_json = { workspace = true }

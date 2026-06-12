@@ -875,6 +875,177 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "economy_imf_balance_of_payments": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "IMF Balance of Payments time series, SDMX-JSON macro series.",
+    "endpoint": "/widget-data/economy/imf/balance_of_payments",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_imf_balance_of_payments",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Balance Of Payments",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_imf_direction_of_trade": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "IMF Direction of Trade Statistics time series, SDMX-JSON macro series.",
+    "endpoint": "/widget-data/economy/imf/direction_of_trade",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_imf_direction_of_trade",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Direction Of Trade",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_imf_international_financial_statistics": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "IMF International Financial Statistics time series, SDMX-JSON macro series.",
+    "endpoint": "/widget-data/economy/imf/international_financial_statistics",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_imf_international_financial_statistics",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "International Financial Statistics",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "economy_money_measures": {
     "category": "economy",
     "data": {
