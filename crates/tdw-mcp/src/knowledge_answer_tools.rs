@@ -806,7 +806,10 @@ mod tests {
         let (cleaned, stripped) =
             validate_and_clean_citations("see [doc-aapl] and [doc-ghost]", &valid);
         assert!(cleaned.contains("[doc-aapl]"), "valid id kept: {cleaned}");
-        assert!(!cleaned.contains("[doc-ghost]"), "ghost stripped: {cleaned}");
+        assert!(
+            !cleaned.contains("[doc-ghost]"),
+            "ghost stripped: {cleaned}"
+        );
         assert_eq!(stripped, vec!["doc-ghost".to_string()]);
     }
 
