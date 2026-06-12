@@ -632,8 +632,14 @@ async fn assemble_hits(
             .collect();
 
         // K-R6: compute confidence when graph is attached and weight is nonzero.
-        let (confidence, final_score) =
-            compute_hit_confidence(graph, query, &doc_meta.entity_id, candidate.score).await?;
+        let (confidence, final_score) = compute_hit_confidence(
+            graph,
+            query,
+            &doc_meta.entity_id,
+            &candidate.id,
+            candidate.score,
+        )
+        .await?;
 
         hits.insert(
             candidate.id.clone(),
@@ -669,12 +675,15 @@ async fn assemble_hits(
 /// returns `(None, rrf_score)` — confidence does not affect ranking.
 ///
 /// The corroboration pool is the slice of `described_by` neighbors of the
-/// entity (outgoing edges).  These carry the provenance of the document
-/// ingestion, which is the correct pool for corroboration counting.
+/// entity (outgoing edges).  The **subject** edge is the one whose `to` target
+/// matches `doc_node_id` — the document node for this specific hit.  Using any
+/// other edge (e.g. the first neighbor) would score the wrong `(entity, doc)`
+/// pair for multi-document entities.
 async fn compute_hit_confidence(
     graph: Option<&dyn GraphEngine>,
     query: &KnowledgeQuery,
     entity_id: &str,
+    doc_id: &str,
     rrf_score: f64,
 ) -> Result<(Option<ConfidenceScore>, f64)> {
     let weight = query.confidence_weight.0;
@@ -698,11 +707,22 @@ async fn compute_hit_confidence(
         return Ok((None, rrf_score));
     }
 
-    // Use the first edge as the subject (the fact being scored is the entity's
-    // existence in the graph, proxied by its ingest provenance).
-    let (ref edge, _) = neighbors[0];
+    // The document node id is "document:<doc_id>" (the convention used by the
+    // ingest pipeline).  Match the specific edge whose target is this hit's
+    // document — a multi-document entity must not have its doc-x hit scored
+    // with doc-a's confidence.
+    let doc_node_id = format!("document:{doc_id}");
+    let subject_edge = neighbors
+        .iter()
+        .map(|(e, _)| e)
+        .find(|e| e.to == doc_node_id)
+        .or_else(|| neighbors.first().map(|(e, _)| e));
+    let Some(subject_edge) = subject_edge else {
+        return Ok((None, rrf_score));
+    };
+
     let pool: Vec<&tdw_core::GraphEdge> = neighbors.iter().map(|(e, _)| e).collect();
-    let subject = EdgeConfidenceInput::from_edge(edge);
+    let subject = EdgeConfidenceInput::from_edge(subject_edge);
 
     // K-R3 seam: no source_reliability yet → None (→ NEUTRAL).
     let score = compute_confidence(&subject, &pool, None);

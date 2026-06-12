@@ -483,6 +483,65 @@ async fn confidence_weight_nonzero_attaches_confidence_and_blends_score() {
     }
 }
 
+#[test]
+fn confidence_ranking_weight_production_wiring() {
+    // Verify the production-wiring contract for ConfidenceRankingWeight:
+    //   - default() matches DEFAULT_CONFIDENCE_WEIGHT
+    //   - OFF is exactly 0.0
+    //   - with_confidence_weight clamps out-of-range values
+    //   - blend formula: rrf*(1-w) + conf*w
+    use tdw_core::DEFAULT_CONFIDENCE_WEIGHT;
+
+    let default_w = ConfidenceRankingWeight::default();
+    assert!(
+        (default_w.0 - DEFAULT_CONFIDENCE_WEIGHT).abs() < f64::EPSILON,
+        "default weight must equal DEFAULT_CONFIDENCE_WEIGHT ({DEFAULT_CONFIDENCE_WEIGHT}); got {}",
+        default_w.0
+    );
+
+    assert!(
+        ConfidenceRankingWeight::OFF.0.abs() < f64::EPSILON,
+        "OFF must be exactly 0.0"
+    );
+
+    // Clamp: value above 1.0 is clamped to 1.0.
+    let query = KnowledgeQuery::try_new("q", 5, QueryFilter::default(), None)
+        .expect("valid")
+        .with_confidence_weight(ConfidenceRankingWeight(2.0));
+    assert!(
+        (query.confidence_weight.0 - 1.0).abs() < f64::EPSILON,
+        "weight > 1.0 must be clamped to 1.0; got {}",
+        query.confidence_weight.0
+    );
+
+    // Clamp: negative value is clamped to 0.0.
+    let query = KnowledgeQuery::try_new("q", 5, QueryFilter::default(), None)
+        .expect("valid")
+        .with_confidence_weight(ConfidenceRankingWeight(-0.5));
+    assert!(
+        query.confidence_weight.0.abs() < f64::EPSILON,
+        "weight < 0.0 must be clamped to 0.0; got {}",
+        query.confidence_weight.0
+    );
+
+    // Blend formula: blended = rrf*(1-w) + conf*w.
+    let w = ConfidenceRankingWeight(0.1);
+    let blended = w.blend(0.8, 0.5);
+    let expected = 0.8f64.mul_add(0.9, 0.5 * 0.1);
+    assert!(
+        (blended - expected).abs() < 1e-12,
+        "blend formula wrong: got {blended}, expected {expected}"
+    );
+
+    // Blend with OFF: result equals rrf unchanged.
+    let raw = 0.12345;
+    let blended_off = ConfidenceRankingWeight::OFF.blend(raw, 0.9);
+    assert!(
+        (blended_off - raw).abs() < f64::EPSILON,
+        "OFF.blend must return rrf unchanged; got {blended_off}"
+    );
+}
+
 #[tokio::test]
 async fn query_validation_rejects_bad_input() {
     assert!(KnowledgeQuery::try_new("  ", 5, QueryFilter::default(), None).is_err());

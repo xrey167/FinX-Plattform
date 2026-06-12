@@ -726,9 +726,11 @@ fn append_merge_steps(
 /// Build a confidence why-chain step for an edge, decomposing all four
 /// components of the K-R6 formula.
 ///
-/// The corroboration pool is collected by scanning all edges of the same `rel`
-/// type (bounded by [`tdw_core::MAX_CORROBORATION_CAP`] inside
-/// [`compute_confidence`]).  This is a bounded read — not a full-graph scan.
+/// The corroboration pool is collected by fetching the outgoing edges of the
+/// **subject entity** for this specific relation type via `graph.neighbors`.
+/// This scopes the scan to the entity rather than doing a global rel-scan and
+/// filtering afterwards — the global approach can exhaust [`tdw_core::MAX_CORROBORATION_CAP`]
+/// with noise edges for other entities before reaching the subject's own corroborators.
 ///
 /// Returns an honest `"confidence_unavailable"` step when the scan fails rather
 /// than propagating the error (the why-chain continues without a confidence step
@@ -740,13 +742,22 @@ async fn build_confidence_step(
 ) -> Value {
     let step = chain.len();
 
-    // Collect all edges of this relation type for the corroboration pool.
-    // The scan is bounded by MAX_CORROBORATION_CAP inside compute_confidence.
-    let pool_result =
-        block_on_inner(graph.edges(Some(&edge.rel), 0, tdw_core::MAX_CORROBORATION_CAP)).await;
+    // Scope the corroboration pool to the subject entity's outgoing edges for
+    // this relation type.  This is the correct unit: "other edges from the
+    // same entity asserting the same rel", which are the only candidates that
+    // can corroborate this particular fact.  A global rel-scan would include
+    // edges from entirely different entities, burning the cap before the
+    // subject's own edges are reached.
+    let traversal = TraversalFilter {
+        rels: Some(vec![edge.rel.clone()]),
+        direction: Direction::Out,
+        max_hops: 1,
+        ..TraversalFilter::default()
+    };
+    let pool_result = block_on_inner(graph.neighbors(&edge.from, &traversal)).await;
 
-    let pool = match pool_result {
-        Ok(edges) => edges,
+    let neighbors = match pool_result {
+        Ok(n) => n,
         Err(error) => {
             return json!({
                 "step": step,
@@ -757,15 +768,12 @@ async fn build_confidence_step(
         }
     };
 
-    // Filter pool to same (from, rel) for corroboration.
-    let same_from_rel: Vec<&tdw_core::GraphEdge> = pool
-        .iter()
-        .filter(|e| e.from == edge.from && e.rel == edge.rel)
-        .collect();
+    // Extract the edge portion of each neighbor pair as the corroboration pool.
+    let pool: Vec<&tdw_core::GraphEdge> = neighbors.iter().map(|(e, _)| e).collect();
 
     let subject = EdgeConfidenceInput::from_edge(edge);
     // K-R3 seam: source_reliability not yet built → None (→ NEUTRAL = 1.0).
-    let score = compute_confidence(&subject, &same_from_rel, None);
+    let score = compute_confidence(&subject, &pool, None);
 
     json!({
         "step": step,

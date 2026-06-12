@@ -115,7 +115,11 @@ pub const CORROBORATION_STEP: f64 = 0.1;
 pub const SURVIVED_CONTRADICTION_BONUS: f64 = 1.0;
 
 /// Confidence multiplier for a fact that was invalidated by K-M4
-/// (carries `invalidated_by` in props or has a closed `valid_to`).
+/// (carries `"invalidated_by"` in props).
+///
+/// Note: a closed `valid_to` alone does **not** trigger this penalty — a
+/// legitimately-expired temporal window does not carry `"invalidated_by"`.
+/// Only K-M4's explicit annotation is authoritative; see [`survived_contradiction`].
 pub const INVALIDATED_PENALTY: f64 = 0.85;
 
 /// Hard ceiling on the corroboration scan to prevent pathological full-graph
@@ -276,7 +280,11 @@ pub fn compute_confidence(
 ///
 /// `f(n) = 1.0 + min(max(n, 1) - 1, MAX_CORROBORATION_BONUS) × CORROBORATION_STEP`
 ///
-/// `f(1) = 1.0` (single source, no bonus); `f(6+) = 1.5` (capped).
+/// `f(0) = f(1) = 1.0` (zero or one source → no bonus, no penalty; `saturating_sub`
+/// treats `n=0` identically to `n=1`); `f(6+) = 1.5` (capped at [`MAX_CORROBORATION_BONUS`]
+/// bonus steps).  This is the only place where 0 and 1 are equated — the
+/// counter in [`count_independent_sources`] returns the raw count and does not
+/// substitute 1 for 0.
 #[must_use]
 pub fn corroboration_factor(n: u32) -> f64 {
     let bonus_steps = n.saturating_sub(1).min(MAX_CORROBORATION_BONUS);
@@ -287,23 +295,32 @@ pub fn corroboration_factor(n: u32) -> f64 {
 ///
 /// Only `Provenance::Ingest { source }` edges contribute.  Distinct `source`
 /// strings are independent; re-ingesting the same source is idempotent.
-/// At most [`MAX_CORROBORATION_CAP`] candidates are examined.
+///
+/// Edges are **first filtered** to the matching `to` target and then capped at
+/// [`MAX_CORROBORATION_CAP`].  Filtering before capping is essential: without
+/// it, unrelated edges for different targets consume cap budget and silently
+/// under-count real corroborators (the exact K-X7 bug class).
 #[must_use]
 pub fn count_independent_sources(
     subject: &EdgeConfidenceInput<'_>,
     candidates: &[&GraphEdge],
 ) -> u32 {
     let mut seen_sources: BTreeSet<&str> = BTreeSet::new();
-    for edge in candidates.iter().take(MAX_CORROBORATION_CAP) {
-        if edge.to != subject.to {
-            continue;
-        }
+    // Filter to the same (from, rel, to) triple FIRST, then cap.  Capping
+    // before filtering would allow noise edges for other targets to exhaust
+    // the budget, hiding real corroborators.
+    for edge in candidates
+        .iter()
+        .filter(|e| e.to == subject.to)
+        .take(MAX_CORROBORATION_CAP)
+    {
         if let Provenance::Ingest { source } = &edge.provenance {
             seen_sources.insert(source.as_str());
         }
     }
-    // A subject with no Ingest edges (e.g. Rule/Agent) has 0 independent sources;
-    // we treat 0 the same as 1 for the factor (no bonus, but no penalty either).
+    // A subject with no Ingest edges (e.g. Rule/Agent) has 0 independent
+    // sources; corroboration_factor treats 0 the same as 1 (no bonus, no
+    // penalty — the factor is 1.0 at n ≤ 1).
     u32::try_from(seen_sources.len()).unwrap_or(u32::MAX)
 }
 
@@ -762,6 +779,48 @@ mod tests {
         assert!(
             factor <= 1.5 + f64::EPSILON,
             "factor {factor} must not exceed 1.5"
+        );
+    }
+
+    #[test]
+    fn noise_edges_beyond_cap_do_not_hide_real_corroborators() {
+        // Reproduce the K-X7 bug class: 64 noise edges pointing to a DIFFERENT
+        // target ("b:noise") followed by 3 real corroborators for "b:real".
+        //
+        // Before the fix (cap-before-filter), the 64 noise edges would exhaust
+        // the cap and return count=0 for "b:real", yielding corroboration_factor=1.0.
+        //
+        // After the fix (filter-before-cap), the noise edges are filtered out
+        // first, only the 3 real corroborators enter the capped iterator, and
+        // count=3 → corroboration_factor = 1.0 + 2 × 0.1 = 1.2.
+        let mut edges: Vec<GraphEdge> = (0..MAX_CORROBORATION_CAP)
+            .map(|i| ingest_edge("a:1", "r", "b:noise", &format!("provider:noise-{i}")))
+            .collect();
+        edges.push(ingest_edge("a:1", "r", "b:real", "provider:src-A"));
+        edges.push(ingest_edge("a:1", "r", "b:real", "provider:src-B"));
+        edges.push(ingest_edge("a:1", "r", "b:real", "provider:src-C"));
+
+        let refs = edge_refs(&edges);
+        let subject = EdgeConfidenceInput {
+            from: "a:1",
+            rel: "r",
+            to: "b:real",
+            provenance: &Provenance::Ingest {
+                source: "provider:src-A".to_string(),
+            },
+            props: &Value::Null,
+            valid_to: None,
+        };
+
+        let count = count_independent_sources(&subject, &refs);
+        assert_eq!(
+            count, 3,
+            "filter-before-cap: 3 real corroborators behind 64 noise edges must all be counted; got {count}"
+        );
+        let factor = corroboration_factor(count);
+        assert!(
+            (factor - 1.2).abs() < 1e-9,
+            "3 sources → factor = 1.0 + 2×0.1 = 1.2; got {factor}"
         );
     }
 
