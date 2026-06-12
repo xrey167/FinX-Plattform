@@ -67,6 +67,13 @@ json5 = "1"
 # backend except `deflate`, which selects `flate2` with the pure-Rust
 # `miniz_oxide` backend — NO `libz-sys` / system zlib / C toolchain dependency.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Pure-Rust (MIT) XLSX writer for the `tdw-cli --export xlsx` envelope path
+# (gap-matrix L5.4 / OpenBB-parity P3W6). Its `default` feature set is empty and
+# the required `zip` dep uses the pure-Rust deflate backend, so a bare
+# `default-features = false` is already C-free. We deliberately do NOT enable the
+# optional `zlib` feature (routes deflate through flate2's C zlib backend) nor
+# `polars`/`serde`/`chrono` — NO native / C-binding dependency on Windows CI.
+rust_xlsxwriter = { version = "0.95", default-features = false }
 # JWT verification (signature + standard claim checks) for the OIDC ingress
 # boundary. `rust_crypto` selects the pure-Rust crypto backend (rsa/p256/p384/
 # hmac/sha2 crates); no C / CMake / aws-lc-sys build dependency.
