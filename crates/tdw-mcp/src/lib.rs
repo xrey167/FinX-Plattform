@@ -22,6 +22,7 @@ pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
+pub(crate) mod knowledge_pattern_tools;
 pub(crate) mod knowledge_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
@@ -436,6 +437,16 @@ impl McpServer {
         if self.knowledge_findings_available() {
             descriptors.extend(knowledge_finding_tools::descriptors());
         }
+        // The knowledge PATTERN tool (knowledge-system K-R4): tdw.kg.similar
+        // is read-only and requires only the graph engine (same gate as the
+        // explain tools). Absent when no knowledge runtime or no graph engine.
+        if self
+            .knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.graph().is_some())
+        {
+            descriptors.push(knowledge_pattern_tools::descriptor());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -607,6 +618,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_finding_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_pattern_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -962,6 +977,44 @@ impl McpServer {
                         .with_data(json!({ "tool": name })),
                 )],
             };
+        Some(messages)
+    }
+
+    /// Dispatch the knowledge pattern tool (`tdw.kg.similar`, knowledge-system K-R4).
+    ///
+    /// Returns `Some(messages)` when `name` is the similar tool — a tool error (never a
+    /// protocol error) when the graph engine is unavailable, otherwise the
+    /// [`knowledge_pattern_tools::execute`] result. Returns `None` when `name` is not the
+    /// similar tool so the caller falls through to the registry and built-in dispatch paths.
+    fn dispatch_knowledge_pattern_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_pattern_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_pattern_tools::execute(runtime, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 

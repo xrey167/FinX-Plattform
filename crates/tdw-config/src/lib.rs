@@ -399,6 +399,93 @@ impl Default for ProposalsConfig {
     }
 }
 
+/// Pattern-mining configuration (knowledge-system K-R4).
+///
+/// # Important: enabled defaults to `false`
+///
+/// Mining is a new, potentially heavy operation. The operator must explicitly
+/// set `enabled = true` in `[knowledge.patterns]` in the daemon TOML.  A loud
+/// status note is emitted at every cron tick when `enabled = false` — the
+/// silence is a signal, not a no-op.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [knowledge.patterns]
+/// enabled = true
+/// cadence = "0 2 * * *"   # nightly at 02:00
+/// min_support = 3
+/// max_motif_edges = 2
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PatternConfig {
+    /// Whether the cron-driven motif-mining pass is enabled.
+    ///
+    /// **Default: `false`.**  Must be explicitly set to `true` by the operator.
+    #[serde(default)]
+    pub enabled: bool,
+    /// 5-field cron expression for the mining cadence.
+    ///
+    /// Default: `"0 2 * * *"` (daily at 02:00 UTC).
+    #[serde(default = "PatternConfig::default_cadence")]
+    pub cadence: String,
+    /// Minimum support count for a motif to be recorded.
+    ///
+    /// Default: 2.
+    #[serde(default = "PatternConfig::default_min_support")]
+    pub min_support: usize,
+    /// Maximum number of edge labels in one motif (1..=3).
+    ///
+    /// Default: 3.
+    #[serde(default = "PatternConfig::default_max_motif_edges")]
+    pub max_motif_edges: usize,
+    /// Maximum distinct candidate pairs examined across all motif sizes.
+    ///
+    /// Exceeding this limit is a hard error. Default: 8 000.
+    #[serde(default = "PatternConfig::default_max_candidates")]
+    pub max_candidates: usize,
+    /// Maximum edge records scanned during instance counting.
+    ///
+    /// Exceeding this limit is a hard error. Default: 20 000.
+    #[serde(default = "PatternConfig::default_max_instance_scan")]
+    pub max_instance_scan: usize,
+}
+
+impl PatternConfig {
+    fn default_cadence() -> String {
+        "0 2 * * *".to_string()
+    }
+
+    const fn default_min_support() -> usize {
+        2
+    }
+
+    const fn default_max_motif_edges() -> usize {
+        3
+    }
+
+    const fn default_max_candidates() -> usize {
+        8_000
+    }
+
+    const fn default_max_instance_scan() -> usize {
+        20_000
+    }
+}
+
+impl Default for PatternConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cadence: Self::default_cadence(),
+            min_support: Self::default_min_support(),
+            max_motif_edges: Self::default_max_motif_edges(),
+            max_candidates: Self::default_max_candidates(),
+            max_instance_scan: Self::default_max_instance_scan(),
+        }
+    }
+}
+
 /// Source kind for a scheduled knowledge feed (knowledge-system K-L6).
 ///
 /// The enum is `#[non_exhaustive]` so future source kinds (e.g. `Http`,
@@ -550,7 +637,7 @@ pub struct FeedsConfig {
     pub entries: Vec<FeedConfig>,
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6).
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -616,6 +703,16 @@ pub struct KnowledgeConfig {
     /// then becomes the only landing path.
     #[serde(default)]
     pub proposals: ProposalsConfig,
+    /// Pattern-mining configuration (knowledge-system K-R4).
+    ///
+    /// Controls the deterministic motif-mining cron trigger.
+    ///
+    /// **Default: `enabled = false`.**  Mining is a new, potentially heavy
+    /// operation; the operator must flip `enabled = true` explicitly.  A loud
+    /// status note is emitted at every cron tick when disabled — this is
+    /// intentionally visible, never silent.
+    #[serde(default)]
+    pub patterns: PatternConfig,
     /// Scheduled document-feed pipelines (knowledge-system K-L6).
     ///
     /// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop
