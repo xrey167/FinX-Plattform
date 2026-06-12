@@ -24,6 +24,7 @@ use tdw_retrieve::Retriever;
 use tdw_tags::TagEngine;
 use tdw_taxonomy::{Adaptivity, EntityKind};
 
+use crate::feeds::FeedFreshness;
 use crate::indexer::KnowledgeIndexer;
 use crate::proposals::ProposalQueue;
 
@@ -114,6 +115,10 @@ pub struct KnowledgeRuntime {
     /// sweep worker in `tdw-backend`. `None` when the sweep is not registered
     /// (status reports [`SweepFreshness::Disabled`]).
     auto_materialize_freshness: Option<Arc<tokio::sync::Mutex<SweepFreshness>>>,
+    /// Live per-feed freshness cells (K-L6). One cell per enabled feed,
+    /// shared with the spawned feed tasks that write [`FeedFreshness`] after
+    /// each poll. Empty when no feeds are configured.
+    feed_freshness_cells: Vec<Arc<tokio::sync::Mutex<FeedFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -141,6 +146,7 @@ impl KnowledgeRuntime {
             eval_freshness: None,
             consolidation_freshness: None,
             auto_materialize_freshness: None,
+            feed_freshness_cells: Vec::new(),
         }
     }
 
@@ -412,6 +418,23 @@ impl KnowledgeRuntime {
     ) -> Option<&Arc<tokio::sync::Mutex<SweepFreshness>>> {
         self.auto_materialize_freshness.as_ref()
     }
+
+    /// Attach a per-feed freshness cell (K-L6).
+    ///
+    /// Call once per enabled feed after spawning the feed task. The cell is
+    /// shared with the task; `status()` reads all attached cells to populate
+    /// `KgStatus::feed_statuses`.
+    #[must_use]
+    pub fn with_feed_freshness(mut self, cell: Arc<tokio::sync::Mutex<FeedFreshness>>) -> Self {
+        self.feed_freshness_cells.push(cell);
+        self
+    }
+
+    /// All per-feed freshness cells, in registration order.
+    #[must_use]
+    pub fn feed_freshness_cells(&self) -> &[Arc<tokio::sync::Mutex<FeedFreshness>>] {
+        &self.feed_freshness_cells
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -437,6 +460,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
                 "auto_materialize_freshness",
                 &self.auto_materialize_freshness.is_some(),
             )
+            .field("feed_freshness_cells", &self.feed_freshness_cells.len())
             .finish_non_exhaustive()
     }
 }
@@ -773,6 +797,21 @@ pub struct KgStatus {
     /// bounded by the graph page limit.
     #[serde(default)]
     pub theses: Option<KgThesesStatus>,
+
+    // --- Scheduled feed freshness (K-L6) ---
+    /// Per-feed freshness snapshots from all configured feeds (K-L6).
+    ///
+    /// Each entry is the last-known [`FeedFreshness`] for one feed, in
+    /// registration order. Empty when no feeds are configured (status note
+    /// makes this visible so operators notice the gap rather than reading
+    /// silence as "healthy").
+    #[serde(default)]
+    pub feed_statuses: Vec<FeedFreshness>,
+    /// Honest note when no feeds are configured.
+    ///
+    /// `"no feeds configured"` when `feed_statuses` is empty; empty string
+    /// otherwise. Loud-by-design: operators see the absence explicitly.
+    pub feed_note: String,
 }
 
 impl KnowledgeRuntime {
@@ -790,6 +829,7 @@ impl KnowledgeRuntime {
     /// This method is infallible at the `status()` level — individual engine
     /// probe failures are captured inside [`KgGraphHealth::error`] so the full
     /// snapshot is always returned.
+    #[allow(clippy::too_many_lines)] // K-L6 added feed-freshness snapshot; refactor deferred
     pub async fn status(&self) -> KgStatus {
         let versions_snapshot = self
             .versions
@@ -903,6 +943,26 @@ impl KnowledgeRuntime {
             None
         };
 
+        // Feed freshness (K-L6): snapshot each cell with try_lock to avoid
+        // blocking the status handler when a feed task is mid-write.
+        let feed_statuses: Vec<FeedFreshness> = self
+            .feed_freshness_cells
+            .iter()
+            .map(|cell| {
+                cell.try_lock().map_or_else(
+                    |_| FeedFreshness::Pending {
+                        feed_id: "?".to_string(),
+                    },
+                    |g| g.clone(),
+                )
+            })
+            .collect();
+        let feed_note = if feed_statuses.is_empty() {
+            "no feeds configured — knowledge acquisition is manual only".to_string()
+        } else {
+            String::new()
+        };
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -918,6 +978,8 @@ impl KnowledgeRuntime {
             consolidation_freshness,
             auto_materialize_freshness,
             theses,
+            feed_statuses,
+            feed_note,
         }
     }
 }

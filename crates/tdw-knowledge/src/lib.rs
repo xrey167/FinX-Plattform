@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 
+pub mod feeds;
 pub mod indexer;
 pub mod proposals;
 pub mod reindex;
 pub mod runtime;
 
+pub use feeds::FeedFreshness;
 pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus};
 
 use std::sync::Arc;
