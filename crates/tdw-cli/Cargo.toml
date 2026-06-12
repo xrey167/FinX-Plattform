@@ -18,6 +18,7 @@ tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
 tdw-knowledge = { path = "../tdw-knowledge" }
 tdw-protocol = { workspace = true }
+rust_xlsxwriter = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch", features = ["meilisearch"] }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant", features = ["qdrant"] }
