@@ -4047,18 +4047,30 @@ fn spawn_lesson_induction_worker(
 ///
 /// On each cron tick the worker:
 ///
-/// 1. Reads all pattern nodes from the graph (via `pattern_instance_of` edge
-///    pagination — the same nodes K-R4 writes) and reconstructs a
-///    [`PatternIndex`].
-/// 2. Reads all edges from the graph as the replay corpus (paginated, bounded
-///    to `INDUCTION_EDGE_CAP` to avoid an unbounded heap allocation).
-/// 3. Calls [`InductionEngine::run_cycle`] with an empty splits slice
-///    (vacuous promote — consistent with the K-R7 gate contract when no
-///    walk-forward splits are configured).
-/// 4. Logs the cycle report.
+/// 0. **FAIL-CLOSED split load**: reads walk-forward replay splits from
+///    `cfg.replay_splits_path`. If the path is `None`, the file is
+///    unreadable, or the array is empty the cycle is **skipped entirely**
+///    with a loud WARNING. Zero splits would produce vacuous promotes
+///    (precision=1.0, recall=1.0) with no out-of-sample validation — that
+///    is not acceptable.
+/// 1. Reads all pattern nodes from the graph (via `pattern_instance_of`
+///    edge pagination — the same nodes K-R4 writes) and reconstructs a
+///    [`PatternIndex`]. Any pagination error **aborts** the cycle; partial
+///    data must never drive promotion.
+/// 2. Reads all edges from the graph as the replay corpus (paginated,
+///    bounded to `INDUCTION_EDGE_CAP`). Any pagination error **aborts**
+///    the cycle for the same reason.
+/// 3. Runs [`InductionEngine::run_cycle`] **without** holding the infer
+///    lock (lock-free gate evaluation). `run_cycle` returns a
+///    `rules_to_install` list.
+/// 4. Takes the infer lock once and calls [`InferEngine::hot_reload`]
+///    with the full existing rule set plus the new rules (atomic install).
+/// 5. Logs the cycle report.
 ///
-/// Returns `None` when `cfg.enabled = false` (the default). A loud NOTICE is
-/// emitted so the operator knows the feature exists.
+/// Returns `None` when `cfg.enabled = false` (the default). A loud NOTICE
+/// is emitted so the operator knows the feature exists. When
+/// `cfg.retire_induced_on_disable = true` a join handle for the one-shot
+/// retirement task is returned instead so the caller can await it.
 fn spawn_induction_worker(
     cfg: &tdw_config::InductionConfig,
     graph: Arc<dyn GraphEngine>,
@@ -4077,9 +4089,15 @@ fn spawn_induction_worker(
         // induction, remove all previously inducted rules from the engine on
         // the next boot/reload. Inducted rules are identified by the
         // `inducted-` prefix on their rule_id (set by InductionEngine).
+        //
+        // The join handle is returned as `Some(handle)` so the caller
+        // (DaemonHandle::shutdown) can await it and be certain the
+        // retirement hot_reload completes before the process exits. A
+        // detached fire-and-forget task would silently miss the retirement
+        // if the daemon shuts down before the task runs.
         if cfg.retire_induced_on_disable {
             let infer = Arc::clone(&infer);
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut guard = infer.lock().await;
                 let surviving: Vec<tdw_infer::InferRule> = guard
                     .rules()
@@ -4093,6 +4111,7 @@ fn spawn_induction_worker(
                     eprintln!("[tdw] K-R5 retire_induced_on_disable: all inducted rules retired.");
                 }
             });
+            return Some(handle);
         }
         return None;
     }
@@ -4250,7 +4269,14 @@ fn spawn_induction_worker(
                 continue;
             }
 
+            // Fetch each pattern node to extract canonical + support.
+            // Node-fetch errors are tracked; if more than 10% of pattern
+            // node IDs fail we abort the cycle — partial data must not drive
+            // promotion (consistent with the pagination-abort posture above).
             let mut pattern_index = PatternIndex::default();
+            let mut node_fetch_errors: usize = 0;
+            let node_error_cap = (pattern_node_ids.len() / 10).max(1);
+            let mut node_fetch_ok = true;
             for node_id in &pattern_node_ids {
                 match graph.node(node_id).await {
                     Ok(Some(node)) => {
@@ -4282,12 +4308,26 @@ fn spawn_induction_worker(
                     }
                     Ok(None) => {}
                     Err(err) => {
+                        node_fetch_errors += 1;
                         eprintln!(
                             "[tdw] K-R5 induction: failed to read pattern node \
-                             {node_id:?} (skipping node): {err}"
+                             {node_id:?} ({node_fetch_errors}/{} errors): {err}",
+                            pattern_node_ids.len(),
                         );
+                        if node_fetch_errors > node_error_cap {
+                            eprintln!(
+                                "[tdw] K-R5 induction: node-fetch error rate \
+                                 exceeds 10% — ABORTING cycle (partial data \
+                                 must not drive promotion)"
+                            );
+                            node_fetch_ok = false;
+                            break;
+                        }
                     }
                 }
+            }
+            if !node_fetch_ok {
+                continue;
             }
 
             if pattern_index.is_empty() {
@@ -4382,9 +4422,11 @@ fn spawn_induction_worker(
                     Err(err) => {
                         eprintln!(
                             "[tdw] K-R5 induction: hot_reload rejected inducted \
-                             rules: {err}"
+                             rules — no rules installed this cycle: {err}"
                         );
-                        // new_rules stays set for logging; promoted stays 0.
+                        // Clear new_rules so the log loop below does not report
+                        // gate-passing candidates as installed (they weren't).
+                        report.new_rules.clear();
                     }
                 }
             }
@@ -4400,6 +4442,7 @@ fn spawn_induction_worker(
                 report.already_installed,
                 splits.len(),
             );
+            // Only log per-rule detail for rules that were actually installed.
             for promoted in &report.new_rules {
                 eprintln!(
                     "[tdw] K-R5 inducted rule {:?} from pattern {:?} \

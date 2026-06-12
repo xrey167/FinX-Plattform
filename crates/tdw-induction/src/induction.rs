@@ -52,16 +52,24 @@
 //!
 //! A candidate that does not pass [`promote_gate`] with the configured
 //! `min_promote_precision` and `min_promote_recall` **must not be
-//! installed**. The gate is called inline and its
-//! [`PromoteVerdict::Reject`] result is stored in
-//! [`CandidateRule::gate_verdict`] for audit.
+//! installed**. The gate verdict for candidates evaluated via
+//! [`InductionEngine::run_cycle`] is captured in
+//! [`PromotedRule::replay_summary`] for audit. When using
+//! [`InductionEngine::induce_candidate`] directly, the caller can
+//! invoke [`promote_gate`] and store the verdict in
+//! [`CandidateRule::gate_verdict`].
 //!
-//! # Rule install
+//! # Rule install (lock-free, single atomic reload)
 //!
-//! Only after a `PromoteVerdict::Promote` does the engine call
-//! `infer_engine.hot_reload(all_rules_with_new)`. The reload is
-//! **atomic**: either all rules (existing + new) validate and stratify,
-//! or nothing changes ([`InferEngine::hot_reload`] contract).
+//! [`InductionEngine::run_cycle`] evaluates all gate candidates
+//! **without** holding the [`InferEngine`] lock, collecting promoted
+//! rules in [`InductionCycleReport::rules_to_install`]. The caller
+//! then takes the lock once and calls
+//! `infer_engine.hot_reload(existing_rules + new_rules)`. The reload
+//! is **atomic**: either all rules (existing + new) validate and
+//! stratify, or nothing changes ([`InferEngine::hot_reload`] contract).
+//! This design avoids holding the infer lock across all per-candidate
+//! gate evaluations (MED-2 fix).
 //!
 //! # Provenance on the installed rule
 //!
@@ -144,7 +152,10 @@ pub struct CandidateRule {
     pub canonical: String,
     /// The synthesised rule (always `InferRule::DeriveEdge`).
     pub rule: InferRule,
-    /// The gate verdict. `None` if pre-rejected (not sent to the gate).
+    /// The gate verdict when using [`InductionEngine::induce_candidate`]
+    /// directly followed by a manual [`promote_gate`] call. Always `None`
+    /// when produced via [`InductionEngine::run_cycle`] — in that path the
+    /// verdict is captured in [`PromotedRule::replay_summary`] instead.
     pub gate_verdict: Option<PromoteVerdict>,
     /// Support count from the pattern record.
     pub support: usize,
@@ -192,18 +203,27 @@ pub struct InductionCycleReport {
     pub pre_rejected: usize,
     /// Candidates that reached the gate but were rejected by it.
     pub gate_rejected: usize,
-    /// Rules promoted (set by the caller after the atomic `hot_reload`).
-    pub promoted: usize,
-    /// Rules that were already installed (skipped dedup).
-    pub already_installed: usize,
-    /// Promoted rules in this cycle (non-empty only when `promoted > 0`).
-    pub new_rules: Vec<PromotedRule>,
-    /// The [`InferRule`]s that passed the gate and should be installed by the
-    /// caller via a single atomic [`InferEngine::hot_reload`].
+    /// Rules actually installed in the inference engine this cycle.
     ///
-    /// The caller pops this after calling `run_cycle`, performs the
-    /// `hot_reload`, and sets `report.promoted = rules_to_install.len()`.
-    /// Parallel index to [`InductionCycleReport::new_rules`].
+    /// Set by the caller to `new_rules.len()` after a successful
+    /// [`InferEngine::hot_reload`]; remains `0` if `hot_reload` fails or
+    /// no candidates passed the gate.
+    pub promoted: usize,
+    /// Rules that were already installed (skipped by the dedup check).
+    pub already_installed: usize,
+    /// Metadata for rules that passed the gate and were installed.
+    ///
+    /// Non-empty only when `promoted > 0`. Cleared by
+    /// the daemon worker when `hot_reload` fails (so this always reflects
+    /// what was actually installed, not what the gate accepted).
+    pub new_rules: Vec<PromotedRule>,
+    /// The [`InferRule`] values that passed the gate, ready for the caller
+    /// to install via a single atomic [`InferEngine::hot_reload`].
+    ///
+    /// The daemon worker calls `std::mem::take` on this field, then does
+    /// one locked `hot_reload`. After that call this field is empty.
+    /// It is parallel to `new_rules`: index N in
+    /// `rules_to_install` corresponds to index N in `new_rules`.
     pub rules_to_install: Vec<InferRule>,
 }
 
