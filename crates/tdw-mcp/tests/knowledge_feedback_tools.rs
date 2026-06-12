@@ -444,7 +444,7 @@ fn forged_agent_id_argument_does_not_change_stored_identity() {
     // the forged id did not win.
 }
 
-/// K-L5: even if the call succeeds (no forged id), the stored event's agent_id
+/// K-L5: even if the call succeeds (no forged id), the stored event's `agent_id`
 /// must ALWAYS be the bound principal, never a caller-supplied value.
 #[test]
 fn stored_event_agent_id_always_matches_bound_principal() {
