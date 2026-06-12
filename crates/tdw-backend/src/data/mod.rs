@@ -1432,6 +1432,7 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
 /// The returned `Arc` is shared between the `KnowledgeRuntime` (read side:
 /// `tdw.kg.status`) and the eval worker task spawned during [`Backend::serve`]
 /// (write side: updates after each cron-triggered run).
+#[must_use]
 pub fn build_eval_freshness_cell(
     config: &EvalsConfig,
 ) -> Option<Arc<tokio::sync::Mutex<EvalFreshness>>> {
@@ -1477,6 +1478,7 @@ fn evals_config_to_runner(cfg: &EvalsConfig) -> EvalRunnerConfig {
 ///
 /// Returns `None` when no `split_id` is configured — the caller omits the task
 /// from [`DaemonHandle`] and status reports [`EvalFreshness::Unconfigured`].
+#[allow(clippy::too_many_lines)] // K-L3 eval wiring: one cohesive loop — splitting degrades readability without reducing complexity
 fn spawn_eval_worker(
     cfg: &EvalsConfig,
     cell: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,

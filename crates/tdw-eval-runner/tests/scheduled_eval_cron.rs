@@ -1,7 +1,7 @@
 //! Cron-tick integration tests for the K-L3 scheduled eval harness.
 //!
 //! These tests live in an integration test file (not in the lib) because they
-//! need `tdw-cron` + `tdw-protocol` as dev-dependencies.  The scheduled_eval
+//! need `tdw-cron` + `tdw-protocol` as dev-dependencies.  The `scheduled_eval`
 //! module itself does NOT import tdw-cron to avoid the cycle:
 //! `tdw-cron → tdw-worker → tdw-service-api → tdw-eval-runner → tdw-cron`.
 //!
