@@ -18,10 +18,10 @@ const EXPECTED_LANDED_V1: usize = 8;
 ///   aapl-10q-2025q4 → company:AAPL               (1 mention edge out)
 ///   msft-profile  → company:MSFT                  (1 mention edge out)
 ///
-/// DeriveEdge rule: mentions→mentions→supply_chain_peer
-/// Two-hop pairs that produce supply_chain_peer:
+/// `DeriveEdge` rule: mentions→mentions→`supply_chain_peer`
+/// Two-hop pairs that produce `supply_chain_peer`:
 ///   aapl-profile  →(mentions)→ company:TSMC  via company-aapl  →(mentions)→ company:TSMC
-///   => instrument:AAPL supply_chain_peer company:AAPL  (aapl-profile→company:AAPL, company:AAPL→company:TSMC)
+///   => instrument:AAPL `supply_chain_peer` company:AAPL  (aapl-profile→company:AAPL, company:AAPL→company:TSMC)
 /// The exact count is determined by the rule engine; the fixture is designed
 /// to produce at least 1.  We assert ≥ 1 rather than a fragile exact number
 /// that would break if the fixture mention graph is tweaked.

@@ -56,6 +56,7 @@ fn unique_temp_dir(tag: &str) -> PathBuf {
 /// directly (via the `tdw-agent-store` API) rather than routing through
 /// `Backend::from_config` with an env var, which would require `unsafe`
 /// `set_var` / `remove_var` calls that are forbidden by `#![forbid(unsafe_code)]`.
+#[allow(clippy::doc_markdown)]
 fn minimal_config() -> TdwConfig {
     let mut cfg = TdwConfig::default();
     cfg.session.sqlite_path = "sqlite::memory:".to_string();
@@ -322,6 +323,8 @@ async fn injected_tick_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[allow(clippy::significant_drop_tightening)]
+// test: cell owner must outlive guard block intentionally
 async fn from_config_wires_consolidation_freshness_cell_into_runtime() {
     let cfg = minimal_config();
 
@@ -396,6 +399,8 @@ async fn shared_cell_write_is_visible_in_runtime_status() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(clippy::significant_drop_tightening)]
+// test: cell owner must outlive guard block intentionally
 fn build_consolidation_freshness_cell_returns_pending() {
     let cell = build_consolidation_freshness_cell();
     let guard = cell.try_lock().expect("not contended");

@@ -797,7 +797,7 @@ impl Backend {
             &self.feeds_cfg,
             &self.feed_freshness_cells,
             ingest_handle,
-            cancel.clone(),
+            &cancel,
             None, // use production cron_tick
         );
 
@@ -2481,6 +2481,8 @@ struct FeedIngestHandle {
 impl FeedIngestHandle {
     /// Index a document batch and fire incremental inference — the same
     /// two-step pipeline as [`Backend::knowledge_ingest_at`].
+    #[allow(clippy::significant_drop_tightening)]
+    // guards scoped intentionally — early drop adds no benefit here
     async fn ingest_at(&self, docs: Vec<KnowledgeDocument>, now: &str) -> BackendResult<()> {
         // Step 1 — index.
         let batch_info: Vec<(String, Vec<String>)> = docs
@@ -2783,11 +2785,13 @@ fn spawn_questions_task(
 ///
 /// `tick_override` lets tests inject a short poll interval without touching
 /// global env-var state. Pass `None` in production to use [`tdw_cron::cron_tick`].
+#[allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
+// single logical unit: one feed-task spawner loop — splitting would obscure the per-feed lifecycle
 fn spawn_feed_tasks(
     cfg: &FeedsConfig,
     cells: &[Arc<tokio::sync::Mutex<FeedFreshness>>],
     ingest: FeedIngestHandle,
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
     tick_override: Option<std::time::Duration>,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     use std::sync::Arc as StdArc;
@@ -2826,16 +2830,13 @@ fn spawn_feed_tasks(
         // is guaranteed to be set (provider=None path). A missing fixture_path
         // at this point is a programming error — treat as a hard startup abort
         // for this feed (log + skip, never silently poll nothing).
-        let fixture_path = match entry.source_params.fixture_path.clone() {
-            Some(p) => p,
-            None => {
-                eprintln!(
-                    "[tdw] knowledge feed {:?}: no fixture_path configured; skipping \
-                     (validate_feeds should have caught this — report as bug)",
-                    entry.id
-                );
-                continue;
-            }
+        let Some(fixture_path) = entry.source_params.fixture_path.clone() else {
+            eprintln!(
+                "[tdw] knowledge feed {:?}: no fixture_path configured; skipping \
+                 (validate_feeds should have caught this — report as bug)",
+                entry.id
+            );
+            continue;
         };
         let source: StdArc<dyn FeedSource> =
             StdArc::new(FixtureFeedSource::from_path(fixture_path));
@@ -3665,6 +3666,8 @@ async fn build_graph_engine(cfg: &tdw_config::GraphConfig) -> BackendResult<Arc<
 /// the worker is off unless the operator explicitly opts in. A loud NOTICE is
 /// emitted when the config is present but `enabled` is `false` so the operator
 /// knows the feature exists and how to turn it on.
+#[allow(clippy::too_many_lines)]
+// single logical unit: pattern mining worker lifecycle — splitting would obscure the cron/persist flow
 fn spawn_pattern_mining_worker(
     cfg: &tdw_config::PatternConfig,
     graph: Arc<dyn GraphEngine>,
@@ -3767,11 +3770,11 @@ fn spawn_pattern_mining_worker(
             }
 
             // Cron slot fired — run pattern mining.
-            let now_ts = chrono::Utc::now().to_rfc3339();
+            let now_rfc = chrono::Utc::now().to_rfc3339();
             let window = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
             match engine
-                .run_pattern_mining_at(&graph, &mut index, &now_ts, &window)
+                .run_pattern_mining_at(&graph, &mut index, &now_rfc, &window)
                 .await
             {
                 Ok(report) => {
@@ -4701,7 +4704,7 @@ mod tests {
     }
 
     /// With a real `index_path`, the worker task persists the index to disk
-    /// after a mining run. We test this via the PatternEngine directly (same
+    /// after a mining run. We test this via the `PatternEngine` directly (same
     /// caller-owned persistence contract).
     #[test]
     fn pattern_index_persists_across_process_boundary() {
@@ -4814,11 +4817,11 @@ mod tests {
 
     // ── K-L6: feed registration + status gates ───────────────────────────────
 
-    /// Zero feeds configured → no task, loud status note, feed_statuses empty.
+    /// Zero feeds configured → no task, loud status note, `feed_statuses` empty.
     ///
-    /// This is the from_config+tempdir production registration gate: we build a
-    /// real TdwConfig with zero feeds, construct the Backend through from_config,
-    /// and assert the KgStatus feed_note is set and feed_statuses is empty.
+    /// This is the `from_config`+tempdir production registration gate: we build a
+    /// real `TdwConfig` with zero feeds, construct the Backend through `from_config`,
+    /// and assert the `KgStatus` `feed_note` is set and `feed_statuses` is empty.
     #[tokio::test]
     async fn zero_feeds_config_produces_loud_note_in_status() {
         // in_memory_for_tests sets feeds_cfg = FeedsConfig::default() (zero
@@ -4843,9 +4846,9 @@ mod tests {
 
     /// One enabled feed → freshness cell attached to runtime → status shows Pending.
     ///
-    /// Mirrors the from_config attachment pattern: build the cell before
-    /// Arc-wrapping the runtime, attach via with_feed_freshness, then confirm
-    /// KgStatus reflects the cell.
+    /// Mirrors the `from_config` attachment pattern: build the cell before
+    /// `Arc`-wrapping the runtime, attach via `with_feed_freshness`, then confirm
+    /// `KgStatus` reflects the cell.
     #[tokio::test]
     async fn one_enabled_feed_shows_pending_in_status() {
         use tdw_embed_local::HashEmbeddingProvider;
@@ -4894,7 +4897,7 @@ mod tests {
         );
     }
 
-    /// Fixture-feed e2e: article → article_to_document → KnowledgeIndexer →
+    /// Fixture-feed e2e: article → `article_to_document` → `KnowledgeIndexer` →
     /// tagged → idempotent re-ingest produces zero new docs.
     ///
     /// This is the ingest→tagged→derived gate through a fixture feed (K-L6).
@@ -4968,10 +4971,10 @@ mod tests {
         path.to_str().expect("valid utf8 path").to_string()
     }
 
-    /// Production-task gate (from_config+tempdir, fix #3):
-    /// one enabled fixture feed → spawn_feed_tasks registers a task, fires it
+    /// Production-task gate (`from_config`+tempdir, fix #3):
+    /// one enabled fixture feed → `spawn_feed_tasks` registers a task, fires it
     /// with an injected short cadence, and items land through the production
-    /// task path (FeedIngestHandle::ingest_at).
+    /// task path (`FeedIngestHandle::ingest_at`).
     ///
     /// The freshness cell transitions from Pending → Ok after the first poll.
     #[tokio::test]
@@ -5029,7 +5032,7 @@ mod tests {
             &feeds_cfg,
             &cells,
             ingest_handle,
-            cancel.clone(),
+            &cancel,
             Some(std::time::Duration::from_millis(100)),
         );
         assert_eq!(handles.len(), 1, "one enabled feed → one task handle");
@@ -5048,12 +5051,11 @@ mod tests {
                 }
                 other => panic!("unexpected freshness state: {other:?}"),
             }
-            if start.elapsed().as_secs() > 10 {
-                panic!(
-                    "feed task did not transition to Ok within 10 s; state: {:?}",
-                    cell.lock().await.clone()
-                );
-            }
+            assert!(
+                start.elapsed().as_secs() <= 10,
+                "feed task did not transition to Ok within 10 s; state: {:?}",
+                cell.lock().await.clone()
+            );
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
@@ -5063,9 +5065,9 @@ mod tests {
         }
     }
 
-    /// DeriveEdge e2e through FeedIngestHandle (fix #1):
-    /// A fixture feed article ingested via FeedIngestHandle::ingest_at fires
-    /// the K-L1 inference hook. When a DeriveEdge rule is loaded, the derived
+    /// `DeriveEdge` e2e through `FeedIngestHandle` (fix #1):
+    /// A fixture feed article ingested via `FeedIngestHandle::ingest_at` fires
+    /// the K-L1 inference hook. When a `DeriveEdge` rule is loaded, the derived
     /// edge must exist in the graph after ingest.
     #[tokio::test]
     async fn feed_ingest_handle_fires_inference_and_derives_edge() {
@@ -5180,7 +5182,7 @@ mod tests {
         );
     }
 
-    /// FeedIngestHandle::ingest_at returns Err on an invalid document
+    /// `FeedIngestHandle::ingest_at` returns Err on an invalid document
     /// (empty id fails validation). Exercises the error path tested by fix #7.
     #[tokio::test]
     async fn feed_ingest_handle_error_path_is_reachable() {
@@ -5282,7 +5284,7 @@ mod tests {
             &feeds_cfg,
             &cells,
             ingest_handle,
-            cancel.clone(),
+            &cancel,
             Some(std::time::Duration::from_millis(100)),
         );
         assert_eq!(handles.len(), 1);
@@ -5305,12 +5307,11 @@ mod tests {
                 }
                 other => panic!("unexpected state: {other:?}"),
             }
-            if start.elapsed().as_secs() > 10 {
-                panic!(
-                    "body-cap test timed out; state: {:?}",
-                    cell.lock().await.clone()
-                );
-            }
+            assert!(
+                start.elapsed().as_secs() <= 10,
+                "body-cap test timed out; state: {:?}",
+                cell.lock().await.clone()
+            );
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
 
@@ -5320,7 +5321,7 @@ mod tests {
         }
     }
 
-    /// feed_statuses serializes correctly (state tag round-trips).
+    /// `feed_statuses` serializes correctly (state tag round-trips).
     #[test]
     fn feed_statuses_serialize_in_kg_status() {
         use tdw_knowledge::feeds::FeedFreshness;
