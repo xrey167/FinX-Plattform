@@ -40,8 +40,13 @@ type InferCtx = (
     Arc<dyn TagEngine>,
 );
 
-/// Contradiction context for the `materialize` action (K-M4).
-type ContradictionCtx = (Arc<ContradictionDetector>, Arc<dyn GraphEngine>);
+/// Contradiction context for the `materialize` action (K-M4): detector, graph,
+/// and optional shared totals accumulator for `tdw.kg.status` reporting.
+type ContradictionCtx = (
+    Arc<ContradictionDetector>,
+    Arc<dyn GraphEngine>,
+    Option<Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>>,
+);
 
 /// The names this module owns.
 pub const TOOL_NAMES: &[&str] = &[
@@ -451,7 +456,7 @@ fn fire_contradiction_after_materialize(
     ready_kinds: &[ProposalKind],
     now: &str,
 ) {
-    let (detector, graph) = ctx;
+    let (detector, graph, totals) = ctx;
     // Check whether any of the materialized edge proposals are functional
     // predicates; skip the scan entirely if none are (fast-path).
     let has_functional = ready_kinds.iter().any(|kind| {
@@ -466,14 +471,22 @@ fn fire_contradiction_after_materialize(
     }
     let result = block_on(async { detector.scan_all_functional(&graph, now).await });
     match result {
-        Ok(report) if report.invalidated > 0 || report.conflicts > 0 => {
-            eprintln!(
-                "tdw-mcp tdw.kg.proposals materialize: contradiction scan: \
-                 closed {} superseded edge(s), {} conflict(s) surfaced (manual review required)",
-                report.invalidated, report.conflicts
-            );
+        Ok(report) => {
+            if report.invalidated > 0 || report.conflicts > 0 {
+                eprintln!(
+                    "tdw-mcp tdw.kg.proposals materialize: contradiction scan: \
+                     closed {} superseded edge(s), {} conflict(s) surfaced (manual review required)",
+                    report.invalidated, report.conflicts
+                );
+            }
+            // Accumulate into the shared totals counter for tdw.kg.status.
+            if let Some(totals_mutex) = totals
+                && let Ok(mut guard) = totals_mutex.lock()
+            {
+                guard.invalidated += report.invalidated;
+                guard.conflicts += report.conflicts;
+            }
         }
-        Ok(_) => {}
         Err(error) => {
             eprintln!(
                 "tdw-mcp tdw.kg.proposals materialize: contradiction scan failed \

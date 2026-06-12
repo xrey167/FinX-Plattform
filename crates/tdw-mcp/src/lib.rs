@@ -198,6 +198,16 @@ pub struct McpServer {
     /// safe to omit for read-only or test deployments where the full daemon
     /// does not boot.
     contradiction_detector: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    /// Cumulative contradiction-detection totals (K-M4).
+    ///
+    /// Shared with the `fire_contradiction_after_*` hooks so each scan's
+    /// [`ContradictionReport`] is accumulated here.  Surfaced in
+    /// `tdw.kg.status` as `contradiction_totals`.  `None` when no detector
+    /// is wired (field omitted from the status JSON).
+    ///
+    /// [`ContradictionReport`]: tdw_infer::contradiction::ContradictionReport
+    contradiction_totals:
+        Option<Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>>,
 }
 
 impl Default for McpServer {
@@ -217,6 +227,7 @@ impl Default for McpServer {
             indexer: None,
             infer_engine: None,
             contradiction_detector: None,
+            contradiction_totals: None,
         }
     }
 }
@@ -244,6 +255,7 @@ impl McpServer {
             indexer: None,
             infer_engine: None,
             contradiction_detector: None,
+            contradiction_totals: None,
         }
     }
 
@@ -362,6 +374,11 @@ impl McpServer {
         detector: Arc<tdw_infer::contradiction::ContradictionDetector>,
     ) -> Self {
         self.contradiction_detector = Some(detector);
+        // Initialize the shared totals counter so fire_* hooks can accumulate
+        // into it and tdw.kg.status can read out the cumulative counts.
+        self.contradiction_totals = Some(Arc::new(std::sync::Mutex::new(
+            tdw_infer::contradiction::ContradictionReport::default(),
+        )));
         self
     }
 
@@ -712,7 +729,13 @@ impl McpServer {
         };
         // `call_tool` already validated `arguments` is an object.
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_tools::execute(runtime, name, &arguments_object) {
+        let contradiction_totals = self.contradiction_totals.clone();
+        let messages = match knowledge_tools::execute(
+            runtime,
+            name,
+            &arguments_object,
+            contradiction_totals,
+        ) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
@@ -773,12 +796,13 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
-        // K-M4: pass the optional contradiction detector so the `materialize`
-        // action can close superseded functional-predicate edges before inference.
+        // K-M4: pass the optional contradiction detector + totals accumulator
+        // so the `materialize` action can close superseded functional-predicate
+        // edges before inference and accumulate counts for tdw.kg.status.
         let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
             let rt = self.knowledge.as_ref()?;
             let graph = rt.graph()?.clone();
-            Some((Arc::clone(det), graph))
+            Some((Arc::clone(det), graph, self.contradiction_totals.clone()))
         });
         let messages = match knowledge_write_tools::execute(
             runtime,
@@ -853,12 +877,13 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
-        // K-M4: contradiction context — detector + graph.  Present only when
-        // the detector is attached AND the knowledge runtime exposes a graph.
+        // K-M4: contradiction context — detector + graph + totals accumulator.
+        // Present only when the detector is attached AND the knowledge runtime
+        // exposes a graph.
         let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
             let rt = self.knowledge.as_ref()?;
             let graph = rt.graph()?.clone();
-            Some((Arc::clone(det), graph))
+            Some((Arc::clone(det), graph, self.contradiction_totals.clone()))
         });
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
         let messages = match knowledge_ingest_tools::execute(

@@ -58,9 +58,14 @@ pub type InferCtx = (
     Arc<dyn TagEngine>,
 );
 
-/// Contradiction context: the detector plus the graph it checks against.
+/// Contradiction context: the detector, the graph it checks against, and an
+/// optional shared totals accumulator (for `tdw.kg.status` reporting).
 /// Kept as a separate type so it can be `None` in deployments without K-M4.
-pub type ContradictionCtx = (Arc<ContradictionDetector>, Arc<dyn GraphEngine>);
+pub type ContradictionCtx = (
+    Arc<ContradictionDetector>,
+    Arc<dyn GraphEngine>,
+    Option<Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>>,
+);
 
 /// The name this module owns.
 pub const TOOL_NAME: &str = "tdw.kg.ingest";
@@ -362,17 +367,25 @@ fn validate_doc_caps(docs: &[KnowledgeDocument]) -> Result<(), ToolFailure> {
 /// Best-effort: errors are logged to stderr and never surfaced — the batch is
 /// already durable at this point.
 fn fire_contradiction_after_ingest(ctx: ContradictionCtx, now: &str) {
-    let (detector, graph) = ctx;
+    let (detector, graph, totals) = ctx;
     let result = block_on(async { detector.scan_all_functional(&graph, now).await });
     match result {
-        Ok(report) if report.invalidated > 0 || report.conflicts > 0 => {
-            eprintln!(
-                "tdw-mcp tdw.kg.ingest: contradiction scan: closed {} superseded edge(s), \
-                 {} conflict(s) surfaced (manual review required)",
-                report.invalidated, report.conflicts
-            );
+        Ok(report) => {
+            if report.invalidated > 0 || report.conflicts > 0 {
+                eprintln!(
+                    "tdw-mcp tdw.kg.ingest: contradiction scan: closed {} superseded edge(s), \
+                     {} conflict(s) surfaced (manual review required)",
+                    report.invalidated, report.conflicts
+                );
+            }
+            // Accumulate into the shared totals counter for tdw.kg.status.
+            if let Some(totals_mutex) = totals
+                && let Ok(mut guard) = totals_mutex.lock()
+            {
+                guard.invalidated += report.invalidated;
+                guard.conflicts += report.conflicts;
+            }
         }
-        Ok(_) => {}
         Err(error) => {
             eprintln!(
                 "tdw-mcp tdw.kg.ingest: contradiction scan failed (batch already durable): \

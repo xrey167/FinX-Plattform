@@ -237,7 +237,15 @@ impl ContradictionDetector {
                     return Ok(InvalidationOutcome::Idempotent);
                 }
                 // Found an active conflicting edge.  Apply trust-class rules.
-                return self.resolve(graph, existing, arriving, as_of).await;
+                // Close at the winner's valid_from (normalized RFC 3339 UTC),
+                // not at scan-time as_of — same contract as scan_all_functional.
+                let close_at_owned = arriving
+                    .valid_from
+                    .as_deref()
+                    .map_or_else(|| as_of.to_string(), date_to_utc_rfc3339);
+                return self
+                    .resolve(graph, existing, arriving, &close_at_owned)
+                    .await;
             }
 
             if page_len < PAGE {
@@ -371,16 +379,31 @@ impl ContradictionDetector {
                     (None, None) => std::cmp::Ordering::Equal,
                 });
                 // The first element is the "newest" (winner); all others are
-                // superseded.
+                // superseded.  Close each loser at the winner's valid_from
+                // (normalized to RFC 3339 UTC) — NOT at scan-time `as_of`.
+                // This gives the semantically correct window
+                // [loser.valid_from, winner.valid_from) and is the fix that
+                // prevents same-day supersession from producing [T, T) on the
+                // production scan path.
                 let winner = active_edges[0].clone();
+                let close_at_owned = winner
+                    .valid_from
+                    .as_deref()
+                    .map_or_else(|| as_of.to_string(), date_to_utc_rfc3339);
+                let close_at = close_at_owned.as_str();
                 for superseded in active_edges.into_iter().skip(1) {
-                    let outcome = self.resolve(graph, superseded, &winner, as_of).await?;
+                    let outcome = self.resolve(graph, superseded, &winner, close_at).await?;
                     match &outcome {
-                        InvalidationOutcome::Invalidated { old_to, new_to, .. } => {
+                        InvalidationOutcome::Invalidated {
+                            old_to,
+                            new_to,
+                            closed_at,
+                            ..
+                        } => {
                             eprintln!(
                                 "tdw-infer contradiction scan: ({from})-[{rel}]->({old_to}) \
                                  superseded by ({from})-[{rel}]->({new_to}); \
-                                 closed at {as_of}"
+                                 closed at {closed_at}"
                             );
                             report.invalidated += 1;
                         }
@@ -408,17 +431,35 @@ impl ContradictionDetector {
     /// Apply the trust-class matrix to a found conflict and either close the
     /// old edge or surface it as a conflict.
     ///
-    /// `as_of` must already be a normalized RFC 3339 UTC timestamp (callers
+    /// This is the **unified close routine** shared by both the per-edge path
+    /// ([`check_and_invalidate`]) and the full-scan path
+    /// ([`scan_all_functional`]).  Having one implementation prevents the two
+    /// paths from diverging.
+    ///
+    /// `close_at` is the RFC 3339 UTC timestamp at which the superseded edge's
+    /// validity window is closed.  Callers supply the **winner's `valid_from`**
+    /// (not the scan-time `now`) so that:
+    ///
+    /// * The closed window is `[loser.valid_from, winner.valid_from)` — a
+    ///   semantically correct interval aligned to the superseding fact.
+    /// * Same-tick supersession (`winner.valid_from == loser.valid_from`) is
+    ///   detected and surfaced as [`InvalidationOutcome::Conflict`] rather than
+    ///   writing an empty `[T, T)` window that the graph engine would reject.
+    ///
+    /// `close_at` must already be a normalized RFC 3339 UTC timestamp (callers
     /// normalize via [`date_to_utc_rfc3339`] at their entry point).
+    ///
+    /// [`check_and_invalidate`]: Self::check_and_invalidate
+    /// [`scan_all_functional`]: Self::scan_all_functional
     async fn resolve(
         &self,
         graph: &Arc<dyn GraphEngine>,
         mut existing: GraphEdge,
         arriving: &GraphEdge,
-        as_of: &str,
+        close_at: &str,
     ) -> Result<InvalidationOutcome, ContradictionError> {
         let new_edge_ref = format!(
-            "{}->{}->{new_to}@{as_of}",
+            "{}->{}->{new_to}@{close_at}",
             arriving.from,
             arriving.rel,
             new_to = arriving.to
@@ -451,13 +492,16 @@ impl ContradictionDetector {
             | Provenance::Agent { gated: true, .. }
             | Provenance::System { .. } => {
                 // Same-timestamp guard: if the superseded edge's valid_from
-                // equals as_of, closing at as_of would create an empty window
-                // [T, T) which the graph engine rejects.  This is the
-                // intraday-supersession case — two distinct values at the
-                // exact same timestamp is ambiguous, so we surface it as a
-                // conflict rather than auto-closing.  See module-level
-                // "Same-timestamp semantics" section.
-                if existing.valid_from.as_deref().is_some_and(|vf| vf >= as_of) {
+                // equals close_at (= winner.valid_from), closing would create
+                // an empty window [T, T) which the graph engine rejects.
+                // Two distinct values at the exact same timestamp is ambiguous
+                // — surface as Conflict rather than auto-closing.
+                // See module-level "Same-timestamp semantics" section.
+                if existing
+                    .valid_from
+                    .as_deref()
+                    .is_some_and(|vf| vf >= close_at)
+                {
                     return Ok(InvalidationOutcome::Conflict {
                         from: existing.from,
                         rel: existing.rel,
@@ -471,9 +515,9 @@ impl ContradictionDetector {
                 let from = existing.from.clone();
                 let rel = existing.rel.clone();
 
-                // Annotate props with supersession lineage so tdw.kg.why
+                // Annotate props with supersession lineage so `tdw.kg.why`
                 // surfaces it: merge the existing props object with the
-                // invalidated_by annotation.
+                // `invalidated_by` annotation.
                 let mut props = match existing.props.clone() {
                     serde_json::Value::Object(map) => map,
                     serde_json::Value::Null => serde_json::Map::new(),
@@ -486,9 +530,13 @@ impl ContradictionDetector {
                 props.insert("invalidated_by".to_string(), json!(new_edge_ref));
                 existing.props = serde_json::Value::Object(props);
 
-                // Close the validity window at as_of (normalized RFC 3339 UTC
-                // form — validated by the graph engine on replace_edges).
-                existing.valid_to = Some(as_of.to_string());
+                // Close the validity window at close_at (= winner.valid_from,
+                // normalized RFC 3339 UTC — validated by the graph engine on
+                // replace_edges).  Closing at the winner's valid_from gives
+                // the semantically correct window [loser.valid_from,
+                // winner.valid_from) and prevents same-day supersession from
+                // producing [T, T).
+                existing.valid_to = Some(close_at.to_string());
 
                 // Atomic replace: fetch all (from, rel, *) edges for this
                 // specific subject, replace the matching one (by identity:
@@ -520,7 +568,7 @@ impl ContradictionDetector {
                     rel,
                     old_to,
                     new_to: arriving.to.clone(),
-                    closed_at: as_of.to_string(),
+                    closed_at: close_at.to_string(),
                 })
             }
         }
@@ -572,7 +620,7 @@ mod tests {
     // Helpers
     // -----------------------------------------------------------------------
 
-    /// Build a minimal GraphNode for a test entity.
+    /// Build a minimal [`GraphNode`] for a test entity.
     fn node(id: &str) -> GraphNode {
         GraphNode {
             id: id.to_string(),
@@ -652,9 +700,12 @@ mod tests {
         graph
             .upsert_nodes(nodes.iter().map(|id| node(id)).collect())
             .await
-            .unwrap();
+            .expect("upsert_nodes failed in test setup");
         if !edges.is_empty() {
-            graph.upsert_edges(edges.to_vec()).await.unwrap();
+            graph
+                .upsert_edges(edges.to_vec())
+                .await
+                .expect("upsert_edges failed in test setup");
         }
         graph
     }
@@ -665,11 +716,11 @@ mod tests {
 
     /// The canonical K-M4 fixture:
     ///
-    /// 1. CEO(company:ACME) = person:alice at t1
-    /// 2. Ingest CEO(company:ACME) = person:bob at t2
-    ///    → alice-edge validity closed at t2
-    ///    → as_of t1.5 query returns alice (history preserved)
-    ///    → current (as_of t3) query returns bob
+    /// 1. `CEO(company:ACME)` = `person:alice` at `t1`
+    /// 2. Ingest `CEO(company:ACME)` = `person:bob` at `t2`
+    ///    → alice-edge validity closed at `t2`
+    ///    → `as_of t1.5` query returns alice (history preserved)
+    ///    → current (`as_of t3`) query returns bob
     ///    → why on old alice edge shows `invalidated_by` prop
     #[tokio::test]
     async fn canonical_ceo_supersession() {
@@ -682,7 +733,7 @@ mod tests {
 
         let graph = seeded_graph(
             &["company:ACME", "person:alice", "person:bob"],
-            &[alice_edge.clone()],
+            std::slice::from_ref(&alice_edge),
         )
         .await;
         let graph: Arc<dyn tdw_core::GraphEngine> = graph;
@@ -717,7 +768,7 @@ mod tests {
         let edges_mid: Vec<_> = graph
             .edges(Some("ceo_of"), 0, 256)
             .await
-            .unwrap()
+            .expect("no graph error")
             .into_iter()
             .filter(|e| {
                 e.from == "company:ACME"
@@ -731,11 +782,11 @@ mod tests {
         graph
             .upsert_edges(vec![arriving_bob.clone()])
             .await
-            .unwrap();
+            .expect("no graph error");
         let edges_current: Vec<_> = graph
             .edges(Some("ceo_of"), 0, 256)
             .await
-            .unwrap()
+            .expect("no graph error")
             .into_iter()
             .filter(|e| {
                 e.from == "company:ACME"
@@ -749,7 +800,7 @@ mod tests {
         let all_ceo: Vec<_> = graph
             .edges(Some("ceo_of"), 0, 256)
             .await
-            .unwrap()
+            .expect("no graph error")
             .into_iter()
             .filter(|e| e.from == "company:ACME")
             .collect();
@@ -800,7 +851,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &same_edge, t1)
             .await
-            .unwrap();
+            .expect("no graph error");
         assert_eq!(outcome, InvalidationOutcome::Idempotent);
     }
 
@@ -825,7 +876,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &arriving, t2)
             .await
-            .unwrap();
+            .expect("no graph error");
 
         assert!(
             matches!(
@@ -839,7 +890,10 @@ mod tests {
         );
 
         // Verify the old edge is UNCHANGED (valid_to still None).
-        let edges = graph.edges(Some("ceo_of"), 0, 256).await.unwrap();
+        let edges = graph
+            .edges(Some("ceo_of"), 0, 256)
+            .await
+            .expect("no graph error");
         let alice = edges
             .iter()
             .find(|e| e.to == "person:alice")
@@ -870,7 +924,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &arriving, t2)
             .await
-            .unwrap();
+            .expect("no graph error");
         assert!(
             matches!(
                 outcome,
@@ -903,7 +957,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &arriving, t2)
             .await
-            .unwrap();
+            .expect("no graph error");
         // Rule-derived edges are idempotent-skipped by the detector.
         assert_eq!(
             outcome,
@@ -927,7 +981,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &edge, "2024-01-01T00:00:00Z")
             .await
-            .unwrap();
+            .expect("no graph error");
         assert_eq!(outcome, InvalidationOutcome::NotFunctional);
     }
 
@@ -956,15 +1010,18 @@ mod tests {
         detector
             .check_and_invalidate(&graph, &bob_edge, t2)
             .await
-            .unwrap();
-        graph.upsert_edges(vec![bob_edge]).await.unwrap();
+            .expect("no graph error");
+        graph
+            .upsert_edges(vec![bob_edge])
+            .await
+            .expect("no graph error");
 
         // Step 2: alice re-asserted at t3 (new edge, not resurrection).
         let alice_t3 = ingest_edge("company:ACME", "ceo_of", "person:alice", Some(t3));
         let outcome = detector
             .check_and_invalidate(&graph, &alice_t3, t3)
             .await
-            .unwrap();
+            .expect("no graph error");
 
         // Bob's edge is now closed at t3.
         assert!(
@@ -981,11 +1038,14 @@ mod tests {
 
         // The original alice-edge (t1..t2) is distinct from the new alice-edge
         // (t3..open) — history has two alice records.
-        graph.upsert_edges(vec![alice_t3]).await.unwrap();
+        graph
+            .upsert_edges(vec![alice_t3])
+            .await
+            .expect("no graph error");
         let all: Vec<_> = graph
             .edges(Some("ceo_of"), 0, 256)
             .await
-            .unwrap()
+            .expect("no graph error")
             .into_iter()
             .filter(|e| e.from == "company:ACME" && e.to == "person:alice")
             .collect();
@@ -993,11 +1053,11 @@ mod tests {
         let original = all
             .iter()
             .find(|e| e.valid_from.as_deref() == Some(t1))
-            .unwrap();
+            .expect("no graph error");
         let reasserted = all
             .iter()
             .find(|e| e.valid_from.as_deref() == Some(t3))
-            .unwrap();
+            .expect("no graph error");
         assert_eq!(
             original.valid_to.as_deref(),
             Some(t2),
@@ -1043,7 +1103,10 @@ mod tests {
             ingest_edge("company:BETA", "ceo_of", "person:dave", Some(t2)),
         ];
 
-        let report = detector.check_batch(&graph, &batch, t2).await.unwrap();
+        let report = detector
+            .check_batch(&graph, &batch, t2)
+            .await
+            .expect("no graph error");
         assert_eq!(report.invalidated, 1, "one ingest edge invalidated");
         assert_eq!(report.conflicts, 1, "one user conflict surfaced");
     }
@@ -1083,7 +1146,10 @@ mod tests {
         );
 
         // Read alice's edge directly and check the annotation.
-        let all_edges = graph.edges(Some("ceo_of"), 0, 256).await.unwrap();
+        let all_edges = graph
+            .edges(Some("ceo_of"), 0, 256)
+            .await
+            .expect("no graph error");
         let alice_closed = all_edges
             .iter()
             .find(|e| e.to == "person:alice")
@@ -1133,7 +1199,7 @@ mod tests {
         let outcome = detector
             .check_and_invalidate(&graph, &arriving, t_same)
             .await
-            .unwrap();
+            .expect("no graph error");
 
         assert!(
             matches!(
@@ -1147,7 +1213,10 @@ mod tests {
         );
 
         // Alice's edge must be untouched (valid_to still None).
-        let edges = graph.edges(Some("ceo_of"), 0, 256).await.unwrap();
+        let edges = graph
+            .edges(Some("ceo_of"), 0, 256)
+            .await
+            .expect("no graph error");
         let alice = edges
             .iter()
             .find(|e| e.to == "person:alice")

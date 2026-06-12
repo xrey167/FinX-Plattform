@@ -366,6 +366,17 @@ fn ingest_path_closes_superseded_edge_and_preserves_history() {
         t_after,
     );
     assert!(bob_current, "bob must be active at t_after");
+
+    // K-M4 status: contradiction_totals must be surfaced via tdw.kg.status.
+    let status_response = call(&mut server, "tdw.kg.status", &json!({}));
+    let status = result_content(&status_response);
+    let invalidated = status["contradiction_totals"]["invalidated"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("contradiction_totals.invalidated missing; status: {status}"));
+    assert!(
+        invalidated >= 1,
+        "tdw.kg.status must report at least 1 invalidated edge; got {invalidated}"
+    );
 }
 
 // ── test 2: user-provenance edge on ingest path is never auto-closed ──────────

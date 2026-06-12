@@ -185,6 +185,9 @@ pub fn execute(
     runtime: &KnowledgeRuntime,
     name: &str,
     arguments: &Map<String, Value>,
+    contradiction_totals: Option<
+        Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>,
+    >,
 ) -> Result<ToolExecution, ToolFailure> {
     match name {
         "tdw.kg.search" => search(runtime, arguments),
@@ -192,7 +195,7 @@ pub fn execute(
         "tdw.kg.traverse" => traverse(runtime, arguments),
         "tdw.kg.path" => path(runtime, arguments),
         "tdw.tags.query" => tags_query(runtime, arguments),
-        "tdw.kg.status" => kg_status(runtime),
+        "tdw.kg.status" => kg_status(runtime, contradiction_totals),
         other => Err(execution(format!("unknown knowledge tool: {other}"))),
     }
 }
@@ -221,8 +224,28 @@ fn status_descriptor() -> ToolDescriptor {
 /// The async `status()` call is bridged through the same sync→async helper the
 /// other knowledge tools use. Individual engine-probe failures are captured
 /// inside the snapshot fields — this function is infallible at the tool level.
-fn kg_status(runtime: &KnowledgeRuntime) -> Result<ToolExecution, ToolFailure> {
-    let snapshot = block_on(runtime.status());
+///
+/// When `contradiction_totals` is `Some`, the cumulative K-M4 counts are read
+/// from the shared mutex and injected into `KgStatus::contradiction_totals`
+/// before serialization.
+fn kg_status(
+    runtime: &KnowledgeRuntime,
+    contradiction_totals: Option<
+        Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>,
+    >,
+) -> Result<ToolExecution, ToolFailure> {
+    let mut snapshot = block_on(runtime.status());
+    // Inject cumulative K-M4 counts when a detector is wired.
+    if let Some(totals_mutex) = contradiction_totals {
+        let totals = totals_mutex.lock().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |guard| guard.clone(),
+        );
+        snapshot.contradiction_totals = Some(tdw_knowledge::runtime::KgContradictionCounts {
+            invalidated: totals.invalidated,
+            conflicts: totals.conflicts,
+        });
+    }
     let value = serde_json::to_value(&snapshot).map_err(|error| serde_failure(&error))?;
     Ok(structured(value))
 }
