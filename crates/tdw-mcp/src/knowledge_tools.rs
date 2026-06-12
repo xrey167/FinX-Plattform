@@ -22,7 +22,7 @@ use std::sync::Arc;
 use serde_json::{Map, Value, json};
 use tdw_core::{Direction, GraphEngine, TraversalFilter};
 use tdw_knowledge::runtime::KnowledgeRuntime;
-use tdw_retrieve::{GraphExpansion, KnowledgeQuery, QueryFilter};
+use tdw_retrieve::{GraphExpansion, KnowledgeQuery, QueryFilter, TrustClass};
 use tdw_tags::date_to_timestamp;
 use tdw_taxonomy::EntityKind;
 
@@ -66,8 +66,15 @@ fn search_descriptor() -> ToolDescriptor {
         "Knowledge Hybrid Search",
         "Hybrid retrieval (vector + lexical + temporal tag channels) with optional graph \
          expansion. Read-only. Returns explained hits (which channels matched, matched tags, \
-         graph path, seed hit) and the knowledge versions (embedder_model, rules_version, \
-         infer_version).",
+         graph path, seed hit, trust_class) and the knowledge versions (embedder_model, \
+         rules_version, infer_version).\n\
+         \n\
+         Trust-dial (K-X3): supply provenance_classes to restrict hits to a trust bucket. \
+         Omit for all classes (default, unchanged behaviour). The doc-index retrieval path \
+         produces two classes today: document_ingested (externally sourced, highest trust) \
+         and user_authored (analyst findings — EntityKind::Finding). \
+         An empty result under a restrictive filter is reported as 0 hits with the active \
+         filter scope — it is not an error.",
         json!({
             "type": "object",
             "properties": {
@@ -77,6 +84,14 @@ fn search_descriptor() -> ToolDescriptor {
                 "entity_kinds": { "type": "array", "items": { "type": "string" }, "description": "Restrict to these entity kinds (lowercase tokens, e.g. instrument)." },
                 "plane": { "type": "string", "description": "Restrict to one plane (agent / platform / shared)." },
                 "as_of": { "type": "string", "description": "Temporal point of view, YYYY-MM-DD. Excludes undated documents." },
+                "provenance_classes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["document_ingested", "user_authored"]
+                    },
+                    "description": "Trust-dial (K-X3): restrict hits to these provenance classes. document_ingested = externally sourced content (highest trust). user_authored = analyst findings (EntityKind::Finding). Omit or null for all classes (default). Each hit in the response carries its trust_class so you can see why it qualified."
+                },
                 "expand": {
                     "type": "object",
                     "properties": {
@@ -266,25 +281,93 @@ fn search(
     }
     let top_k = optional_usize(arguments, "top_k")?.unwrap_or(8);
     let filter = search_filter(arguments)?;
+    let active_classes = filter.provenance_classes.clone();
     let expand = optional_expansion(arguments)?;
     let knowledge_query = KnowledgeQuery::try_new(query, top_k, filter, expand)
         .map_err(|error| execution(error.to_string()))?;
     let hits = block_on(runtime.retriever().search(&knowledge_query))
         .map_err(|error| execution(error.to_string()))?;
-    let hits = serde_json::to_value(&hits).map_err(|error| serde_failure(&error))?;
+    let hit_count = hits.len();
+    let hits_value = serde_json::to_value(&hits).map_err(|error| serde_failure(&error))?;
     let versions =
         serde_json::to_value(runtime.versions()).map_err(|error| serde_failure(&error))?;
-    Ok(structured(json!({ "hits": hits, "versions": versions })))
+    // Honesty (K-X3): always surface which classes were in scope.  An empty
+    // result under a restrictive filter is reported as "0 hits at this trust
+    // level", never as a generic empty response that looks like a search error.
+    let trust_scope = trust_scope_summary(active_classes.as_deref(), hit_count);
+    Ok(structured(json!({
+        "hits": hits_value,
+        "versions": versions,
+        "trust_scope": trust_scope,
+    })))
 }
 
 /// Build the cross-channel query filter from the search arguments.
 fn search_filter(arguments: &Map<String, Value>) -> Result<QueryFilter, ToolFailure> {
+    let provenance_classes = optional_provenance_classes(arguments)?;
     Ok(QueryFilter {
         tags_any: optional_string_array(arguments, "tags_any")?.unwrap_or_default(),
         entity_kinds: optional_entity_kinds(arguments, "entity_kinds")?,
         plane: optional_str(arguments, "plane").map(ToString::to_string),
         as_of: optional_str(arguments, "as_of").map(ToString::to_string),
+        provenance_classes,
     })
+}
+
+/// Parse the optional `provenance_classes` array into [`TrustClass`] values.
+fn optional_provenance_classes(
+    arguments: &Map<String, Value>,
+) -> Result<Option<Vec<TrustClass>>, ToolFailure> {
+    let Some(values) = optional_string_array(arguments, "provenance_classes")? else {
+        return Ok(None);
+    };
+    let mut classes = Vec::with_capacity(values.len());
+    for token in values {
+        let class = TrustClass::from_payload_token(&token).ok_or_else(|| {
+            execution(format!(
+                "unknown provenance_class {token:?}; valid values: \
+                 document_ingested, rule_derived, agent_proposed, user_authored"
+            ))
+        })?;
+        classes.push(class);
+    }
+    Ok(Some(classes))
+}
+
+/// Build the K-X3 scope summary included in every search response.
+///
+/// When a filter is active and returns zero hits, the summary makes the scope
+/// explicit so callers understand why the result is empty — it is not a search
+/// error, just a trust-level constraint.
+fn trust_scope_summary(active_classes: Option<&[TrustClass]>, hit_count: usize) -> Value {
+    // None OR an empty slice both mean "all classes" — report as unfiltered.
+    match active_classes {
+        None | Some([]) => {
+            json!({
+                "filtered": false,
+                "note": "all provenance classes included (no trust-dial filter active)",
+            })
+        }
+        Some(classes) => {
+            let tokens: Vec<&str> = classes.iter().map(|c| c.payload_token()).collect();
+            let note = if hit_count == 0 {
+                format!(
+                    "0 hits at this trust level — classes in scope: {}",
+                    tokens.join(", ")
+                )
+            } else {
+                format!(
+                    "{hit_count} hit(s) restricted to classes: {}",
+                    tokens.join(", ")
+                )
+            };
+            json!({
+                "filtered": true,
+                "provenance_classes": tokens,
+                "note": note,
+            })
+        }
+    }
 }
 
 fn entity(

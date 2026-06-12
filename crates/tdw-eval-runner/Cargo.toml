@@ -23,6 +23,7 @@ tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-core = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
+tdw-infer = { path = "../tdw-infer" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
 tdw-retrieve = { path = "../tdw-retrieve" }

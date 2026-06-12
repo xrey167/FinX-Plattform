@@ -35,11 +35,17 @@ Owner tranche: G006-knowledge-graph-tags-ml-eval-and-utility-crates - Knowledge,
 - KnowledgeIndex is a composed in-memory bootstrap index.
 - Payload validation and document/query validation now cover the primary corruption paths.
 
+## K-X3 Trust-Dial (2026-06-12)
+
+- **`document_payload` stamps `provenance_class`**: the `provenance_class_token(kind)` helper maps `EntityKind::Finding` → `"user_authored"` and all other kinds → `"document_ingested"`. This stamp appears on every vector point upserted by `index_at`.
+- **Production-path coverage**: `KnowledgeIndexer::index_at` calls `document_payload` for both the vector point and the lexical co-index payload, so both retrieval channels see the stamp. The graph stamping path (`write_durable_graph`) is unchanged — graph-channel provenance is tracked via `Provenance` variants (not the `provenance_class` payload field, which is doc-index only).
+- **Honest class assignment**: `RuleDerived` and `AgentProposed` tokens are NOT written by `document_payload` because graph-derived facts write to the graph engine, not to doc-index points. These classes are reserved for a future graph-channel filter path (K-M3 or later). The MCP schema correctly advertises only `document_ingested` and `user_authored` as reachable today.
+
 ## Verification
 
-- Focused G006 crate check passed: cargo test -p tdw-entity-resolver -p tdw-eval-runner -p tdw-feature-store -p tdw-fn-string -p tdw-graph -p tdw-kg -p tdw-knowledge -p tdw-ml-registry -p tdw-rewrite -p tdw-spatial -p tdw-tag-rules -p tdw-tags -p tdw-test-utils -p tdw-workflow-engine -p tdw-service-api.
-- Final workspace gate for G006 passed: cargo fmt --all -- --check; cargo check --workspace; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; cargo run -p xtask -- clean-room-audit; git diff --check.
+- Focused crate check passed: `cargo test --target-dir target -p tdw-knowledge` — all tests pass including the production-path stamp assertion in `crates/tdw-mcp/tests/knowledge_tools.rs::index_at_stamps_provenance_class_on_production_path`.
+- Lint gate passed: `cargo clippy --workspace --all-targets -- -D warnings` zero errors; `cargo fmt -p tdw-knowledge` clean.
 
 ## Verdict
 
-Ready with follow-ups. No G006 blocker remains inside tdw-knowledge.
+Ready with follow-ups. No blocker remains inside tdw-knowledge. K-X3 provenance stamping is wired through `document_payload`; trust-class filtering is handled downstream in tdw-retrieve.

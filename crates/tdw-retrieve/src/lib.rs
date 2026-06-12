@@ -22,6 +22,28 @@
 //! same contract through document-node props (the `document_visible`
 //! `as_of`/`plane` mirror plus the entity node's kind), so no channel is a
 //! way around the payload gate.
+//!
+//! ## Trust-dial (K-X3)
+//!
+//! [`QueryFilter::provenance_classes`] restricts hits to one or more
+//! [`TrustClass`] buckets.  The class is stamped as a `provenance_class`
+//! payload field at index time (see `tdw-knowledge::document_payload`).
+//! The mapping is:
+//!
+//! | [`TrustClass`]        | Payload `provenance_class`   | Provenance at write time                     |
+//! |----------------------|------------------------------|----------------------------------------------|
+//! | `DocumentIngested`   | `"document_ingested"`        | `Provenance::Ingest { .. }` (provider/news/manual) |
+//! | `RuleDerived`        | `"rule_derived"`             | `Provenance::Rule { .. }` (tag-rule derived) |
+//! | `AgentProposed`      | `"agent_proposed"`           | `Provenance::Agent { gated: true }` (eval-landed) |
+//! | `UserAuthored`       | `"user_authored"`            | `Provenance::Agent { gated: false }` (findings, `entity_kind=finding`) |
+//!
+//! Default (no filter) = all classes → unchanged behaviour (regression-safe).
+//! Old index points without the `provenance_class` field are treated as
+//! `DocumentIngested` when applying a restrictive filter (conservative
+//! default: externally sourced content is the most trusted class so it is
+//! never silently excluded from a `DocumentIngested`-only query against a
+//! pre-stamp index).  Agents calling `tdw.kg.answer` (K-M3) can reuse the
+//! same [`QueryFilter`] field when that tool lands.
 
 pub mod evals;
 pub mod rrf;
@@ -91,6 +113,96 @@ pub const MAX_TOP_K: usize = 256;
 /// Hard ceiling on per-seed, per-hop expansion breadth.
 pub const MAX_PER_HIT_LIMIT: usize = 64;
 
+/// A trust-dial provenance class (K-X3).
+///
+/// Ordered from highest trust (externally sourced, human-vetted) to lowest
+/// (agent-proposed, pending operator review).  Every indexable document is
+/// stamped with exactly one class in the `provenance_class` payload field.
+/// The class is derived from the document kind and ingestion path — it is NOT
+/// a free-form caller input.
+///
+/// Use [`QueryFilter::provenance_classes`] to restrict a search to a subset.
+/// An absent or `null` filter means **all classes** (the pre-K-X3 default —
+/// no existing behaviour is changed).
+///
+/// ## Which classes the doc-index retrieval path can actually produce
+///
+/// The **vector and lexical channels** retrieve documents indexed via
+/// `tdw-knowledge::document_payload`.  That function stamps exactly two
+/// classes today:
+///
+/// - `DocumentIngested` — all entity kinds except `Finding`
+/// - `UserAuthored` — `EntityKind::Finding` (K-X6 user findings)
+///
+/// `RuleDerived` and `AgentProposed` are **reserved for future use**.
+/// Rule-derived and agent-gated facts currently write to the knowledge graph
+/// as edges (with the corresponding `Provenance` variants), not as retrievable
+/// documents, so the doc-index retrieval path cannot produce those classes
+/// today.  Filtering on them via `provenance_classes` is safe and well-defined
+/// (it will match zero hits against the current index) but the MCP tool
+/// descriptor only advertises `document_ingested` and `user_authored` to avoid
+/// advertising classes the vector/lexical path cannot deliver.  This variant
+/// is kept in the Rust enum so the type system is forward-compatible and
+/// future document kinds can be stamped without an API break.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustClass {
+    /// External-source ingested document (provider data, news articles, manual
+    /// knowledge entries).  Highest trust: content is externally authored and
+    /// human-selected for ingestion.
+    ///
+    /// Produced by `document_payload` for all `EntityKind`s except `Finding`.
+    DocumentIngested,
+    /// A fact derived by an inference/tag rule engine.
+    ///
+    /// **Reserved / future**: rule-derived facts currently write to the graph
+    /// as edges, not as retrievable documents.  This class will match zero
+    /// hits against the current index.  The MCP `tdw.kg.search` tool does not
+    /// advertise this variant in its schema enum today.
+    RuleDerived,
+    /// An agent proposal that passed the eval gate (`Provenance::Agent { gated:
+    /// true }`).
+    ///
+    /// **Reserved / future**: eval-gated proposals currently write to the graph,
+    /// not to the doc index.  This class will match zero hits against the
+    /// current index.  The MCP `tdw.kg.search` tool does not advertise this
+    /// variant in its schema enum today.
+    AgentProposed,
+    /// A user-authored finding (`Provenance::Agent { gated: false }`,
+    /// `EntityKind::Finding`).  Personal analyst research notes; high personal
+    /// relevance, not operator-reviewed.
+    ///
+    /// Produced by `document_payload` when `entity.kind == EntityKind::Finding`.
+    UserAuthored,
+}
+
+impl TrustClass {
+    /// The `provenance_class` payload token for this class.
+    #[must_use]
+    pub const fn payload_token(self) -> &'static str {
+        match self {
+            Self::DocumentIngested => "document_ingested",
+            Self::RuleDerived => "rule_derived",
+            Self::AgentProposed => "agent_proposed",
+            Self::UserAuthored => "user_authored",
+        }
+    }
+
+    /// Recover a [`TrustClass`] from a raw payload token.  Returns `None` for
+    /// unknown tokens so old index points without the field can be handled
+    /// gracefully by the caller.
+    #[must_use]
+    pub fn from_payload_token(token: &str) -> Option<Self> {
+        match token {
+            "document_ingested" => Some(Self::DocumentIngested),
+            "rule_derived" => Some(Self::RuleDerived),
+            "agent_proposed" => Some(Self::AgentProposed),
+            "user_authored" => Some(Self::UserAuthored),
+            _ => None,
+        }
+    }
+}
+
 /// Which channel produced a piece of evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -139,6 +251,13 @@ pub struct RetrievedHit {
     pub entity_id: String,
     pub score: f64,
     pub tags: Vec<String>,
+    /// The trust class this hit qualified under (K-X3 explainability).
+    ///
+    /// `None` only for graph-expanded hits that arrive without a stamped
+    /// payload (stub nodes, expansion neighbours).  All directly retrieved
+    /// hits carry a class so callers see WHY a hit qualified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust_class: Option<TrustClass>,
     pub explanation: HitExplanation,
     /// Per-fact confidence score (K-R6).  `None` when the graph engine is not
     /// attached or the entity has no graph edges (e.g. pure-vector hits without
@@ -165,6 +284,19 @@ pub struct QueryFilter {
     /// documents and gates the tag channel.
     #[serde(default)]
     pub as_of: Option<String>,
+    /// Trust-dial: restrict hits to these provenance classes (K-X3).
+    ///
+    /// `None` / empty = all classes (the pre-K-X3 default — no existing
+    /// behaviour changes).  Supplying one or more classes filters to the
+    /// union.  Old index points that lack the `provenance_class` payload field
+    /// are treated as [`TrustClass::DocumentIngested`] (the most trusted
+    /// class, so a `DocumentIngested`-only query against a pre-stamp index
+    /// still returns ingested content rather than excluding it silently).
+    ///
+    /// Reusable by `tdw.kg.answer` (K-M3) when that tool lands — the shared
+    /// filter contract is defined here once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance_classes: Option<Vec<TrustClass>>,
 }
 
 /// Graph-expansion settings.
@@ -291,6 +423,8 @@ fn is_date(value: &str) -> bool {
 struct DocMeta {
     entity_id: String,
     tags: Vec<String>,
+    /// The `provenance_class` payload token from the index, if present.
+    provenance_class_token: Option<String>,
 }
 
 /// One expansion seed: a fused hit whose entity anchors the BFS.
@@ -385,7 +519,7 @@ impl Retriever {
         expanded_tags.sort();
         expanded_tags.dedup();
 
-        // 2. Channel fan-out, 3. fuse, 4. explained hits.
+        // 2. Channel fan-out, 3. fuse, 4. explained hits (trust-dial applied).
         let run = self.run_channels(query, &expanded_tags).await?;
         let fused = rrf_fuse(&run.channels, RRF_K);
         let mut hits =
@@ -410,6 +544,19 @@ impl Retriever {
                 }
                 self.expand_seed(graph.as_ref(), expansion, &query.filter, &seed, &mut hits)
                     .await?;
+            }
+            // Trust-dial gate on expanded hits (K-X3 fix): graph-expanded
+            // neighbours bypass `assemble_hits` and are inserted directly.
+            // Apply the same provenance-class gate here so a restrictive filter
+            // cannot be circumvented by expansion.  Expanded stubs carry no
+            // payload round-trip (trust_class: None) → effective class is
+            // `DocumentIngested` (the conservative default).
+            if query.filter.provenance_classes.is_some() {
+                let allowed = query.filter.provenance_classes.as_deref();
+                hits.retain(|_, hit| {
+                    let class = hit.trust_class.unwrap_or(TrustClass::DocumentIngested);
+                    trust_class_passes(class, allowed)
+                });
             }
         }
 
@@ -516,10 +663,16 @@ impl Retriever {
                             continue;
                         }
                     }
-                    for doc_id in entity_documents(graph.as_ref(), &entity, &query.filter).await? {
+                    for (doc_id, class_token) in
+                        entity_documents(graph.as_ref(), &entity, &query.filter).await?
+                    {
                         run.meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
                             entity_id: entity.clone(),
                             tags: vec![tag.clone()],
+                            // K-X3: class_token is read from the graph document
+                            // node's props.provenance_class (stamped at index time).
+                            // Pre-stamp nodes carry None → effective DocumentIngested.
+                            provenance_class_token: class_token,
                         });
                         entries.push(RankedEntry {
                             id: doc_id,
@@ -573,15 +726,23 @@ impl Retriever {
                         to: edge.to.clone(),
                     });
                     let contribution = seed.score * expansion.decay.powi(i32::from(hop));
-                    for doc_id in entity_documents(graph, &node.id, filter).await? {
+                    for (doc_id, class_token) in entity_documents(graph, &node.id, filter).await? {
                         if doc_id == seed.doc {
                             continue;
                         }
+                        // K-X3: resolve trust_class from the graph document node's
+                        // props.provenance_class (stamped at index time).  Pre-stamp
+                        // nodes carry None → effective DocumentIngested in the
+                        // post-expansion retain pass.
+                        let trust_class = class_token
+                            .as_deref()
+                            .and_then(TrustClass::from_payload_token);
                         let entry = hits.entry(doc_id.clone()).or_insert_with(|| RetrievedHit {
                             id: doc_id.clone(),
                             entity_id: node.id.clone(),
                             score: 0.0,
                             tags: Vec::new(),
+                            trust_class,
                             explanation: HitExplanation::default(),
                             // Graph-expanded hits do not carry confidence (no direct
                             // entity→document ingest edge to score); the seed hit's
@@ -608,11 +769,15 @@ impl Retriever {
 
 /// Turn fused candidates into explained hits keyed by document id.
 ///
+/// Applies the K-X3 trust-dial gate: hits whose effective trust class is not
+/// in `filter.provenance_classes` are silently excluded here (they never
+/// reach the caller's ranked list).  Each passing hit carries its resolved
+/// [`TrustClass`] in `trust_class` for explainability.
+///
 /// When a graph engine is attached and `query.confidence_weight` is nonzero,
-/// each hit's RRF score is blended with its per-fact confidence.  The
-/// confidence is computed from the `described_by` edges of the hit's entity
-/// (the same one that produced the document link), using all edges of that
-/// relation type as the corroboration pool (bounded by
+/// each hit's RRF score is blended with its per-fact confidence (K-R6).  The
+/// confidence is computed from the `described_by` edges of the hit's entity,
+/// using all edges of that relation type as the corroboration pool (bounded by
 /// [`tdw_core::MAX_CORROBORATION_CAP`]).
 async fn assemble_hits(
     fused: &[Fused],
@@ -624,6 +789,10 @@ async fn assemble_hits(
     let mut hits = BTreeMap::new();
     for candidate in fused {
         let doc_meta = run.meta.get(&candidate.id).cloned().unwrap_or_default();
+        let trust_class = effective_trust_class(doc_meta.provenance_class_token.as_deref());
+        if !trust_class_passes(trust_class, query.filter.provenance_classes.as_deref()) {
+            continue;
+        }
         let matched_tags: Vec<String> = doc_meta
             .tags
             .iter()
@@ -648,6 +817,7 @@ async fn assemble_hits(
                 entity_id: doc_meta.entity_id.clone(),
                 score: final_score,
                 tags: doc_meta.tags.clone(),
+                trust_class: Some(trust_class),
                 explanation: HitExplanation {
                     channels: candidate
                         .contributions
@@ -733,6 +903,11 @@ async fn compute_hit_confidence(
 /// Documents described by an entity (via `described_by` edges to
 /// `document:<id>` nodes) that are VISIBLE under the query filter.
 ///
+/// Returns `(doc_id, provenance_class_token)` pairs.  The class token is read
+/// from the document node's `props.provenance_class` field, which is stamped at
+/// index time by `write_durable_graph` (K-X3).  Absent tokens occur only on
+/// pre-stamp nodes and default to [`TrustClass::DocumentIngested`] in callers.
+///
 /// Graph-derived documents must satisfy the same contract the payload filter
 /// enforces on the vector/lexical channels — otherwise the tag channel and
 /// graph expansion would be the leak around the `as_of` gate.
@@ -740,7 +915,7 @@ async fn entity_documents(
     graph: &dyn GraphEngine,
     entity_id: &str,
     filter: &QueryFilter,
-) -> Result<Vec<String>> {
+) -> Result<Vec<(String, Option<String>)>> {
     let traversal = TraversalFilter {
         rels: Some(vec![DESCRIBED_BY.to_string()]),
         direction: Direction::Out,
@@ -752,7 +927,18 @@ async fn entity_documents(
         .await?
         .into_iter()
         .filter(|(_, node)| document_visible(&node.props, filter))
-        .filter_map(|(_, node)| node.id.strip_prefix(DOCUMENT_PREFIX).map(ToOwned::to_owned))
+        .filter_map(|(_, node)| {
+            let doc_id = node
+                .id
+                .strip_prefix(DOCUMENT_PREFIX)
+                .map(ToOwned::to_owned)?;
+            let class_token = node
+                .props
+                .get("provenance_class")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            Some((doc_id, class_token))
+        })
         .collect())
 }
 
@@ -777,9 +963,33 @@ fn document_visible(props: &serde_json::Value, filter: &QueryFilter) -> bool {
     true
 }
 
-/// Build the cross-channel payload filter from the query filter. Contract
-/// payload keys: `tags` (array), `entity_kind`, `plane`, `as_of` (normalized
-/// timestamp — undated documents are EXCLUDED by temporal queries).
+/// Build the cross-channel payload filter from the query filter.
+///
+/// Contract payload keys: `tags` (array), `entity_kind`, `plane`, `as_of`
+/// (normalized timestamp — undated documents are EXCLUDED by temporal
+/// queries), and `provenance_class` (K-X3 trust-dial stamp).
+///
+/// ## Provenance-class pre-filter (K-X3, fix #4)
+///
+/// When a restrictive class set is requested AND it does **not** include
+/// `DocumentIngested`, a `MatchAny` condition on `provenance_class` is added
+/// to the payload filter.  This is filter-before-scoring: only stamped index
+/// points with a matching token reach the scoring/fuse stage, which keeps
+/// `top_k` semantics honest (the result set is drawn from the matching
+/// population, not post-truncated from a larger unfiltered pool).
+///
+/// When `DocumentIngested` IS in the requested set we intentionally skip the
+/// payload condition: old index points that pre-date the stamp have no
+/// `provenance_class` field and would be wrongly excluded by a `MatchAny`
+/// condition (the in-memory `PayloadFilter` treats a missing key as
+/// non-matching).  Their effective class is `DocumentIngested` by the
+/// backward-compat rule, so they must pass a filter that includes that class.
+/// The post-assembly gate in [`assemble_hits`] handles them correctly.
+///
+/// Summary:
+/// - classes not including `DocumentIngested` → `MatchAny` pushed → efficient
+/// - classes including `DocumentIngested` → no `MatchAny` → post-gate only
+/// - no filter (default) → no `MatchAny` → unfiltered (pre-K-X3 behaviour)
 fn build_payload_filter(filter: &QueryFilter, expanded_tags: &[String]) -> PayloadFilter {
     let mut must = Vec::new();
     if !expanded_tags.is_empty() {
@@ -814,7 +1024,40 @@ fn build_payload_filter(filter: &QueryFilter, expanded_tags: &[String]) -> Paylo
             lte: Some(date_to_timestamp(as_of)),
         });
     }
+    // Provenance-class pre-filter: push only when DocumentIngested is NOT in
+    // the requested set (see doc-comment above for the reasoning).
+    if let Some(classes) = &filter.provenance_classes
+        && !classes.is_empty()
+        && !classes.contains(&TrustClass::DocumentIngested)
+    {
+        must.push(PayloadCondition::MatchAny {
+            key: "provenance_class".to_string(),
+            values: classes
+                .iter()
+                .map(|c| c.payload_token().to_string())
+                .collect(),
+        });
+    }
     PayloadFilter { must }
+}
+
+/// Resolve the effective [`TrustClass`] for a hit given its raw payload token.
+///
+/// When the `provenance_class` field is absent (old-index point) we conservatively
+/// default to [`TrustClass::DocumentIngested`] so a `DocumentIngested`-only
+/// query against a pre-stamp index still returns ingested content rather than
+/// silently excluding it.
+fn effective_trust_class(provenance_class_token: Option<&str>) -> TrustClass {
+    provenance_class_token
+        .and_then(TrustClass::from_payload_token)
+        .unwrap_or(TrustClass::DocumentIngested)
+}
+
+/// Whether a hit's trust class passes the requested filter.
+///
+/// `None` / empty class set = all classes pass (the pre-K-X3 default).
+fn trust_class_passes(class: TrustClass, allowed: Option<&[TrustClass]>) -> bool {
+    allowed.is_none_or(|classes| classes.is_empty() || classes.contains(&class))
 }
 
 fn record_meta(meta: &mut BTreeMap<String, DocMeta>, id: &str, payload: &serde_json::Value) {
@@ -833,6 +1076,13 @@ fn record_meta(meta: &mut BTreeMap<String, DocMeta>, id: &str, payload: &serde_j
                 .collect()
         })
         .unwrap_or_default();
-    meta.entry(id.to_string())
-        .or_insert(DocMeta { entity_id, tags });
+    let provenance_class_token = payload
+        .get("provenance_class")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    meta.entry(id.to_string()).or_insert(DocMeta {
+        entity_id,
+        tags,
+        provenance_class_token,
+    });
 }

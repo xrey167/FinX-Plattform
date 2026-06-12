@@ -430,7 +430,11 @@ async fn write_durable_graph(graph: &dyn GraphEngine, document: &KnowledgeDocume
     let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
     let as_of_ts = document.as_of.as_deref().map(tdw_tags::date_to_timestamp);
 
-    let mut document_props = json!({});
+    // K-X3: stamp provenance_class on the graph document node so the tag
+    // channel and graph expansion can resolve the effective trust class without
+    // a vector-payload round-trip.  Mirrors the field written by document_payload.
+    let provenance_class = crate::provenance_class_token(document.entity.kind);
+    let mut document_props = json!({ "provenance_class": provenance_class });
     if let Some(plane) = &document.plane {
         document_props["plane"] = json!(plane);
     }
