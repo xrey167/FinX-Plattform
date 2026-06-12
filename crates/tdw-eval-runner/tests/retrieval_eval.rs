@@ -45,6 +45,7 @@ fn corpus() -> Vec<KnowledgeDocument> {
             source: None,
             plane: Some("platform".into()),
             as_of: Some("2026-01-01".into()),
+            author: None,
             mentions: Vec::new(),
         },
         KnowledgeDocument {
@@ -55,6 +56,7 @@ fn corpus() -> Vec<KnowledgeDocument> {
             source: None,
             plane: Some("platform".into()),
             as_of: Some("2026-02-01".into()),
+            author: None,
             mentions: Vec::new(),
         },
         KnowledgeDocument {
@@ -65,6 +67,7 @@ fn corpus() -> Vec<KnowledgeDocument> {
             source: None,
             plane: Some("platform".into()),
             as_of: Some("2026-03-01".into()),
+            author: None,
             mentions: Vec::new(),
         },
     ]
