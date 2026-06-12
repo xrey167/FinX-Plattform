@@ -24,6 +24,7 @@ pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
 pub(crate) mod knowledge_pattern_tools;
 pub(crate) mod knowledge_tools;
+pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
 
@@ -209,6 +210,13 @@ pub struct McpServer {
     /// [`ContradictionReport`]: tdw_infer::contradiction::ContradictionReport
     contradiction_totals:
         Option<Arc<std::sync::Mutex<tdw_infer::contradiction::ContradictionReport>>>,
+    /// Optional watchlist store (knowledge-system K-X5).
+    ///
+    /// When attached AND a knowledge runtime with a graph engine and bound user
+    /// id is present, the `tdw.kg.watch` / `tdw.kg.unwatch` /
+    /// `tdw.kg.watchlist` tools are exposed via `tools/list` and dispatched in
+    /// `tools/call`. `None` keeps the watchlist surface off entirely.
+    watchlist_store: Option<Arc<std::sync::Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
 }
 
 impl Default for McpServer {
@@ -229,6 +237,7 @@ impl Default for McpServer {
             infer_engine: None,
             contradiction_detector: None,
             contradiction_totals: None,
+            watchlist_store: None,
         }
     }
 }
@@ -257,6 +266,7 @@ impl McpServer {
             infer_engine: None,
             contradiction_detector: None,
             contradiction_totals: None,
+            watchlist_store: None,
         }
     }
 
@@ -383,6 +393,22 @@ impl McpServer {
         self
     }
 
+    /// Attach the watchlist store (knowledge-system K-X5).
+    ///
+    /// When attached AND a knowledge runtime with a graph engine and bound user
+    /// id is present, the `tdw.kg.watch`, `tdw.kg.unwatch`, and
+    /// `tdw.kg.watchlist` tools are exposed via `tools/list` and dispatched in
+    /// `tools/call`. `None` keeps the watchlist surface off entirely. Consumes
+    /// and returns `self` for builder use.
+    #[must_use]
+    pub fn with_watchlist_store(
+        mut self,
+        store: Arc<std::sync::Mutex<knowledge_watchlist_tools::WatchlistStore>>,
+    ) -> Self {
+        self.watchlist_store = Some(store);
+        self
+    }
+
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
     /// exposed via `tools/list`.
     ///
@@ -491,6 +517,13 @@ impl McpServer {
             .is_some_and(|rt| rt.graph().is_some())
         {
             descriptors.push(knowledge_pattern_tools::descriptor());
+        }
+        // The knowledge WATCHLIST tools (knowledge-system K-X5): tdw.kg.watch,
+        // tdw.kg.unwatch, tdw.kg.watchlist are appended only when a watchlist
+        // store AND a knowledge runtime with a graph engine and bound user id
+        // are all attached. Absent any → off.
+        if self.knowledge_watchlist_available() {
+            descriptors.extend(knowledge_watchlist_tools::descriptors());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -667,6 +700,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_pattern_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_watchlist_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1011,6 +1048,16 @@ impl McpServer {
             .is_some_and(|runtime| runtime.graph().is_some() && runtime.bound_user_id().is_some())
     }
 
+    /// True when the watchlist store AND a knowledge runtime with a graph engine
+    /// and bound user id are all attached (knowledge-system K-X5).
+    fn knowledge_watchlist_available(&self) -> bool {
+        self.watchlist_store.is_some()
+            && self
+                .knowledge
+                .as_ref()
+                .is_some_and(|rt| rt.graph().is_some() && rt.bound_user_id().is_some())
+    }
+
     /// Dispatch a knowledge finding tool (`tdw.kg.finding` / `tdw.kg.link`,
     /// knowledge-system K-X6).
     ///
@@ -1091,6 +1138,55 @@ impl McpServer {
                     .with_data(json!({ "tool": name })),
             )],
         };
+        Some(messages)
+    }
+
+    /// Dispatch a knowledge watchlist tool (`tdw.kg.watch` / `tdw.kg.unwatch` /
+    /// `tdw.kg.watchlist`, knowledge-system K-X5).
+    ///
+    /// Returns `Some(messages)` when `name` is a watchlist tool — a tool error
+    /// (never a protocol error) when the watchlist surface is unavailable (no
+    /// runtime, no graph engine, no bound user id, or no watchlist store),
+    /// otherwise the [`knowledge_watchlist_tools::execute`] result. Returns
+    /// `None` when `name` is not a watchlist tool so the caller falls through
+    /// to the registry and built-in dispatch paths.
+    fn dispatch_knowledge_watchlist_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_watchlist_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_watchlist_available() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result(
+                    "knowledge watchlist surface not attached \
+                     (requires graph engine + user id + watchlist store)",
+                ),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let store = self.watchlist_store.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages =
+            match knowledge_watchlist_tools::execute(runtime, store, name, &arguments_object, &now)
+            {
+                Ok(ToolExecution { structured, .. }) => {
+                    vec![success_message(id, &tool_result(&structured))]
+                }
+                Err(ToolFailure::Execution(message)) => {
+                    vec![success_message(id, &tool_error_result(&message))]
+                }
+                Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                    problem
+                        .with_id(id.clone())
+                        .with_data(json!({ "tool": name })),
+                )],
+            };
         Some(messages)
     }
 
@@ -1300,6 +1396,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1325,6 +1422,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(detector) = contradiction {
         base.with_contradiction_detector(detector)
+    } else {
+        base
+    };
+    let base = if let Some(wl) = watchlist {
+        base.with_watchlist_store(wl)
     } else {
         base
     };
@@ -1830,6 +1932,7 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
 /// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
 /// behaves identically to [`run_streamable_http_with_daemon`] for those surfaces.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn run_streamable_http_with_knowledge(
     bind: &str,
     daemon: Option<DaemonClientConfig>,
@@ -1838,6 +1941,7 @@ pub fn run_streamable_http_with_knowledge(
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1884,6 +1988,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(detector) = contradiction {
         base.with_contradiction_detector(detector)
+    } else {
+        base
+    };
+    let base = if let Some(wl) = watchlist {
+        base.with_watchlist_store(wl)
     } else {
         base
     };
