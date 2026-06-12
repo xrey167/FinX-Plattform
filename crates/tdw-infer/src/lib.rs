@@ -3,6 +3,10 @@
 
 //! Rule-based forward-chaining inference over the graph + tag substrate (knowledge-system B7).
 //!
+//! K-M4 adds [`contradiction`] (contradiction-driven temporal invalidation):
+//! when a new fact arrives for a functional predicate and an active conflicting
+//! fact exists, the old fact's validity window is closed (history preserved).
+//!
 //! [`InferEngine`] holds a stratified, versioned, hot-reloadable rule set
 //! ([`InferRule`]) and materializes derived facts:
 //!
@@ -37,6 +41,7 @@
 //! [`RetractReport::unremovable_tags`]; the caller's documented fallback is a full re-run
 //! from a clean graph.
 
+pub mod contradiction;
 pub mod index;
 pub mod rule;
 

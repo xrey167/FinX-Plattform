@@ -637,7 +637,7 @@ pub struct FeedsConfig {
     pub entries: Vec<FeedConfig>,
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4).
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4 + K-M4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -703,6 +703,16 @@ pub struct KnowledgeConfig {
     /// then becomes the only landing path.
     #[serde(default)]
     pub proposals: ProposalsConfig,
+    /// Contradiction-driven temporal invalidation settings (knowledge-system K-M4).
+    ///
+    /// Controls the functional-predicate set used by the contradiction detector.
+    /// The taxonomy-level defaults (`ceo_of`, `primary_exchange`, etc.) are always
+    /// active; this section only needs to be present when the operator wants to
+    /// extend the set with domain-specific relations.
+    ///
+    /// When absent (the default), only the taxonomy defaults are active.
+    #[serde(default)]
+    pub contradiction: ContradictionConfig,
     /// Pattern-mining configuration (knowledge-system K-R4).
     ///
     /// Controls the deterministic motif-mining cron trigger.
@@ -722,6 +732,36 @@ pub struct KnowledgeConfig {
     /// and a loud status note (the K-L3 zero-config honesty posture).
     #[serde(default)]
     pub feeds: FeedsConfig,
+}
+
+/// Contradiction-driven temporal invalidation settings (knowledge-system K-M4).
+///
+/// The taxonomy-level functional-predicate defaults are always active (see
+/// `tdw_taxonomy::TAXONOMY_DEFAULTS`).  This section extends the set with
+/// additional operator-defined relations.
+///
+/// # Validation
+///
+/// Every name in `extra_functional_rels` must satisfy the graph-id grammar
+/// (`[A-Za-z0-9:._-]+`, non-empty).  An invalid name is a **hard config
+/// validation error** — a typo that silently skips invalidation is harder to
+/// debug than an explicit rejection at config load time.
+///
+/// # Example
+///
+/// ```toml
+/// [knowledge.contradiction]
+/// extra_functional_rels = ["board_chair", "audit_committee_chair"]
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ContradictionConfig {
+    /// Additional relation names to treat as functional predicates, beyond the
+    /// taxonomy-level defaults.  Each name must match `[A-Za-z0-9:._-]+`.
+    ///
+    /// Taxonomy defaults are listed in `tdw_taxonomy::TAXONOMY_DEFAULTS` and
+    /// are always active regardless of this field.
+    #[serde(default)]
+    pub extra_functional_rels: Vec<String>,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -1137,7 +1177,7 @@ impl TdwConfig {
     }
 }
 
-/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4 + K-L6).
+/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4 + K-M4 + K-L6).
 ///
 /// Extracted from [`TdwConfig::validate`] so that function stays under the
 /// 100-line function-length lint limit.
@@ -1149,8 +1189,38 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")?;
     // Proposals sweep config (K-L4).
     validate_proposals(&knowledge.proposals)?;
+    // Contradiction config (K-M4): every extra functional rel must be a valid graph id.
+    validate_contradiction(&knowledge.contradiction)?;
     // Feed entries (K-L6): validate id grammar, cadence, and max_items.
     validate_feeds(&knowledge.feeds)
+}
+
+/// Validate `[knowledge.contradiction]` (K-M4).
+///
+/// Every name in `extra_functional_rels` must satisfy the graph-id grammar
+/// (`[A-Za-z0-9:._-]+`, non-empty).  An invalid name is a hard config error —
+/// a typo that silently skips invalidation is harder to debug than a loud
+/// rejection at config load time.
+fn validate_contradiction(contradiction: &ContradictionConfig) -> Result<()> {
+    for rel in &contradiction.extra_functional_rels {
+        if rel.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "knowledge.contradiction.extra_functional_rels: relation name must not be \
+                 empty or whitespace-only"
+                    .to_string(),
+            ));
+        }
+        if !rel
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '.' | '_' | '-'))
+        {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.contradiction.extra_functional_rels: {rel:?} is not a valid \
+                 graph-id (must match [A-Za-z0-9:._-]+)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Validate `[knowledge.proposals]` (K-L4).

@@ -713,6 +713,19 @@ pub const THESIS_STATUS_PAGE_CAP: usize = 4_096;
 ///
 /// **Honest notes on unavailable stats** are carried in the corresponding
 /// `*_note` / `error` fields rather than omitted, so callers can distinguish
+/// Cumulative contradiction-detection counts surfaced by [`KgStatus`] (K-M4).
+///
+/// Counts accumulate across all `tdw.kg.ingest` and `tdw.kg.proposals
+/// materialize` calls since the server started.  Omitted from JSON when no
+/// `ContradictionDetector` is wired (`contradiction_totals` field is `None`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgContradictionCounts {
+    /// Total edges closed (temporally invalidated) across all scans.
+    pub invalidated: usize,
+    /// Total conflicts surfaced (user/manual provenance — not auto-closed).
+    pub conflicts: usize,
+}
+
 /// "zero" from "not measured". Specifically:
 /// - `document_count`: the `VectorEngine` trait has no count method; this field
 ///   reflects what the collection name implies but is NOT a live engine count.
@@ -784,6 +797,19 @@ pub struct KgStatus {
     /// `[knowledge.proposals]` — the operator tool is then the only landing
     /// path.
     pub auto_materialize_freshness: SweepFreshness,
+
+    // --- K-M4 contradiction detection totals ---
+    /// Cumulative contradiction-detection counts since server start (K-M4).
+    ///
+    /// `None` when no `ContradictionDetector` is wired (field omitted from
+    /// JSON).  When present, `invalidated` is the total number of
+    /// functional-predicate edges auto-closed across all ingest and
+    /// materialize scans; `conflicts` is the total number of user/manual-
+    /// provenance contradictions surfaced (not auto-closed — require manual
+    /// review).  Populated by the MCP layer; `runtime.status()` always
+    /// returns `None` to keep `tdw-knowledge` decoupled from `tdw-infer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contradiction_totals: Option<KgContradictionCounts>,
 
     // --- Theses (K-X7) ---
     /// Thesis summary for the attached graph (K-X7).
@@ -977,6 +1003,9 @@ impl KnowledgeRuntime {
             eval_freshness,
             consolidation_freshness,
             auto_materialize_freshness,
+            // Populated by the MCP layer when a ContradictionDetector is wired;
+            // None here so runtime.status() stays decoupled from tdw-infer.
+            contradiction_totals: None,
             theses,
             feed_statuses,
             feed_note,
