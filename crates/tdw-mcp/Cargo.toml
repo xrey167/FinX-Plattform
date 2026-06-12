@@ -47,6 +47,7 @@ tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-service-api = { path = "../tdw-service-api" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-taxonomy = { workspace = true }
+tdw-patterns = { workspace = true }
 tdw-tool-exec = { path = "../tdw-tool-exec" }
 # Read-only widget-catalog tools project the OpenBB Workspace widgets.json /
 # apps.json contract; the contract test also asserts every widget `mcp_tool.tool_id`

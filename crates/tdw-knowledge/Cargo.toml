@@ -13,6 +13,7 @@ license = "MIT OR Apache-2.0"
 doctest = false
 
 [dependencies]
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tdw-core = { workspace = true }
@@ -32,7 +33,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-meilisearch = { path = "../tdw-storage-meilisearch" }
 tokio = { workspace = true }
