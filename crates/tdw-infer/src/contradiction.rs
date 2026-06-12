@@ -538,17 +538,18 @@ impl ContradictionDetector {
                 // producing [T, T).
                 existing.valid_to = Some(close_at.to_string());
 
-                // Atomic replace: fetch all (from, rel, *) edges for this
-                // specific subject, replace the matching one (by identity:
-                // from+rel+to+valid_from), write the updated set back.
-                // Filter to only this subject's edges — `replace_edges`
-                // validates that every edge in the slice has the same
-                // (from, rel) as the call arguments.
-                let all_edges = scan_rel_full(graph, &rel).await?;
+                // Atomic replace: fetch only the (from, rel, *) edges for
+                // this specific subject via a scoped neighbors query, replace
+                // the matching one (by identity: from+rel+to+valid_from), and
+                // write the updated set back.  Previously this called
+                // scan_rel_full which fetched ALL edges of the relation type
+                // across the whole graph, then filtered to `e.from == from` —
+                // O(graph size) work for a single-subject update (Gemini
+                // K-M4 #392).  neighbors() is bounded to the subject's degree.
+                let all_edges = scan_rel_for_subject(graph, &from, &rel).await?;
                 let identity = edge_identity(&existing);
                 let updated: Vec<GraphEdge> = all_edges
                     .into_iter()
-                    .filter(|e| e.from == from)
                     .map(|e| {
                         if edge_identity(&e) == identity {
                             existing.clone()
@@ -575,26 +576,32 @@ impl ContradictionDetector {
     }
 }
 
-/// Scan ALL edges of one relation type (all pages).
-async fn scan_rel_full(
+/// Fetch only the outgoing `(from, rel, *)` edges for a single subject.
+///
+/// Uses [`GraphEngine::neighbors`] with an `Out` direction and a single-rel
+/// filter so the query is bounded by the subject's out-degree, not the total
+/// number of edges with that relation type across the whole graph.  This
+/// replaces the old `scan_rel_full` global scan that was O(graph size) for
+/// every single-subject contradiction check (Gemini K-M4 #392).
+///
+/// The returned edges all have `from == subject` and `rel == rel`, matching
+/// the contract expected by `GraphEngine::replace_edges`.
+async fn scan_rel_for_subject(
     graph: &Arc<dyn GraphEngine>,
+    subject: &str,
     rel: &str,
 ) -> Result<Vec<GraphEdge>, ContradictionError> {
-    let mut all = Vec::new();
-    let mut offset = 0_usize;
-    loop {
-        let page = graph
-            .edges(Some(rel), offset, PAGE)
-            .await
-            .map_err(|e| ContradictionError::Graph(e.to_string()))?;
-        let page_len = page.len();
-        all.extend(page);
-        if page_len < PAGE {
-            break;
-        }
-        offset += PAGE;
-    }
-    Ok(all)
+    use tdw_core::{Direction, TraversalFilter};
+    let filter = TraversalFilter {
+        rels: Some(vec![rel.to_owned()]),
+        direction: Direction::Out,
+        ..TraversalFilter::default()
+    };
+    let pairs = graph
+        .neighbors(subject, &filter)
+        .await
+        .map_err(|e| ContradictionError::Graph(e.to_string()))?;
+    Ok(pairs.into_iter().map(|(edge, _node)| edge).collect())
 }
 
 /// Edge identity for replace-in-place: `(from, rel, to, valid_from)`.
