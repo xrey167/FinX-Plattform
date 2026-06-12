@@ -531,6 +531,68 @@ impl ProposalQueue {
         self.proposals.get(proposal_id)
     }
 
+    /// Truthful audit of every lesson (K-R1) currently in the queue.
+    ///
+    /// A lesson is an [`ProposalKind::Annotation`] whose note carries the
+    /// [`crate::lessons::LESSON_NOTE_PREFIX`] marker. The reported
+    /// [`crate::lessons::LessonState`] is derived ONLY from the backing
+    /// proposal's real status — `Active` iff `materialized`, `Rejected` iff
+    /// rejected, otherwise `Pending`. The ledger never claims an installation
+    /// that did not actually happen (the `tdw.kg.why` truthfulness contract).
+    ///
+    /// Notes that fail to parse as a lesson are skipped (defensive: a non-lesson
+    /// annotation that happens to share the marker is ignored, not surfaced as a
+    /// malformed lesson).
+    #[must_use]
+    pub fn lessons_audit(&self) -> Vec<crate::lessons::LessonAudit> {
+        use crate::lessons::{Lesson, LessonAudit, LessonState};
+        let mut out = Vec::new();
+        for proposal in self.proposals.values() {
+            let ProposalKind::Annotation { note, .. } = &proposal.kind else {
+                continue;
+            };
+            if !Lesson::note_is_lesson(note) {
+                continue;
+            }
+            let Ok(lesson) = Lesson::from_note(note) else {
+                continue;
+            };
+            let state = if proposal.materialized {
+                LessonState::Active
+            } else if proposal.rejected.is_some() {
+                LessonState::Rejected
+            } else {
+                LessonState::Pending
+            };
+            out.push(LessonAudit {
+                proposal_id: proposal.id.clone(),
+                lesson,
+                state,
+            });
+        }
+        out
+    }
+
+    /// Counts of lessons by lifecycle state for `tdw.kg.status` (K-R1).
+    ///
+    /// `pending` counts lessons not yet materialized (and not rejected);
+    /// `active` counts materialized (installed) lessons. Additive — does not
+    /// alter the existing [`pending_counts_by_state`](Self::pending_counts_by_state)
+    /// breakdown.
+    #[must_use]
+    pub fn lesson_counts(&self) -> crate::lessons::LessonCounts {
+        use crate::lessons::{LessonCounts, LessonState};
+        let mut counts = LessonCounts::default();
+        for audit in self.lessons_audit() {
+            match audit.state {
+                LessonState::Pending => counts.pending += 1,
+                LessonState::Active => counts.active += 1,
+                LessonState::Rejected | LessonState::Retired => {}
+            }
+        }
+        counts
+    }
+
     /// Exact pending proposal counts broken down by [`ValidationStatus`].
     ///
     /// Unlike [`list`](Self::list), this is a single-pass scan over the full

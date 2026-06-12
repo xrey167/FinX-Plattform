@@ -1,5 +1,68 @@
 {
   "$defs": {
+    "AgentConfig": {
+      "description": "Agent identity for the knowledge write surface (knowledge-system B9 + K-L5).\n\nK-L5 closes the B9 host-binding gap for the feedback tool: the agent id is\nbound here at runtime construction and NEVER accepted as a tool argument.\nRemote callers cannot assert a different identity via the MCP surface.\n\nThis is the single-principal-per-listener model: one bearer token → one\nagent principal, configured here. Multi-principal HTTP (one identity per\nauthenticated connection) is explicitly deferred to a follow-up story.\n\nFor STDIO / embedded surfaces the bearer token is irrelevant — identity\ncomes solely from this config value, validated at load time with the same\ngrammar as `tdw_knowledge::proposals::validate_agent_id`:\n`[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.\n\nSet `[knowledge.agent] id = \"my-agent\"` in your daemon TOML.\nDefault: `\"agent\"`.",
+      "properties": {
+        "id": {
+          "default": "agent",
+          "description": "The operator-configured agent identity bound to the write/feedback tools.\n\nGrammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.\nDefault: `\"agent\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ArticleSourceParams": {
+      "description": "Parameters for the `Article` feed source kind (knowledge-system K-L6).\n\nExactly one of `fixture_path` (offline fixture) or `provider` (live data\nprovider) must be set for the feed to be valid. A feed with neither is\nrejected as a hard config error at load time. A live `provider` name that\nis not yet implemented is also a hard config error — there is no silent\nfallback to an empty source.",
+      "properties": {
+        "api_key_env": {
+          "default": null,
+          "description": "Environment variable holding the provider API key. Resolved at poll\ntime (never at config load) so key rotation requires no restart.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fixture_path": {
+          "default": null,
+          "description": "Path to a fixture JSON file (array of [`tdw_news_compose::Article`]\nvalues). Used in offline, CI, and dev environments. Mutually exclusive\nwith `provider`. When set and `provider` is absent, the feed reads\narticles from this file on every poll. The file must exist at daemon\nboot; a missing path is a hard Init error.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "default": null,
+          "description": "Provider name for the article source (e.g. `\"benzinga\"`, `\"tiingo\"`).\nWhen set, the daemon constructs a live provider source from this name.\nAny provider name not yet implemented is a HARD config error at load —\nnever a silent empty fixture. Mutually exclusive with `fixture_path`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "symbols": {
+          "default": [],
+          "description": "Ticker symbols to filter the article feed (e.g. `[\"AAPL\", \"MSFT\"]`).\nWhen absent or empty, no symbol filter is applied.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ContradictionConfig": {
+      "description": "Contradiction-driven temporal invalidation settings (knowledge-system K-M4).\n\nThe taxonomy-level functional-predicate defaults are always active (see\n`tdw_taxonomy::TAXONOMY_DEFAULTS`).  This section extends the set with\nadditional operator-defined relations.\n\n# Validation\n\nEvery name in `extra_functional_rels` must satisfy the graph-id grammar\n(`[A-Za-z0-9:._-]+`, non-empty).  An invalid name is a **hard config\nvalidation error** — a typo that silently skips invalidation is harder to\ndebug than an explicit rejection at config load time.\n\n# Example\n\n```toml\n[knowledge.contradiction]\nextra_functional_rels = [\"board_chair\", \"audit_committee_chair\"]\n```",
+      "properties": {
+        "extra_functional_rels": {
+          "default": [],
+          "description": "Additional relation names to treat as functional predicates, beyond the\ntaxonomy-level defaults.  Each name must match `[A-Za-z0-9:._-]+`.\n\nTaxonomy defaults are listed in `tdw_taxonomy::TAXONOMY_DEFAULTS` and\nare always active regardless of this field.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "DaemonConfig": {
       "properties": {
         "http_bind": {
@@ -34,6 +97,340 @@
         "HttpSse"
       ],
       "type": "string"
+    },
+    "EmbeddingConfig": {
+      "description": "Which embedder the knowledge index uses.\n\nBOTH the local model and the API providers are first-class; this switch\nselects one — there is NO silent fallback (a requested-but-unavailable\nprovider is a startup error). Collections are namespaced per embedder\nmodel id, so switching never mixes dimensions; re-embed existing\ndocuments with `tdw kg reindex`.",
+      "properties": {
+        "expected_dims": {
+          "default": null,
+          "description": "When set, the constructed embedder's dimension must match — a cheap\nguard against pointing `model_dir` at the wrong model.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "default": null,
+          "description": "Provider-specific model id (API model name; informational for `local`,\nwhose id derives from the model directory).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_dir": {
+          "default": null,
+          "description": "Directory holding `config.json` + `tokenizer.json` +\n`model.safetensors` for the `local` provider.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "`hash` (deterministic offline default) | `local` (on-disk model via\nthe `local-model` build feature) | `openai` | `google`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "type": "object"
+    },
+    "FeedConfig": {
+      "description": "One scheduled knowledge-feed entry (knowledge-system K-L6).\n\nA feed entry tells the daemon: on `cadence`, fetch up to `max_items_per_poll`\narticles from `source_kind` with `source_params`, map them through\n`article_to_document`, and ingest them through the K-E3 indexer.\nContent-hash idempotency in the indexer manifest makes re-polls safe by\nconstruction: unchanged items produce `SkippedUnchanged` outcomes and are\nreported as duplicates, never double-indexed.\n\n# Example (`tdw.toml`)\n\n```toml\n[[knowledge.feeds]]\nid      = \"benzinga-aapl\"\nsource_kind = \"article\"\ncadence = \"*/15 * * * *\"\nenabled = true\nmax_items_per_poll = 20\n\n[knowledge.feeds.source_params]\nsymbols     = [\"AAPL\", \"MSFT\"]\nprovider    = \"benzinga\"\napi_key_env = \"TDW_BENZINGA_API_KEY\"\n```",
+      "properties": {
+        "cadence": {
+          "description": "5-field cron expression for the poll cadence (same validation as\n`knowledge.evals.cadence`). Example: `\"*/15 * * * *\"` (every 15 min).",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether this feed is active. A disabled feed is parsed and validated but\nregisters no cron trigger. Default: `true`.",
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable unique identifier for this feed. Used as the cron trigger id\nand appears in status fields and log lines. Must be non-empty and\ncontain only `[A-Za-z0-9:._-]` characters (same grammar as principal ids).",
+          "type": "string"
+        },
+        "max_body_bytes": {
+          "default": 65536,
+          "description": "Maximum body size (in bytes) for a single article before it is rejected\nand counted as `rejected` in the feed status. Articles exceeding this\ncap are logged and skipped; they do not enter `article_to_document`.\nDefault: 65 536 bytes (64 KiB). Set to 0 to disable the cap.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_items_per_poll": {
+          "default": 50,
+          "description": "Maximum number of items fetched per poll. Bounds network use and index\nwrite latency. Default: `50`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "plane": {
+          "default": "shared",
+          "description": "Knowledge plane to stamp on indexed documents. Must be a\n`[a-z_]+` identifier. Default: `\"shared\"`.",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/FeedSourceKind",
+          "description": "Which source kind this feed polls."
+        },
+        "source_params": {
+          "$ref": "#/$defs/ArticleSourceParams",
+          "default": {
+            "api_key_env": null,
+            "fixture_path": null,
+            "provider": null,
+            "symbols": []
+          },
+          "description": "Provider-agnostic source parameters. The shape depends on `source_kind`:\nfor `Article` these are [`ArticleSourceParams`]."
+        }
+      },
+      "required": [
+        "id",
+        "source_kind",
+        "cadence"
+      ],
+      "type": "object"
+    },
+    "FeedSourceKind": {
+      "description": "Source kind for a scheduled knowledge feed (knowledge-system K-L6).\n\nThe enum is `#[non_exhaustive]` so future source kinds (e.g. `Http`,\n`Provider`) can be added in backwards-compatible minor releases without\nbreaking existing match arms in caller code.\n\nCurrently only `Article` (the tdw-news-compose article seam) is supported.\nThe serialized form is `snake_case`, e.g. `source_kind = \"article\"` in TOML.",
+      "oneOf": [
+        {
+          "const": "article",
+          "description": "Poll the normalized [`tdw_news_compose::Article`] seam.\n\nConcrete source parameters (symbols, provider, API key env var) live\nin `source_params` on the enclosing [`FeedConfig`].",
+          "type": "string"
+        }
+      ]
+    },
+    "FeedsConfig": {
+      "description": "Scheduled knowledge-feed pipeline settings (knowledge-system K-L6).\n\nEach `[[knowledge.feeds]]` entry registers one cron-driven ingest loop.\nZero entries = no triggers registered + a loud status note (the K-L3\nzero-config honesty posture).\n\n# Example (`tdw.toml`)\n\n```toml\n[[knowledge.feeds]]\nid          = \"benzinga-aapl\"\nsource_kind = \"article\"\ncadence     = \"*/15 * * * *\"\nenabled     = true\nmax_items_per_poll = 20\n\n[knowledge.feeds.source_params]\nsymbols = [\"AAPL\", \"MSFT\"]\n```",
+      "properties": {
+        "entries": {
+          "default": [],
+          "description": "The list of feed entries. Absent / empty = no feeds configured.",
+          "items": {
+            "$ref": "#/$defs/FeedConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "GraphConfig": {
+      "description": "Which graph-database backend the knowledge graph uses.\n\nBoth `in-memory` (the zero-config default) and `bolt` (Memgraph/Neo4j,\nproduction) are first-class. There is **NO silent fallback**: a `bolt`\nbackend whose URI is unreachable at daemon startup is a hard `Init` error,\nand a `bolt` backend requested without the `bolt` Cargo feature is a hard\n`Init` error. The `in-memory` default is an explicit choice, not a fallback.\n\n**Production posture**: compose/production configs **must** set\n`backend = \"bolt\"` explicitly. The `full` and `live` Docker Compose\nprofiles do this via environment. The `in-memory` default is intentional\nfor zero-config first runs and offline development only.",
+      "properties": {
+        "backend": {
+          "description": "`in-memory` (default; zero-config, not persisted) or `bolt`\n(Memgraph/Neo4j; production). See [`KnowledgeConfig::graph`].",
+          "type": "string"
+        },
+        "bolt_db": {
+          "default": "memgraph",
+          "description": "Bolt database name. Memgraph's default is `\"memgraph\"`; Neo4j's is\n`\"neo4j\"`. neo4rs defaults to `\"neo4j\"` when unset, which fails against\nMemgraph — so we default explicitly to `\"memgraph\"` here.",
+          "type": "string"
+        },
+        "bolt_password_env": {
+          "default": "",
+          "description": "Environment variable holding the Bolt password. The variable is read at\ndaemon startup, not at config load. Defaults to `TDW_GRAPH_PASSWORD`.\nThe resolved value is the empty string when the variable is unset\n(Memgraph auth-disabled default).",
+          "type": "string"
+        },
+        "bolt_uri": {
+          "default": null,
+          "description": "Bolt endpoint URI, e.g. `bolt://127.0.0.1:7687`. Required when\n`backend = bolt`; ignored for `in-memory`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bolt_user": {
+          "default": "",
+          "description": "Bolt username. Defaults to the empty string (Memgraph auth-disabled).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend"
+      ],
+      "type": "object"
+    },
+    "InferLimitsConfig": {
+      "description": "Inference-engine run limits (knowledge-system K-L1).\n\nBoth fields are optional and default to the constants defined in `tdw-infer`\n(`max_iterations = 32`, `max_derived = 10 000`). Exceeding either bound is\nlogged as an error, never silently truncated (B7 contract).",
+      "properties": {
+        "max_derived": {
+          "default": null,
+          "description": "Maximum new facts (edges + tags) one run may derive.\nDefaults to `tdw-infer`'s `RunLimits::default().max_derived` (10 000).",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_iterations": {
+          "default": null,
+          "description": "Maximum stratum-iterations across one inference run.\nDefaults to `tdw-infer`'s `RunLimits::default().max_iterations` (32).",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "KnowledgeConfig": {
+      "description": "Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4 + K-M4).",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentConfig",
+          "default": {
+            "id": "agent"
+          },
+          "description": "Agent identity for the write/feedback tools (knowledge-system B9 + K-L5).\n\nDefaults to `id = \"agent\"`. Override in `[knowledge.agent]` in your\ndaemon TOML. K-L5 closed the B9 host-binding gap for the feedback tool:\nidentity is bound at construction time from this value, never from tool\narguments. For HTTP listeners the bearer token IS the authentication\nmechanism; the principal identity is this configured id (single-principal\nper listener). Multi-principal HTTP is explicitly deferred."
+        },
+        "contradiction": {
+          "$ref": "#/$defs/ContradictionConfig",
+          "default": {
+            "extra_functional_rels": []
+          },
+          "description": "Contradiction-driven temporal invalidation settings (knowledge-system K-M4).\n\nControls the functional-predicate set used by the contradiction detector.\nThe taxonomy-level defaults (`ceo_of`, `primary_exchange`, etc.) are always\nactive; this section only needs to be present when the operator wants to\nextend the set with domain-specific relations.\n\nWhen absent (the default), only the taxonomy defaults are active."
+        },
+        "embedding": {
+          "$ref": "#/$defs/EmbeddingConfig",
+          "default": {
+            "expected_dims": null,
+            "model": null,
+            "model_dir": null,
+            "provider": "hash"
+          }
+        },
+        "evals": {
+          "$ref": "#/$defs/ScheduledEvalConfig",
+          "default": {
+            "cadence": "0 3 * * MON",
+            "max_mrr_drop": 0.05,
+            "max_ndcg_drop": 0.05,
+            "max_recall_drop": 0.05,
+            "split_fixture_path": null,
+            "split_id": null
+          },
+          "description": "Scheduled in-daemon retrieval self-eval (K-L3).\n\nWhen `split_id` is set, the daemon registers a cron trigger that runs a\ngolden-split regression test on the configured cadence and surfaces the\nresult as `eval_freshness` in `tdw.kg.status`.  When `split_id` is absent\n(the default), no trigger is registered and status reports `Unconfigured`."
+        },
+        "feeds": {
+          "$ref": "#/$defs/FeedsConfig",
+          "default": {
+            "entries": []
+          },
+          "description": "Scheduled document-feed pipelines (knowledge-system K-L6).\n\nEach `[[knowledge.feeds]]` entry registers one cron-driven ingest loop\nthat polls a provider seam, maps items through `article_to_document`,\nand ingests them via the K-E3 indexer (content-hash idempotency makes\nre-polls safe by construction). Zero entries = no triggers registered\nand a loud status note (the K-L3 zero-config honesty posture)."
+        },
+        "graph": {
+          "$ref": "#/$defs/GraphConfig",
+          "default": {
+            "backend": "in-memory",
+            "bolt_db": "memgraph",
+            "bolt_password_env": "TDW_GRAPH_PASSWORD",
+            "bolt_uri": "bolt://127.0.0.1:7687",
+            "bolt_user": ""
+          },
+          "description": "Graph-database backend for the live daemon's knowledge graph (F1).\n\nThe default backend is `in-memory` so that `tdw-service` starts without\nany external services on a first run. Graph data is **not persisted**\nacross restarts in this mode. Set `backend = \"bolt\"` in your daemon TOML\n(or in the `full`/`live` Compose profiles) for any environment where\ngraph data must survive a restart.\n\nThis is an **explicit default**, not a fallback: both `in-memory` and\n`bolt` are first-class. There is NO silent fallback — selecting `bolt`\nand having Memgraph unreachable is a hard `Init` error at daemon startup."
+        },
+        "infer": {
+          "$ref": "#/$defs/InferLimitsConfig",
+          "default": {
+            "max_derived": null,
+            "max_iterations": null
+          },
+          "description": "Inference engine limits (knowledge-system K-L1).\n\nAbsent fields fall back to the defaults defined in `tdw-infer`'s\n[`RunLimits`]: `max_iterations = 32`, `max_derived = 10 000`."
+        },
+        "lessons": {
+          "$ref": "#/$defs/LessonsConfig",
+          "default": {
+            "cadence": "0 4 * * *",
+            "enabled": false,
+            "max_episode_scan": 20000,
+            "min_confidence": 0.7
+          },
+          "description": "Lessons-as-proposals configuration (knowledge-system-2 K-R1).\n\nControls the cron-driven lesson-induction worker. Induced lessons are\nenqueued as PROPOSALS through the B9 gate and promote only via the\nagent's real eval gate (fail-closed on no eval data).\n\n**Default: `enabled = false`.** Lesson induction changes agent behavior\nonce a lesson promotes, so it is opt-in; a loud status note is emitted at\neach tick when disabled."
+        },
+        "patterns": {
+          "$ref": "#/$defs/PatternConfig",
+          "default": {
+            "cadence": "0 2 * * *",
+            "enabled": false,
+            "max_candidates": 8000,
+            "max_instance_scan": 20000,
+            "max_motif_edges": 3,
+            "min_support": 2
+          },
+          "description": "Pattern-mining configuration (knowledge-system K-R4).\n\nControls the deterministic motif-mining cron trigger.\n\n**Default: `enabled = false`.**  Mining is a new, potentially heavy\noperation; the operator must flip `enabled = true` explicitly.  A loud\nstatus note is emitted at every cron tick when disabled — this is\nintentionally visible, never silent."
+        },
+        "proposals": {
+          "$ref": "#/$defs/ProposalsConfig",
+          "default": {
+            "auto_materialize": true,
+            "sweep_cadence": "*/5 * * * *",
+            "sweep_cap": 64
+          },
+          "description": "Gated auto-materialization sweep settings (K-L4).\n\nWhen `auto_materialize = true` (the default), the daemon registers a cron\ntrigger that materializes every `Ready` proposal on `sweep_cadence`.\nSet `auto_materialize = false` to require explicit operator approval for\nevery landing — the `tdw.kg.proposals action=materialize` operator tool\nthen becomes the only landing path."
+        },
+        "rules": {
+          "$ref": "#/$defs/RulesConfig",
+          "default": {
+            "max_file_size_kb": null,
+            "max_files": null,
+            "max_total_rules": null,
+            "rules_dir": null
+          },
+          "description": "Auto-tagging rule-set configuration (knowledge-system K-L1).\n\nWhen absent (the default), no tag rules are loaded and the fact is\nlogged loudly at boot. When present, `rules_dir` must exist and\ncontain valid `*.json` rule files — a missing directory or malformed\nfile is a **hard `Init` error**."
+        },
+        "user": {
+          "$ref": "#/$defs/UserConfig",
+          "default": {
+            "id": "analyst"
+          },
+          "description": "Single-user identity for the finding tools (knowledge-system K-X6 + K-L5).\n\nDefaults to `id = \"analyst\"`. Override in `[knowledge.user]` in your\ndaemon TOML. K-L5 closed the host-binding gap: identity is now bound at\nconstruction time, never accepted from tool arguments."
+        },
+        "watchlists": {
+          "$ref": "#/$defs/WatchlistsConfig",
+          "default": {
+            "cadence": "*/15 * * * *",
+            "enabled": true
+          },
+          "description": "Knowledge watchlist change-detection settings (knowledge-system K-X5).\n\nControls the cron cadence at which the daemon checks active watchlists\nfor graph / tag changes and fires per-watch alerts.\n\n**Default: `enabled = true`, `cadence = \"*/15 * * * *\"` (every 15 min).**\nSet `enabled = false` to disable background change detection while\nkeeping the `tdw.kg.watch` / `tdw.kg.unwatch` / `tdw.kg.watchlist`\nMCP tools available for subscription management."
+        }
+      },
+      "type": "object"
+    },
+    "LessonsConfig": {
+      "description": "Lessons-as-proposals configuration (knowledge-system-2 K-R1).\n\nControls the cron-driven lesson-induction worker: it reads agent episodes\nfrom the graph, induces generalized behavioral lessons, and enqueues them as\nPROPOSALS through the B9 gate. Induced lessons NEVER write directly — they\npromote only through the agent's eval gate (`promote_for_agent`), fail-closed\non no eval data.\n\n# Important: enabled defaults to `false`\n\nLesson induction changes agent behavior (once a lesson promotes), so it is\nopt-in. The operator must set `enabled = true` in `[knowledge.lessons]`.\nWhen disabled, a loud status note is emitted at each tick — keyless/offline\ninstalls run the daemon unchanged.\n\n# Example TOML\n\n```toml\n[knowledge.lessons]\nenabled = true\ncadence = \"0 4 * * *\"     # nightly at 04:00\nmin_confidence = 0.7\nmax_episode_scan = 20000\n```",
+      "properties": {
+        "cadence": {
+          "default": "0 4 * * *",
+          "description": "5-field cron expression for the induction cadence.\n\nDefault: `\"0 4 * * *\"` (daily at 04:00 UTC).",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Whether the cron-driven lesson-induction pass is enabled.\n\n**Default: `false`.** Must be explicitly set to `true` by the operator.",
+          "type": "boolean"
+        },
+        "max_episode_scan": {
+          "default": 20000,
+          "description": "Maximum episode edges scanned per induction pass (bounds the work).\n\nDefault: `20 000`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_confidence": {
+          "default": 0.7,
+          "description": "Minimum observed success rate for an induced lesson to be PROPOSED.\n\nThis is the induction floor only; promotion is still governed by the\nagent's real eval gate. Default: `0.7`.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "ModelConfig": {
       "properties": {
@@ -71,6 +468,50 @@
       ],
       "type": "object"
     },
+    "PatternConfig": {
+      "description": "Pattern-mining configuration (knowledge-system K-R4).\n\n# Important: enabled defaults to `false`\n\nMining is a new, potentially heavy operation. The operator must explicitly\nset `enabled = true` in `[knowledge.patterns]` in the daemon TOML.  A loud\nstatus note is emitted at every cron tick when `enabled = false` — the\nsilence is a signal, not a no-op.\n\n# Example TOML\n\n```toml\n[knowledge.patterns]\nenabled = true\ncadence = \"0 2 * * *\"   # nightly at 02:00\nmin_support = 3\nmax_motif_edges = 2\n```",
+      "properties": {
+        "cadence": {
+          "default": "0 2 * * *",
+          "description": "5-field cron expression for the mining cadence.\n\nDefault: `\"0 2 * * *\"` (daily at 02:00 UTC).",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Whether the cron-driven motif-mining pass is enabled.\n\n**Default: `false`.**  Must be explicitly set to `true` by the operator.",
+          "type": "boolean"
+        },
+        "max_candidates": {
+          "default": 8000,
+          "description": "Maximum distinct candidate pairs examined across all motif sizes.\n\nExceeding this limit is a hard error. Default: 8 000.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_instance_scan": {
+          "default": 20000,
+          "description": "Maximum edge records scanned during instance counting.\n\nExceeding this limit is a hard error. Default: 20 000.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_motif_edges": {
+          "default": 3,
+          "description": "Maximum number of edge labels in one motif (1..=3).\n\nDefault: 3.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_support": {
+          "default": 2,
+          "description": "Minimum support count for a motif to be recorded.\n\nDefault: 2.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "PermissionAction": {
       "enum": [
         "Allow",
@@ -94,6 +535,29 @@
       ],
       "type": "object"
     },
+    "ProposalsConfig": {
+      "description": "Auto-materialization sweep settings for the gated proposal queue (K-L4).\n\nControls the autonomous cron sweep that lands `Ready` proposals without\noperator intervention. Default: **enabled** (`auto_materialize = true`).\n\n# Kill-switch\n\nSet `auto_materialize = false` to disable the sweep entirely. When the sweep\nis off, the **only** landing path is the operator `tdw.kg.proposals\naction=materialize` tool — human approval is then mandatory for every Ready\nproposal to reach the graph/tag engines.\n\n# Defaults\n\n```toml\n[knowledge.proposals]\nauto_materialize  = true        # fully autonomous within gates (default on)\nsweep_cadence     = \"*/5 * * * *\"  # every 5 minutes\nsweep_cap         = 64          # max proposals landed per sweep\n```\n\n# Example (opt-out)\n\n```toml\n[knowledge.proposals]\nauto_materialize = false   # human-approval-only mode\n```",
+      "properties": {
+        "auto_materialize": {
+          "default": true,
+          "description": "Enable the autonomous materialization sweep (default: `true`).\n\nWhen `true` the daemon registers a cron trigger that materializes every\n`Ready` proposal on `sweep_cadence`, sharing the same TOCTOU-safe core\nas the operator `materialize` action.\n\nWhen `false` the sweep is not registered and no proposal is ever landed\nwithout explicit operator approval. Status reports `disabled` for the\n`proposals/auto-materialize` freshness line.",
+          "type": "boolean"
+        },
+        "sweep_cadence": {
+          "default": "*/5 * * * *",
+          "description": "5-field cron expression for the materialization sweep cadence.\n\nDefault: `\"*/5 * * * *\"` (every 5 minutes).",
+          "type": "string"
+        },
+        "sweep_cap": {
+          "default": 64,
+          "description": "Maximum number of proposals the sweep lands in a single invocation.\n\nThe sweep processes proposals in deterministic (`BTreeMap` insertion) order\nand stops after landing `sweep_cap` of them. Proposals that were `Ready`\nbut not reached in this sweep will be landed on the next tick.\n\nDefault: `64`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ProtocolConfig": {
       "properties": {
         "max_event_bytes": {
@@ -111,6 +575,95 @@
       ],
       "type": "object"
     },
+    "RulesConfig": {
+      "description": "Auto-tagging rule-set configuration (knowledge-system K-L1).\n\n`rules_dir` is optional — absent means \"no rules loaded\"; the daemon logs\nthis loudly at boot so the operator knows auto-tagging AND inference are\ndisabled. When set, the directory must exist and every rule file must parse\ncorrectly; a nonexistent directory or malformed file is a **hard `Init`\nerror**, never a silent skip.\n\n# File-naming convention (K-L1)\n\nTwo distinct rule types live in separate files identified by their suffix:\n\n- **`*.tag.json`** — [`tdw_tag_rules::TagRule`] array; drives auto-tagging\n  via the `RuleEngine`. These run synchronously inside the indexer.\n- **`*.infer.json`** — [`tdw_infer::InferRule`] array (serde shapes\n  `DeriveEdge` / `PropagateTag` as documented in `tdw-infer`); drives\n  forward-chaining inference via the `InferEngine`. These fire after every\n  ingest batch via `run_incremental`.\n\nFiles with any other extension (e.g. plain `.json`) are **ignored** so\n`README.json` or schema files don't accidentally parse as rules. Lexicographic\nsort order within each group is deterministic.\n\n# Load limits\n\n`max_files`, `max_file_size_kb`, and `max_total_rules` cap the total rules\nloaded at boot and on every hot-reload tick. Exceeding any limit is a **hard\n`Init` error** at boot and a loud log + keep-old on reload.",
+      "properties": {
+        "max_file_size_kb": {
+          "default": null,
+          "description": "Maximum size of any single rule file in kilobytes. A hard `Init` error\n(or loud reload rejection) if any file exceeds this. Default: 256 KiB.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_files": {
+          "default": null,
+          "description": "Maximum number of rule files (tag + infer combined) permitted in the\ndirectory. A hard `Init` error (or loud reload rejection) beyond this.\nDefault: 64.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_total_rules": {
+          "default": null,
+          "description": "Maximum total number of rules (tag + infer combined) loaded from the\ndirectory. A hard `Init` error (or loud reload rejection) beyond this.\nDefault: 1 000.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rules_dir": {
+          "default": null,
+          "description": "Directory containing `*.tag.json` (tag rules) and `*.infer.json`\n(inference rules) files.  `None` disables all rule-driven derivation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ScheduledEvalConfig": {
+      "description": "Scheduled retrieval-eval settings for the in-daemon self-eval (K-L3).\n\nPlaced in `tdw-config` (not `tdw-eval-runner`) so operator TOML can configure\nit without creating a dependency cycle:\n`tdw-cron → tdw-worker → tdw-service-api → tdw-eval-runner → tdw-cron`.\n\nThe composition root (`tdw-backend`) converts this into a\n`tdw_eval_runner::scheduled_eval::ScheduledEvalConfig` at startup.\n\n# Example (`tdw.toml`)\n\n```toml\n[knowledge.evals]\nsplit_id = \"golden-split-v1\"\ncadence  = \"0 3 * * MON\"\nmax_recall_drop = 0.05\nmax_mrr_drop    = 0.05\nmax_ndcg_drop   = 0.05\n```",
+      "properties": {
+        "cadence": {
+          "default": "0 3 * * MON",
+          "description": "5-field cron expression for the eval cadence.\n\nDefault: `\"0 3 * * MON\"` (weekly, Monday 03:00 UTC).",
+          "type": "string"
+        },
+        "max_mrr_drop": {
+          "default": 0.05,
+          "description": "Maximum allowed absolute drop in MRR before a regression is declared.\nMust be in `[0.0, 1.0]`. Default: `0.05`.",
+          "format": "double",
+          "type": "number"
+        },
+        "max_ndcg_drop": {
+          "default": 0.05,
+          "description": "Maximum allowed absolute drop in mean nDCG\\@k before a regression is\ndeclared. Must be in `[0.0, 1.0]`. Default: `0.05`.",
+          "format": "double",
+          "type": "number"
+        },
+        "max_recall_drop": {
+          "default": 0.05,
+          "description": "Maximum allowed absolute drop in mean recall\\@k before a regression is\ndeclared. Must be in `[0.0, 1.0]`. Default: `0.05` (5 percentage points).",
+          "format": "double",
+          "type": "number"
+        },
+        "split_fixture_path": {
+          "default": null,
+          "description": "Filesystem path to the golden-split fixture file (JSON).\n\nMust point to a `GoldenSplitFixture` JSON object\n(`{ \"documents\": [...], \"cases\": [...], \"baseline\": <report>|null }`).\nWhen `None`, the daemon falls back to the fixture embedded in the\n`tdw-eval-runner` crate at `baselines/<split_id>.json`.\n\nA missing or unparseable file causes the eval worker to write\n`Stale` (no alarm) — a load error is a configuration problem, never\na retrieval regression.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "split_id": {
+          "default": null,
+          "description": "The `fixed_split_id` identifying which golden case set to run.\n\nWhen `None` or empty the daemon registers no cron trigger and status\nreports `Unconfigured` — loudly, not silently.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SessionConfig": {
       "properties": {
         "jsonl_archive": {
@@ -125,12 +678,139 @@
         "jsonl_archive"
       ],
       "type": "object"
+    },
+    "UserConfig": {
+      "description": "Single-user identity for the knowledge finding surface (knowledge-system K-X6).\n\nK-L5 closed the host-binding gap for the user (finding) surface: identity is\nbound at runtime construction from this config value and NEVER accepted as a\ntool argument. The id is validated at config load with the same grammar as\n`tdw_knowledge::proposals::validate_agent_id`: `[A-Za-z0-9:._-]+`, non-empty,\n≤ 128 bytes.\n\nSet `[knowledge.user] id = \"analyst\"` in your daemon TOML (default).",
+      "properties": {
+        "id": {
+          "default": "analyst",
+          "description": "The operator-configured user identity bound to the finding tools.\n\nGrammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.\nDefault: `\"analyst\"`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "WatchlistsConfig": {
+      "description": "Knowledge watchlist change-detection configuration (knowledge-system K-X5).\n\n# Example\n\n```toml\n[knowledge.watchlists]\nenabled = true\ncadence = \"*/15 * * * *\"\n```",
+      "properties": {
+        "cadence": {
+          "description": "Cron expression for the change-detection cadence.\n\nMust be a valid 5-field cron expression.  Invalid expressions fall back\nto `\"*/15 * * * *\"` with a loud log at daemon start.\n\nDefault: `\"*/15 * * * *\"` (every 15 minutes).",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Whether the background change-detection cron is registered at daemon\nstart. When `false`, watches can still be subscribed via MCP tools but\nno alert is ever fired automatically.\n\nDefault: `true`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "cadence"
+      ],
+      "type": "object"
+    },
+    "WorkerBackend": {
+      "enum": [
+        "Sqlite",
+        "Postgres"
+      ],
+      "type": "string"
+    },
+    "WorkerConfig": {
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/WorkerBackend"
+        },
+        "postgres_url_env": {
+          "type": "string"
+        },
+        "sqlite_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "sqlite_path",
+        "postgres_url_env"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "daemon": {
       "$ref": "#/$defs/DaemonConfig"
+    },
+    "knowledge": {
+      "$ref": "#/$defs/KnowledgeConfig",
+      "default": {
+        "agent": {
+          "id": "agent"
+        },
+        "contradiction": {
+          "extra_functional_rels": []
+        },
+        "embedding": {
+          "expected_dims": null,
+          "model": null,
+          "model_dir": null,
+          "provider": "hash"
+        },
+        "evals": {
+          "cadence": "0 3 * * MON",
+          "max_mrr_drop": 0.05,
+          "max_ndcg_drop": 0.05,
+          "max_recall_drop": 0.05,
+          "split_fixture_path": null,
+          "split_id": null
+        },
+        "feeds": {
+          "entries": []
+        },
+        "graph": {
+          "backend": "in-memory",
+          "bolt_db": "memgraph",
+          "bolt_password_env": "TDW_GRAPH_PASSWORD",
+          "bolt_uri": "bolt://127.0.0.1:7687",
+          "bolt_user": ""
+        },
+        "infer": {
+          "max_derived": null,
+          "max_iterations": null
+        },
+        "lessons": {
+          "cadence": "0 4 * * *",
+          "enabled": false,
+          "max_episode_scan": 20000,
+          "min_confidence": 0.7
+        },
+        "patterns": {
+          "cadence": "0 2 * * *",
+          "enabled": false,
+          "max_candidates": 8000,
+          "max_instance_scan": 20000,
+          "max_motif_edges": 3,
+          "min_support": 2
+        },
+        "proposals": {
+          "auto_materialize": true,
+          "sweep_cadence": "*/5 * * * *",
+          "sweep_cap": 64
+        },
+        "rules": {
+          "max_file_size_kb": null,
+          "max_files": null,
+          "max_total_rules": null,
+          "rules_dir": null
+        },
+        "user": {
+          "id": "analyst"
+        },
+        "watchlists": {
+          "cadence": "*/15 * * * *",
+          "enabled": true
+        }
+      },
+      "description": "Defaulted so pre-B6 config files keep deserializing unchanged."
     },
     "model": {
       "$ref": "#/$defs/ModelConfig"
@@ -149,6 +829,9 @@
     },
     "session": {
       "$ref": "#/$defs/SessionConfig"
+    },
+    "worker": {
+      "$ref": "#/$defs/WorkerConfig"
     }
   },
   "required": [
@@ -156,6 +839,7 @@
     "paths",
     "daemon",
     "session",
+    "worker",
     "permissions",
     "model",
     "protocol"

@@ -4,6 +4,7 @@
 pub mod extraction;
 pub mod feeds;
 pub mod indexer;
+pub mod lessons;
 pub mod proposals;
 pub mod reindex;
 pub mod runtime;

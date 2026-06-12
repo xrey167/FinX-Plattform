@@ -812,6 +812,15 @@ pub struct KgProposalCounts {
     /// Whether the runtime has OPERATOR authority (approve/reject/materialize
     /// actions enabled). A read-only agent-facing runtime reports `false`.
     pub operator_authority: bool,
+    /// Lessons (K-R1) enqueued but not yet materialized — proposed behavior
+    /// changes awaiting the eval gate. Additive: a subset view of the pending
+    /// annotation proposals carrying the lesson marker.
+    #[serde(default)]
+    pub pending_lessons: usize,
+    /// Lessons (K-R1) whose proposal materialized — installed, behavior-
+    /// influencing. Reported truthfully (only materialized lessons count).
+    #[serde(default)]
+    pub active_lessons: usize,
 }
 
 /// Snapshot of graph-backend health: name and a cheap reachability check.
@@ -1092,15 +1101,22 @@ impl KnowledgeRuntime {
                     validated: 0,
                     ready: 0,
                     operator_authority: self.operator_authority,
+                    pending_lessons: 0,
+                    active_lessons: 0,
                 },
                 |queue| {
                     // Single-pass exact count — not subject to LIST_PAGE caps.
                     let (draft, validated, ready) = queue.pending_counts_by_state();
+                    // K-R1: additive lesson counts (truthful — active counts
+                    // only materialized lessons).
+                    let lessons = queue.lesson_counts();
                     KgProposalCounts {
                         draft,
                         validated,
                         ready,
                         operator_authority: self.operator_authority,
+                        pending_lessons: lessons.pending,
+                        active_lessons: lessons.active,
                     }
                 },
             )
