@@ -13,11 +13,12 @@ use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
 use tdw_domain::StatementKind;
 use tdw_provider_fmp::{
-    FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpProfileFetcher,
-    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpScreenerFetcher,
-    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpStatement,
+    FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpAnalystEstimatesFetcher,
+    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpRatiosFetcher, FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpStatement,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -541,6 +542,179 @@ fn cassette_earnings_normalises_to_estimates() {
 }
 
 #[test]
+fn cassette_price_target_normalises_to_estimate() {
+    let fetcher = FmpHttpPriceTargetFetcher::default();
+    let query = FmpHttpPriceTargetFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "targetHigh": 300.0,
+            "targetLow": 150.0,
+            "targetConsensus": 240.0,
+            "targetMedian": 235.0
+        }
+    ]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+
+    assert_eq!(rows.len(), 1);
+    let r = &rows[0];
+    assert_eq!(r.symbol, "AAPL");
+    assert_eq!(r.kind, "price_target");
+    assert_eq!(r.value, Some(240.0));
+    assert_eq!(r.mean, Some(240.0));
+    assert_eq!(r.high, Some(300.0));
+    assert_eq!(r.low, Some(150.0));
+}
+
+#[test]
+fn cassette_price_target_falls_back_to_median_when_consensus_missing() {
+    let fetcher = FmpHttpPriceTargetFetcher::default();
+    let query = FmpHttpPriceTargetFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+
+    // No targetConsensus → value/mean fall back to targetMedian.
+    let raw = cassette_bytes!([
+        {"symbol": "AAPL", "targetHigh": 300.0, "targetLow": 150.0, "targetMedian": 235.0}
+    ]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].value, Some(235.0));
+    assert_eq!(rows[0].mean, Some(235.0));
+}
+
+#[test]
+fn cassette_price_target_empty_array_yields_no_rows() {
+    let fetcher = FmpHttpPriceTargetFetcher::default();
+    let query = FmpHttpPriceTargetFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let rows = fetcher
+        .transform_data(&query, cassette_bytes!([]))
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert!(rows.is_empty(), "empty array must yield no estimates");
+}
+
+#[test]
+fn price_target_malformed_json_produces_provider_error() {
+    let fetcher = FmpHttpPriceTargetFetcher::default();
+    let query = FmpHttpPriceTargetFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let err = fetcher
+        .transform_data(&query, Bytes::from(b"not json".to_vec()))
+        .expect_err("malformed JSON must error");
+    assert!(err.to_string().contains("fmp price_target parse_json"));
+}
+
+#[test]
+fn cassette_analyst_estimates_emits_forward_rows_per_period() {
+    let fetcher = FmpHttpAnalystEstimatesFetcher::default();
+    let query = FmpHttpAnalystEstimatesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+
+    // Two periods: the first carries all three forward metrics; the second omits
+    // EBITDA (null) so only forward_eps + forward_sales are emitted for it.
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "date": "2026-09-30",
+            "estimatedRevenueLow": 400.0,
+            "estimatedRevenueHigh": 440.0,
+            "estimatedRevenueAvg": 420.0,
+            "estimatedEpsLow": 6.0,
+            "estimatedEpsHigh": 7.0,
+            "estimatedEpsAvg": 6.5,
+            "estimatedEbitdaLow": 130.0,
+            "estimatedEbitdaHigh": 150.0,
+            "estimatedEbitdaAvg": 140.0,
+            "numberAnalystEstimatedRevenue": 30,
+            "numberAnalystsEstimatedEps": 28
+        },
+        {
+            "symbol": "AAPL",
+            "date": "2027-09-30",
+            "estimatedRevenueLow": 430.0,
+            "estimatedRevenueHigh": 470.0,
+            "estimatedRevenueAvg": 450.0,
+            "estimatedEpsLow": 6.5,
+            "estimatedEpsHigh": 7.5,
+            "estimatedEpsAvg": 7.0,
+            "estimatedEbitdaAvg": null
+        }
+    ]);
+
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+
+    // Period 1: eps + sales + ebitda = 3; period 2: eps + sales = 2 → 5 total.
+    assert_eq!(rows.len(), 5);
+
+    let eps = rows
+        .iter()
+        .find(|r| r.kind == "forward_eps" && r.fiscal_period.as_deref() == Some("2026-09-30"))
+        .expect("forward_eps row for 2026 period");
+    assert_eq!(eps.symbol, "AAPL");
+    assert_eq!(eps.value, Some(6.5));
+    assert_eq!(eps.mean, Some(6.5));
+    assert_eq!(eps.low, Some(6.0));
+    assert_eq!(eps.high, Some(7.0));
+    assert_eq!(eps.number_of_analysts, Some(28));
+
+    let sales = rows
+        .iter()
+        .find(|r| r.kind == "forward_sales" && r.fiscal_period.as_deref() == Some("2026-09-30"))
+        .expect("forward_sales row for 2026 period");
+    assert_eq!(sales.value, Some(420.0));
+    assert_eq!(sales.low, Some(400.0));
+    assert_eq!(sales.high, Some(440.0));
+    assert_eq!(sales.number_of_analysts, Some(30));
+
+    let ebitda = rows
+        .iter()
+        .find(|r| r.kind == "forward_ebitda" && r.fiscal_period.as_deref() == Some("2026-09-30"))
+        .expect("forward_ebitda row for 2026 period");
+    assert_eq!(ebitda.value, Some(140.0));
+
+    // The 2027 period had a null EBITDA avg → no forward_ebitda row emitted.
+    assert!(
+        !rows
+            .iter()
+            .any(|r| r.kind == "forward_ebitda" && r.fiscal_period.as_deref() == Some("2027-09-30")),
+        "missing EBITDA avg must not emit a forward_ebitda row"
+    );
+}
+
+#[test]
+fn cassette_analyst_estimates_empty_array_yields_no_rows() {
+    let fetcher = FmpHttpAnalystEstimatesFetcher::default();
+    let query = FmpHttpAnalystEstimatesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let rows = fetcher
+        .transform_data(&query, cassette_bytes!([]))
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert!(rows.is_empty(), "empty array must yield no estimates");
+}
+
+#[test]
+fn analyst_estimates_malformed_json_produces_provider_error() {
+    let fetcher = FmpHttpAnalystEstimatesFetcher::default();
+    let query = FmpHttpAnalystEstimatesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let err = fetcher
+        .transform_data(&query, Bytes::from(b"not json".to_vec()))
+        .expect_err("malformed JSON must error");
+    assert!(err.to_string().contains("fmp analyst_estimates parse_json"));
+}
+
+#[test]
 fn cassette_discovery_normalises_to_quote_snapshots() {
     let fetcher = FmpHttpDiscoveryFetcher::default();
     let query = FmpHttpDiscoveryFetcher::transform_query(json!({"direction": "gainers"}))
@@ -813,4 +987,42 @@ async fn live_fmp_profile_returns_data_when_env_var_set() {
     let rows = live_fetch_nonempty!(fetcher, query);
     assert!(!rows.is_empty(), "live profile must include an entry");
     assert_eq!(rows[0].ticker, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_price_target_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP price-target integration test");
+        return;
+    }
+
+    let fetcher = FmpHttpPriceTargetFetcher::default();
+    let query = FmpHttpPriceTargetFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live price-target must include an entry");
+    assert_eq!(rows[0].kind, "price_target");
+}
+
+#[tokio::test]
+async fn live_fmp_analyst_estimates_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP analyst-estimates integration test");
+        return;
+    }
+
+    let fetcher = FmpHttpAnalystEstimatesFetcher::default();
+    let query = FmpHttpAnalystEstimatesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(
+        !rows.is_empty(),
+        "live analyst-estimates must include a row"
+    );
+    assert!(
+        rows.iter().all(|r| r.kind.starts_with("forward_")),
+        "every analyst-estimate row must carry a forward_* kind"
+    );
 }

@@ -5,8 +5,9 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
+    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
+    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
     FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
     FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
 };
