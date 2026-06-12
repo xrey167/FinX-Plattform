@@ -13,8 +13,12 @@ license = "MIT OR Apache-2.0"
 doctest = false
 
 [dependencies]
+# Raw cron parser for ScheduledEvalConfig::validate() — does NOT pull in
+# tdw-cron (which would create a cycle via tdw-worker → tdw-service-api).
+cron = "0.16"
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tdw-agent = { path = "../tdw-agent" }
 tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-core = { workspace = true }
@@ -33,10 +37,13 @@ tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 local-model = ["tdw-embed-local/model"]
 
 [dev-dependencies]
+chrono = { workspace = true }
+tdw-cron = { path = "../tdw-cron" }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-kg = { path = "../tdw-kg" }
 tdw-llm-anthropic = { workspace = true }
-tokio = { workspace = true }
+tdw-protocol = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # Unique example binary name (the workspace builds examples into one shared
 # target dir, where a bare `basic` would collide across crates).

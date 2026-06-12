@@ -101,6 +101,10 @@ pub struct KnowledgeRuntime {
     /// `None` means findings are written to the graph but NOT indexed for
     /// retrieval — valid for write-only surfaces or graph-only deployments.
     finding_indexer: Option<Arc<std::sync::Mutex<KnowledgeIndexer>>>,
+    /// Live eval-freshness cell (K-L3). Shared with the scheduled eval worker,
+    /// which writes [`EvalFreshness`] after each run. `None` when no eval is
+    /// configured (status reports [`EvalFreshness::Unconfigured`]).
+    eval_freshness: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -125,6 +129,7 @@ impl KnowledgeRuntime {
             bound_agent_id: None,
             bound_user_id: None,
             finding_indexer: None,
+            eval_freshness: None,
         }
     }
 
@@ -321,6 +326,30 @@ impl KnowledgeRuntime {
     pub const fn finding_indexer(&self) -> Option<&Arc<std::sync::Mutex<KnowledgeIndexer>>> {
         self.finding_indexer.as_ref()
     }
+
+    /// Attach the eval-freshness cell (K-L3).
+    ///
+    /// The scheduled eval worker holds a clone of this `Arc` and writes the
+    /// updated [`EvalFreshness`] after each run.  The `status()` method reads
+    /// the cell to populate the `eval_freshness` field in [`KgStatus`].
+    ///
+    /// Pass a pre-constructed `Arc<tokio::sync::Mutex<EvalFreshness>>` so the
+    /// daemon can share ownership with the worker task without additional
+    /// wrapping.
+    #[must_use]
+    pub fn with_eval_freshness(mut self, cell: Arc<tokio::sync::Mutex<EvalFreshness>>) -> Self {
+        self.eval_freshness = Some(cell);
+        self
+    }
+
+    /// The eval-freshness cell, when attached.
+    ///
+    /// The scheduled eval worker uses this to write updated freshness after
+    /// each run.
+    #[must_use]
+    pub const fn eval_freshness_cell(&self) -> Option<&Arc<tokio::sync::Mutex<EvalFreshness>>> {
+        self.eval_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -337,7 +366,83 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("bound_agent_id", &self.bound_agent_id.is_some())
             .field("bound_user_id", &self.bound_user_id.is_some())
             .field("finding_indexer", &self.finding_indexer.is_some())
+            .field("eval_freshness", &self.eval_freshness.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// K-L3: eval-freshness / drift status (knowledge-system-2 K-L3)
+// ---------------------------------------------------------------------------
+
+/// Eval-freshness / drift status for `tdw.kg.status` (K-L3).
+///
+/// Surfaced as `eval_freshness` on [`KgStatus`] so operators see at a glance
+/// whether the last scheduled self-eval passed, regressed, or never ran.
+///
+/// The scheduled eval worker (in `tdw-eval-runner::scheduled_eval`) writes
+/// this after each run via the shared cell on [`KnowledgeRuntime`]. The type
+/// lives here (in `tdw-knowledge`) and is re-exported from `tdw-eval-runner`
+/// so there is no circular dependency.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum EvalFreshness {
+    /// No golden split is configured — the scheduler has nothing to run.
+    ///
+    /// Not a silent do-nothing: the status field explicitly says no eval is
+    /// scheduled, so operators notice quickly.
+    Unconfigured,
+
+    /// The scheduler is configured but has not run yet (no stored result).
+    Pending {
+        /// The split id the scheduler will run when it first fires.
+        split_id: String,
+    },
+
+    /// The last eval run passed all thresholds.
+    Green {
+        /// Epoch-ms timestamp of the last eval run (`now_ms` when it ran).
+        last_run_ms: i64,
+        /// The split id that was evaluated.
+        split_id: String,
+        /// Summary line from the last verdict.
+        summary: String,
+    },
+
+    /// The last eval run detected a metric regression beyond threshold.
+    Regressed {
+        /// Epoch-ms timestamp of the last eval run.
+        last_run_ms: i64,
+        /// The split id that was evaluated.
+        split_id: String,
+        /// Full summary from the regression verdict.
+        summary: String,
+        /// `true` when the baseline and current reports have different
+        /// drift-key values (embedder model, rules version, or infer version
+        /// changed between the baseline run and the current run).
+        ///
+        /// A metric drop that correlates with a key change is a *version
+        /// effect* rather than a code regression — this flag lets operators
+        /// distinguish the two causes without re-reading the raw report.
+        drift_key_changed: bool,
+    },
+
+    /// The last eval run itself failed (engine error or empty case set).
+    Stale {
+        /// Epoch-ms timestamp of the last attempt.
+        last_run_ms: i64,
+        /// The split id attempted.
+        split_id: String,
+        /// Error message.
+        error: String,
+    },
+}
+
+impl EvalFreshness {
+    /// Whether this status warrants an alert (regressed or stale).
+    #[must_use]
+    pub const fn is_alarm(&self) -> bool {
+        matches!(self, Self::Regressed { .. } | Self::Stale { .. })
     }
 }
 
@@ -442,6 +547,15 @@ pub struct KgStatus {
     /// Value is `"stub"` when no production LM is wired (eval feedback and
     /// auto-materialization disabled); `"production"` otherwise.
     pub language_model_grade: String,
+
+    // --- Retrieval eval freshness / drift (autonomy-gap#9, K-L3) ---
+    /// Live eval-freshness status from the scheduled self-eval (K-L3).
+    ///
+    /// Reports whether the last scheduled retrieval eval passed, regressed,
+    /// staled, or has never run (pending / unconfigured).  `Unconfigured` is
+    /// the honest loudly-visible default when no golden split is wired: the
+    /// scheduler runs nothing and this field says so explicitly.
+    pub eval_freshness: EvalFreshness,
 }
 
 impl KnowledgeRuntime {
@@ -526,6 +640,18 @@ impl KnowledgeRuntime {
                 "stub — eval feedback and auto-materialization disabled".to_string()
             };
 
+        // Eval-freshness (K-L3): read the shared cell if wired, else
+        // Unconfigured.  `try_lock` avoids blocking: if the eval worker is
+        // mid-write we report the last known state (or Unconfigured) rather
+        // than deadlocking the status handler.
+        let eval_freshness =
+            self.eval_freshness
+                .as_ref()
+                .map_or(EvalFreshness::Unconfigured, |cell| {
+                    cell.try_lock()
+                        .map_or(EvalFreshness::Unconfigured, |guard| guard.clone())
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -537,6 +663,7 @@ impl KnowledgeRuntime {
             versions: versions_snapshot,
             proposals,
             language_model_grade,
+            eval_freshness,
         }
     }
 }
@@ -692,5 +819,68 @@ mod status_tests {
         assert_eq!(counts.draft, 0, "no draft proposals");
         assert_eq!(counts.validated, 2, "two validated proposals");
         assert_eq!(counts.ready, 0, "none ready yet");
+    }
+
+    // ── K-L3: eval_freshness field ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn status_eval_freshness_unconfigured_when_no_cell_attached() {
+        let runtime = vector_only_runtime();
+        let status = runtime.status().await;
+        assert_eq!(
+            status.eval_freshness,
+            EvalFreshness::Unconfigured,
+            "no cell → Unconfigured"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_eval_freshness_reads_shared_cell() {
+        use std::sync::Arc;
+        let cell = Arc::new(tokio::sync::Mutex::new(EvalFreshness::Green {
+            last_run_ms: 1_749_297_600_000,
+            split_id: "golden-split-v1".to_string(),
+            summary: "OK on split".to_string(),
+        }));
+        let runtime = vector_only_runtime().with_eval_freshness(cell.clone());
+        let status = runtime.status().await;
+        assert!(
+            matches!(status.eval_freshness, EvalFreshness::Green { .. }),
+            "cell Green → status Green"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_eval_freshness_regressed_is_alarm() {
+        use std::sync::Arc;
+        let cell = Arc::new(tokio::sync::Mutex::new(EvalFreshness::Regressed {
+            last_run_ms: 1_749_297_600_000,
+            split_id: "golden-split-v1".to_string(),
+            summary: "REGRESSION on split".to_string(),
+            drift_key_changed: false,
+        }));
+        let runtime = vector_only_runtime().with_eval_freshness(cell);
+        let status = runtime.status().await;
+        assert!(
+            status.eval_freshness.is_alarm(),
+            "Regressed freshness must be an alarm"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_serializes_eval_freshness_field() {
+        let runtime = vector_only_runtime();
+        let status = runtime.status().await;
+        let json = serde_json::to_value(&status).expect("status serializes");
+        assert!(
+            json["eval_freshness"].is_object(),
+            "eval_freshness must be a JSON object; got: {}",
+            json["eval_freshness"]
+        );
+        assert_eq!(
+            json["eval_freshness"]["state"],
+            serde_json::Value::String("unconfigured".to_string()),
+            "default state must serialize as 'unconfigured'"
+        );
     }
 }

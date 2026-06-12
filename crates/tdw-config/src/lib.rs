@@ -192,8 +192,94 @@ impl Default for UserConfig {
     }
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-X6).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// Scheduled retrieval-eval settings for the in-daemon self-eval (K-L3).
+///
+/// Placed in `tdw-config` (not `tdw-eval-runner`) so operator TOML can configure
+/// it without creating a dependency cycle:
+/// `tdw-cron → tdw-worker → tdw-service-api → tdw-eval-runner → tdw-cron`.
+///
+/// The composition root (`tdw-backend`) converts this into a
+/// `tdw_eval_runner::scheduled_eval::ScheduledEvalConfig` at startup.
+///
+/// # Example (`tdw.toml`)
+///
+/// ```toml
+/// [knowledge.evals]
+/// split_id = "golden-split-v1"
+/// cadence  = "0 3 * * MON"
+/// max_recall_drop = 0.05
+/// max_mrr_drop    = 0.05
+/// max_ndcg_drop   = 0.05
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScheduledEvalConfig {
+    /// The `fixed_split_id` identifying which golden case set to run.
+    ///
+    /// When `None` or empty the daemon registers no cron trigger and status
+    /// reports `Unconfigured` — loudly, not silently.
+    #[serde(default)]
+    pub split_id: Option<String>,
+
+    /// 5-field cron expression for the eval cadence.
+    ///
+    /// Default: `"0 3 * * MON"` (weekly, Monday 03:00 UTC).
+    #[serde(default = "ScheduledEvalConfig::default_cadence")]
+    pub cadence: String,
+
+    /// Maximum allowed absolute drop in mean recall\@k before a regression is
+    /// declared. Must be in `[0.0, 1.0]`. Default: `0.05` (5 percentage points).
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_recall_drop: f64,
+
+    /// Maximum allowed absolute drop in MRR before a regression is declared.
+    /// Must be in `[0.0, 1.0]`. Default: `0.05`.
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_mrr_drop: f64,
+
+    /// Maximum allowed absolute drop in mean nDCG\@k before a regression is
+    /// declared. Must be in `[0.0, 1.0]`. Default: `0.05`.
+    #[serde(default = "ScheduledEvalConfig::default_threshold")]
+    pub max_ndcg_drop: f64,
+
+    /// Filesystem path to the golden-split fixture file (JSON).
+    ///
+    /// Must point to a `GoldenSplitFixture` JSON object
+    /// (`{ "documents": [...], "cases": [...], "baseline": <report>|null }`).
+    /// When `None`, the daemon falls back to the fixture embedded in the
+    /// `tdw-eval-runner` crate at `baselines/<split_id>.json`.
+    ///
+    /// A missing or unparseable file causes the eval worker to write
+    /// `Stale` (no alarm) — a load error is a configuration problem, never
+    /// a retrieval regression.
+    #[serde(default)]
+    pub split_fixture_path: Option<String>,
+}
+
+impl ScheduledEvalConfig {
+    fn default_cadence() -> String {
+        "0 3 * * MON".to_string()
+    }
+
+    const fn default_threshold() -> f64 {
+        0.05
+    }
+}
+
+impl Default for ScheduledEvalConfig {
+    fn default() -> Self {
+        Self {
+            split_id: None,
+            cadence: Self::default_cadence(),
+            max_recall_drop: Self::default_threshold(),
+            max_mrr_drop: Self::default_threshold(),
+            max_ndcg_drop: Self::default_threshold(),
+            split_fixture_path: None,
+        }
+    }
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
     pub embedding: EmbeddingConfig,
@@ -230,6 +316,14 @@ pub struct KnowledgeConfig {
     /// daemon TOML. Per-session identity arrives with K-L5.
     #[serde(default)]
     pub user: UserConfig,
+    /// Scheduled in-daemon retrieval self-eval (K-L3).
+    ///
+    /// When `split_id` is set, the daemon registers a cron trigger that runs a
+    /// golden-split regression test on the configured cadence and surfaces the
+    /// result as `eval_freshness` in `tdw.kg.status`.  When `split_id` is absent
+    /// (the default), no trigger is registered and status reports `Unconfigured`.
+    #[serde(default)]
+    pub evals: ScheduledEvalConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -405,7 +499,7 @@ impl Default for EmbeddingConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TdwConfig {
     pub profile: String,
     pub paths: PathsConfig,
@@ -474,6 +568,7 @@ impl TdwConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError::Validation`] describing the first invalid field.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<()> {
         use std::net::SocketAddr;
         use std::str::FromStr;
@@ -592,6 +687,53 @@ impl TdwConfig {
         }
 
         validate_knowledge(&self.knowledge)?;
+
+        // Scheduled eval: cadence must be a 5-field cron expression; thresholds
+        // must be in [0.0, 1.0].  Validation runs regardless of whether
+        // `split_id` is set so operators catch typos before enabling the eval.
+        let evals = &self.knowledge.evals;
+
+        // Cadence: exactly 5 whitespace-separated fields, each field containing
+        // only cron-legal characters ([0-9*/,\-?LWC#]).  A full semantic parse
+        // requires `tdw-cron` (which would introduce a dependency cycle here);
+        // this structural check catches the most common mistakes (wrong field
+        // count, stray characters) at config-load time.
+        {
+            let fields: Vec<&str> = evals.cadence.split_whitespace().collect();
+            if fields.len() != 5 {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.evals.cadence must be a 5-field cron expression \
+                     (e.g. \"0 3 * * MON\"), got {:?}",
+                    evals.cadence
+                )));
+            }
+            let legal: fn(char) -> bool = |c| {
+                c.is_ascii_digit()
+                    || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+            };
+            for field in &fields {
+                if field.chars().any(|c| !legal(c)) {
+                    return Err(ConfigError::Validation(format!(
+                        "knowledge.evals.cadence contains an invalid cron field {:?} \
+                         in expression {:?}",
+                        field, evals.cadence
+                    )));
+                }
+            }
+        }
+
+        // Regression thresholds must be in [0.0, 1.0].
+        for (name, value) in [
+            ("knowledge.evals.max_recall_drop", evals.max_recall_drop),
+            ("knowledge.evals.max_mrr_drop", evals.max_mrr_drop),
+            ("knowledge.evals.max_ndcg_drop", evals.max_ndcg_drop),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ConfigError::Validation(format!(
+                    "{name} must be in [0.0, 1.0], got {value}"
+                )));
+            }
+        }
 
         Ok(())
     }

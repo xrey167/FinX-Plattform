@@ -28,6 +28,8 @@ tdw-app-client = { path = "../tdw-app-client" }
 # Phase 2 — the sync agent/MCP facade compiles workflows and runs evals.
 tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# K-L3 — cron scheduling for the in-daemon self-eval worker.
+tdw-cron = { path = "../tdw-cron" }
 # Phase C1 — the eval runner now executes cases through a `LanguageModel`; the
 # backend injects the deterministic offline `StubLanguageModel` by default so
 # `run_eval` never hits the network.
@@ -138,6 +140,8 @@ path = "examples/learning_consumer.rs"
 tokio = { workspace = true }
 # Reused as the offline, deterministic test fetcher for fetch/stream coverage.
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
+# K-L3 integration tests: eval-runner types for the wiring proof tests.
+tdw-eval-runner = { path = "../tdw-eval-runner" }
 
 [lints]
 workspace = true

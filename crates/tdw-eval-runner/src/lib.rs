@@ -16,7 +16,9 @@
 //! retrieval-quality harness: fixed [`retrieval_eval::RetrievalEvalCase`] sets scored
 //! with recall\@k, MRR, and nDCG\@k, stamped with a [`retrieval_eval::DriftKey`].
 
+pub mod baseline_comparator;
 pub mod retrieval_eval;
+pub mod scheduled_eval;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
