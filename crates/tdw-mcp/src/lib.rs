@@ -762,10 +762,15 @@ impl McpServer {
         Some(messages)
     }
 
-    /// True when the feedback surface is available (knowledge-system B10): a
-    /// knowledge runtime is attached AND a feedback store handle is attached.
-    const fn knowledge_feedback_available(&self) -> bool {
-        self.knowledge.is_some() && self.feedback_store.is_some()
+    /// True when the feedback surface is available (knowledge-system B10 + K-L5):
+    /// a knowledge runtime with a **bound agent id** is attached AND a feedback
+    /// store handle is attached. The bound agent id requirement closes the K-L5
+    /// trust boundary: the tool is absent unless identity is host-bound.
+    fn knowledge_feedback_available(&self) -> bool {
+        self.knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.bound_agent_id().is_some())
+            && self.feedback_store.is_some()
     }
 
     /// True when the ingest surface is available (knowledge-system K-E3): a
