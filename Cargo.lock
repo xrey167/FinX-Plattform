@@ -5453,6 +5453,7 @@ dependencies = [
  "tdw-cron",
  "tdw-embed",
  "tdw-embed-local",
+ "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
  "tdw-llm",
