@@ -17,7 +17,7 @@ use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
 use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
-use tdw_config::{FeedsConfig, TdwConfig};
+use tdw_config::{FeedsConfig, TdwConfig, WatchlistsConfig};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -34,10 +34,12 @@ use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::feeds::{FeedFreshness, FeedSource, FixtureFeedSource};
 use tdw_knowledge::indexer::KnowledgeIndexer;
+use tdw_knowledge::runtime::WatchlistFreshness;
 use tdw_knowledge::runtime::{
     ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
 };
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
+use tdw_mcp::knowledge_watchlist_tools::{WatchlistStore, tick_watchlist_check};
 use tdw_outbox::InMemoryOutbox;
 use tdw_patterns::{MiningLimits, PatternEngine, PatternIndex};
 use tdw_protocol::{EventMsg, OpEnvelope};
@@ -82,6 +84,9 @@ struct DaemonHandle {
     /// The K-L6 scheduled feed tasks, one per enabled feed entry.
     /// Empty when no feeds are configured.
     feed_handles: Vec<tokio::task::JoinHandle<()>>,
+    /// The K-X5 knowledge watchlist change-detection cron task.
+    /// `None` when `knowledge.watchlists.enabled = false`.
+    watchlist_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -205,6 +210,22 @@ pub struct Backend {
     /// tasks; `shutdown()` does not need to touch them (the tasks observe
     /// the cancellation token and exit).
     feed_freshness_cells: Vec<Arc<tokio::sync::Mutex<FeedFreshness>>>,
+    /// K-X5 watchlist change-detection configuration, extracted from
+    /// `config.knowledge.watchlists` in [`Backend::from_config`]. Held here
+    /// so [`Backend::serve`] can register the cron trigger and spawn the
+    /// watchlist worker without a second round of config parsing.
+    watchlists_cfg: WatchlistsConfig,
+    /// The watchlist store (knowledge-system K-X5). Shared between the MCP
+    /// tools (`tdw.kg.watch` / `tdw.kg.unwatch` / `tdw.kg.watchlist`) and the
+    /// background cron task that runs change detection. Always present after
+    /// construction; starts empty.
+    watchlist_store: Arc<std::sync::Mutex<WatchlistStore>>,
+    /// Live watchlist-freshness cell (K-X5). Shared between the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the watchlist
+    /// cron task spawned in [`Backend::serve`] (write side: updated after each
+    /// tick). Always present after construction; starts as
+    /// [`WatchlistFreshness::default`].
+    watchlist_freshness: Arc<std::sync::Mutex<WatchlistFreshness>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -243,6 +264,8 @@ impl Backend {
         let proposals_cfg = config.knowledge.proposals.clone();
         // K-L6: extract feeds config before `config` is consumed.
         let feeds_cfg = config.knowledge.feeds.clone();
+        // K-X5: extract watchlists config before `config` is consumed.
+        let watchlists_cfg = config.knowledge.watchlists.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -388,6 +411,15 @@ impl Backend {
         for cell in &feed_freshness_cells {
             knowledge_runtime = knowledge_runtime.with_feed_freshness(Arc::clone(cell));
         }
+        // K-X5: build the watchlist store and freshness cell before Arc-wrapping
+        // the runtime so the cell can be attached via with_watchlist_freshness.
+        let watchlist_store = Arc::new(std::sync::Mutex::new(
+            tdw_mcp::knowledge_watchlist_tools::load_store_from_env(),
+        ));
+        let watchlist_freshness_cell =
+            Arc::new(std::sync::Mutex::new(WatchlistFreshness::default()));
+        knowledge_runtime =
+            knowledge_runtime.with_watchlist_freshness(Arc::clone(&watchlist_freshness_cell));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -413,6 +445,9 @@ impl Backend {
             proposals_cfg,
             feeds_cfg,
             feed_freshness_cells,
+            watchlists_cfg,
+            watchlist_store,
+            watchlist_freshness: watchlist_freshness_cell,
             daemon: None,
         })
     }
@@ -472,6 +507,9 @@ impl Backend {
             proposals_cfg: ProposalsCfg::default(),
             feeds_cfg: FeedsConfig::default(),
             feed_freshness_cells: Vec::new(),
+            watchlists_cfg: WatchlistsConfig::default(),
+            watchlist_store: Arc::new(std::sync::Mutex::new(WatchlistStore::new())),
+            watchlist_freshness: Arc::new(std::sync::Mutex::new(WatchlistFreshness::default())),
             daemon: None,
         }
     }
@@ -695,6 +733,16 @@ impl Backend {
             None, // use production cron_tick
         );
 
+        // K-X5 — spawn the watchlist change-detection cron task when enabled.
+        let watchlist_task = spawn_watchlist_task(
+            &self.watchlists_cfg,
+            Arc::clone(&self.watchlist_store),
+            Arc::clone(&self.graph),
+            self.runtime.tags().cloned(),
+            Arc::clone(&self.watchlist_freshness),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
@@ -705,6 +753,7 @@ impl Backend {
             auto_mat_task,
             pattern_mining_task,
             feed_handles,
+            watchlist_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -775,6 +824,12 @@ impl Backend {
             feed_task.abort();
             let _ = feed_task.await;
         }
+        // K-X5: The watchlist cron task observes the same token; abort if it
+        // lingers so shutdown stays bounded.
+        if let Some(watchlist_task) = daemon.watchlist_task {
+            watchlist_task.abort();
+            let _ = watchlist_task.await;
+        }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
         daemon.transport_task.abort();
@@ -816,6 +871,28 @@ impl Backend {
     #[must_use]
     pub fn consolidation_freshness_cell(&self) -> Arc<Mutex<ConsolidationFreshness>> {
         Arc::clone(&self.consolidation_freshness)
+    }
+
+    /// The shared watchlist store (K-X5).
+    ///
+    /// Pass this to [`tdw_mcp::McpServer::with_watchlist_store`] to expose the
+    /// `tdw.kg.watch` / `tdw.kg.unwatch` / `tdw.kg.watchlist` tools to
+    /// connected agents. The `Arc<std::sync::Mutex<WatchlistStore>>` is shared
+    /// with the background cron task that runs change detection.
+    #[must_use]
+    pub fn watchlist_store_handle(&self) -> Arc<std::sync::Mutex<WatchlistStore>> {
+        Arc::clone(&self.watchlist_store)
+    }
+
+    /// The shared watchlist-freshness cell (K-X5).
+    ///
+    /// The watchlist cron task writes this after every tick;
+    /// [`KnowledgeRuntime::status`] reads it to populate
+    /// `tdw.kg.status.watchlist_status`. Always `Some` after construction;
+    /// starts as [`WatchlistFreshness::default`] until the first tick fires.
+    #[must_use]
+    pub fn watchlist_freshness_cell(&self) -> Arc<std::sync::Mutex<WatchlistFreshness>> {
+        Arc::clone(&self.watchlist_freshness)
     }
 
     /// Replace the feedback store with a host-supplied handle (builder pattern).
@@ -2348,6 +2425,111 @@ impl FeedIngestHandle {
 /// `throttled_until_ms` to the next cron slot (behavioral backoff). Resets on
 /// success. Both branches are symmetric.
 ///
+/// Spawn the knowledge watchlist change-detection cron task (K-X5).
+///
+/// When `cfg.enabled = false` returns `None`; no trigger is registered and
+/// no background work is spawned. A loud log is emitted at daemon start so
+/// operators see the disabled state explicitly.
+///
+/// The task follows the same loop structure as `spawn_eval_worker`:
+/// 1. Sleep for one `cron_tick` interval.
+/// 2. Call `due_triggers` against a `ScheduleRegistry` with the watchlist
+///    cadence trigger.
+/// 3. On fire: call `tick_watchlist_check` (injected-now path).
+/// 4. Update the shared freshness cell (written by `tick_watchlist_check`).
+fn spawn_watchlist_task(
+    cfg: &WatchlistsConfig,
+    store: Arc<std::sync::Mutex<WatchlistStore>>,
+    graph: Arc<dyn GraphEngine>,
+    tags: Option<Arc<dyn TagEngine>>,
+    freshness: Arc<std::sync::Mutex<WatchlistFreshness>>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] knowledge watchlists: change-detection disabled \
+             (knowledge.watchlists.enabled = false); subscribe via tdw.kg.watch \
+             but no alert will fire automatically"
+        );
+        return None;
+    }
+
+    let schedule = CronSchedule::parse(&cfg.cadence).unwrap_or_else(|_| {
+        eprintln!(
+            "[tdw] knowledge watchlists: invalid cadence {:?}; \
+             falling back to \"*/15 * * * *\"",
+            cfg.cadence
+        );
+        CronSchedule::parse("*/15 * * * *").expect("fallback parse")
+    });
+
+    let trigger_id = "tdw-watchlist-check".to_string();
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-watchlist-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "watchlist-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: trigger_id,
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-watchlist".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            let fired =
+                tick_watchlist_check(&store, &graph, tags.as_ref(), now_ms, &freshness).await;
+            if fired > 0 {
+                eprintln!("[tdw] knowledge watchlists: {fired} alert(s) fired this tick");
+            }
+        }
+    });
+    Some(task)
+}
+
 /// Returns join handles for all spawned tasks (one per enabled feed).
 ///
 /// `tick_override` lets tests inject a short poll interval without touching

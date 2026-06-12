@@ -732,6 +732,52 @@ pub struct KnowledgeConfig {
     /// and a loud status note (the K-L3 zero-config honesty posture).
     #[serde(default)]
     pub feeds: FeedsConfig,
+    /// Knowledge watchlist change-detection settings (knowledge-system K-X5).
+    ///
+    /// Controls the cron cadence at which the daemon checks active watchlists
+    /// for graph / tag changes and fires per-watch alerts.
+    ///
+    /// **Default: `enabled = true`, `cadence = "*/15 * * * *"` (every 15 min).**
+    /// Set `enabled = false` to disable background change detection while
+    /// keeping the `tdw.kg.watch` / `tdw.kg.unwatch` / `tdw.kg.watchlist`
+    /// MCP tools available for subscription management.
+    #[serde(default)]
+    pub watchlists: WatchlistsConfig,
+}
+
+/// Knowledge watchlist change-detection configuration (knowledge-system K-X5).
+///
+/// # Example
+///
+/// ```toml
+/// [knowledge.watchlists]
+/// enabled = true
+/// cadence = "*/15 * * * *"
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WatchlistsConfig {
+    /// Whether the background change-detection cron is registered at daemon
+    /// start. When `false`, watches can still be subscribed via MCP tools but
+    /// no alert is ever fired automatically.
+    ///
+    /// Default: `true`.
+    pub enabled: bool,
+    /// Cron expression for the change-detection cadence.
+    ///
+    /// Must be a valid 5-field cron expression.  Invalid expressions fall back
+    /// to `"*/15 * * * *"` with a loud log at daemon start.
+    ///
+    /// Default: `"*/15 * * * *"` (every 15 minutes).
+    pub cadence: String,
+}
+
+impl Default for WatchlistsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cadence: "*/15 * * * *".to_string(),
+        }
+    }
 }
 
 /// Contradiction-driven temporal invalidation settings (knowledge-system K-M4).
