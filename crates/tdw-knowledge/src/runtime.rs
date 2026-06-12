@@ -129,6 +129,11 @@ pub struct KnowledgeRuntime {
     /// `None` when the question scheduler is not running (status field omitted
     /// from JSON so agents see the absence explicitly).
     questions_freshness: Option<Arc<std::sync::Mutex<QuestionsFreshness>>>,
+    /// Live extraction-freshness cell (K-M1). Shared with the `KnowledgeIndexer`
+    /// (via the composition root) which writes [`ExtractionFreshness`] after
+    /// each extraction batch. `None` when the extraction stage is not wired
+    /// (`[knowledge.extraction] enabled = false` or no production-grade model).
+    extraction_freshness: Option<Arc<std::sync::Mutex<crate::ExtractionFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -159,6 +164,7 @@ impl KnowledgeRuntime {
             feed_freshness_cells: Vec::new(),
             watchlist_freshness: None,
             questions_freshness: None,
+            extraction_freshness: None,
         }
     }
 
@@ -501,6 +507,34 @@ impl KnowledgeRuntime {
     ) -> Option<&Arc<std::sync::Mutex<QuestionsFreshness>>> {
         self.questions_freshness.as_ref()
     }
+
+    /// Attach the LLM extraction-freshness cell (K-M1).
+    ///
+    /// Pass an `Arc<std::sync::Mutex<ExtractionFreshness>>` constructed by the
+    /// composition root (`tdw-backend`) so the `KnowledgeIndexer`'s extraction
+    /// stage and `tdw.kg.status` share the same live cell.
+    ///
+    /// When absent the `extraction_freshness` field is omitted from the status
+    /// JSON — explicit absence (not silent zero) so operators see the gap.
+    #[must_use]
+    pub fn with_extraction_freshness(
+        mut self,
+        cell: Arc<std::sync::Mutex<crate::ExtractionFreshness>>,
+    ) -> Self {
+        self.extraction_freshness = Some(cell);
+        self
+    }
+
+    /// The extraction-freshness cell, when attached.
+    ///
+    /// The `KnowledgeIndexer` writes [`ExtractionFreshness`] after each
+    /// extraction batch via this handle.
+    #[must_use]
+    pub const fn extraction_freshness_cell(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<crate::ExtractionFreshness>>> {
+        self.extraction_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -527,6 +561,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
                 &self.auto_materialize_freshness.is_some(),
             )
             .field("feed_freshness_cells", &self.feed_freshness_cells.len())
+            .field("extraction_freshness", &self.extraction_freshness.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -982,6 +1017,21 @@ pub struct KgStatus {
     /// candidate-match alerts fired since daemon start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions_status: Option<QuestionsFreshness>,
+    // --- LLM extraction-as-proposals (K-M1) ---
+    /// Live LLM extraction-as-proposals freshness snapshot (K-M1).
+    ///
+    /// `None` when the extraction stage is not wired (`[knowledge.extraction]
+    /// enabled = false`, the default, or no production-grade model available).
+    /// When present, carries the last-batch entity/relation enqueue counts,
+    /// tokens consumed, and remaining daily budget.
+    ///
+    /// The differentiator: `Disabled` with reason `"stub model"` means a
+    /// production-grade LLM is NOT wired — the deterministic pipeline runs
+    /// unchanged.  `Disabled` with reason `"enabled = false"` means the
+    /// operator has explicitly opted out.  Either way the field is loud so
+    /// operators see the gap without reading silence as "healthy".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extraction_freshness: Option<crate::ExtractionFreshness>,
 }
 
 impl KnowledgeRuntime {
@@ -1156,6 +1206,18 @@ impl KnowledgeRuntime {
                     Err(std::sync::TryLockError::WouldBlock) => QuestionsFreshness::default(),
                 });
 
+        // Extraction freshness (K-M1): read the shared cell if wired, else None.
+        // `try_lock` avoids blocking: if the indexer is mid-extraction we return
+        // the last known state rather than deadlocking the status handler.
+        let extraction_freshness =
+            self.extraction_freshness
+                .as_ref()
+                .map(|cell| match cell.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
+                    Err(std::sync::TryLockError::WouldBlock) => crate::ExtractionFreshness::Pending,
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1178,6 +1240,7 @@ impl KnowledgeRuntime {
             feed_note,
             watchlist_status,
             questions_status,
+            extraction_freshness,
         }
     }
 }

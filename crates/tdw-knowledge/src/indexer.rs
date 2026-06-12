@@ -9,6 +9,16 @@
 //! nodes carry `props.{as_of, plane}` — the fields the retriever's
 //! `document_visible` gate filters on. Undated documents get NO `as_of` prop
 //! and stay invisible to temporal queries by construction.
+//!
+//! ## K-M1: LLM extraction-as-proposals
+//!
+//! [`KnowledgeIndexer::with_extraction`] attaches an optional [`ExtractionStage`].
+//! When attached AND the wired model's `is_production_grade()` returns `true`,
+//! the stage runs **after** the deterministic pipeline (manifest check, auto-tag,
+//! vector + graph stamp) and submits extracted entities/relations as B9 proposals.
+//! Extraction is **additive** — it never blocks or replaces the deterministic
+//! path.  Keyless installs (no `ExtractionStage` attached, or stub model) execute
+//! the full deterministic pipeline unchanged.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -24,8 +34,8 @@ use tdw_news_compose::Article;
 use tdw_tag_rules::{EntityContext, NeighborView, RuleEngine};
 
 use crate::{
-    KnowledgeDocument, KnowledgeError, KnowledgeIndex, Result, document_payload, is_date,
-    validate_document,
+    KnowledgeDocument, KnowledgeError, KnowledgeIndex, Result, document_payload,
+    extraction::ExtractionStage, is_date, validate_document,
 };
 
 /// What `index_at` did with a document.
@@ -141,16 +151,29 @@ pub fn content_hash(document: &KnowledgeDocument) -> String {
 
 /// The ingestion indexer: a [`KnowledgeIndex`] plus the B5 write-side
 /// concerns. Channels are optional exactly like the retriever's read side.
+///
+/// The optional K-M1 [`ExtractionStage`] runs after the deterministic pipeline
+/// (manifest → auto-tag → vector+graph). It is absent by default; attach one
+/// via [`with_extraction`](Self::with_extraction) in production wiring.
 pub struct KnowledgeIndexer {
     index: KnowledgeIndex,
     rules: RuleEngine,
     manifest: IndexManifest,
     lexical: Option<(Arc<dyn LexicalEngine>, String)>,
     graph: Option<Arc<dyn GraphEngine>>,
+    /// Optional LLM extraction stage (K-M1). `None` = deterministic-only mode
+    /// (default; keyless installs, stub model). When `Some`, the stage runs
+    /// after the deterministic pipeline and submits extracted facts as B9
+    /// proposals. Never blocks or replaces the deterministic path.
+    extraction: Option<ExtractionStage>,
 }
 
 impl KnowledgeIndexer {
     /// Wrap an index; no rules, empty manifest, no extra channels.
+    ///
+    /// Extraction stage is absent by default — the full deterministic lexical/rule
+    /// pipeline runs unchanged.  Attach a production-grade stage via
+    /// [`with_extraction`](Self::with_extraction).
     #[must_use]
     pub fn new(index: KnowledgeIndex) -> Self {
         Self {
@@ -159,7 +182,49 @@ impl KnowledgeIndexer {
             manifest: IndexManifest::default(),
             lexical: None,
             graph: None,
+            extraction: None,
         }
+    }
+
+    /// Attach the optional K-M1 LLM extraction stage.
+    ///
+    /// The stage runs **after** the deterministic pipeline (manifest, auto-tag,
+    /// vector + graph) and submits extracted facts as B9 proposals.  It is
+    /// **additive** — it never blocks or replaces the deterministic path.
+    ///
+    /// The stage gate is enforced internally: if the wired model's
+    /// `is_production_grade()` returns `false`, every call to `extract_and_propose`
+    /// returns `Ok(None)` without touching the proposal queue.
+    ///
+    /// Call once at composition root (after `with_graph`, because the stage
+    /// needs the durable-graph handle to satisfy the B9 endpoint validator for
+    /// `document:<id>` nodes written by the deterministic path).
+    ///
+    /// When extraction is disabled (`[knowledge.extraction] enabled = false` or
+    /// no production-grade model available), simply do not call this method —
+    /// the indexer operates in deterministic-only mode with a loud status note
+    /// emitted by the daemon at boot.
+    #[must_use]
+    pub fn with_extraction(mut self, stage: ExtractionStage) -> Self {
+        self.extraction = Some(stage);
+        self
+    }
+
+    /// Whether the K-M1 extraction stage is attached.
+    #[must_use]
+    pub const fn has_extraction(&self) -> bool {
+        self.extraction.is_some()
+    }
+
+    /// Whether the attached extraction stage is currently active (production
+    /// model wired AND daily budget not yet exhausted).
+    ///
+    /// Returns `false` when no stage is attached.
+    #[must_use]
+    pub fn extraction_is_active(&self) -> bool {
+        self.extraction
+            .as_ref()
+            .is_some_and(ExtractionStage::is_active)
     }
 
     /// Attach the auto-tagging rule engine.
@@ -302,6 +367,46 @@ impl KnowledgeIndexer {
         }
 
         self.manifest.record(&document.id, &hash, now);
+
+        // K-M1: optional LLM extraction stage — runs AFTER the deterministic
+        // pipeline.  Extraction is additive: any error is logged and swallowed
+        // here so extraction NEVER propagates into the deterministic result.
+        // The document node `document:<id>` has been written by `write_durable_graph`
+        // above (when a graph is attached), so the B9 endpoint validator can
+        // find it when validating Annotation proposals.
+        if let Some(stage) = self.extraction.as_mut() {
+            if stage.is_active() {
+                match stage
+                    .extract_and_propose(&document.id, &document.body, now)
+                    .await
+                {
+                    Ok(Some(result)) if result.budget_exhausted => {
+                        eprintln!(
+                            "[tdw.kg.extraction] budget exhausted after doc {}; \
+                             extraction stage disabled for remainder of today",
+                            document.id
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!(
+                            "[tdw.kg.extraction] doc {}: extraction error (non-fatal): {error}",
+                            document.id
+                        );
+                    }
+                }
+            } else if !stage.is_active() && stage.budget().daily_token_budget > 0 {
+                // Stub-gated: model is not production-grade — log once at first
+                // document so operators know extraction is off.
+                eprintln!(
+                    "[tdw.kg.extraction] extraction stage present but model is not \
+                     production-grade (is_production_grade() = false); \
+                     deterministic pipeline runs unchanged — \
+                     set a production-grade LLM in [knowledge.extraction] to enable"
+                );
+            }
+        }
+
         Ok(IndexOutcome::Indexed)
     }
 
