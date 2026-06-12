@@ -9,17 +9,24 @@
 //! graph, tags, retrieval, agents, MCP) can depend on one taxonomy without cycles.
 //! `tdw-agent` re-exports these types from their original module paths, so existing
 //! consumers keep compiling unchanged.
+//!
+//! K-M4: the [`functional_predicates`] module adds the functional-predicate metadata
+//! surface used by contradiction-driven temporal invalidation.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 
 pub mod facets;
+pub mod functional_predicates;
 pub mod kind;
 pub mod origin;
 
 pub use facets::{
     Adaptivity, DataFacets, EvalFacets, Materialization, OpsMetrics, Plane, ValidationState,
     ValidationStatus,
+};
+pub use functional_predicates::{
+    FunctionalPredicateSet, TAXONOMY_DEFAULTS, validate_functional_rel,
 };
 pub use kind::{EntityKind, Group};
 pub use origin::{Origin, Source, Tier};

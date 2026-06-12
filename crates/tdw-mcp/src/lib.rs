@@ -190,6 +190,14 @@ pub struct McpServer {
     /// inference. `None` keeps inference off — safe to omit for read-only or
     /// test deployments.
     infer_engine: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    /// Optional contradiction detector (knowledge-system K-M4).
+    ///
+    /// When attached, fires after each ingest batch and after each
+    /// `tdw.kg.proposals materialize` to close superseded functional-predicate
+    /// edges before inference runs.  `None` keeps contradiction detection off —
+    /// safe to omit for read-only or test deployments where the full daemon
+    /// does not boot.
+    contradiction_detector: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
 }
 
 impl Default for McpServer {
@@ -208,6 +216,7 @@ impl Default for McpServer {
             feedback_store: None,
             indexer: None,
             infer_engine: None,
+            contradiction_detector: None,
         }
     }
 }
@@ -234,6 +243,7 @@ impl McpServer {
             feedback_store: None,
             indexer: None,
             infer_engine: None,
+            contradiction_detector: None,
         }
     }
 
@@ -334,6 +344,24 @@ impl McpServer {
     #[must_use]
     pub fn with_infer_engine(mut self, infer: Arc<tokio::sync::Mutex<InferEngine>>) -> Self {
         self.infer_engine = Some(infer);
+        self
+    }
+
+    /// Attach the contradiction detector (knowledge-system K-M4).
+    ///
+    /// When attached, fires after each ingest batch and after each
+    /// `tdw.kg.proposals materialize` to close superseded functional-predicate
+    /// edges BEFORE inference runs (so inference always sees a consistent graph).
+    /// The `graph` is sourced from the attached [`KnowledgeRuntime`] — it must
+    /// be present for the detector to fire.
+    /// `None` skips contradiction detection (safe for read-only deployments).
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_contradiction_detector(
+        mut self,
+        detector: Arc<tdw_infer::contradiction::ContradictionDetector>,
+    ) -> Self {
+        self.contradiction_detector = Some(detector);
         self
     }
 
@@ -745,20 +773,32 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
-        let messages =
-            match knowledge_write_tools::execute(runtime, infer_ctx, name, &arguments_object) {
-                Ok(ToolExecution { structured, .. }) => {
-                    vec![success_message(id, &tool_result(&structured))]
-                }
-                Err(ToolFailure::Execution(message)) => {
-                    vec![success_message(id, &tool_error_result(&message))]
-                }
-                Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                    problem
-                        .with_id(id.clone())
-                        .with_data(json!({ "tool": name })),
-                )],
-            };
+        // K-M4: pass the optional contradiction detector so the `materialize`
+        // action can close superseded functional-predicate edges before inference.
+        let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            Some((Arc::clone(det), graph))
+        });
+        let messages = match knowledge_write_tools::execute(
+            runtime,
+            infer_ctx,
+            contradiction_ctx,
+            name,
+            &arguments_object,
+        ) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 
@@ -813,9 +853,20 @@ impl McpServer {
             let tags = rt.tags()?.clone();
             Some((Arc::clone(infer), graph, tags))
         });
+        // K-M4: contradiction context — detector + graph.  Present only when
+        // the detector is attached AND the knowledge runtime exposes a graph.
+        let contradiction_ctx = self.contradiction_detector.as_ref().and_then(|det| {
+            let rt = self.knowledge.as_ref()?;
+            let graph = rt.graph()?.clone();
+            Some((Arc::clone(det), graph))
+        });
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match knowledge_ingest_tools::execute(indexer, infer_ctx, &arguments_object)
-        {
+        let messages = match knowledge_ingest_tools::execute(
+            indexer,
+            infer_ctx,
+            contradiction_ctx,
+            &arguments_object,
+        ) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
@@ -1170,6 +1221,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1190,6 +1242,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(infer_engine) = infer {
         base.with_infer_engine(infer_engine)
+    } else {
+        base
+    };
+    let base = if let Some(detector) = contradiction {
+        base.with_contradiction_detector(detector)
     } else {
         base
     };
@@ -1702,6 +1759,7 @@ pub fn run_streamable_http_with_knowledge(
     feedback: Option<Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
+    contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1743,6 +1801,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(infer_engine) = infer {
         base.with_infer_engine(infer_engine)
+    } else {
+        base
+    };
+    let base = if let Some(detector) = contradiction {
+        base.with_contradiction_detector(detector)
     } else {
         base
     };

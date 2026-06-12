@@ -39,6 +39,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use tdw_core::GraphEngine;
+use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine};
 use tdw_knowledge::indexer::{IndexOutcome, KnowledgeIndexer};
 use tdw_knowledge::{KnowledgeDocument, validate_document};
@@ -56,6 +57,10 @@ pub type InferCtx = (
     Arc<dyn GraphEngine>,
     Arc<dyn TagEngine>,
 );
+
+/// Contradiction context: the detector plus the graph it checks against.
+/// Kept as a separate type so it can be `None` in deployments without K-M4.
+pub type ContradictionCtx = (Arc<ContradictionDetector>, Arc<dyn GraphEngine>);
 
 /// The name this module owns.
 pub const TOOL_NAME: &str = "tdw.kg.ingest";
@@ -178,6 +183,11 @@ pub fn descriptor() -> ToolDescriptor {
 /// Inference errors are logged and never surfaced to the caller (inference
 /// is best-effort; the batch is already durable).
 ///
+/// When `contradiction_ctx` is `Some` (K-M4), the contradiction detector
+/// fires after the batch so functional-predicate conflicts discovered via
+/// the ingest path are invalidated before inference runs. Best-effort —
+/// errors are logged, never surfaced.
+///
 /// # Errors
 ///
 /// Returns [`ToolFailure::Execution`] if the `documents` field is
@@ -186,6 +196,7 @@ pub fn descriptor() -> ToolDescriptor {
 pub fn execute(
     indexer: &Arc<Mutex<KnowledgeIndexer>>,
     infer_ctx: Option<InferCtx>,
+    contradiction_ctx: Option<ContradictionCtx>,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
     let raw_docs = arguments
@@ -285,6 +296,17 @@ pub fn execute(
         .filter(|item| item["outcome"] == "error")
         .count();
 
+    // K-M4: fire contradiction detection after the batch when at least one
+    // document landed. The detector scans for functional-predicate conflicts
+    // introduced by the newly-landed edges and closes superseded validity
+    // windows BEFORE inference fires (so inference sees the corrected graph).
+    // Best-effort — errors are logged loudly and never surfaced.
+    if landed > 0
+        && let Some(ctx) = contradiction_ctx
+    {
+        fire_contradiction_after_ingest(ctx, now);
+    }
+
     // K-L1: fire incremental inference after the batch when at least one
     // document landed and the inference context is wired up. Inference is
     // best-effort — errors are logged loudly and never surfaced to the caller
@@ -327,6 +349,37 @@ fn validate_doc_caps(docs: &[KnowledgeDocument]) -> Result<(), ToolFailure> {
         }
     }
     Ok(())
+}
+
+/// Fire contradiction detection after a successful ingest batch (K-M4).
+///
+/// Scans every edge of every functional predicate in the detector's set for
+/// active conflicts introduced by this batch.  Superseded edges are closed in
+/// the graph via [`ContradictionDetector::scan_all_functional`] which uses the
+/// atomic `replace_edges` path (history preserved).  Conflicts with
+/// user/manual edges are logged loudly but not auto-resolved.
+///
+/// Best-effort: errors are logged to stderr and never surfaced — the batch is
+/// already durable at this point.
+fn fire_contradiction_after_ingest(ctx: ContradictionCtx, now: &str) {
+    let (detector, graph) = ctx;
+    let result = block_on(async { detector.scan_all_functional(&graph, now).await });
+    match result {
+        Ok(report) if report.invalidated > 0 || report.conflicts > 0 => {
+            eprintln!(
+                "tdw-mcp tdw.kg.ingest: contradiction scan: closed {} superseded edge(s), \
+                 {} conflict(s) surfaced (manual review required)",
+                report.invalidated, report.conflicts
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!(
+                "tdw-mcp tdw.kg.ingest: contradiction scan failed (batch already durable): \
+                 {error}"
+            );
+        }
+    }
 }
 
 /// Fire `run_incremental` after a successful ingest batch (K-L1).

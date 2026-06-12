@@ -724,17 +724,29 @@ fn run_mcp_loop(
     feedback: Option<std::sync::Arc<tokio::sync::Mutex<tdw_agent_store::RetrievalFeedbackStore>>>,
     indexer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_knowledge::indexer::KnowledgeIndexer>>>,
     infer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_infer::InferEngine>>>,
+    contradiction: Option<std::sync::Arc<tdw_infer::contradiction::ContradictionDetector>>,
 ) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
             .with_timeout(std::time::Duration::from_secs(2))
     });
     match transport {
-        McpTransport::Stdio => {
-            tdw_mcp::run_stdio_json_rpc_with_knowledge(daemon, knowledge, feedback, indexer, infer)
-        }
+        McpTransport::Stdio => tdw_mcp::run_stdio_json_rpc_with_knowledge(
+            daemon,
+            knowledge,
+            feedback,
+            indexer,
+            infer,
+            contradiction,
+        ),
         McpTransport::Http(bind) => tdw_mcp::run_streamable_http_with_knowledge(
-            bind, daemon, knowledge, feedback, indexer, infer,
+            bind,
+            daemon,
+            knowledge,
+            feedback,
+            indexer,
+            infer,
+            contradiction,
         ),
     }
 }
@@ -768,7 +780,7 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             // transport, not in-process injection).
             let transport = cfg.mcp_transport.clone();
             let code = tokio::task::block_in_place(|| {
-                run_mcp_loop(&transport, None, None, None, None, None)
+                run_mcp_loop(&transport, None, None, None, None, None, None)
             });
             exit_code_to_result(code)
         }
@@ -787,13 +799,14 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
         .map(str::to_string)
         .ok_or_else(|| BackendError::Init("daemon did not expose a bound address".to_string()))?;
 
-    // Inject the co-resident knowledge runtime, feedback store, indexer, and
-    // inference engine into the embedded MCP server (knowledge-system F1/K-E3/K-L1).
-    // All are cheap Arc clones from the Backend composition root.
+    // Inject the co-resident knowledge runtime, feedback store, indexer,
+    // inference engine, and contradiction detector into the embedded MCP server
+    // (knowledge-system F1/K-E3/K-L1/K-M4). All are cheap Arc clones.
     let knowledge = Some(backend.knowledge_runtime_handle());
     let feedback = Some(backend.feedback_store_handle());
     let indexer = Some(backend.knowledge_indexer_handle());
     let infer = Some(backend.infer_engine_handle());
+    let contradiction_detector = backend.contradiction_detector_handle();
 
     // Optional catalog-derived REST surface, env-gated on TDW_DAEMON_REST_BIND.
     // In Both mode the co-resident knowledge runtime is wired so
@@ -815,6 +828,7 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
                 feedback,
                 indexer,
                 infer,
+                Some(contradiction_detector),
             )
         })
         .map_err(BackendError::Io)?;

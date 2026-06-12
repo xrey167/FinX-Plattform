@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use tdw_core::GraphEngine;
+use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine};
 use tdw_knowledge::proposals::{ProposalKind, ProposalQueue};
 use tdw_knowledge::runtime::KnowledgeRuntime;
@@ -38,6 +39,9 @@ type InferCtx = (
     Arc<dyn GraphEngine>,
     Arc<dyn TagEngine>,
 );
+
+/// Contradiction context for the `materialize` action (K-M4).
+type ContradictionCtx = (Arc<ContradictionDetector>, Arc<dyn GraphEngine>);
 
 /// The names this module owns.
 pub const TOOL_NAMES: &[&str] = &[
@@ -175,6 +179,7 @@ fn proposals_descriptor() -> ToolDescriptor {
 pub fn execute(
     runtime: &KnowledgeRuntime,
     infer_ctx: Option<InferCtx>,
+    contradiction_ctx: Option<ContradictionCtx>,
     name: &str,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
@@ -182,7 +187,7 @@ pub fn execute(
         "tdw.tags.define" => submit_define(runtime, arguments),
         "tdw.tags.assign" => submit_assign(runtime, arguments),
         "tdw.kg.annotate" => submit_annotate(runtime, arguments),
-        "tdw.kg.proposals" => proposals(runtime, infer_ctx, arguments),
+        "tdw.kg.proposals" => proposals(runtime, infer_ctx, contradiction_ctx, arguments),
         other => Err(execution(format!("unknown knowledge write tool: {other}"))),
     }
 }
@@ -328,6 +333,7 @@ fn submit_annotate(
 fn proposals(
     runtime: &KnowledgeRuntime,
     infer_ctx: Option<InferCtx>,
+    contradiction_ctx: Option<ContradictionCtx>,
     arguments: &Map<String, Value>,
 ) -> Result<ToolExecution, ToolFailure> {
     let (graph, tags, queue) = write_context(runtime)?;
@@ -398,6 +404,17 @@ fn proposals(
             })
             .map_err(|error| execution(error.to_string()))?;
 
+            // K-M4: fire contradiction detection after materialization BEFORE
+            // inference so functional-predicate conflicts in newly-materialized
+            // edge proposals are closed before inference sees the graph.
+            // Best-effort: errors are logged, never surfaced — the proposals
+            // are already durable at this point.
+            if !mat_report.materialized.is_empty()
+                && let Some(ctx) = contradiction_ctx
+            {
+                fire_contradiction_after_materialize(ctx, &ready_kinds, &now);
+            }
+
             // K-L1: fire incremental inference after materialization so derived
             // edges land for any edge or tag proposal that just materialized.
             // Best-effort: errors are logged, never surfaced — the proposals
@@ -416,6 +433,53 @@ fn proposals(
             "tdw.kg.proposals: unknown action {other:?} (expected list / approve / reject / \
              materialize)"
         ))),
+    }
+}
+
+/// Fire contradiction detection after proposals materialize (K-M4).
+///
+/// Scans every functional-predicate relation that appears in the materialized
+/// edge proposals.  Superseded edges are closed via the atomic `replace_edges`
+/// path (history preserved).  Conflicts with user/manual edges are logged
+/// loudly but not auto-resolved.
+///
+/// Only edge proposals whose `rel` is a functional predicate trigger a scan —
+/// non-functional relations are fast-path skipped by the detector.
+/// Best-effort: errors are logged, never surfaced.
+fn fire_contradiction_after_materialize(
+    ctx: ContradictionCtx,
+    ready_kinds: &[ProposalKind],
+    now: &str,
+) {
+    let (detector, graph) = ctx;
+    // Check whether any of the materialized edge proposals are functional
+    // predicates; skip the scan entirely if none are (fast-path).
+    let has_functional = ready_kinds.iter().any(|kind| {
+        if let ProposalKind::Edge { rel, .. } = kind {
+            detector.predicates().is_functional(rel)
+        } else {
+            false
+        }
+    });
+    if !has_functional {
+        return;
+    }
+    let result = block_on(async { detector.scan_all_functional(&graph, now).await });
+    match result {
+        Ok(report) if report.invalidated > 0 || report.conflicts > 0 => {
+            eprintln!(
+                "tdw-mcp tdw.kg.proposals materialize: contradiction scan: \
+                 closed {} superseded edge(s), {} conflict(s) surfaced (manual review required)",
+                report.invalidated, report.conflicts
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!(
+                "tdw-mcp tdw.kg.proposals materialize: contradiction scan failed \
+                 (proposals already durable): {error}"
+            );
+        }
     }
 }
 

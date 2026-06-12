@@ -11,11 +11,12 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tdw-core = { workspace = true }
 tdw-tags = { path = "../tdw-tags" }
+# K-M4: functional-predicate metadata lives in tdw-taxonomy (leaf crate, no cycles).
+tdw-taxonomy = { workspace = true }
 
 [dev-dependencies]
 tdw-storage-graph = { path = "../tdw-storage-graph" }
-tdw-taxonomy = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

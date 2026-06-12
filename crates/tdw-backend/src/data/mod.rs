@@ -30,6 +30,7 @@ use tdw_eval_runner::scheduled_eval::{
     EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, default_fixture_path, eval_trigger_id,
     load_golden_split, regression_alert_body, run_scheduled_eval_from_fixture,
 };
+use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::{
@@ -43,6 +44,7 @@ use tdw_service_api::{AppState, fetch_equity_historical};
 use tdw_storage_graph::InMemoryGraphEngine;
 use tdw_tag_rules::{RuleEngine, TagRule};
 use tdw_tags::{InMemoryTagEngine, TagEngine};
+use tdw_taxonomy::FunctionalPredicateSet;
 use tokio::sync::Mutex;
 
 use crate::config::BackendConfig;
@@ -149,6 +151,13 @@ pub struct Backend {
     /// here (caller-owns pattern, not persisted in this phase). Shared with the
     /// hot-reload tick via `Arc<Mutex>`.
     infer: Arc<Mutex<InferEngine>>,
+    /// The contradiction detector (knowledge-system K-M4).
+    ///
+    /// Fires BEFORE K-L1 inference on every ingest batch so inference sees the
+    /// corrected graph. Built from `config.knowledge.contradiction` at boot:
+    /// taxonomy defaults plus any `extra_functional_rels` the operator configures.
+    /// Shared with the MCP server via [`contradiction_detector_handle`].
+    contradiction: Arc<ContradictionDetector>,
     /// The finding indexer for hybrid search indexing of user-authored findings
     /// (knowledge-system K-X6). Behind a `std::sync::Mutex` so the sync MCP
     /// dispatch can hold the lock across the `index_at` await via `block_on`.
@@ -200,6 +209,7 @@ impl Backend {
         let graph_cfg = config.knowledge.graph.clone();
         let rules_cfg = config.knowledge.rules.clone();
         let infer_cfg = config.knowledge.infer.clone();
+        let contradiction_cfg = config.knowledge.contradiction.clone();
         let user_id = config.knowledge.user.id.clone();
         // K-L5: host-bound agent identity for the write/feedback surface.
         // Identity is validated at config load (validate_principal_id) so it
@@ -325,6 +335,11 @@ impl Backend {
             knowledge_runtime = knowledge_runtime.with_auto_materialize_freshness(cell);
         }
         let runtime = Arc::new(knowledge_runtime);
+        // K-M4: build the contradiction detector from the configured functional
+        // predicate set (taxonomy defaults + operator extra_functional_rels).
+        let contradiction = Arc::new(ContradictionDetector::new(
+            FunctionalPredicateSet::from_config(&contradiction_cfg.extra_functional_rels),
+        ));
         Ok(Self {
             state,
             runner,
@@ -337,6 +352,7 @@ impl Backend {
             tags_engine,
             rules,
             infer,
+            contradiction,
             finding_indexer,
             evals_cfg,
             consolidation_freshness: consolidation_freshness_cell,
@@ -393,6 +409,7 @@ impl Backend {
             tags_engine,
             rules: Arc::new(Mutex::new(RuleEngine::default())),
             infer: Arc::new(Mutex::new(InferEngine::default())),
+            contradiction: Arc::new(ContradictionDetector::new(FunctionalPredicateSet::default())),
             finding_indexer,
             evals_cfg: EvalsConfig::default(),
             consolidation_freshness: consolidation_freshness_cell,
@@ -1224,6 +1241,17 @@ impl Backend {
         Arc::clone(&self.infer)
     }
 
+    /// The contradiction detector handle (cloned `Arc`, knowledge-system K-M4).
+    ///
+    /// Pass to [`tdw_mcp::McpServer::with_contradiction_detector`] so the
+    /// embedded MCP surface can fire contradiction detection on the `materialize`
+    /// action using the same detector and functional-predicate set as the
+    /// backend's ingest path.
+    #[must_use]
+    pub fn contradiction_detector_handle(&self) -> Arc<ContradictionDetector> {
+        Arc::clone(&self.contradiction)
+    }
+
     /// Retract a derived fact by its key and propagate the support-set closure.
     ///
     /// Drives [`InferEngine::retract`] on the daemon-hosted inference engine.
@@ -1264,12 +1292,37 @@ impl Backend {
 
     /// Fire [`InferEngine::run_incremental`] after an ingest batch completes.
     ///
-    /// Builds a [`ChangeSet`] from the entity's declared tags and the edge types
-    /// that the daemon's `describes_by` / `mentions` graph edges introduce. Errors
-    /// are logged loudly and never surfaced to the caller (inference is best-effort;
-    /// the ingested document is already durable). This is intentional: inference
-    /// failures must never roll back an ingest that succeeded (B7 contract).
+    /// Fires K-M4 contradiction detection FIRST so inference sees the corrected
+    /// graph (superseded functional-predicate edges are closed before derived
+    /// edges are computed). Then builds a [`ChangeSet`] and runs K-L1 incremental
+    /// inference. Errors are logged loudly and never surfaced to the caller
+    /// (inference is best-effort; the ingested document is already durable). This
+    /// is intentional: inference failures must never roll back an ingest that
+    /// succeeded (B7 contract).
     async fn run_infer_after_ingest(&self, label: &str, tags: &[String], now: &str) {
+        // K-M4: contradiction scan BEFORE K-L1 inference so derived edges are
+        // computed on the corrected (temporally-closed) graph.
+        match self
+            .contradiction
+            .scan_all_functional(&self.graph, now)
+            .await
+        {
+            Ok(report) if report.invalidated > 0 || report.conflicts > 0 => {
+                eprintln!(
+                    "tdw-backend: contradiction scan after ingest of {label:?}: \
+                     closed {} superseded edge(s), {} conflict(s) surfaced \
+                     (manual review required)",
+                    report.invalidated, report.conflicts
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!(
+                    "tdw-backend: contradiction scan after ingest of {label:?} \
+                     failed (document already durable): {error}"
+                );
+            }
+        }
         let mut changed = ChangeSet::default();
         // Standard graph edge types written by the K-E3 indexer.
         changed.edge_types.insert("described_by".to_string());
