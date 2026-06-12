@@ -18,6 +18,7 @@ use tdw_infer::InferEngine;
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
+pub(crate) mod knowledge_answer_tools;
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
@@ -558,6 +559,13 @@ impl McpServer {
         if self.knowledge_questions_available() {
             descriptors.extend(knowledge_question_tools::descriptors());
         }
+        // The knowledge ANSWER tool (knowledge-system K-M3): tdw.kg.answer is a
+        // read-only GraphRAG synthesis tool. It requires only a knowledge runtime
+        // with the retriever attached (vector channel minimum). The graph engine
+        // enables k-hop expansion; absent graph → expansion silently skipped.
+        if self.knowledge.is_some() {
+            descriptors.push(knowledge_answer_tools::descriptor());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -741,6 +749,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_question_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_answer_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1287,6 +1299,45 @@ impl McpServer {
                         .with_data(json!({ "tool": name })),
                 )],
             };
+        Some(messages)
+    }
+
+    /// Dispatch the knowledge answer tool (`tdw.kg.answer`, knowledge-system K-M3).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.kg.answer` — a tool error
+    /// (never a protocol error) when the knowledge runtime is not attached,
+    /// otherwise the [`knowledge_answer_tools::execute`] result. Returns `None`
+    /// when `name` is not the answer tool so the caller falls through to the
+    /// registry and built-in dispatch paths.
+    fn dispatch_knowledge_answer_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_answer_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_answer_tools::execute(runtime, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 
