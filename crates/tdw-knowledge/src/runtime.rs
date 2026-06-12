@@ -105,6 +105,10 @@ pub struct KnowledgeRuntime {
     /// which writes [`EvalFreshness`] after each run. `None` when no eval is
     /// configured (status reports [`EvalFreshness::Unconfigured`]).
     eval_freshness: Option<Arc<tokio::sync::Mutex<EvalFreshness>>>,
+    /// Live sweep-freshness cell (K-L4). Shared with the auto-materialization
+    /// sweep worker in `tdw-backend`. `None` when the sweep is not registered
+    /// (status reports [`SweepFreshness::Disabled`]).
+    auto_materialize_freshness: Option<Arc<tokio::sync::Mutex<SweepFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -130,6 +134,7 @@ impl KnowledgeRuntime {
             bound_user_id: None,
             finding_indexer: None,
             eval_freshness: None,
+            auto_materialize_freshness: None,
         }
     }
 
@@ -350,6 +355,31 @@ impl KnowledgeRuntime {
     pub const fn eval_freshness_cell(&self) -> Option<&Arc<tokio::sync::Mutex<EvalFreshness>>> {
         self.eval_freshness.as_ref()
     }
+
+    /// Attach the auto-materialization sweep freshness cell (K-L4).
+    ///
+    /// Pass an `Arc<tokio::sync::Mutex<SweepFreshness>>` constructed by the
+    /// composition root (`tdw-backend`) so the sweep worker and `tdw.kg.status`
+    /// share the same live cell. Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_auto_materialize_freshness(
+        mut self,
+        cell: Arc<tokio::sync::Mutex<SweepFreshness>>,
+    ) -> Self {
+        self.auto_materialize_freshness = Some(cell);
+        self
+    }
+
+    /// The sweep-freshness cell, when attached.
+    ///
+    /// The sweep worker in `tdw-backend` writes [`SweepFreshness`] after every
+    /// sweep invocation via this handle.
+    #[must_use]
+    pub const fn auto_materialize_freshness_cell(
+        &self,
+    ) -> Option<&Arc<tokio::sync::Mutex<SweepFreshness>>> {
+        self.auto_materialize_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -367,6 +397,10 @@ impl std::fmt::Debug for KnowledgeRuntime {
             .field("bound_user_id", &self.bound_user_id.is_some())
             .field("finding_indexer", &self.finding_indexer.is_some())
             .field("eval_freshness", &self.eval_freshness.is_some())
+            .field(
+                "auto_materialize_freshness",
+                &self.auto_materialize_freshness.is_some(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -444,6 +478,42 @@ impl EvalFreshness {
     pub const fn is_alarm(&self) -> bool {
         matches!(self, Self::Regressed { .. } | Self::Stale { .. })
     }
+}
+
+// ---------------------------------------------------------------------------
+// K-L4: auto-materialization sweep freshness
+// ---------------------------------------------------------------------------
+
+/// Observability status for the gated auto-materialization sweep (K-L4).
+///
+/// Surfaced as `proposals/auto-materialize` on [`KgStatus`] so operators see
+/// at a glance whether the autonomous sweep is enabled and what it last did.
+///
+/// The sweep worker (in `tdw-backend`) writes this cell after every sweep run
+/// via the shared `Arc<tokio::sync::Mutex<SweepFreshness>>` on
+/// [`KnowledgeRuntime`]. The type lives here so `tdw-mcp` and
+/// `tdw-backend` can both read it without a circular dependency.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum SweepFreshness {
+    /// `auto_materialize = false` — the sweep is intentionally disabled.
+    /// Proposals that reach `Ready` wait for operator `materialize` action.
+    Disabled,
+
+    /// The sweep is enabled but has not fired yet since daemon start.
+    Pending,
+
+    /// The last sweep completed (possibly with zero landings — that is OK,
+    /// not an alarm condition).
+    Ran {
+        /// Epoch-ms timestamp of the last sweep run.
+        last_run_ms: i64,
+        /// Number of proposals materialized in the last sweep.
+        landed: usize,
+        /// Number of `Ready` proposals that failed TOCTOU re-validation and
+        /// were rejected rather than landed.
+        rejected: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -556,6 +626,15 @@ pub struct KgStatus {
     /// the honest loudly-visible default when no golden split is wired: the
     /// scheduler runs nothing and this field says so explicitly.
     pub eval_freshness: EvalFreshness,
+
+    // --- Auto-materialization sweep (K-L4) ---
+    /// Live freshness status for the gated auto-materialization sweep (K-L4).
+    ///
+    /// Reports whether the sweep is enabled (`Pending` / `Ran`) or explicitly
+    /// disabled (`Disabled`). `Disabled` means `auto_materialize = false` in
+    /// `[knowledge.proposals]` — the operator tool is then the only landing
+    /// path.
+    pub auto_materialize_freshness: SweepFreshness,
 }
 
 impl KnowledgeRuntime {
@@ -652,6 +731,18 @@ impl KnowledgeRuntime {
                         .map_or(EvalFreshness::Unconfigured, |guard| guard.clone())
                 });
 
+        // Auto-materialize sweep freshness (K-L4): read the shared cell if
+        // wired. `None` cell → `Disabled` (sweep was not registered, meaning
+        // `auto_materialize = false`). `try_lock` avoids blocking when the
+        // sweep worker is mid-write — report the last known state instead.
+        let auto_materialize_freshness = self
+            .auto_materialize_freshness
+            .as_ref()
+            .map_or(SweepFreshness::Disabled, |cell| {
+                cell.try_lock()
+                    .map_or(SweepFreshness::Pending, |guard| guard.clone())
+            });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -664,6 +755,7 @@ impl KnowledgeRuntime {
             proposals,
             language_model_grade,
             eval_freshness,
+            auto_materialize_freshness,
         }
     }
 }

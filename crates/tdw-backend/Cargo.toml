@@ -142,6 +142,11 @@ tokio = { workspace = true }
 tdw-provider-fileset = { path = "../tdw-provider-fileset" }
 # K-L3 integration tests: eval-runner types for the wiring proof tests.
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# K-L4 tests submit proposals with Adaptivity values from the taxonomy crate.
+# `tdw-taxonomy` is a dep of `tdw-knowledge` but not of `tdw-backend`; the
+# dev-dep makes the type available to integration tests without widening the
+# production dependency surface.
+tdw-taxonomy = { path = "../tdw-taxonomy" }
 
 [lints]
 workspace = true

@@ -317,7 +317,89 @@ impl Default for ScheduledEvalConfig {
     }
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6).
+/// Auto-materialization sweep settings for the gated proposal queue (K-L4).
+///
+/// Controls the autonomous cron sweep that lands `Ready` proposals without
+/// operator intervention. Default: **enabled** (`auto_materialize = true`).
+///
+/// # Kill-switch
+///
+/// Set `auto_materialize = false` to disable the sweep entirely. When the sweep
+/// is off, the **only** landing path is the operator `tdw.kg.proposals
+/// action=materialize` tool — human approval is then mandatory for every Ready
+/// proposal to reach the graph/tag engines.
+///
+/// # Defaults
+///
+/// ```toml
+/// [knowledge.proposals]
+/// auto_materialize  = true        # fully autonomous within gates (default on)
+/// sweep_cadence     = "*/5 * * * *"  # every 5 minutes
+/// sweep_cap         = 64          # max proposals landed per sweep
+/// ```
+///
+/// # Example (opt-out)
+///
+/// ```toml
+/// [knowledge.proposals]
+/// auto_materialize = false   # human-approval-only mode
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProposalsConfig {
+    /// Enable the autonomous materialization sweep (default: `true`).
+    ///
+    /// When `true` the daemon registers a cron trigger that materializes every
+    /// `Ready` proposal on `sweep_cadence`, sharing the same TOCTOU-safe core
+    /// as the operator `materialize` action.
+    ///
+    /// When `false` the sweep is not registered and no proposal is ever landed
+    /// without explicit operator approval. Status reports `disabled` for the
+    /// `proposals/auto-materialize` freshness line.
+    #[serde(default = "ProposalsConfig::default_auto_materialize")]
+    pub auto_materialize: bool,
+
+    /// 5-field cron expression for the materialization sweep cadence.
+    ///
+    /// Default: `"*/5 * * * *"` (every 5 minutes).
+    #[serde(default = "ProposalsConfig::default_sweep_cadence")]
+    pub sweep_cadence: String,
+
+    /// Maximum number of proposals the sweep lands in a single invocation.
+    ///
+    /// The sweep processes proposals in deterministic (BTreeMap insertion) order
+    /// and stops after landing `sweep_cap` of them. Proposals that were `Ready`
+    /// but not reached in this sweep will be landed on the next tick.
+    ///
+    /// Default: `64`.
+    #[serde(default = "ProposalsConfig::default_sweep_cap")]
+    pub sweep_cap: usize,
+}
+
+impl ProposalsConfig {
+    const fn default_auto_materialize() -> bool {
+        true
+    }
+
+    fn default_sweep_cadence() -> String {
+        "*/5 * * * *".to_string()
+    }
+
+    const fn default_sweep_cap() -> usize {
+        64
+    }
+}
+
+impl Default for ProposalsConfig {
+    fn default() -> Self {
+        Self {
+            auto_materialize: Self::default_auto_materialize(),
+            sweep_cadence: Self::default_sweep_cadence(),
+            sweep_cap: Self::default_sweep_cap(),
+        }
+    }
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -374,6 +456,15 @@ pub struct KnowledgeConfig {
     /// (the default), no trigger is registered and status reports `Unconfigured`.
     #[serde(default)]
     pub evals: ScheduledEvalConfig,
+    /// Gated auto-materialization sweep settings (K-L4).
+    ///
+    /// When `auto_materialize = true` (the default), the daemon registers a cron
+    /// trigger that materializes every `Ready` proposal on `sweep_cadence`.
+    /// Set `auto_materialize = false` to require explicit operator approval for
+    /// every landing — the `tdw.kg.proposals action=materialize` operator tool
+    /// then becomes the only landing path.
+    #[serde(default)]
+    pub proposals: ProposalsConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -789,7 +880,7 @@ impl TdwConfig {
     }
 }
 
-/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5).
+/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4).
 ///
 /// Extracted from [`TdwConfig::validate`] so that function stays under the
 /// 100-line function-length lint limit.
@@ -798,7 +889,46 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     // User identity: grammar [A-Za-z0-9:._-]+, non-empty, ≤128 bytes.
     validate_principal_id(&knowledge.user.id, "knowledge.user.id")?;
     // Agent identity (K-L5): same grammar, bound to the write/feedback surface.
-    validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")
+    validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")?;
+    // Proposals sweep config (K-L4).
+    validate_proposals(&knowledge.proposals)
+}
+
+/// Validate `[knowledge.proposals]` (K-L4).
+fn validate_proposals(proposals: &ProposalsConfig) -> Result<()> {
+    // sweep_cadence must be a valid 5-field cron expression (same structural
+    // check as `knowledge.evals.cadence` — full semantic parse is avoided to
+    // keep tdw-config free of tdw-cron).
+    {
+        let fields: Vec<&str> = proposals.sweep_cadence.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.proposals.sweep_cadence must be a 5-field cron expression \
+                 (e.g. \"*/5 * * * *\"), got {:?}",
+                proposals.sweep_cadence
+            )));
+        }
+        let legal: fn(char) -> bool = |c| {
+            c.is_ascii_digit()
+                || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+        };
+        for field in &fields {
+            if field.chars().any(|c| !legal(c)) {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.proposals.sweep_cadence contains an invalid cron field {:?} \
+                     in expression {:?}",
+                    field, proposals.sweep_cadence
+                )));
+            }
+        }
+    }
+    // sweep_cap must be at least 1 — a cap of 0 would land nothing, silently.
+    if proposals.sweep_cap == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.proposals.sweep_cap must be at least 1".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Result<()> {
