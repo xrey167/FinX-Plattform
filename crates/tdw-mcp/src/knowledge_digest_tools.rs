@@ -242,14 +242,24 @@ struct ScannedFinding {
 
 /// Result of the bounded `Finding` scan.
 struct FindingScan {
-    /// Findings whose validity began within the look-back window (newest first).
+    /// Findings whose validity began within the look-back window (newest first),
+    /// truncated to [`SECTION_LIST_CAP`] for display.
     new_in_window: Vec<ScannedFinding>,
+    /// True total of new-in-window findings BEFORE the display truncation, so the
+    /// reported `count` stays honest even when more than [`SECTION_LIST_CAP`] match.
+    new_in_window_total: usize,
     /// Active findings whose last-corroboration is older than the staleness
-    /// threshold (oldest first).
+    /// threshold (oldest first), truncated to [`SECTION_LIST_CAP`] for display.
     stale: Vec<ScannedFinding>,
+    /// True total of stale findings BEFORE the display truncation, so the reported
+    /// `count` stays honest even when more than [`SECTION_LIST_CAP`] match.
+    stale_total: usize,
     /// Top entity/finding labels by recent activity (within the window),
     /// `(label, count)` — actually a per-finding tally; bounded.
     tag_activity: Vec<(String, usize)>,
+    /// True total of distinct active labels with activity in the window BEFORE the
+    /// display truncation, so the reported `count` stays honest.
+    tag_activity_total: usize,
     /// Total active findings visible at the reference time.
     active_total: usize,
     /// True when the scan hit [`DIGEST_SCAN_CAP`]; the digest then carries an
@@ -413,6 +423,11 @@ async fn scan_findings(
         capped,
     } = acc;
 
+    // Capture the TRUE totals before the display truncation so the reported
+    // `count` fields can never under-report (Gemini honesty finding).
+    let new_in_window_total = new_in_window.len();
+    let stale_total = stale.len();
+
     // Newest first for new-in-window (smallest age first).
     new_in_window.sort_by(|a, b| a.age_days.cmp(&b.age_days).then(a.id.cmp(&b.id)));
     new_in_window.truncate(SECTION_LIST_CAP);
@@ -423,13 +438,17 @@ async fn scan_findings(
 
     // Top activity by per-finding tally (descending count, then label).
     let mut tag_activity: Vec<(String, usize)> = tag_tally.into_iter().collect();
+    let tag_activity_total = tag_activity.len();
     tag_activity.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     tag_activity.truncate(SECTION_LIST_CAP);
 
     Ok(FindingScan {
         new_in_window,
+        new_in_window_total,
         stale,
+        stale_total,
         tag_activity,
+        tag_activity_total,
         active_total,
         capped,
     })
@@ -493,21 +512,26 @@ fn build_structured(
             "proposals_by_state": status.proposals,
         },
         "new_knowledge": {
-            "count": scan.new_in_window.len(),
-            "empty": scan.new_in_window.is_empty(),
+            // True total before display truncation, so the count never under-reports.
+            "count": scan.new_in_window_total,
+            "shown": scan.new_in_window.len(),
+            "empty": scan.new_in_window_total == 0,
             "items": scan.new_in_window.iter().map(finding_to_value).collect::<Vec<_>>(),
         },
         "top_activity": {
-            "count": scan.tag_activity.len(),
-            "empty": scan.tag_activity.is_empty(),
+            "count": scan.tag_activity_total,
+            "shown": scan.tag_activity.len(),
+            "empty": scan.tag_activity_total == 0,
             "items": scan.tag_activity.iter().map(|(label, count)| json!({
                 "label": label,
                 "count": count,
             })).collect::<Vec<_>>(),
         },
         "staleness": {
-            "count": scan.stale.len(),
-            "empty": scan.stale.is_empty(),
+            // True total before display truncation, so the count never under-reports.
+            "count": scan.stale_total,
+            "shown": scan.stale.len(),
+            "empty": scan.stale_total == 0,
             "items": scan.stale.iter().map(finding_to_value).collect::<Vec<_>>(),
         },
         "proposals": {
@@ -554,14 +578,14 @@ fn build_narrative(
     ));
 
     // New knowledge.
-    if scan.new_in_window.is_empty() {
+    if scan.new_in_window_total == 0 {
         lines.push(format!(
             "New knowledge: no new knowledge in the last {window_days} day(s)."
         ));
     } else {
         lines.push(format!(
             "New knowledge: {} finding(s) appeared in the last {window_days} day(s).",
-            scan.new_in_window.len()
+            scan.new_in_window_total
         ));
         for f in scan.new_in_window.iter().take(5) {
             let kind = if f.is_thesis { "thesis" } else { "finding" };
@@ -573,7 +597,7 @@ fn build_narrative(
     }
 
     // Top activity.
-    if scan.tag_activity.is_empty() {
+    if scan.tag_activity_total == 0 {
         lines.push("Top activity: nothing was active in the window.".to_string());
     } else {
         let top: Vec<String> = scan
@@ -586,7 +610,7 @@ fn build_narrative(
     }
 
     // Staleness — the headline of the self-narration.
-    if scan.stale.is_empty() {
+    if scan.stale_total == 0 {
         lines.push(format!(
             "Staleness: nothing is stale — every active finding has been corroborated within \
              the last {stale_after_days} day(s)."
@@ -595,7 +619,7 @@ fn build_narrative(
         lines.push(format!(
             "Staleness: {} finding(s) have not been corroborated in over {stale_after_days} \
              day(s) and may need attention.",
-            scan.stale.len()
+            scan.stale_total
         ));
         for f in scan.stale.iter().take(5) {
             let kind = if f.is_thesis { "thesis" } else { "finding" };
@@ -732,14 +756,18 @@ fn optional_i64(arguments: &Map<String, Value>, name: &str) -> Result<Option<i64
 }
 
 /// `YYYY-MM-DD` shape check (mirrors the tag/retrieve date grammar).
+///
+/// Operates directly on the byte slice — the grammar is pure ASCII, so there is
+/// no need to UTF-8 decode (Gemini efficiency finding).
 fn is_date(value: &str) -> bool {
-    value.len() == 10
-        && value.as_bytes().get(4) == Some(&b'-')
-        && value.as_bytes().get(7) == Some(&b'-')
-        && value
-            .chars()
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
             .enumerate()
-            .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
 }
 
 const fn execution(message: String) -> ToolFailure {
@@ -953,6 +981,48 @@ mod tests {
             out["counts"]["embedder_model"].as_str().expect("embedder_model is a string"),
             status.embedder_model,
             "digest embedder matches status"
+        );
+    }
+
+    #[tokio::test]
+    async fn count_is_honest_above_section_cap() {
+        // More stale findings than SECTION_LIST_CAP: the reported `count` must be
+        // the TRUE total (not the truncated display length), and `shown` must be
+        // the cap. Guards the Gemini honesty finding.
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let total = SECTION_LIST_CAP + 5;
+        for i in 0..total {
+            // All born 2026-03-04 → 100 days old at 2026-06-12 → all stale.
+            insert_finding(
+                &graph,
+                &format!("finding:stale-{i:03}"),
+                &format!("Aging fact {i}"),
+                "2026-03-04",
+                false,
+            )
+            .await;
+        }
+        let runtime = runtime_with_graph(graph);
+
+        let out = run(&runtime, &Map::new(), "2026-06-12");
+        let staleness = &out["staleness"];
+        assert_eq!(
+            staleness["count"], json!(total),
+            "count reports the true total, not the capped display length: {out}"
+        );
+        assert_eq!(
+            staleness["shown"], json!(SECTION_LIST_CAP),
+            "items are capped for display"
+        );
+        assert_eq!(
+            staleness["items"].as_array().expect("items array").len(),
+            SECTION_LIST_CAP,
+            "items list is bounded to SECTION_LIST_CAP"
+        );
+        let narrative = out["narrative"].as_str().expect("narrative is a string");
+        assert!(
+            narrative.contains(&format!("Staleness: {total} finding")),
+            "narrative reports the true total: {narrative}"
         );
     }
 
