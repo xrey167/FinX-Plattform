@@ -105,9 +105,10 @@ pub trait RestApiHandler: Send + Sync {
 }
 
 /// Abstract interface for the `GET /api/v1/knowledge/status` observability
-/// endpoint (K-E2). Implemented by the crate that holds the
-/// `KnowledgeRuntime` to avoid a dependency cycle — `tdw-app-server` has no
-/// dependency on `tdw-knowledge`.
+/// endpoint (K-E2).
+///
+/// Implemented by the crate that holds the `KnowledgeRuntime` to avoid a
+/// dependency cycle — `tdw-app-server` has no dependency on `tdw-knowledge`.
 ///
 /// Returning `None` from [`knowledge_status`] signals "not attached" and the
 /// transport responds `404`.
