@@ -17,6 +17,7 @@ use tdw_config::{ConfigLayer, ConfigLayerKind, TdwConfig, merge_layers};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
+pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_ingest_tools;
 pub(crate) mod knowledge_tools;
@@ -383,6 +384,17 @@ impl McpServer {
         if self.knowledge_feedback_available() {
             descriptors.push(knowledge_feedback_tools::descriptor());
         }
+        // The knowledge EXPLAIN tools (knowledge-system K-X1): tdw.kg.why and
+        // tdw.kg.diff are read-only and require only the graph engine. They are
+        // appended whenever a knowledge runtime with a graph engine is attached —
+        // the same gate as the B8 entity/traverse/path tools.
+        if self
+            .knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.graph().is_some())
+        {
+            descriptors.extend(knowledge_explain_tools::descriptors());
+        }
         // The knowledge INGEST tool (knowledge-system K-E3) is appended ONLY when a
         // knowledge runtime is present AND a hosted indexer handle is attached. The
         // indexer is the public write surface: content-hash-idempotent batch ingest
@@ -549,6 +561,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_feedback_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_explain_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -788,6 +804,46 @@ impl McpServer {
                         .with_data(json!({ "tool": name })),
                 )],
             };
+        Some(messages)
+    }
+
+    /// Dispatch a knowledge explain tool (`tdw.kg.why` / `tdw.kg.diff`,
+    /// knowledge-system K-X1).
+    ///
+    /// Returns `Some(messages)` when `name` is an explain tool — a tool error
+    /// (never a protocol error) when the graph engine is unavailable, otherwise
+    /// the [`knowledge_explain_tools::execute`] result. Returns `None` when
+    /// `name` is not an explain tool so the caller falls through to the registry
+    /// and built-in dispatch paths.
+    fn dispatch_knowledge_explain_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_explain_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_explain_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 
