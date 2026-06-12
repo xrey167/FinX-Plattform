@@ -39,7 +39,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tdw_core::{GraphEngine, GraphNode};
+use tdw_core::{Direction, GraphEngine, GraphNode, TraversalFilter};
 use tdw_tags::TagEngine;
 use tdw_taxonomy::{Adaptivity, EntityKind};
 
@@ -295,29 +295,25 @@ pub async fn read_episodes_from_graph(
     max_scan: usize,
 ) -> Result<Vec<Episode>> {
     let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
+    // Single batch traversal instead of an N+1 (one `edges` page scan + one
+    // `node` round-trip per edge). Every episode links to the lessons subject
+    // via an INCOMING `EPISODE_REL` edge, so one `neighbors` call returns each
+    // (edge, source-node) pair — eliminating the per-episode round-trips that
+    // would otherwise be up to `max_scan` sequential DB calls (Gemini HIGH).
+    let filter = TraversalFilter {
+        rels: Some(vec![EPISODE_REL.to_string()]),
+        direction: Direction::In,
+        ..TraversalFilter::default()
+    };
+    let neighbors = graph
+        .neighbors(LESSON_SUBJECT_ENTITY, &filter)
+        .await
+        .map_err(storage)?;
     let mut episodes = Vec::new();
-    let mut offset = 0usize;
-    let page = 256usize;
-    while offset < max_scan {
-        let edges = graph
-            .edges(Some(EPISODE_REL), offset, page)
-            .await
-            .map_err(storage)?;
-        if edges.is_empty() {
-            break;
-        }
-        offset += edges.len();
-        for edge in edges {
-            // Only edges INTO the lessons subject are episode links.
-            if edge.to != LESSON_SUBJECT_ENTITY {
-                continue;
-            }
-            let Some(node) = graph.node(&edge.from).await.map_err(storage)? else {
-                continue;
-            };
-            if let Some(episode) = episode_from_node(&node) {
-                episodes.push(episode);
-            }
+    // `max_scan` still bounds the work a pathological graph can impose.
+    for (_edge, node) in neighbors.into_iter().take(max_scan) {
+        if let Some(episode) = episode_from_node(&node) {
+            episodes.push(episode);
         }
     }
     Ok(episodes)

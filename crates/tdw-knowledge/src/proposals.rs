@@ -543,6 +543,19 @@ impl ProposalQueue {
     /// Notes that fail to parse as a lesson are skipped (defensive: a non-lesson
     /// annotation that happens to share the marker is ignored, not surfaced as a
     /// malformed lesson).
+    ///
+    /// # Retirement is NOT inferred here
+    ///
+    /// This audit is queue-local: it has no `GraphEngine` handle, so it cannot
+    /// observe a materialized lesson whose annotation edge was later temporally
+    /// closed (retired) in the substrate. It therefore NEVER returns
+    /// [`LessonState::Retired`](crate::lessons::LessonState::Retired) — that
+    /// state is reserved for the graph-backed audit pass. The contract this
+    /// method DOES uphold is the K-R5 one that matters: `Active` is reported
+    /// strictly when the proposal `materialized`, so the ledger never claims an
+    /// installation that did not happen. (A retired lesson is over-reported as
+    /// `Active`, never under-reported — the audit errs toward "still installed",
+    /// never toward a phantom install.)
     #[must_use]
     pub fn lessons_audit(&self) -> Vec<crate::lessons::LessonAudit> {
         use crate::lessons::{Lesson, LessonAudit, LessonState};

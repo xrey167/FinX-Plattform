@@ -485,6 +485,17 @@ impl Backend {
         let extraction_freshness_cell = build_extraction_freshness_cell(&extraction_cfg);
         knowledge_runtime =
             knowledge_runtime.with_extraction_freshness(Arc::clone(&extraction_freshness_cell));
+        // B9 / K-L4 / K-R1: attach the single canonical gated ProposalQueue to
+        // the co-resident runtime. Without this the runtime's `proposals()` is
+        // `None`, which silently disables the MCP write surface (`write_context`
+        // requires it), the K-L4 auto-materialize sweep, AND the K-R1 lesson-
+        // induction worker — every gated-writeback path is dead at runtime. One
+        // shared handle keeps the write surface, the sweep, and lesson induction
+        // operating on the same queue.
+        let proposal_queue = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::proposals::ProposalQueue::default(),
+        ));
+        knowledge_runtime = knowledge_runtime.with_proposals(Arc::clone(&proposal_queue));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -3946,37 +3957,55 @@ fn spawn_lesson_induction_worker(
 
             // Cron slot fired — run one induction pass. Lessons enqueue as
             // PROPOSALS; the eval gate (promote_for_agent) decides promotion.
+            //
+            // The read-and-induce phase (episode scan + induction + idempotent
+            // subject upsert) does NOT hold the proposal-queue lock: those are
+            // graph round-trips, and holding the lock across them would block the
+            // MCP write surface and the K-L4 sweep for the whole pass (Gemini
+            // HIGH). The lock is acquired ONLY for `submit_lessons`.
             let now_ts = chrono::Utc::now().format("%Y-%m-%d").to_string();
-            let mut queue = proposals.lock().await;
-            match tdw_knowledge::lessons::run_induction_pass(
-                &mut queue,
-                &graph,
-                &tags,
-                // The worker proposes at Learning — the minimum admission
-                // adaptivity. This grants the right to PROPOSE only; the agent's
-                // real eval gate still governs whether any lesson is installed.
-                tdw_taxonomy::Adaptivity::Learning,
-                min_confidence,
-                max_scan,
-                &now_ts,
-            )
-            .await
+            let episodes = match tdw_knowledge::lessons::read_episodes_from_graph(&graph, max_scan)
+                .await
             {
-                Ok(report) => {
-                    if report.lessons_enqueued > 0 || report.lessons_rejected > 0 {
-                        eprintln!(
-                            "[tdw] K-R1 lesson induction: episodes_read={} \
-                             induced={} enqueued={} rejected_by_gate={}",
-                            report.episodes_read,
-                            report.lessons_induced,
-                            report.lessons_enqueued,
-                            report.lessons_rejected,
-                        );
-                    }
-                }
+                Ok(episodes) => episodes,
                 Err(error) => {
                     eprintln!("[tdw] K-R1 lesson induction error (will retry next slot): {error}");
+                    continue;
                 }
+            };
+            let lessons = tdw_knowledge::lessons::induce_lessons(&episodes, min_confidence);
+            if lessons.is_empty() {
+                continue;
+            }
+            if let Err(error) = tdw_knowledge::lessons::ensure_lesson_subject(&graph).await {
+                eprintln!("[tdw] K-R1 lesson induction error (will retry next slot): {error}");
+                continue;
+            }
+            let report = {
+                let mut queue = proposals.lock().await;
+                tdw_knowledge::lessons::submit_lessons(
+                    &mut queue,
+                    &lessons,
+                    // The worker proposes at Learning — the minimum admission
+                    // adaptivity. This grants the right to PROPOSE only; the
+                    // agent's real eval gate still governs whether any lesson is
+                    // installed.
+                    tdw_taxonomy::Adaptivity::Learning,
+                    &graph,
+                    &tags,
+                    &now_ts,
+                )
+                .await
+            };
+            if report.lessons_enqueued > 0 || report.lessons_rejected > 0 {
+                eprintln!(
+                    "[tdw] K-R1 lesson induction: episodes_read={} \
+                     induced={} enqueued={} rejected_by_gate={}",
+                    episodes.len(),
+                    report.lessons_induced,
+                    report.lessons_enqueued,
+                    report.lessons_rejected,
+                );
             }
         }
     });
