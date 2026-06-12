@@ -119,6 +119,11 @@ pub struct KnowledgeRuntime {
     /// shared with the spawned feed tasks that write [`FeedFreshness`] after
     /// each poll. Empty when no feeds are configured.
     feed_freshness_cells: Vec<Arc<tokio::sync::Mutex<FeedFreshness>>>,
+    /// Live watchlist-freshness cell (K-X5). Shared with the spawned watchlist
+    /// cron task, which writes [`WatchlistFreshness`] after each tick.
+    /// `None` when the watchlist scheduler is not running (status field omitted
+    /// from JSON so agents see the absence explicitly).
+    watchlist_freshness: Option<Arc<std::sync::Mutex<WatchlistFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -147,6 +152,7 @@ impl KnowledgeRuntime {
             consolidation_freshness: None,
             auto_materialize_freshness: None,
             feed_freshness_cells: Vec::new(),
+            watchlist_freshness: None,
         }
     }
 
@@ -435,6 +441,33 @@ impl KnowledgeRuntime {
     pub fn feed_freshness_cells(&self) -> &[Arc<tokio::sync::Mutex<FeedFreshness>>] {
         &self.feed_freshness_cells
     }
+
+    /// Attach the watchlist freshness cell (K-X5).
+    ///
+    /// Pass the `Arc<std::sync::Mutex<WatchlistFreshness>>` constructed by the
+    /// composition root (`tdw-backend`) so the watchlist cron task and
+    /// `tdw.kg.status` share the same live cell. Consumes and returns `self`
+    /// for builder use.
+    #[must_use]
+    pub fn with_watchlist_freshness(
+        mut self,
+        cell: Arc<std::sync::Mutex<WatchlistFreshness>>,
+    ) -> Self {
+        self.watchlist_freshness = Some(cell);
+        self
+    }
+
+    /// The watchlist-freshness cell, when attached.
+    ///
+    /// The watchlist cron task in `tdw-backend` writes [`WatchlistFreshness`]
+    /// after every tick via this handle. `None` when the scheduler is not wired
+    /// (status field is omitted from JSON).
+    #[must_use]
+    pub const fn watchlist_freshness_cell(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<WatchlistFreshness>>> {
+        self.watchlist_freshness.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -626,6 +659,35 @@ pub enum SweepFreshness {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         last_error: Option<String>,
     },
+}
+
+/// Watchlist change-detection freshness snapshot (knowledge-system K-X5).
+///
+/// Updated by the cron task after each tick; read by `status()` without
+/// blocking (uses `try_lock`). `None` when the watchlist scheduler is not
+/// running — `KgStatus.watchlist_status` is omitted from JSON in that case.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchlistFreshness {
+    /// Total active watches across all principals.
+    pub watch_count: usize,
+    /// Unix-epoch ms of the last check tick. `0` means never checked.
+    pub last_check_ms: i64,
+    /// Cumulative alerts fired since process start.
+    pub total_alerts_fired: u64,
+    /// Human-readable note when zero watches are configured.
+    #[serde(default)]
+    pub note: String,
+}
+
+impl Default for WatchlistFreshness {
+    fn default() -> Self {
+        Self {
+            watch_count: 0,
+            last_check_ms: 0,
+            total_alerts_fired: 0,
+            note: "no watchlists configured".to_string(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -838,6 +900,16 @@ pub struct KgStatus {
     /// `"no feeds configured"` when `feed_statuses` is empty; empty string
     /// otherwise. Loud-by-design: operators see the absence explicitly.
     pub feed_note: String,
+
+    // --- Watchlist change-detection freshness (K-X5) ---
+    /// Live watchlist change-detection freshness snapshot (K-X5).
+    ///
+    /// `None` when the watchlist scheduler is not running — field is omitted
+    /// from JSON so absence is explicit (loud by design). When present, carries
+    /// the count of active watches, last-check timestamp, and cumulative alerts
+    /// fired since daemon start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watchlist_status: Option<WatchlistFreshness>,
 }
 
 impl KnowledgeRuntime {
@@ -989,6 +1061,18 @@ impl KnowledgeRuntime {
             String::new()
         };
 
+        // Watchlist freshness (K-X5): read the shared cell if wired, else None.
+        // `try_lock` avoids blocking: if the cron task is mid-write (WouldBlock)
+        // or the lock is poisoned, return the default rather than deadlocking.
+        let watchlist_status =
+            self.watchlist_freshness
+                .as_ref()
+                .map(|cell| match cell.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
+                    Err(std::sync::TryLockError::WouldBlock) => WatchlistFreshness::default(),
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1009,6 +1093,7 @@ impl KnowledgeRuntime {
             theses,
             feed_statuses,
             feed_note,
+            watchlist_status,
         }
     }
 }
