@@ -32,7 +32,10 @@
 //!   [`DIFF_MAX_LIMIT`]. Counts are always exact; lists are paginated.
 
 use serde_json::{Map, Value, json};
-use tdw_core::{Direction, GraphEdge, Provenance, TraversalFilter, active_at};
+use tdw_core::{
+    Direction, EdgeConfidenceInput, GraphEdge, Provenance, TraversalFilter, active_at,
+    compute_confidence,
+};
 use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_tags::date_to_timestamp;
 use tdw_taxonomy::EntityKind;
@@ -300,7 +303,14 @@ async fn why_edge(
         }));
     };
 
-    let chain = provenance_chain(&edge.provenance, &edge.props, 0);
+    let mut chain = provenance_chain(&edge.provenance, &edge.props, 0);
+
+    // K-R6: append a confidence step decomposing all four components.
+    // The corroboration pool is the full set of edges with the same rel
+    // (bounded by MAX_CORROBORATION_CAP inside compute_confidence).
+    let confidence_step = build_confidence_step(graph, edge, &chain).await;
+    chain.push(confidence_step);
+
     let cap = chain.len() >= WHY_MAX_CHAIN_DEPTH;
     let summary = edge_summary(&edge.provenance, from, rel, to);
 
@@ -709,6 +719,103 @@ fn append_merge_steps(
             )
         }));
     }
+}
+
+// ── Confidence step (K-R6) ───────────────────────────────────────────────────
+
+/// Build a confidence why-chain step for an edge, decomposing all four
+/// components of the K-R6 formula.
+///
+/// The corroboration pool is collected by fetching the outgoing edges of the
+/// **subject entity** for this specific relation type via `graph.neighbors`.
+/// This scopes the scan to the entity rather than doing a global rel-scan and
+/// filtering afterwards — the global approach can exhaust [`tdw_core::MAX_CORROBORATION_CAP`]
+/// with noise edges for other entities before reaching the subject's own corroborators.
+///
+/// Returns an honest `"confidence_unavailable"` step when the scan fails rather
+/// than propagating the error (the why-chain continues without a confidence step
+/// rather than failing the whole tool call).
+async fn build_confidence_step(
+    graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
+    edge: &GraphEdge,
+    chain: &[Value],
+) -> Value {
+    let step = chain.len();
+
+    // Scope the corroboration pool to the subject entity's outgoing edges for
+    // this relation type.  This is the correct unit: "other edges from the
+    // same entity asserting the same rel", which are the only candidates that
+    // can corroborate this particular fact.  A global rel-scan would include
+    // edges from entirely different entities, burning the cap before the
+    // subject's own edges are reached.
+    let traversal = TraversalFilter {
+        rels: Some(vec![edge.rel.clone()]),
+        direction: Direction::Out,
+        max_hops: 1,
+        ..TraversalFilter::default()
+    };
+    let pool_result = block_on_inner(graph.neighbors(&edge.from, &traversal)).await;
+
+    let neighbors = match pool_result {
+        Ok(n) => n,
+        Err(error) => {
+            return json!({
+                "step": step,
+                "kind": "confidence_unavailable",
+                "reason": format!("graph scan failed: {error}"),
+                "summary": "Confidence could not be computed (graph scan error)."
+            });
+        }
+    };
+
+    // Extract the edge portion of each neighbor pair as the corroboration pool.
+    let pool: Vec<&tdw_core::GraphEdge> = neighbors.iter().map(|(e, _)| e).collect();
+
+    let subject = EdgeConfidenceInput::from_edge(edge);
+    // K-R3 seam: source_reliability not yet built → None (→ NEUTRAL = 1.0).
+    let score = compute_confidence(&subject, &pool, None);
+
+    json!({
+        "step": step,
+        "kind": "confidence",
+        "formula_version": score.formula_version,
+        "components": {
+            "extraction": {
+                "value": score.extraction,
+                "source": "props[\"extraction_confidence\"] (K-M1 seam; absent → neutral 1.0)",
+                "note": "K-M1 not yet built; field will be stamped by extraction pipeline when available."
+            },
+            "source_reliability": {
+                "value": score.source_reliability,
+                "source": "K-R3 seam (not yet built; absent → neutral 1.0)",
+                "note": "Source-reliability scores will be injected here when K-R3 ships."
+            },
+            "corroboration": {
+                "independent_sources": score.corroboration_sources,
+                "factor": score.corroboration_factor,
+                "definition": "Distinct Provenance::Ingest { source } values asserting the same (from, rel, to); same source re-ingested counts once.",
+                "formula": "1.0 + min(n-1, 5) × 0.1 (caps at 1.5)"
+            },
+            "contradiction": {
+                "survived": score.survived_contradiction,
+                "factor": score.contradiction_factor,
+                "definition": "Survived K-M4 functional-predicate check (no invalidated_by in props); bonus 1.0 / penalty 0.85."
+            }
+        },
+        "confidence": score.confidence,
+        "summary": format!(
+            "Confidence {:.3}: extraction={:.2} × source_reliability={:.2} × corroboration_factor={:.2} × contradiction_factor={:.2} = {:.3} (clamped). \
+             {} independent source(s); survived_contradiction={}.",
+            score.confidence,
+            score.extraction,
+            score.source_reliability,
+            score.corroboration_factor,
+            score.contradiction_factor,
+            score.confidence,
+            score.corroboration_sources,
+            score.survived_contradiction
+        )
+    })
 }
 
 // ── Provenance helpers ────────────────────────────────────────────────────────

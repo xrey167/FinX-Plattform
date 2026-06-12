@@ -360,6 +360,86 @@ fn why_edge_ingest_chain() {
 }
 
 #[test]
+fn why_edge_confidence_step_appended_to_chain() {
+    // K-R6: every why-chain for a graph edge must include a trailing
+    // "confidence" step that decomposes all four formula components.
+    //
+    // Fixture edge: instrument:AAPL -listed_on-> venue:XNAS
+    //   - extraction_confidence absent → NEUTRAL (1.0)
+    //   - source_reliability absent → NEUTRAL (K-R3 seam, 1.0)
+    //   - 1 independent source ("exchange-feed") → corroboration_factor = 1.0
+    //   - no invalidated_by → survived_contradiction = true
+    //   → confidence = 1.0 × 1.0 × 1.0 × 1.0 = 1.0
+    let mut server = server_with_runtime();
+    let response = call(
+        &mut server,
+        "tdw.kg.why",
+        &json!({
+            "edge": { "from": "instrument:AAPL", "rel": "listed_on", "to": "venue:XNAS" }
+        }),
+    );
+    assert_eq!(response["result"]["isError"], false);
+    let sc = &response["result"]["structuredContent"];
+    let chain = sc["chain"]
+        .as_array()
+        .unwrap_or_else(|| panic!("chain array"));
+
+    // The confidence step must be the last step in the chain.
+    let last = chain.last().unwrap_or_else(|| panic!("chain non-empty"));
+    assert_eq!(
+        last["kind"], "confidence",
+        "last chain step must be kind=confidence; got: {last}"
+    );
+
+    // Formula version matches the constant.
+    assert_eq!(
+        last["formula_version"].as_u64(),
+        Some(u64::from(tdw_core::CONFIDENCE_FORMULA_VERSION)),
+        "formula_version mismatch"
+    );
+
+    // All four components are present and have the expected neutral values.
+    let comp = &last["components"];
+    assert_eq!(
+        comp["extraction"]["value"].as_f64(),
+        Some(tdw_core::NEUTRAL),
+        "extraction must be NEUTRAL (K-M1 absent)"
+    );
+    assert_eq!(
+        comp["source_reliability"]["value"].as_f64(),
+        Some(tdw_core::NEUTRAL),
+        "source_reliability must be NEUTRAL (K-R3 absent)"
+    );
+    assert_eq!(
+        comp["corroboration"]["independent_sources"].as_u64(),
+        Some(1),
+        "one independent source (exchange-feed)"
+    );
+    assert!(
+        (comp["corroboration"]["factor"].as_f64().unwrap_or(0.0) - 1.0).abs() < 1e-9,
+        "single source → corroboration_factor = 1.0"
+    );
+    assert_eq!(
+        comp["contradiction"]["survived"].as_bool(),
+        Some(true),
+        "no invalidated_by → survived=true"
+    );
+
+    // Final confidence must be 1.0 (all neutral components).
+    assert!(
+        (last["confidence"].as_f64().unwrap_or(0.0) - 1.0).abs() < 1e-9,
+        "all-neutral components → confidence = 1.0"
+    );
+
+    // Summary string must be non-empty and mention confidence.
+    let summary = last["summary"].as_str().unwrap_or("");
+    assert!(
+        summary.contains("Confidence"),
+        "summary must mention Confidence; got: {summary}"
+    );
+}
+
+#[test]
 fn why_edge_rule_chain() {
     let mut server = server_with_runtime();
     let response = call(
