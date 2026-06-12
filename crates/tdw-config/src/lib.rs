@@ -164,23 +164,35 @@ pub struct KnowledgeConfig {
     pub embedding: EmbeddingConfig,
     /// Graph-database backend for the live daemon's knowledge graph (F1).
     ///
-    /// Default backend is `bolt` (Memgraph/Neo4j). There is **NO silent
-    /// fallback**: if `bolt` is selected and the endpoint is unreachable at
-    /// daemon startup, the daemon refuses to boot with an `Init` error.
+    /// The default backend is `in-memory` so that `tdw-service` starts without
+    /// any external services on a first run. Graph data is **not persisted**
+    /// across restarts in this mode. Set `backend = "bolt"` in your daemon TOML
+    /// (or in the `full`/`live` Compose profiles) for any environment where
+    /// graph data must survive a restart.
     ///
-    /// Use `in-memory` explicitly for development and tests.
+    /// This is an **explicit default**, not a fallback: both `in-memory` and
+    /// `bolt` are first-class. There is NO silent fallback — selecting `bolt`
+    /// and having Memgraph unreachable is a hard `Init` error at daemon startup.
     #[serde(default)]
     pub graph: GraphConfig,
 }
 
 /// Which graph-database backend the knowledge graph uses.
 ///
-/// BOTH `bolt` (Memgraph/Neo4j, production) and `in-memory` (dev/test) are
-/// first-class. There is **NO silent fallback**: a `bolt` backend whose URI
-/// is unreachable at daemon startup is a hard `Init` error.
+/// Both `in-memory` (the zero-config default) and `bolt` (Memgraph/Neo4j,
+/// production) are first-class. There is **NO silent fallback**: a `bolt`
+/// backend whose URI is unreachable at daemon startup is a hard `Init` error,
+/// and a `bolt` backend requested without the `bolt` Cargo feature is a hard
+/// `Init` error. The `in-memory` default is an explicit choice, not a fallback.
+///
+/// **Production posture**: compose/production configs **must** set
+/// `backend = "bolt"` explicitly. The `full` and `live` Docker Compose
+/// profiles do this via environment. The `in-memory` default is intentional
+/// for zero-config first runs and offline development only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GraphConfig {
-    /// `bolt` (Memgraph/Neo4j, production default) or `in-memory` (dev/test).
+    /// `in-memory` (default; zero-config, not persisted) or `bolt`
+    /// (Memgraph/Neo4j; production). See [`KnowledgeConfig::graph`].
     pub backend: String,
     /// Bolt endpoint URI, e.g. `bolt://127.0.0.1:7687`. Required when
     /// `backend = bolt`; ignored for `in-memory`.
@@ -209,9 +221,23 @@ impl GraphConfig {
 }
 
 impl Default for GraphConfig {
+    /// Returns the zero-config default: `backend = "in-memory"`.
+    ///
+    /// This allows `tdw-service` to start without any external graph database
+    /// on a first run. Graph data is **not persisted** across restarts in this
+    /// mode; a startup notice is printed to stderr as a reminder.
+    ///
+    /// Production environments **must** override `backend = "bolt"` in their
+    /// daemon TOML or Compose environment. The `full` and `live` Compose
+    /// profiles set `bolt` explicitly — this default does not affect them.
+    ///
+    /// Bolt field defaults (`bolt_uri`, `bolt_user`, `bolt_password_env`,
+    /// `bolt_db`) are kept at their production-appropriate values so that
+    /// operator configs that only set `backend = "bolt"` work without having
+    /// to repeat every field.
     fn default() -> Self {
         Self {
-            backend: "bolt".to_string(),
+            backend: "in-memory".to_string(),
             bolt_uri: Some("bolt://127.0.0.1:7687".to_string()),
             bolt_user: String::new(),
             bolt_password_env: "TDW_GRAPH_PASSWORD".to_string(),
@@ -916,10 +942,15 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
     }
 
     #[test]
-    fn graph_config_defaults_to_bolt() {
+    fn graph_config_defaults_to_in_memory() {
+        // K-E1: the zero-config default is in-memory so that a first run
+        // requires no external services. Bolt field defaults are still
+        // populated so that operator configs can override just `backend`.
         let cfg = TdwConfig::default();
-        assert_eq!(cfg.knowledge.graph.backend, "bolt");
+        assert_eq!(cfg.knowledge.graph.backend, "in-memory");
+        // Bolt URI default is still set (used when operator adds backend=bolt).
         assert!(cfg.knowledge.graph.bolt_uri.is_some());
+        // The default config must pass validation.
         assert!(cfg.validate().is_ok());
     }
 
@@ -928,6 +959,15 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         let mut cfg = TdwConfig::default();
         cfg.knowledge.graph.backend = "in-memory".to_string();
         cfg.knowledge.graph.bolt_uri = None;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn graph_config_bolt_with_uri_passes() {
+        // Bolt validation path: URI present → OK.
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.graph.backend = "bolt".to_string();
+        cfg.knowledge.graph.bolt_uri = Some("bolt://127.0.0.1:7687".to_string());
         assert!(cfg.validate().is_ok());
     }
 

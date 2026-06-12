@@ -29,6 +29,7 @@ pub mod fetch_policy;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
 mod policy;
+mod portfolio_compute;
 mod provider_resolve;
 mod quant_compute;
 #[cfg(feature = "rest-api-route")]
@@ -147,6 +148,8 @@ use tdw_provider_deribit::{
 };
 #[cfg(feature = "provider-ecb")]
 use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
+#[cfg(feature = "provider-econdb")]
+use tdw_provider_econdb::EcondbHttpMacroSeriesFetcher;
 #[cfg(feature = "provider-eia")]
 use tdw_provider_eia::{
     EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
@@ -162,8 +165,9 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
+    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
+    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
     FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
     FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
 };
@@ -182,6 +186,8 @@ use tdw_provider_government_us::{
 };
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
+#[cfg(feature = "provider-imf")]
+use tdw_provider_imf::ImfHttpMacroSeriesFetcher;
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
@@ -379,6 +385,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpEarningsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpPriceTargetFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpAnalystEstimatesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpPeersFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpDiscoveryFetcher::registry_entry())?;
@@ -404,6 +414,12 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(GovUsTreasuryPricesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-famafrench")]
     registry.register(FamaFrenchHttpFetcher::registry_entry())?;
+    // Catalog-facing IMF SDMX-JSON macro fetcher (OpenBB-parity P3W3).
+    #[cfg(feature = "provider-imf")]
+    registry.register(ImfHttpMacroSeriesFetcher::registry_entry())?;
+    // Catalog-facing EconDB macro fetcher (OpenBB-parity P3W4).
+    #[cfg(feature = "provider-econdb")]
+    registry.register(EcondbHttpMacroSeriesFetcher::registry_entry())?;
     register_extended_providers(&mut registry)?;
     Ok(registry)
 }
@@ -733,6 +749,25 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         ("famafrench", "economy_factors_famafrench") => {
             dispatch!(FamaFrenchHttpFetcher::default())
         }
+        // ImfHttpMacroSeriesFetcher — one fetcher per IMF SDMX database route;
+        // the catalog `command` rides in `params` (injected by the dispatcher
+        // FetchBinding) so all three keys share the same concrete fetcher.
+        #[cfg(feature = "provider-imf")]
+        (
+            "imf",
+            "economy_imf_international_financial_statistics"
+            | "economy_imf_direction_of_trade"
+            | "economy_imf_balance_of_payments",
+        ) => {
+            dispatch!(ImfHttpMacroSeriesFetcher::default())
+        }
+        // EcondbHttpMacroSeriesFetcher — the single EconDB series route; the
+        // catalog `command` rides in `params` (injected by the dispatcher
+        // FetchBinding).
+        #[cfg(feature = "provider-econdb")]
+        ("econdb", "economy_econdb_series") => {
+            dispatch!(EcondbHttpMacroSeriesFetcher::default())
+        }
         // SeekingAlphaArticlesHttpFetcher (PROVIDER_ID = "seeking-alpha")
         #[cfg(feature = "provider-seeking-alpha")]
         ("seeking-alpha", "articles") => dispatch!(SeekingAlphaArticlesHttpFetcher::default()),
@@ -909,6 +944,14 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
     }
     #[cfg(feature = "provider-famafrench")]
     target!("famafrench", "economy_factors_famafrench");
+    #[cfg(feature = "provider-imf")]
+    {
+        target!("imf", "economy_imf_international_financial_statistics");
+        target!("imf", "economy_imf_direction_of_trade");
+        target!("imf", "economy_imf_balance_of_payments");
+    }
+    #[cfg(feature = "provider-econdb")]
+    target!("econdb", "economy_econdb_series");
     #[cfg(feature = "provider-seeking-alpha")]
     {
         target!("seeking-alpha", "articles");
@@ -2014,6 +2057,8 @@ mod tests {
         feature = "provider-fmp",
         feature = "provider-fred",
         feature = "provider-government-us",
+        feature = "provider-imf",
+        feature = "provider-econdb",
         feature = "provider-geckoterminal",
         feature = "provider-glassnode",
         feature = "provider-huggingface",

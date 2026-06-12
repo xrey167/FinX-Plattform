@@ -5061,6 +5061,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-analytics-portfolio"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-analytics-quant",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-analytics-quant"
 version = "0.1.0"
 dependencies = [
@@ -5230,6 +5241,7 @@ dependencies = [
 name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "clap",
  "serde_json",
  "tdw-core",
@@ -5239,8 +5251,10 @@ dependencies = [
  "tdw-embed-local",
  "tdw-embed-openai",
  "tdw-endpoint-catalog",
+ "tdw-kg",
  "tdw-knowledge",
  "tdw-protocol",
+ "tdw-storage-graph",
  "tdw-storage-meilisearch",
  "tdw-storage-qdrant",
  "tdw-test-utils",
@@ -5389,6 +5403,7 @@ dependencies = [
  "schemars",
  "serde",
  "tdw-analytics-econometrics",
+ "tdw-analytics-portfolio",
  "tdw-analytics-quant",
  "tdw-analytics-technical",
  "tdw-core",
@@ -5963,6 +5978,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-econdb"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "tdw-provider-testkit",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-eia"
 version = "0.1.0"
 dependencies = [
@@ -6166,6 +6198,23 @@ dependencies = [
  "serde_json",
  "tdw-core",
  "tdw-provider-http",
+ "tdw-provider-testkit",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-provider-imf"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
  "tdw-provider-testkit",
  "thiserror 2.0.18",
  "tokio",
@@ -6495,6 +6544,7 @@ dependencies = [
  "tdw-agent-store",
  "tdw-alerts",
  "tdw-analytics-econometrics",
+ "tdw-analytics-portfolio",
  "tdw-analytics-quant",
  "tdw-analytics-technical",
  "tdw-app-client",
@@ -6543,6 +6593,7 @@ dependencies = [
  "tdw-provider-databento",
  "tdw-provider-deribit",
  "tdw-provider-ecb",
+ "tdw-provider-econdb",
  "tdw-provider-eia",
  "tdw-provider-famafrench",
  "tdw-provider-federal-reserve",
@@ -6555,6 +6606,7 @@ dependencies = [
  "tdw-provider-glassnode",
  "tdw-provider-government-us",
  "tdw-provider-huggingface",
+ "tdw-provider-imf",
  "tdw-provider-nasdaq",
  "tdw-provider-oecd",
  "tdw-provider-polygon",

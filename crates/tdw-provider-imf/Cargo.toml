@@ -1,0 +1,48 @@
+[package]
+name = "tdw-provider-imf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+# PERF(doctest-disabled): no runnable doc examples; skip the empty doctest harness
+# to cut warm `cargo test --workspace` time, matching sibling provider crates.
+doctest = false
+
+[features]
+default = []
+# Enables the real IMF Data Services SDMX-JSON HTTP fetchers (reqwest). Off by
+# default so workspace tests stay offline; live calls are additionally gated by
+# TDW_IMF_LIVE=1. The IMF SDMX-JSON API is keyless (no token required).
+http = [
+    "dep:async-trait",
+    "dep:bytes",
+    "dep:reqwest",
+    "dep:tdw-domain",
+    "dep:tokio",
+    "tdw-core/http",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tdw-core = { workspace = true }
+tdw-domain = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+
+[[test]]
+name = "http_fetcher"
+path = "tests/http_fetcher.rs"
+required-features = ["http"]
+
+[lints]
+workspace = true

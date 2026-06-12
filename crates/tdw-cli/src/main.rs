@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 
+mod ingest;
 mod params;
 mod reindex;
 mod render;
@@ -63,6 +64,16 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "status")
     {
         return status::run(&args).await;
+    }
+
+    // kg ingest: public ingestion surface through the KnowledgeIndexer seam
+    // (knowledge-system K-E3). Reads JSONL from a file or stdin and writes
+    // through the full B5 pipeline (idempotency, rules, lexical, graph).
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "ingest")
+    {
+        return ingest::run(&args).await;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).

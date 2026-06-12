@@ -140,6 +140,8 @@ provider-government-us = [
     "dep:tdw-provider-government-us",
     "tdw-provider-government-us/http",
 ]
+provider-imf = ["dep:tdw-provider-imf", "tdw-provider-imf/http"]
+provider-econdb = ["dep:tdw-provider-econdb", "tdw-provider-econdb/http"]
 provider-geckoterminal = [
     "dep:tdw-provider-geckoterminal",
     "tdw-provider-geckoterminal/http",
@@ -238,6 +240,8 @@ all-http-providers = [
     "provider-fmp",
     "provider-fred",
     "provider-government-us",
+    "provider-imf",
+    "provider-econdb",
     "provider-geckoterminal",
     "provider-glassnode",
     "provider-huggingface",
@@ -276,6 +280,7 @@ tdw-bus = { path = "../tdw-bus" }
 tdw-analytics-technical = { workspace = true }
 tdw-analytics-quant = { workspace = true }
 tdw-analytics-econometrics = { workspace = true }
+tdw-analytics-portfolio = { workspace = true }
 tdw-charting = { workspace = true }
 tdw-cdc = { path = "../tdw-cdc" }
 tdw-config = { workspace = true }
@@ -325,6 +330,8 @@ tdw-provider-finnhub = { path = "../tdw-provider-finnhub", optional = true }
 tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-government-us = { path = "../tdw-provider-government-us", optional = true }
+tdw-provider-imf = { path = "../tdw-provider-imf", optional = true }
+tdw-provider-econdb = { path = "../tdw-provider-econdb", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
 tdw-provider-glassnode = { path = "../tdw-provider-glassnode", optional = true }
 tdw-provider-huggingface = { path = "../tdw-provider-huggingface", optional = true }

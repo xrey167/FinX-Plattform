@@ -8,6 +8,58 @@ from __future__ import annotations
 from ._client import Client, FinXObject
 
 
+class EconomyEcondbNamespace:
+    """Accessor for the ``economy/econdb`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def series(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """EconDB economic time series by ticker (standardized cross-country macro series).
+
+        Route: ``economy/econdb/series``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("economy/econdb/series", params)
+
 class EconomyFactorsNamespace:
     """Accessor for the ``economy/factors`` route namespace."""
 
@@ -157,6 +209,150 @@ class EconomyGdpNamespace:
         if chart:
             params["chart"] = "true"
         return self._client.fetch("economy/gdp/real", params)
+
+class EconomyImfNamespace:
+    """Accessor for the ``economy/imf`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def balance_of_payments(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """IMF Balance of Payments time series, SDMX-JSON macro series.
+
+        Route: ``economy/imf/balance_of_payments``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("economy/imf/balance_of_payments", params)
+
+    def direction_of_trade(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """IMF Direction of Trade Statistics time series, SDMX-JSON macro series.
+
+        Route: ``economy/imf/direction_of_trade``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("economy/imf/direction_of_trade", params)
+
+    def international_financial_statistics(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """IMF International Financial Statistics time series, SDMX-JSON macro series.
+
+        Route: ``economy/imf/international_financial_statistics``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("economy/imf/international_financial_statistics", params)
 
 class EconomyMoneyMeasuresNamespace:
     """Accessor for the ``economy/money_measures`` route namespace."""
@@ -405,8 +601,10 @@ class EconomyNamespace:
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        self.econdb = EconomyEcondbNamespace(client)
         self.factors = EconomyFactorsNamespace(client)
         self.gdp = EconomyGdpNamespace(client)
+        self.imf = EconomyImfNamespace(client)
         self.money_measures = EconomyMoneyMeasuresNamespace(client)
         self.survey = EconomySurveyNamespace(client)
 

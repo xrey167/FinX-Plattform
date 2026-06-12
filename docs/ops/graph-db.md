@@ -1,8 +1,15 @@
 # Graph Database Operations Runbook
 
+> **New here?** See [`docs/knowledge-quickstart.md`](../knowledge-quickstart.md)
+> for the end-to-end first-run guide, embedder matrix, and `in-memory` → `bolt`
+> migration path. This runbook covers operational topics (deployment, backup,
+> upgrade, troubleshooting) for production Bolt setups.
+
 The FinX daemon uses Memgraph (or any Bolt-protocol-compatible graph database,
-e.g. Neo4j) as the production graph backend for the knowledge system. This
-runbook covers deployment, configuration, backup, upgrade, and troubleshooting.
+e.g. Neo4j) as the production graph backend for the knowledge system. The
+**default backend is `in-memory`** (K-E1) for zero-config first runs; set
+`backend = "bolt"` in production. This runbook covers deployment, configuration,
+backup, upgrade, and troubleshooting.
 
 ## Quick reference
 
