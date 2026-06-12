@@ -40,6 +40,8 @@ tdw-core = { workspace = true }
 # routes — it only reads catalog() to advertise and dispatch them.
 tdw-endpoint-catalog = { workspace = true }
 tdw-infer = { path = "../tdw-infer" }
+# K-R5 why-chain: detect inducted rule ids and trace them to their source pattern.
+tdw-induction = { workspace = true }
 tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-protocol = { workspace = true }

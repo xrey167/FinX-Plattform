@@ -278,6 +278,16 @@ impl InferEngine {
         self
     }
 
+    /// Return the currently installed rule set (read-only).
+    ///
+    /// Callers that need to build an updated set (e.g. the K-R5 induction
+    /// worker) clone this slice, push new rules, then call
+    /// [`hot_reload`](Self::hot_reload).
+    #[must_use]
+    pub fn rules(&self) -> &[InferRule] {
+        &self.rules
+    }
+
     /// Atomically replace the rule set: EVERY rule validates (shape + stratification) or
     /// NOTHING changes; success bumps the version (mirrors `tdw-tag-rules`).
     ///

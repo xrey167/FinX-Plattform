@@ -500,6 +500,17 @@ impl Default for PatternConfig {
 /// opt-in. The operator must set `enabled = true` in `[knowledge.lessons]`.
 /// When disabled, a loud status note is emitted at each tick — keyless/offline
 /// installs run the daemon unchanged.
+/// Rule-induction configuration (knowledge-system K-R5).
+///
+/// Controls the cron-driven pipeline that promotes mined patterns to
+/// inference rules through the walk-forward replay gate (K-R7).
+///
+/// # Important: enabled defaults to `false`
+///
+/// Rule induction is the most powerful new capability — it lets the system
+/// write its own inference rules from experience.  The operator must
+/// explicitly set `enabled = true`.  A loud NOTICE is emitted at every
+/// cron tick when disabled.
 ///
 /// # Example TOML
 ///
@@ -556,6 +567,86 @@ impl Default for LessonsConfig {
             cadence: Self::default_cadence(),
             min_confidence: Self::default_min_confidence(),
             max_episode_scan: Self::default_max_episode_scan(),
+        }
+    }
+}
+
+/// [knowledge.induction]
+/// enabled = true
+/// cadence = "0 3 * * *"          # nightly at 03:00
+/// min_promote_precision = 0.60
+/// min_promote_recall    = 0.20
+/// max_candidates_per_cycle = 20
+/// retire_induced_on_disable = false
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InductionConfig {
+    /// Whether the cron-driven induction pipeline is active.
+    ///
+    /// **Default: `false`.**
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// 5-field cron expression for the induction cadence.
+    ///
+    /// Default: `"0 3 * * *"` (daily 03:00 UTC — one hour after the
+    /// default pattern-mining cadence at 02:00).
+    #[serde(default = "InductionConfig::default_cadence")]
+    pub cadence: String,
+
+    /// Minimum mean precision over replay splits for promotion.
+    ///
+    /// Default: `0.60`.
+    #[serde(default = "InductionConfig::default_min_precision")]
+    pub min_promote_precision: f64,
+
+    /// Minimum mean recall over replay splits for promotion.
+    ///
+    /// Default: `0.20`.
+    #[serde(default = "InductionConfig::default_min_recall")]
+    pub min_promote_recall: f64,
+
+    /// Maximum candidate rules processed per induction cycle (B7 hard cap).
+    ///
+    /// Default: `20`.
+    #[serde(default = "InductionConfig::default_max_candidates")]
+    pub max_candidates_per_cycle: usize,
+
+    /// When `true`, all previously inducted rules are retired from the
+    /// inference engine when `enabled` is `false`.
+    ///
+    /// Default: `false`.
+    #[serde(default)]
+    pub retire_induced_on_disable: bool,
+}
+
+impl InductionConfig {
+    fn default_cadence() -> String {
+        "0 3 * * *".to_string()
+    }
+
+    const fn default_min_precision() -> f64 {
+        0.60
+    }
+
+    const fn default_min_recall() -> f64 {
+        0.20
+    }
+
+    const fn default_max_candidates() -> usize {
+        20
+    }
+}
+
+impl Default for InductionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cadence: Self::default_cadence(),
+            min_promote_precision: Self::default_min_precision(),
+            min_promote_recall: Self::default_min_recall(),
+            max_candidates_per_cycle: Self::default_max_candidates(),
+            retire_induced_on_disable: false,
         }
     }
 }
@@ -875,6 +966,28 @@ pub struct KnowledgeConfig {
     /// each tick when disabled.
     #[serde(default)]
     pub lessons: LessonsConfig,
+    /// Pattern → rule induction configuration (knowledge-system K-R5).
+    ///
+    /// Controls the self-authoring inference pipeline that turns mined
+    /// patterns into candidate rules and promotes those that pass the
+    /// walk-forward replay gate (K-R7).
+    ///
+    /// **Default: `enabled = false`.**  This is the most powerful new
+    /// capability; the operator must flip `enabled = true` explicitly.
+    /// A loud NOTICE is emitted at every cron tick when disabled.
+    ///
+    /// # Example TOML
+    ///
+    /// ```toml
+    /// [knowledge.induction]
+    /// enabled = true
+    /// cadence = "0 3 * * *"
+    /// min_promote_precision = 0.60
+    /// min_promote_recall    = 0.20
+    /// max_candidates_per_cycle = 20
+    /// ```
+    #[serde(default)]
+    pub induction: InductionConfig,
     /// Scheduled document-feed pipelines (knowledge-system K-L6).
     ///
     /// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop

@@ -1,0 +1,25 @@
+[package]
+name = "tdw-induction"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+doctest = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-core = { workspace = true }
+tdw-eval-runner = { path = "../tdw-eval-runner" }
+tdw-infer = { path = "../tdw-infer" }
+tdw-patterns = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+
+[lints]
+workspace = true
