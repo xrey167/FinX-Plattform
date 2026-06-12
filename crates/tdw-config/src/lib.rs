@@ -159,15 +159,13 @@ pub struct ProtocolConfig {
 
 /// Single-user identity for the knowledge finding surface (knowledge-system K-X6).
 ///
-/// Until K-L5 delivers per-session identity negotiation this is a single
-/// operator-configured id that binds to every `tdw.kg.finding` / `tdw.kg.link`
-/// tool call on this daemon. The id is validated at config load with the same
-/// grammar as [`tdw_knowledge::proposals::validate_agent_id`]:
-/// `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+/// K-L5 closed the host-binding gap for the user (finding) surface: identity is
+/// bound at runtime construction from this config value and NEVER accepted as a
+/// tool argument. The id is validated at config load with the same grammar as
+/// `tdw_knowledge::proposals::validate_agent_id`: `[A-Za-z0-9:._-]+`, non-empty,
+/// ≤ 128 bytes.
 ///
 /// Set `[knowledge.user] id = "analyst"` in your daemon TOML (default).
-/// When K-L5 lands, per-session identity will be injected at the MCP layer
-/// and this config key will be superseded — note that in the transition plan.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UserConfig {
     /// The operator-configured user identity bound to the finding tools.
@@ -185,6 +183,47 @@ impl UserConfig {
 }
 
 impl Default for UserConfig {
+    fn default() -> Self {
+        Self {
+            id: Self::default_id(),
+        }
+    }
+}
+
+/// Agent identity for the knowledge write surface (knowledge-system B9 + K-L5).
+///
+/// K-L5 closes the B9 host-binding gap for the feedback tool: the agent id is
+/// bound here at runtime construction and NEVER accepted as a tool argument.
+/// Remote callers cannot assert a different identity via the MCP surface.
+///
+/// This is the single-principal-per-listener model: one bearer token → one
+/// agent principal, configured here. Multi-principal HTTP (one identity per
+/// authenticated connection) is explicitly deferred to a follow-up story.
+///
+/// For STDIO / embedded surfaces the bearer token is irrelevant — identity
+/// comes solely from this config value, validated at load time with the same
+/// grammar as `tdw_knowledge::proposals::validate_agent_id`:
+/// `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+///
+/// Set `[knowledge.agent] id = "my-agent"` in your daemon TOML.
+/// Default: `"agent"`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentConfig {
+    /// The operator-configured agent identity bound to the write/feedback tools.
+    ///
+    /// Grammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
+    /// Default: `"agent"`.
+    #[serde(default = "AgentConfig::default_id")]
+    pub id: String,
+}
+
+impl AgentConfig {
+    fn default_id() -> String {
+        "agent".to_string()
+    }
+}
+
+impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             id: Self::default_id(),
@@ -278,7 +317,89 @@ impl Default for ScheduledEvalConfig {
     }
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6).
+/// Auto-materialization sweep settings for the gated proposal queue (K-L4).
+///
+/// Controls the autonomous cron sweep that lands `Ready` proposals without
+/// operator intervention. Default: **enabled** (`auto_materialize = true`).
+///
+/// # Kill-switch
+///
+/// Set `auto_materialize = false` to disable the sweep entirely. When the sweep
+/// is off, the **only** landing path is the operator `tdw.kg.proposals
+/// action=materialize` tool — human approval is then mandatory for every Ready
+/// proposal to reach the graph/tag engines.
+///
+/// # Defaults
+///
+/// ```toml
+/// [knowledge.proposals]
+/// auto_materialize  = true        # fully autonomous within gates (default on)
+/// sweep_cadence     = "*/5 * * * *"  # every 5 minutes
+/// sweep_cap         = 64          # max proposals landed per sweep
+/// ```
+///
+/// # Example (opt-out)
+///
+/// ```toml
+/// [knowledge.proposals]
+/// auto_materialize = false   # human-approval-only mode
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProposalsConfig {
+    /// Enable the autonomous materialization sweep (default: `true`).
+    ///
+    /// When `true` the daemon registers a cron trigger that materializes every
+    /// `Ready` proposal on `sweep_cadence`, sharing the same TOCTOU-safe core
+    /// as the operator `materialize` action.
+    ///
+    /// When `false` the sweep is not registered and no proposal is ever landed
+    /// without explicit operator approval. Status reports `disabled` for the
+    /// `proposals/auto-materialize` freshness line.
+    #[serde(default = "ProposalsConfig::default_auto_materialize")]
+    pub auto_materialize: bool,
+
+    /// 5-field cron expression for the materialization sweep cadence.
+    ///
+    /// Default: `"*/5 * * * *"` (every 5 minutes).
+    #[serde(default = "ProposalsConfig::default_sweep_cadence")]
+    pub sweep_cadence: String,
+
+    /// Maximum number of proposals the sweep lands in a single invocation.
+    ///
+    /// The sweep processes proposals in deterministic (`BTreeMap` insertion) order
+    /// and stops after landing `sweep_cap` of them. Proposals that were `Ready`
+    /// but not reached in this sweep will be landed on the next tick.
+    ///
+    /// Default: `64`.
+    #[serde(default = "ProposalsConfig::default_sweep_cap")]
+    pub sweep_cap: usize,
+}
+
+impl ProposalsConfig {
+    const fn default_auto_materialize() -> bool {
+        true
+    }
+
+    fn default_sweep_cadence() -> String {
+        "*/5 * * * *".to_string()
+    }
+
+    const fn default_sweep_cap() -> usize {
+        64
+    }
+}
+
+impl Default for ProposalsConfig {
+    fn default() -> Self {
+        Self {
+            auto_materialize: Self::default_auto_materialize(),
+            sweep_cadence: Self::default_sweep_cadence(),
+            sweep_cap: Self::default_sweep_cap(),
+        }
+    }
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -310,12 +431,23 @@ pub struct KnowledgeConfig {
     /// [`RunLimits`]: `max_iterations = 32`, `max_derived = 10 000`.
     #[serde(default)]
     pub infer: InferLimitsConfig,
-    /// Single-user identity for the finding tools (knowledge-system K-X6).
+    /// Single-user identity for the finding tools (knowledge-system K-X6 + K-L5).
     ///
     /// Defaults to `id = "analyst"`. Override in `[knowledge.user]` in your
-    /// daemon TOML. Per-session identity arrives with K-L5.
+    /// daemon TOML. K-L5 closed the host-binding gap: identity is now bound at
+    /// construction time, never accepted from tool arguments.
     #[serde(default)]
     pub user: UserConfig,
+    /// Agent identity for the write/feedback tools (knowledge-system B9 + K-L5).
+    ///
+    /// Defaults to `id = "agent"`. Override in `[knowledge.agent]` in your
+    /// daemon TOML. K-L5 closed the B9 host-binding gap for the feedback tool:
+    /// identity is bound at construction time from this value, never from tool
+    /// arguments. For HTTP listeners the bearer token IS the authentication
+    /// mechanism; the principal identity is this configured id (single-principal
+    /// per listener). Multi-principal HTTP is explicitly deferred.
+    #[serde(default)]
+    pub agent: AgentConfig,
     /// Scheduled in-daemon retrieval self-eval (K-L3).
     ///
     /// When `split_id` is set, the daemon registers a cron trigger that runs a
@@ -324,6 +456,15 @@ pub struct KnowledgeConfig {
     /// (the default), no trigger is registered and status reports `Unconfigured`.
     #[serde(default)]
     pub evals: ScheduledEvalConfig,
+    /// Gated auto-materialization sweep settings (K-L4).
+    ///
+    /// When `auto_materialize = true` (the default), the daemon registers a cron
+    /// trigger that materializes every `Ready` proposal on `sweep_cadence`.
+    /// Set `auto_materialize = false` to require explicit operator approval for
+    /// every landing — the `tdw.kg.proposals action=materialize` operator tool
+    /// then becomes the only landing path.
+    #[serde(default)]
+    pub proposals: ProposalsConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -739,14 +880,55 @@ impl TdwConfig {
     }
 }
 
-/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6).
+/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4).
 ///
 /// Extracted from [`TdwConfig::validate`] so that function stays under the
 /// 100-line function-length lint limit.
 fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     validate_rules_infer(&knowledge.rules, &knowledge.infer)?;
     // User identity: grammar [A-Za-z0-9:._-]+, non-empty, ≤128 bytes.
-    validate_user_id(&knowledge.user.id)
+    validate_principal_id(&knowledge.user.id, "knowledge.user.id")?;
+    // Agent identity (K-L5): same grammar, bound to the write/feedback surface.
+    validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")?;
+    // Proposals sweep config (K-L4).
+    validate_proposals(&knowledge.proposals)
+}
+
+/// Validate `[knowledge.proposals]` (K-L4).
+fn validate_proposals(proposals: &ProposalsConfig) -> Result<()> {
+    // sweep_cadence must be a valid 5-field cron expression (same structural
+    // check as `knowledge.evals.cadence` — full semantic parse is avoided to
+    // keep tdw-config free of tdw-cron).
+    {
+        let fields: Vec<&str> = proposals.sweep_cadence.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.proposals.sweep_cadence must be a 5-field cron expression \
+                 (e.g. \"*/5 * * * *\"), got {:?}",
+                proposals.sweep_cadence
+            )));
+        }
+        let legal: fn(char) -> bool = |c| {
+            c.is_ascii_digit()
+                || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+        };
+        for field in &fields {
+            if field.chars().any(|c| !legal(c)) {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.proposals.sweep_cadence contains an invalid cron field {:?} \
+                     in expression {:?}",
+                    field, proposals.sweep_cadence
+                )));
+            }
+        }
+    }
+    // sweep_cap must be at least 1 — a cap of 0 would land nothing, silently.
+    if proposals.sweep_cap == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.proposals.sweep_cap must be at least 1".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Result<()> {
@@ -800,29 +982,33 @@ fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Resul
     Ok(())
 }
 
-/// Validate a `knowledge.user.id` value.
+/// Validate a knowledge principal id (user or agent).
 ///
 /// Grammar: `[A-Za-z0-9:._-]+`, non-empty, ≤ 128 bytes.
 /// Mirrors `tdw_knowledge::proposals::validate_agent_id` — kept inline so
 /// `tdw-config` stays free of that cross-crate dependency.
-fn validate_user_id(user_id: &str) -> Result<()> {
-    if user_id.is_empty() {
-        return Err(ConfigError::Validation(
-            "knowledge.user.id must not be empty".to_string(),
-        ));
-    }
-    if user_id.len() > 128 {
+///
+/// `field` is the config key (e.g. `"knowledge.user.id"` or
+/// `"knowledge.agent.id"`) and is used verbatim in error messages so the
+/// operator sees exactly which field is misconfigured.
+fn validate_principal_id(id: &str, field: &str) -> Result<()> {
+    if id.is_empty() {
         return Err(ConfigError::Validation(format!(
-            "knowledge.user.id is too long ({} bytes, max 128)",
-            user_id.len()
+            "{field} must not be empty"
         )));
     }
-    if let Some(bad) = user_id
+    if id.len() > 128 {
+        return Err(ConfigError::Validation(format!(
+            "{field} is too long ({} bytes, max 128)",
+            id.len()
+        )));
+    }
+    if let Some(bad) = id
         .chars()
         .find(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
     {
         return Err(ConfigError::Validation(format!(
-            "knowledge.user.id {user_id:?} contains invalid character {bad:?} \
+            "{field} {id:?} contains invalid character {bad:?} \
              — only [A-Za-z0-9:._-] allowed"
         )));
     }

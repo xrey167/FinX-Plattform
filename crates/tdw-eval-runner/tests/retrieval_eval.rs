@@ -220,6 +220,9 @@ async fn hash_embedder_report_round_trips_json() {
 // CI reads the baseline and fails on regression; it never writes back.
 #[tokio::test]
 async fn golden_split_regression_gate() {
+    use tdw_eval_runner::baseline_comparator::{RegressionThresholds, compare_to_baseline};
+    use tdw_eval_runner::scheduled_eval::{GoldenSplitFixture, load_golden_split};
+
     let Ok(flag) = std::env::var("TDW_GOLDEN_SPLIT_CI") else {
         eprintln!("TDW_GOLDEN_SPLIT_CI unset; skipping golden-split regression gate");
         return;
@@ -228,9 +231,6 @@ async fn golden_split_regression_gate() {
         eprintln!("TDW_GOLDEN_SPLIT_CI={flag}; skipping golden-split regression gate");
         return;
     }
-
-    use tdw_eval_runner::baseline_comparator::{RegressionThresholds, compare_to_baseline};
-    use tdw_eval_runner::scheduled_eval::{GoldenSplitFixture, load_golden_split};
 
     // ── load fixture (GoldenSplitFixture: documents + cases + baseline) ──────
     let fixture_path = concat!(

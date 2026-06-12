@@ -84,6 +84,11 @@ impl IndexManifest {
         self.entries.is_empty()
     }
 
+    /// Iterate over every `(doc_id, entry)` pair recorded in the manifest (sorted by id).
+    pub fn entries(&self) -> impl Iterator<Item = (&String, &ManifestEntry)> {
+        self.entries.iter()
+    }
+
     /// Serialize for persistence.
     ///
     /// # Errors

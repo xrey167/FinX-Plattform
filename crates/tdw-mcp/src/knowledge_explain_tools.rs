@@ -300,7 +300,7 @@ async fn why_edge(
         }));
     };
 
-    let chain = provenance_chain(&edge.provenance, 0);
+    let chain = provenance_chain(&edge.provenance, &edge.props, 0);
     let cap = chain.len() >= WHY_MAX_CHAIN_DEPTH;
     let summary = edge_summary(&edge.provenance, from, rel, to);
 
@@ -657,7 +657,11 @@ fn append_merge_steps(
 
 /// Build an ordered chain of typed steps from a single [`Provenance`] value.
 /// Returns at most [`WHY_MAX_CHAIN_DEPTH`] items.
-fn provenance_chain(provenance: &Provenance, start_step: usize) -> Vec<Value> {
+fn provenance_chain(
+    provenance: &Provenance,
+    edge_props: &serde_json::Value,
+    start_step: usize,
+) -> Vec<Value> {
     let mut chain = Vec::new();
     let step = start_step;
 
@@ -689,20 +693,26 @@ fn provenance_chain(provenance: &Provenance, start_step: usize) -> Vec<Value> {
         }
         Provenance::Agent { agent_id, gated } => {
             if *gated {
-                // Gated agent write — parse the proposal id from the edge props if available.
+                // Gated agent write — the edge props carry `{"proposal": "<pid>"}`.
+                // Surface the proposal id so operators can correlate with the
+                // queue audit trail without a separate tdw.kg.proposals lookup.
+                let proposal_id = edge_props
+                    .get("proposal")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>");
                 chain.push(json!({
                     "step": step,
                     "kind": "agent_gated",
                     "agent_id": agent_id,
                     "gated": true,
-                    "note": "Validation timestamps and exact promotion route (eval pass_rate vs \
-                             human approve, approver id) are stored in the ProposalQueue history \
-                             field as human-readable audit lines. They are not re-serialized here \
-                             to avoid coupling this read tool to the mutable write-queue state. \
-                             Consult tdw.kg.proposals for the full audit trail.",
+                    "proposal_id": proposal_id,
+                    "audit_note": "Full gate audit (submit/validate/promote/materialize \
+                                   timestamps and eval pass_rate or approver id) is in \
+                                   ProposalQueue history for this proposal id \
+                                   (tdw.kg.proposals list).",
                     "summary": format!(
-                        "Written by agent {agent_id:?} through the gated proposal path. \
-                         Full gate audit in ProposalQueue history (see tdw.kg.proposals)."
+                        "Written by agent {agent_id:?} through the gated proposal path \
+                         (proposal {proposal_id})."
                     )
                 }));
             } else {

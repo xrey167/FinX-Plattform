@@ -68,9 +68,8 @@ providers never mixes vector dimensions. See the migration path in step 4.
 
 ## 3. Ingest
 
-Today the public ingest surface is the **Rust `Backend` API** and the **MCP
-`knowledge_index` path**. A public `tdw kg index` CLI/MCP ingest command is
-planned for story K-E3 (not yet merged); do not reference it until that PR lands.
+The public ingest surfaces are the **Rust `Backend` API**, the **MCP
+`knowledge_index` path**, and the **`tdw kg ingest` CLI command** (landed in K-E3).
 
 Index documents via the `Backend` API (Rust):
 
@@ -146,6 +145,42 @@ these steps in order:
 > **Note**: Switching embedder provider also requires `tdw kg reindex` because
 > vector collections are namespaced per model id and old vectors are not
 > readable by a new model.
+
+## Try it: offline demo walkthrough
+
+Run a fully offline, in-memory walkthrough of the knowledge graph in one
+command — no running daemon, no API keys, no external services required:
+
+```bash
+tdw kg demo
+```
+
+The demo seeds 8 curated finance documents (instruments, companies, filings),
+runs inference (supply-chain peer derivation), and walks you through five steps:
+
+| Step | What it shows |
+|------|---------------|
+| Ingest | 8 fixture docs indexed; derived `supply_chain_peer` edges minted |
+| Search | Hybrid search for "AAPL supply chain" |
+| Why | Provenance chain for a derived edge (rule id + support) |
+| Diff | Manifest diff between v1 (Jan 2026) and v2 (Apr 2026) snapshots |
+| Status | Document count, derivation count, embedder model, inference version |
+
+> **In-memory demo — data is not persisted.** The graph is discarded at exit.
+> To persist data, configure a bolt backend and run `tdw kg reindex`.
+
+Use `--json` for scripted / CI output (emits NDJSON — one JSON object per step):
+
+```bash
+# Print the search step result:
+tdw kg demo --json | jq 'select(.step == "search")'
+
+# Print all step names:
+tdw kg demo --json | jq -r '.step'
+```
+
+The equivalent production API call for each step is printed alongside the demo
+output so you can copy it into your own code.
 
 ## Further reading
 
