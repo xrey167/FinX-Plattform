@@ -10,7 +10,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tdw_agent::{ConsolidationAction, Memory, UsageHint, consolidation_plan_with_usage};
 use tdw_agent_store::{
-    MemoryStore, RetrievalFeedbackStore, consolidate_at, spawn_consolidation_scheduler,
+    MemoryStore, RetrievalFeedbackStore, consolidate_at,
+    spawn_consolidation_scheduler_with_feedback,
 };
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
@@ -31,7 +32,9 @@ use tdw_eval_runner::scheduled_eval::{
 };
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::indexer::KnowledgeIndexer;
-use tdw_knowledge::runtime::{EvalFreshness, KnowledgeRuntime, SweepFreshness};
+use tdw_knowledge::runtime::{
+    ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
+};
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_outbox::InMemoryOutbox;
 use tdw_protocol::{EventMsg, OpEnvelope};
@@ -163,6 +166,12 @@ pub struct Backend {
     /// [`Backend::serve`] can register the cron trigger and spawn the eval
     /// worker without a second round of config parsing.
     evals_cfg: EvalsConfig,
+    /// Live consolidation-freshness cell (K-L2). Shared between the
+    /// [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the consolidation
+    /// scheduler spawned in [`Backend::serve`] (write side: updated after each
+    /// tick). Always `Some` after construction; pre-populated with
+    /// [`ConsolidationFreshness::Pending`].
+    consolidation_freshness: Arc<Mutex<ConsolidationFreshness>>,
     /// K-L4 auto-materialization sweep configuration, extracted from
     /// `config.knowledge.proposals` in [`Backend::from_config`]. Held here so
     /// [`Backend::serve`] can register the sweep trigger without re-parsing.
@@ -185,6 +194,7 @@ impl Backend {
     ///
     /// Returns [`BackendError::Init`] if the daemon composition root cannot be
     /// constructed from `config`.
+    #[allow(clippy::too_many_lines)]
     pub async fn from_config(config: TdwConfig) -> BackendResult<Self> {
         let embedding = config.knowledge.embedding.clone();
         let graph_cfg = config.knowledge.graph.clone();
@@ -294,6 +304,8 @@ impl Backend {
         // K-X6 + K-L5: bind the config user and agent identities at construction
         // time. Identity is never accepted from tool arguments — it is fixed
         // here from the validated config so remote callers cannot spoof it.
+        // K-L2: build the consolidation-freshness cell (always present; starts Pending).
+        let consolidation_freshness_cell = build_consolidation_freshness_cell();
         // K-L3: attach the eval-freshness cell when configured.
         // K-L4: attach the sweep-freshness cell when auto_materialize = true.
         let mut knowledge_runtime =
@@ -304,7 +316,8 @@ impl Backend {
                 .with_versions(rules_v, infer_v)
                 .with_user_id(user_id)
                 .with_agent_id(agent_id)
-                .with_finding_indexer(Arc::clone(&finding_indexer));
+                .with_finding_indexer(Arc::clone(&finding_indexer))
+                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell));
         if let Some(cell) = eval_freshness_cell {
             knowledge_runtime = knowledge_runtime.with_eval_freshness(cell);
         }
@@ -326,6 +339,7 @@ impl Backend {
             infer,
             finding_indexer,
             evals_cfg,
+            consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg,
             daemon: None,
         })
@@ -357,13 +371,15 @@ impl Backend {
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph)),
         ));
+        let consolidation_freshness_cell = build_consolidation_freshness_cell();
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
                 .with_graph(Arc::clone(&graph))
                 .with_tags(Arc::clone(&tags_engine))
                 .with_user_id("test-user")
-                .with_finding_indexer(Arc::clone(&finding_indexer)),
+                .with_finding_indexer(Arc::clone(&finding_indexer))
+                .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell)),
         );
         Self {
             state,
@@ -379,6 +395,7 @@ impl Backend {
             infer: Arc::new(Mutex::new(InferEngine::default())),
             finding_indexer,
             evals_cfg: EvalsConfig::default(),
+            consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg: ProposalsCfg::default(),
             daemon: None,
         }
@@ -518,10 +535,14 @@ impl Backend {
             }
         });
 
-        // Phase B — co-spawn the memory-consolidation scheduler on the same
-        // cancellation token, mirroring the relay's lifecycle.
-        let consolidation_task = spawn_consolidation_scheduler(
+        // Phase B / K-L2 — co-spawn the feedback-aware consolidation scheduler
+        // on the same cancellation token, mirroring the relay's lifecycle.
+        // Uses the shared feedback store so recency credit is applied on every
+        // tick; results are persisted and the freshness cell is updated.
+        let consolidation_task = spawn_consolidation_scheduler_with_feedback(
             self.memory.clone(),
+            self.feedback.clone(),
+            Arc::clone(&self.consolidation_freshness),
             consolidation_tick(),
             cancel.clone(),
         );
@@ -666,6 +687,17 @@ impl Backend {
     #[must_use]
     pub fn feedback_store_handle(&self) -> Arc<Mutex<RetrievalFeedbackStore>> {
         Arc::clone(&self.feedback)
+    }
+
+    /// The shared consolidation-freshness cell (K-L2). The consolidation
+    /// scheduler writes this after every tick; [`KnowledgeRuntime::status`] reads
+    /// it to populate `tdw.kg.status.consolidation_freshness`.
+    ///
+    /// Always `Some` after construction; starts as
+    /// [`ConsolidationFreshness::Pending`] until the first tick fires.
+    #[must_use]
+    pub fn consolidation_freshness_cell(&self) -> Arc<Mutex<ConsolidationFreshness>> {
+        Arc::clone(&self.consolidation_freshness)
     }
 
     /// Replace the feedback store with a host-supplied handle (builder pattern).
@@ -1470,6 +1502,21 @@ pub(crate) fn consolidation_tick() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+/// Build the consolidation-freshness shared cell for the K-L2 feedback loop.
+///
+/// Returns an `Arc<Mutex<ConsolidationFreshness>>` pre-populated with
+/// [`ConsolidationFreshness::Pending`]. The returned `Arc` is shared between
+/// the [`KnowledgeRuntime`] (read side: `tdw.kg.status`) and the consolidation
+/// scheduler task spawned during [`Backend::serve`] (write side: updates after
+/// each tick).
+///
+/// Always returns `Some`; the `Option` wrapper is kept so callers can use
+/// `if let Some(cell) = ...` symmetrically with `build_eval_freshness_cell`.
+#[must_use]
+pub fn build_consolidation_freshness_cell() -> Arc<Mutex<ConsolidationFreshness>> {
+    Arc::new(Mutex::new(ConsolidationFreshness::Pending))
+}
+
 /// Build the eval-freshness shared cell for the K-L3 scheduled self-eval (K-L3).
 ///
 /// Returns `Some(Arc<Mutex<EvalFreshness>>)` pre-populated with
@@ -1788,13 +1835,13 @@ fn fire_infer_after_sweep(
 const fn epoch_secs_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let second = secs % 60;
     let minute = (secs / 60) % 60;
-    let hour = (secs / 3600) % 24;
-    let days = secs / 86400;
+    let hour = (secs / 3_600) % 24;
+    let days = secs / 86_400;
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z % 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let year = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
