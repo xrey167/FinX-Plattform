@@ -203,7 +203,10 @@ impl Backend {
             KnowledgeIndexer::new(inner_index)
                 .with_lexical(Arc::clone(&state.lexical), collection.clone())
                 .with_graph(Arc::clone(&graph))
-                .with_rules(indexer_rules),
+                .with_rules(indexer_rules)
+                .map_err(|error| {
+                    BackendError::Init(format!("indexer tag-store define: {error}"))
+                })?,
         ));
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
@@ -964,17 +967,27 @@ impl Backend {
     ///
     /// The returned indexer is seeded with a snapshot of the daemon's current
     /// live tag-rule set so offline re-index runs apply the same rules as the
-    /// live path. The snapshot is taken at construction time; subsequent
-    /// hot-reloads are NOT reflected — for a live-updating indexer use
-    /// [`knowledge_index_at`](Self::knowledge_index_at) instead.
+    /// live path. Rule-target tags are pre-defined in the indexer's internal
+    /// [`TagStore`] (idempotent, root placement) so `apply_rules` can assign
+    /// them without hitting `TagError::UnknownTag`. The snapshot is taken at
+    /// construction time; subsequent hot-reloads are NOT reflected — for a
+    /// live-updating indexer use [`knowledge_index_at`](Self::knowledge_index_at)
+    /// instead.
     ///
     /// Use this to construct an offline or caller-scoped indexer with its own
     /// manifest (e.g. the `tdw kg reindex` offline command). For live daemon
     /// ingestion use [`knowledge_index_at`](Self::knowledge_index_at) or
     /// [`knowledge_ingest_at`](Self::knowledge_ingest_at), which route through
     /// the daemon-hosted indexer with the shared manifest.
-    #[must_use]
-    pub fn knowledge_indexer(&self) -> KnowledgeIndexer {
+    ///
+    /// [`TagStore`]: tdw_tags::TagStore
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Init`] if the tag store rejects a rule-target
+    /// tag definition (e.g. due to a taxonomy cycle — extremely unlikely for
+    /// root-level auto-defined tags).
+    pub fn knowledge_indexer(&self) -> BackendResult<KnowledgeIndexer> {
         let index = KnowledgeIndex::new(Arc::clone(&self.embedder), Arc::clone(&self.state.vector));
         let collection = tdw_knowledge::collection_name(self.embedder.model_id());
         // Snapshot the live rule set; fall back to an empty engine when the
@@ -989,6 +1002,7 @@ impl Backend {
             .with_lexical(Arc::clone(&self.state.lexical), collection)
             .with_graph(Arc::clone(&self.graph))
             .with_rules(rules_snapshot)
+            .map_err(|error| BackendError::Init(format!("indexer tag-store define: {error}")))
     }
 
     /// Search the embedded knowledge index for the `top_k` nearest hits to

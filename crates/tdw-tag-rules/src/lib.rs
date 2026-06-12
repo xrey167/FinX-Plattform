@@ -210,6 +210,19 @@ impl RuleEngine {
         self.apply_at(&EntityContext::label_only(entity_id, label), now, store)
     }
 
+    /// Returns an iterator over the tag ids assigned by the current rule set.
+    ///
+    /// Used by [`KnowledgeIndexer`] to pre-define rule-target tags in its
+    /// internal [`TagStore`] so that [`apply_at`] can assign them without
+    /// hitting [`TagError::UnknownTag`] (knowledge-system K-L1 U1 fix).
+    ///
+    /// [`KnowledgeIndexer`]: tdw_knowledge::KnowledgeIndexer
+    /// [`apply_at`]: Self::apply_at
+    /// [`TagError::UnknownTag`]: tdw_tags::TagError::UnknownTag
+    pub fn tag_ids(&self) -> impl Iterator<Item = &str> {
+        self.rules.iter().map(|rule| rule.tag_id.as_str())
+    }
+
     #[must_use]
     pub const fn version(&self) -> u64 {
         self.version
