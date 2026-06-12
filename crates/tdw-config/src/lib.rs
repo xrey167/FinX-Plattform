@@ -420,9 +420,11 @@ pub enum FeedSourceKind {
 
 /// Parameters for the `Article` feed source kind (knowledge-system K-L6).
 ///
-/// All fields are optional — absent fields are ignored at poll time (e.g. a
-/// feed without `api_key_env` uses anonymous/unauthenticated access; a feed
-/// without `symbols` is not filtered by symbol).
+/// Exactly one of `fixture_path` (offline fixture) or `provider` (live data
+/// provider) must be set for the feed to be valid. A feed with neither is
+/// rejected as a hard config error at load time. A live `provider` name that
+/// is not yet implemented is also a hard config error — there is no silent
+/// fallback to an empty source.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ArticleSourceParams {
     /// Ticker symbols to filter the article feed (e.g. `["AAPL", "MSFT"]`).
@@ -430,13 +432,22 @@ pub struct ArticleSourceParams {
     #[serde(default)]
     pub symbols: Vec<String>,
     /// Provider name for the article source (e.g. `"benzinga"`, `"tiingo"`).
-    /// When absent, a fixture/stub source is used (offline-safe).
+    /// When set, the daemon constructs a live provider source from this name.
+    /// Any provider name not yet implemented is a HARD config error at load —
+    /// never a silent empty fixture. Mutually exclusive with `fixture_path`.
     #[serde(default)]
     pub provider: Option<String>,
     /// Environment variable holding the provider API key. Resolved at poll
     /// time (never at config load) so key rotation requires no restart.
     #[serde(default)]
     pub api_key_env: Option<String>,
+    /// Path to a fixture JSON file (array of [`tdw_news_compose::Article`]
+    /// values). Used in offline, CI, and dev environments. Mutually exclusive
+    /// with `provider`. When set and `provider` is absent, the feed reads
+    /// articles from this file on every poll. The file must exist at daemon
+    /// boot; a missing path is a hard Init error.
+    #[serde(default)]
+    pub fixture_path: Option<String>,
 }
 
 /// One scheduled knowledge-feed entry (knowledge-system K-L6).
@@ -490,6 +501,12 @@ pub struct FeedConfig {
     /// `[a-z_]+` identifier. Default: `"shared"`.
     #[serde(default = "FeedConfig::default_plane")]
     pub plane: String,
+    /// Maximum body size (in bytes) for a single article before it is rejected
+    /// and counted as `rejected` in the feed status. Articles exceeding this
+    /// cap are logged and skipped; they do not enter `article_to_document`.
+    /// Default: 65 536 bytes (64 KiB). Set to 0 to disable the cap.
+    #[serde(default = "FeedConfig::default_max_body_bytes")]
+    pub max_body_bytes: usize,
 }
 
 impl FeedConfig {
@@ -501,6 +518,9 @@ impl FeedConfig {
     }
     fn default_plane() -> String {
         "shared".to_string()
+    }
+    const fn default_max_body_bytes() -> usize {
+        65_536
     }
 }
 
@@ -1149,6 +1169,37 @@ fn validate_feeds(feeds: &FeedsConfig) -> Result<()> {
             return Err(ConfigError::Validation(format!(
                 "{ctx}: plane {:?} must be a non-empty lowercase identifier ([a-z_]+)",
                 feed.plane
+            )));
+        }
+        // source_params: exactly one of fixture_path or provider must be set.
+        // A live provider that is not yet implemented is a HARD error — never
+        // silently fall back to an empty fixture.
+        if let Some(provider) = &feed.source_params.provider {
+            // No live providers are supported in this slice. Any provider
+            // name is a hard config error so operators get an explicit
+            // message rather than silently polling nothing.
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params.provider {provider:?} is not yet supported — \
+                 remove the provider field and set fixture_path for offline use, \
+                 or wait for the provider integration to land"
+            )));
+        }
+        // No provider: fixture_path is required.
+        if feed.source_params.fixture_path.is_none() {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params must set fixture_path \
+                 (no live provider is configured)"
+            )));
+        }
+        // fixture_path must not be empty or whitespace-only.
+        if feed
+            .source_params
+            .fixture_path
+            .as_deref()
+            .is_some_and(|p| p.trim().is_empty())
+        {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params.fixture_path must be a non-empty path"
             )));
         }
     }
@@ -1877,11 +1928,15 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         FeedConfig {
             id: id.to_string(),
             source_kind: FeedSourceKind::Article,
-            source_params: ArticleSourceParams::default(),
+            source_params: ArticleSourceParams {
+                fixture_path: Some("/tmp/fixture.json".to_string()),
+                ..ArticleSourceParams::default()
+            },
             cadence: "*/15 * * * *".to_string(),
             enabled: true,
             max_items_per_poll: 50,
             plane: "shared".to_string(),
+            max_body_bytes: 65_536,
         }
     }
 
@@ -1980,15 +2035,57 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
             source_kind: FeedSourceKind::Article,
             source_params: ArticleSourceParams {
                 symbols: vec!["AAPL".to_string()],
-                provider: Some("benzinga".to_string()),
-                api_key_env: Some("TDW_BENZINGA_API_KEY".to_string()),
+                fixture_path: Some("/tmp/aapl-fixture.json".to_string()),
+                provider: None,
+                api_key_env: None,
             },
             cadence: "0 * * * *".to_string(),
             enabled: false,
             max_items_per_poll: 20,
             plane: "shared".to_string(),
+            max_body_bytes: 65_536,
         });
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn feed_unsupported_provider_fails() {
+        // Any live provider name is a hard config error until provider
+        // integrations land. There is no silent fallback to empty fixture.
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.provider = Some("benzinga".to_string());
+        feed.source_params.fixture_path = None;
+        cfg.knowledge.feeds.entries.push(feed);
+        let err = cfg.validate().expect_err("unsupported provider must fail");
+        assert!(
+            err.to_string().contains("not yet supported"),
+            "error must mention 'not yet supported'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn feed_missing_fixture_path_fails() {
+        // No provider + no fixture_path = hard config error.
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.fixture_path = None;
+        feed.source_params.provider = None;
+        cfg.knowledge.feeds.entries.push(feed);
+        let err = cfg.validate().expect_err("missing source must fail");
+        assert!(
+            err.to_string().contains("fixture_path"),
+            "error must mention 'fixture_path'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn feed_empty_fixture_path_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.fixture_path = Some("  ".to_string());
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
     }
 
     #[test]

@@ -21,9 +21,12 @@
 //!
 //! # Post-ingest inference
 //!
-//! Inference fires automatically as a post-condition of [`crate::indexer::KnowledgeIndexer`]
-//! ingest (K-L1 hook). The feed task goes through the indexer directly; no
-//! separate inference call is needed.
+//! The K-L1 inference hook lives on `Backend::knowledge_ingest_at` (in
+//! `tdw-backend`), not on [`crate::indexer::KnowledgeIndexer`] directly.
+//! Feed tasks must route their ingest through `Backend::knowledge_ingest_at`
+//! so that `run_infer_after_ingest` fires after every batch. Bypassing the
+//! backend method (calling `index_batch_at` on the bare indexer) silently
+//! skips inference.
 
 #![forbid(unsafe_code)]
 
@@ -62,22 +65,48 @@ pub trait FeedSource: Send + Sync + 'static {
 // FixtureFeedSource — offline/test source backed by an in-repo article list
 // ---------------------------------------------------------------------------
 
-/// An offline fixture feed source backed by a static article list.
+/// An offline fixture feed source.
 ///
-/// Used in tests and in CI so the always-run test suite never touches the
-/// network. Articles are returned in declaration order, capped at `max_items`.
+/// Two construction modes:
+/// - [`FixtureFeedSource::new`] — in-memory list; used in unit tests.
+/// - [`FixtureFeedSource::from_path`] — reads a JSON file (`Vec<Article>`) on
+///   every poll; used in dev/CI environments where `fixture_path` is set in
+///   the feed config.
+///
+/// Articles are returned in declaration/file order, capped at `max_items`.
 pub struct FixtureFeedSource {
+    /// In-memory articles (used when `path` is `None`).
     articles: Vec<Article>,
+    /// Optional path to a JSON fixture file (`Vec<Article>`). When `Some`, the
+    /// file is read and deserialized on every `poll` call.
+    path: Option<String>,
     description: String,
 }
 
 impl FixtureFeedSource {
-    /// Build a fixture source from a pre-built article list.
+    /// Build a fixture source from a pre-built article list (in-memory).
     #[must_use]
     pub fn new(articles: Vec<Article>, description: impl Into<String>) -> Self {
         Self {
             articles,
+            path: None,
             description: description.into(),
+        }
+    }
+
+    /// Build a fixture source that reads articles from `path` on every poll.
+    ///
+    /// The file must contain a JSON array of [`Article`] values. The file is
+    /// read at poll time (not at construction), so updates to the file are
+    /// reflected in the next poll without restarting the daemon.
+    #[must_use]
+    pub fn from_path(path: impl Into<String>) -> Self {
+        let path = path.into();
+        let description = format!("fixture:{path}");
+        Self {
+            articles: Vec::new(),
+            path: Some(path),
+            description,
         }
     }
 
@@ -91,7 +120,17 @@ impl FixtureFeedSource {
 #[async_trait::async_trait]
 impl FeedSource for FixtureFeedSource {
     async fn poll(&self, max_items: usize) -> Result<Vec<Article>, String> {
-        Ok(self.articles.iter().take(max_items).cloned().collect())
+        match &self.path {
+            None => Ok(self.articles.iter().take(max_items).cloned().collect()),
+            Some(path) => {
+                let contents = std::fs::read_to_string(path)
+                    .map_err(|e| format!("fixture feed: failed to read {path:?}: {e}"))?;
+                let all: Vec<Article> = serde_json::from_str(&contents).map_err(|e| {
+                    format!("fixture feed: failed to parse {path:?} as Vec<Article>: {e}")
+                })?;
+                Ok(all.into_iter().take(max_items).collect())
+            }
+        }
     }
 
     fn description(&self) -> &str {
@@ -125,6 +164,8 @@ pub enum FeedFreshness {
         indexed: usize,
         /// Number of items skipped (already indexed — idempotent re-poll).
         duplicates: usize,
+        /// Number of articles rejected due to body size cap (not indexed).
+        rejected: usize,
     },
     /// The last poll returned a fetch error; the feed is backing off.
     Error {
@@ -218,6 +259,7 @@ mod tests {
             feed_id: "f".to_string(),
             indexed: 3,
             duplicates: 1,
+            rejected: 0,
         };
         assert!(!freshness.is_error());
     }
