@@ -13,12 +13,13 @@
 //!    also leakage-safe because the retriever applies the same temporal filter to
 //!    expansion paths.
 //! 3. **ANSWER** — assemble a cited answer from the retrieved hit set:
-//!    - **Synthesized** (production-grade model attached via `TDW_ALLOW_STUB_FEEDBACK=1`
-//!      override OR `is_production_grade() = true`): NL synthesis with inline
-//!      `[doc-id]` citations.
-//!    - **Extractive** (no model / stub model): top passages + citation list,
-//!      clearly labelled `"extractive (no model configured)"`. Keyless installs
-//!      get a fully functional extractive path.
+//!    - **Synthesized stub** (only reachable via the `TDW_ALLOW_STUB_FEEDBACK=1`
+//!      operator override — no production `LanguageModel` is wired into the runtime
+//!      yet, #345): exercises the synthesis code-path with inline `[doc-id]`
+//!      citations but is stamped truthfully as a stub, never bare `"synthesized"`.
+//!    - **Extractive** (default — no model / stub model): top passages + citation
+//!      list, clearly labelled `"extractive (no model configured)"`. Keyless
+//!      installs get a fully functional extractive path.
 //!
 //! # Citation-validity contract
 //!
@@ -50,9 +51,11 @@
 //!
 //! # Mode stamp
 //!
-//! The response always carries `"mode": "synthesized"` or
-//! `"mode": "extractive (no model configured)"` so callers can distinguish the
-//! two paths without inspecting the answer text.
+//! The response always carries a truthful `"mode"` stamp: either
+//! `"extractive (no model configured)"` or
+//! `"synthesized (stub model — not production NL synthesis)"` — never a bare
+//! `"synthesized"` while a real production `LanguageModel` is unwired — so
+//! callers can never mistake stub boilerplate for production NL synthesis.
 
 use serde_json::{Map, Value, json};
 use tdw_knowledge::runtime::KnowledgeRuntime;
@@ -94,6 +97,19 @@ const MAX_PROMPT_CONTEXT_CHARS: usize = 24_576;
 #[allow(dead_code)]
 const MAX_OUTPUT_TOKENS: u32 = 1_024;
 
+// ── Mode stamps (truthful) ──────────────────────────────────────────────────
+
+/// Extractive mode stamp: no language model — top passages + citation list.
+const MODE_EXTRACTIVE: &str = "extractive (no model configured)";
+
+/// Stub-synthesis mode stamp. The synthesized code-path is exercised but the
+/// answer text is assembled deterministically (no production LLM is wired into
+/// `KnowledgeRuntime` yet — #345). The stamp MUST NOT claim bare `"synthesized"`
+/// because that would misrepresent a stub as production NL synthesis (K-M3
+/// citation-honesty guarantee). Until a real `LanguageModel` is wired, the only
+/// way to reach this path is the `TDW_ALLOW_STUB_FEEDBACK=1` operator override.
+const MODE_SYNTHESIZED_STUB: &str = "synthesized (stub model — not production NL synthesis)";
+
 // ── Descriptor ────────────────────────────────────────────────────────────────
 
 /// Descriptor for `tdw.kg.answer`. Appended to `tools/list` only when a
@@ -110,10 +126,13 @@ pub fn descriptor() -> ToolDescriptor {
          Runs retrieve → graph-expand → answer over the knowledge graph and returns \
          an answer with MANDATORY citations to the document ids it drew from. \
          \n\n\
-         Two modes (stamped in the response):\n\
-         - synthesized: NL answer with inline [doc-id] citations (production LLM).\n\
+         Two modes (truthfully stamped in the response):\n\
          - extractive (no model configured): top passages + citation list (keyless, \
            fully functional).\n\
+         - synthesized (stub model …): the synthesis code-path with inline [doc-id] \
+           citations. Until a production LanguageModel is wired into the runtime this \
+           is a deterministic stub, stamped as such so it is never mistaken for \
+           production NL synthesis.\n\
          \n\
          Point-in-time safety: as_of makes answers backtest-safe — temporal leakage \
          is impossible because the retriever's payload predicates exclude all facts \
@@ -324,7 +343,8 @@ struct AnswerCitation {
 
 /// Result of the answer assembly step.
 struct AnswerResult {
-    /// `"synthesized"` or `"extractive (no model configured)"`.
+    /// One of [`MODE_EXTRACTIVE`] or [`MODE_SYNTHESIZED_STUB`] — always truthful
+    /// about whether a production LLM produced the text.
     mode: String,
     /// The answer text (NL synthesis or structured extractive passages).
     answer: String,
@@ -348,7 +368,7 @@ fn assemble_answer(
 ) -> AnswerResult {
     if hits.is_empty() {
         return AnswerResult {
-            mode: "extractive (no model configured)".to_string(),
+            mode: MODE_EXTRACTIVE.to_string(),
             answer: "No relevant documents found for this query in the knowledge graph."
                 .to_string(),
             citations: Vec::new(),
@@ -414,7 +434,7 @@ fn extractive_answer(query: &str, citations: Vec<AnswerCitation>) -> AnswerResul
     }
 
     AnswerResult {
-        mode: "extractive (no model configured)".to_string(),
+        mode: MODE_EXTRACTIVE.to_string(),
         answer: answer_parts.join("\n"),
         citations,
         citation_validity_warning: None,
@@ -428,7 +448,9 @@ fn extractive_answer(query: &str, citations: Vec<AnswerCitation>) -> AnswerResul
 /// the retrieved set is stripped (citation-validity enforcement) and a warning
 /// is attached.
 ///
-/// Mode stamp: `"synthesized"`.
+/// Mode stamp: [`MODE_SYNTHESIZED_STUB`] — truthfully marks this as a stub, NOT
+/// bare `"synthesized"`, so a keyless/stub install can never present fabricated
+/// boilerplate as production NL synthesis (K-M3 citation-honesty guarantee).
 ///
 /// # Production-wiring seam (#345)
 ///
@@ -479,7 +501,7 @@ fn synthesized_answer(
     };
 
     AnswerResult {
-        mode: "synthesized".to_string(),
+        mode: MODE_SYNTHESIZED_STUB.to_string(),
         answer: cleaned_answer,
         citations,
         citation_validity_warning,
@@ -538,7 +560,15 @@ fn validate_and_clean_citations(
         let rest = &scan[open + 1..];
         if let Some(close) = rest.find(']') {
             let candidate = &rest[..close];
-            if !valid_ids.contains(candidate) && !candidate.is_empty() {
+            // Only treat a bracketed token as a *citation candidate* when it looks
+            // like a document id (alphanumerics plus the id punctuation `- _ :`).
+            // This prevents corrupting legitimate non-citation prose an LLM may
+            // emit, e.g. `[Note: …]`, `[approximate]`, `[1]` — Gemini HIGH.
+            let looks_like_id = !candidate.is_empty()
+                && candidate
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':'));
+            if looks_like_id && !valid_ids.contains(candidate) {
                 // Strip this citation from the cleaned answer.
                 let marker = format!("[{candidate}]");
                 cleaned = cleaned.replace(&marker, "");
@@ -563,14 +593,19 @@ fn validate_and_clean_citations(
 /// class matches one of the requested classes.  `RetrievedHit` carries
 /// `entity_id` and the explanation's channels; it does NOT carry the full edge
 /// provenance (that lives in the graph).  We therefore apply the filter at a
-/// best-effort level using the hit's explanation channel information:
+/// best-effort level combining the hit's `entity_id` prefix with its channel mix:
 ///
-/// - `ingest` → hits that have a [`Channel::Vector`] or [`Channel::Lexical`]
-///   contribution (ingested documents route through these channels).
-/// - `graph` / `rule` → hits that reached via [`Channel::Graph`] or have a
-///   graph path in their explanation.
+/// - `ingest` / `manual` / `system` → text-channel hits ([`Channel::Vector`] or
+///   [`Channel::Lexical`]) that are NOT `agent:`-prefixed entities.
+/// - `agent` → text-channel hits whose `entity_id` starts with `agent:`.
+/// - `rule` / `graph` → hits that reached via [`Channel::Graph`], have a graph
+///   path, or whose `entity_id` starts with `rule:`.
 /// - `tag` → hits that reached via the [`Channel::Tag`] channel.
 /// - Unknown class: honest note, no filter applied.
+///
+/// The `entity_id` prefix is what separates `ingest` from `agent`: both route
+/// through the same vector/lexical channels, so channels alone cannot tell them
+/// apart.
 ///
 /// When `provenance_classes` is `None` or empty, all hits are returned as-is.
 ///
@@ -627,15 +662,21 @@ fn apply_provenance_filter(
                 hit.explanation.channels.iter().map(|c| c.channel).collect();
             let has_graph_path = hit.explanation.graph_path.is_some();
 
-            let passes_ingest = want_ingest
-                && channels
-                    .iter()
-                    .any(|c| matches!(c, Channel::Vector | Channel::Lexical));
-            let passes_rule = want_rule && (channels.contains(&Channel::Graph) || has_graph_path);
-            let passes_agent = want_agent
-                && channels
-                    .iter()
-                    .any(|c| matches!(c, Channel::Vector | Channel::Lexical));
+            // Apply the documented entity_id-prefix heuristic so `ingest` and
+            // `agent` are actually distinguishable (Gemini MEDIUM): agent-authored
+            // facts carry an `agent:` entity prefix, rule-derived facts a `rule:`
+            // prefix. Channels alone cannot separate ingest from agent because both
+            // route through the vector/lexical stores.
+            let is_agent_entity = hit.entity_id.starts_with("agent:");
+            let is_rule_entity = hit.entity_id.starts_with("rule:");
+            let text_channel = channels
+                .iter()
+                .any(|c| matches!(c, Channel::Vector | Channel::Lexical));
+
+            let passes_ingest = want_ingest && text_channel && !is_agent_entity;
+            let passes_rule = want_rule
+                && (channels.contains(&Channel::Graph) || has_graph_path || is_rule_entity);
+            let passes_agent = want_agent && text_channel && is_agent_entity;
             let passes_tag = want_tag && channels.contains(&Channel::Tag);
 
             // If none of the requested classes matched any known category, include all.
@@ -674,14 +715,20 @@ fn extract_snippet(id: &str, tags: &[String]) -> String {
 }
 
 /// Truncate `s` to at most `max_chars` characters, appending `…` when truncated.
-fn truncate_str(s: &str, max_chars: usize) -> &str {
+///
+/// Returns a [`Cow`](std::borrow::Cow) so the (common) no-truncation case stays
+/// borrow-only while the truncated case can actually append the ellipsis the
+/// docstring promises — Gemini MEDIUM.
+fn truncate_str(s: &str, max_chars: usize) -> std::borrow::Cow<'_, str> {
     if s.chars().count() <= max_chars {
-        s
+        std::borrow::Cow::Borrowed(s)
     } else {
         // Find the byte offset of the max_chars-th character boundary.
-        s.char_indices()
+        let byte_offset = s
+            .char_indices()
             .nth(max_chars)
-            .map_or(s, |(byte_offset, _)| &s[..byte_offset])
+            .map_or(s.len(), |(offset, _)| offset);
+        std::borrow::Cow::Owned(format!("{}…", &s[..byte_offset]))
     }
 }
 
@@ -742,4 +789,59 @@ fn optional_string_array(
 
 const fn execution(message: String) -> ToolFailure {
     ToolFailure::Execution(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    fn ids<'a>(slice: &'a [&'a str]) -> BTreeSet<&'a str> {
+        slice.iter().copied().collect()
+    }
+
+    #[test]
+    fn clean_citations_strips_out_of_set_ids() {
+        let valid = ids(&["doc-aapl"]);
+        let (cleaned, stripped) =
+            validate_and_clean_citations("see [doc-aapl] and [doc-ghost]", &valid);
+        assert!(cleaned.contains("[doc-aapl]"), "valid id kept: {cleaned}");
+        assert!(!cleaned.contains("[doc-ghost]"), "ghost stripped: {cleaned}");
+        assert_eq!(stripped, vec!["doc-ghost".to_string()]);
+    }
+
+    #[test]
+    fn clean_citations_preserves_non_citation_brackets() {
+        // Gemini HIGH: legitimate bracketed prose with spaces/punctuation must
+        // survive — only document-id-shaped tokens are citation candidates.
+        let valid = ids(&["doc-aapl"]);
+        let answer = "Answer [Note: see filing] with [doc-aapl] context.";
+        let (cleaned, stripped) = validate_and_clean_citations(answer, &valid);
+        assert!(
+            cleaned.contains("[Note: see filing]"),
+            "non-citation prose must be preserved: {cleaned}"
+        );
+        assert!(cleaned.contains("[doc-aapl]"));
+        assert!(
+            stripped.is_empty(),
+            "no id-shaped out-of-set token to strip: {stripped:?}"
+        );
+    }
+
+    #[test]
+    fn truncate_str_appends_ellipsis_only_when_truncated() {
+        // Gemini MEDIUM: ellipsis must actually be appended on truncation.
+        assert_eq!(truncate_str("short", 32), "short");
+        let truncated = truncate_str("abcdef", 3);
+        assert_eq!(truncated, "abc…");
+        assert!(truncated.ends_with('…'));
+    }
+
+    #[test]
+    fn stub_synthesis_mode_stamp_is_never_bare_synthesized() {
+        // K-M3 citation honesty: the stub stamp must declare itself a stub so it
+        // is never mistaken for production NL synthesis.
+        assert_ne!(MODE_SYNTHESIZED_STUB, "synthesized");
+        assert!(MODE_SYNTHESIZED_STUB.contains("stub"));
+    }
 }

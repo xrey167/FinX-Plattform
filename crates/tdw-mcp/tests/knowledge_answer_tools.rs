@@ -321,11 +321,19 @@ fn synthesized_mode_with_stub_override_cites_only_valid_ids() {
     );
     let s = &response["result"]["structuredContent"];
 
-    // Mode stamp: synthesized.
-    assert_eq!(
-        s["mode"].as_str().unwrap_or_default(),
-        "synthesized",
-        "mode must be synthesized with TDW_ALLOW_STUB_FEEDBACK=1: {s}"
+    // Mode stamp: synthesized-stub, and CITATION-HONESTY guarantee — the stub
+    // path must NEVER stamp bare "synthesized" (that would misrepresent
+    // deterministic boilerplate as production NL synthesis). It must mark itself
+    // a stub so callers can distinguish it from a real LLM answer.
+    let mode = s["mode"].as_str().unwrap_or_default();
+    assert!(
+        mode.starts_with("synthesized") && mode.contains("stub"),
+        "mode must be a truthfully-stamped synthesized stub (not bare 'synthesized') \
+         with TDW_ALLOW_STUB_FEEDBACK=1: got {mode:?} in {s}"
+    );
+    assert_ne!(
+        mode, "synthesized",
+        "stub path must not present itself as production synthesis: {s}"
     );
 
     // Answer text present.
