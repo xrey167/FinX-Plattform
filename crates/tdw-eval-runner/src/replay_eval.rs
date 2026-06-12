@@ -69,10 +69,46 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use tdw_core::{GraphEdge, active_at};
+use tdw_core::{GraphEdge, Provenance, active_at};
 use tdw_infer::InferRule;
 
 use crate::retrieval_eval::DriftKey;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Safety limit on intermediate chain-join results.
+///
+/// Matches the production `InferEngine::join_bound()` floor — `max(8 × max_derived, 4096)`.
+/// Replay has no `RunLimits` struct, so we adopt the floor value (4096) as a
+/// conservative constant.  Exceeded → [`ReplayError::JoinBoundExceeded`].
+const REPLAY_JOIN_BOUND: usize = 4096;
+
+// ── Errors ───────────────────────────────────────────────────────────────────
+
+/// Errors that can occur during replay evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayError {
+    /// The intermediate chain-join set exceeded [`REPLAY_JOIN_BOUND`] entries.
+    ///
+    /// This mirrors `InferError::JoinBoundExceeded` in the production engine.
+    /// The rule likely has a fanout that is too large for safe replay evaluation.
+    JoinBoundExceeded {
+        /// The bound that was exceeded.
+        bound: usize,
+    },
+}
+
+impl std::fmt::Display for ReplayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::JoinBoundExceeded { bound } => {
+                write!(f, "replay chain-join exceeded bound of {bound}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReplayError {}
 
 // ── Temporal helpers ─────────────────────────────────────────────────────────
 
@@ -281,32 +317,52 @@ impl EdgeTriple {
 /// in the chain join.  Non-`DeriveEdge` rules produce an empty set (this
 /// harness only replays edge derivation rules).
 ///
+/// **Production-parity exclusions** (matching `InferEngine::match_chain` semantics):
+/// - Edges with `Provenance::Agent { gated: false }` (user-authored, ungated) are
+///   excluded from the active set.  The production engine sets `exclude_user_authored`
+///   to `true` by default; replay matches that default.
+/// - The intermediate `next` vec is bounded by [`REPLAY_JOIN_BOUND`].  If the bound
+///   is exceeded, `Err(ReplayError::JoinBoundExceeded { bound })` is returned rather
+///   than silently continuing with a potentially unbounded result.
+///
+/// **Why not reuse `InferEngine::match_chain` directly?**  `match_chain` is an
+/// `async fn` that takes `Arc<dyn GraphEngine>` with paged I/O; replay operates
+/// over a synchronous `&[GraphEdge]` slice.  Reusing it without a large refactor is
+/// architecturally incompatible.  Instead, replay matches the semantics exactly and
+/// documents the divergence here.
+///
 /// Self-loops (`from == to`) are excluded, matching the production engine.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`ReplayError::JoinBoundExceeded`] if the intermediate chain-join set
+/// exceeds [`REPLAY_JOIN_BOUND`] entries.
 pub fn apply_derive_edge_at(
     rule: &InferRule,
     all_edges: &[GraphEdge],
     as_of: &str,
-) -> BTreeSet<EdgeTriple> {
+) -> Result<BTreeSet<EdgeTriple>, ReplayError> {
     let InferRule::DeriveEdge {
         when, derived_type, ..
     } = rule
     else {
-        return BTreeSet::new();
+        return Ok(BTreeSet::new());
     };
 
     // ── No-lookahead filter: only edges active at as_of ───────────────────────
     // REUSE active_at from tdw-core — do NOT reimplement.
+    // Also exclude user-authored (ungated) edges — production parity.
     let active: Vec<&GraphEdge> = all_edges
         .iter()
         .filter(|edge| active_at(edge.valid_from.as_deref(), edge.valid_to.as_deref(), as_of))
+        .filter(|edge| !matches!(edge.provenance, Provenance::Agent { gated: false, .. }))
         .collect();
 
     // ── Chain join (same algorithm as InferEngine::match_chain) ──────────────
     // Length-1 chain: single hop.  Longer chains: join head-to-tail.
     // Partials: (head_from, current_tail).
     if when.is_empty() {
-        return BTreeSet::new();
+        return Ok(BTreeSet::new());
     }
 
     let first_rel = &when[0].rel;
@@ -331,13 +387,18 @@ pub fn apply_derive_edge_at(
             if let Some(nexts) = by_from.get(&tail) {
                 for new_tail in nexts {
                     next.push((head.clone(), new_tail.clone()));
+                    if next.len() > REPLAY_JOIN_BOUND {
+                        return Err(ReplayError::JoinBoundExceeded {
+                            bound: REPLAY_JOIN_BOUND,
+                        });
+                    }
                 }
             }
         }
         partials = next;
     }
 
-    partials
+    Ok(partials
         .into_iter()
         .filter(|(from, to)| from != to) // exclude self-loops
         .map(|(from, to)| EdgeTriple {
@@ -345,7 +406,7 @@ pub fn apply_derive_edge_at(
             rel: derived_type.clone(),
             to,
         })
-        .collect()
+        .collect())
 }
 
 /// Collect outcome facts: edges of the `derived_type` produced by the rule
@@ -353,6 +414,10 @@ pub fn apply_derive_edge_at(
 ///
 /// This is the "future" side of the replay — facts the rule could not have seen
 /// during prediction because they were not active at `as_of`.
+///
+/// Semantics: an outcome edge answers "did it ever materialize in the forward
+/// window?" — `valid_to` is intentionally ignored so that a fact which appeared
+/// and was later retracted still counts as a realized outcome.
 #[must_use]
 pub fn collect_outcomes(
     rule: &InferRule,
@@ -379,26 +444,30 @@ pub fn collect_outcomes(
 /// filter is applied inside this function).  The function is pure and
 /// deterministic: given the same inputs it always returns the same
 /// [`SplitReplayScore`].
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`ReplayError::JoinBoundExceeded`] if the intermediate chain-join set
+/// exceeds [`REPLAY_JOIN_BOUND`].
 pub fn score_split(
     rule: &InferRule,
     all_edges: &[GraphEdge],
     split: &ReplaySplit,
-) -> SplitReplayScore {
-    let preds = apply_derive_edge_at(rule, all_edges, &split.as_of);
+) -> Result<SplitReplayScore, ReplayError> {
+    let preds = apply_derive_edge_at(rule, all_edges, &split.as_of)?;
     let outcomes = collect_outcomes(rule, all_edges, &split.as_of, &split.as_of_plus_window);
 
     let hits = preds.intersection(&outcomes).count();
     let p = precision(hits, preds.len());
     let r = recall(hits, outcomes.len());
 
-    SplitReplayScore {
+    Ok(SplitReplayScore {
         split_id: split.split_id.clone(),
         precision: p,
         recall: r,
         support: outcomes.len(),
         predictions: preds.len(),
-    }
+    })
 }
 
 // ── Full replay eval ──────────────────────────────────────────────────────────
@@ -410,21 +479,23 @@ pub fn score_split(
 /// Callers inject the full temporal edge corpus; split-level temporal filtering
 /// is applied inside.
 ///
-/// # Panics
+/// `splits` may be empty (producing `mean_precision = 1.0`, `mean_recall = 1.0`,
+/// `total_support = 0`).
 ///
-/// Does not panic; `splits` may be empty (producing `mean_precision = 1.0`,
-/// `mean_recall = 1.0`, `total_support = 0`).
-#[must_use]
+/// # Errors
+///
+/// Returns [`ReplayError::JoinBoundExceeded`] if any split's chain-join exceeds
+/// [`REPLAY_JOIN_BOUND`].
 pub fn run_replay_eval(
     rule: &InferRule,
     all_edges: &[GraphEdge],
     splits: &[ReplaySplit],
     drift_key: DriftKey,
-) -> RuleReplayReport {
+) -> Result<RuleReplayReport, ReplayError> {
     let scored: Vec<SplitReplayScore> = splits
         .iter()
         .map(|split| score_split(rule, all_edges, split))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Vacuous case: no splits → nothing to fail on → both means are 1.0.
     let (mean_precision, mean_recall) = if scored.is_empty() {
@@ -438,14 +509,14 @@ pub fn run_replay_eval(
     };
     let total_support = scored.iter().map(|s| s.support).sum();
 
-    RuleReplayReport {
+    Ok(RuleReplayReport {
         rule_id: rule.rule_id().to_string(),
         mean_precision,
         mean_recall,
         total_support,
         splits: scored,
         drift_key,
-    }
+    })
 }
 
 // ── K-R5 promote gate (the contract K-R5 consumes) ───────────────────────────
@@ -465,6 +536,11 @@ pub fn run_replay_eval(
 ///
 /// This is a **real callable function** tested standalone — not dead wiring.
 /// The function is pure, synchronous, and deterministic.
+///
+/// # Errors
+///
+/// Returns [`ReplayError::JoinBoundExceeded`] if any split's chain-join exceeds
+/// [`REPLAY_JOIN_BOUND`].
 ///
 /// # Example (the seam K-R5 calls)
 ///
@@ -487,24 +563,24 @@ pub fn run_replay_eval(
 /// let splits: Vec<ReplaySplit> = vec![]; // empty → vacuous promote
 /// let threshold = PromoteThreshold::default();
 /// let drift_key = DriftKey::default();
-/// let verdict = promote_gate(&rule, &[], &splits, &threshold, drift_key);
+/// let verdict = promote_gate(&rule, &[], &splits, &threshold, drift_key)
+///     .expect("vacuous promote gate must not fail");
 /// assert!(verdict.is_promote());
 /// ```
-#[must_use]
 pub fn promote_gate(
     rule: &InferRule,
     all_edges: &[GraphEdge],
     splits: &[ReplaySplit],
     threshold: &PromoteThreshold,
     drift_key: DriftKey,
-) -> PromoteVerdict {
-    let report = run_replay_eval(rule, all_edges, splits, drift_key);
+) -> Result<PromoteVerdict, ReplayError> {
+    let report = run_replay_eval(rule, all_edges, splits, drift_key)?;
 
     let precision_ok = report.mean_precision >= threshold.min_precision;
     let recall_ok = report.mean_recall >= threshold.min_recall;
 
     if precision_ok && recall_ok {
-        PromoteVerdict::Promote {
+        Ok(PromoteVerdict::Promote {
             summary: format!(
                 "rule {:?} clears promote gate: precision {:.4} >= {:.4}, \
                  recall {:.4} >= {:.4} (support={}, splits={})",
@@ -516,7 +592,7 @@ pub fn promote_gate(
                 report.total_support,
                 report.splits.len(),
             ),
-        }
+        })
     } else {
         let mut failed = Vec::new();
         if !precision_ok {
@@ -531,7 +607,7 @@ pub fn promote_gate(
                 report.mean_recall, threshold.min_recall
             ));
         }
-        PromoteVerdict::Reject {
+        Ok(PromoteVerdict::Reject {
             summary: format!(
                 "rule {:?} rejected by promote gate: {} (support={}, splits={})",
                 report.rule_id,
@@ -539,7 +615,7 @@ pub fn promote_gate(
                 report.total_support,
                 report.splits.len(),
             ),
-        }
+        })
     }
 }
 
@@ -690,6 +766,7 @@ impl ReplayEvalConfig {
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tdw_core::{GraphEdge, Provenance};
@@ -847,18 +924,17 @@ mod tests {
         let as_of = "2024-01-01T00:00:00Z";
         let all_edges = [pre_split, post_split];
 
-        let predictions = apply_derive_edge_at(&rule, &all_edges, as_of);
+        let predictions = apply_derive_edge_at(&rule, &all_edges, as_of).unwrap();
 
         // Without the listed_on edge (post-split), the chain cannot complete —
         // no predictions must be generated.
         assert!(
             predictions.is_empty(),
-            "post-split edge must not participate in prediction; got {:?}",
-            predictions
+            "post-split edge must not participate in prediction; got {predictions:?}"
         );
     }
 
-    /// Complementary leakage check: when BOTH edges are active at as_of,
+    /// Complementary leakage check: when BOTH edges are active at `as_of`,
     /// the prediction IS generated (the filter does not over-suppress).
     #[test]
     fn both_pre_split_edges_produce_prediction() {
@@ -868,7 +944,7 @@ mod tests {
         let e2 = dated_edge("b", "listed_on", "x", "2023-06-01T00:00:00Z");
 
         let as_of = "2024-01-01T00:00:00Z";
-        let predictions = apply_derive_edge_at(&rule, &[e1, e2], as_of);
+        let predictions = apply_derive_edge_at(&rule, &[e1, e2], as_of).unwrap();
 
         assert_eq!(predictions.len(), 1);
         assert!(predictions.contains(&EdgeTriple {
@@ -878,13 +954,13 @@ mod tests {
         }));
     }
 
-    /// Undated edges (no valid_from) are active at any time — they always pass
-    /// the active_at filter and CAN participate in chain matching.
+    /// Undated edges (no `valid_from`) are active at any time — they always pass
+    /// the `active_at` filter and CAN participate in chain matching.
     #[test]
     fn undated_edges_are_active_at_any_as_of() {
         let rule = derive_rule("r", &["owns"], "related_to");
         let e = undated_edge("a", "owns", "b");
-        let predictions = apply_derive_edge_at(&rule, &[e], "2024-01-01T00:00:00Z");
+        let predictions = apply_derive_edge_at(&rule, &[e], "2024-01-01T00:00:00Z").unwrap();
         assert_eq!(predictions.len(), 1);
     }
 
@@ -905,7 +981,7 @@ mod tests {
         let outcome = dated_edge("a", "exposed_to", "x", "2024-03-01T00:00:00Z");
 
         let sp = split("s1", "2024-01-01T00:00:00Z", "2024-07-01T00:00:00Z");
-        let score = score_split(&rule, &[e1, e2, outcome], &sp);
+        let score = score_split(&rule, &[e1, e2, outcome], &sp).unwrap();
 
         assert_eq!(score.split_id, "s1");
         assert_eq!(score.predictions, 1);
@@ -935,7 +1011,7 @@ mod tests {
         // No outcome in the window.
 
         let sp = split("s1", "2024-01-01T00:00:00Z", "2024-07-01T00:00:00Z");
-        let score = score_split(&rule, &[e1, e2], &sp);
+        let score = score_split(&rule, &[e1, e2], &sp).unwrap();
 
         assert_eq!(score.predictions, 1);
         assert_eq!(score.support, 0); // no outcomes
@@ -964,7 +1040,7 @@ mod tests {
         let outcome = dated_edge("a", "exposed_to", "x", "2024-03-01T00:00:00Z");
 
         let sp = split("s1", "2024-01-01T00:00:00Z", "2024-07-01T00:00:00Z");
-        let score = score_split(&rule, &[e2, outcome], &sp);
+        let score = score_split(&rule, &[e2, outcome], &sp).unwrap();
 
         assert_eq!(score.predictions, 0);
         assert_eq!(score.support, 1);
@@ -993,8 +1069,8 @@ mod tests {
             split("s2", "2023-06-01T00:00:00Z", "2024-01-01T00:00:00Z"),
         ];
 
-        let report_a = run_replay_eval(&rule, &edges, &splits, default_drift_key());
-        let report_b = run_replay_eval(&rule, &edges, &splits, default_drift_key());
+        let report_a = run_replay_eval(&rule, &edges, &splits, default_drift_key()).unwrap();
+        let report_b = run_replay_eval(&rule, &edges, &splits, default_drift_key()).unwrap();
 
         assert_eq!(report_a, report_b, "replay eval must be deterministic");
     }
@@ -1025,7 +1101,7 @@ mod tests {
             split("s2", "2022-01-01T00:00:00Z", "2023-01-01T00:00:00Z"),
         ];
 
-        let report = run_replay_eval(&rule, &edges, &splits, default_drift_key());
+        let report = run_replay_eval(&rule, &edges, &splits, default_drift_key()).unwrap();
 
         // s1: predictions=1, outcomes=1 → precision=1.0, recall=1.0.
         // s2: predictions=0, outcomes=1 → precision=vacuous 1.0, recall=0.0.
@@ -1060,7 +1136,8 @@ mod tests {
             min_precision: 0.60,
             min_recall: 0.20,
         };
-        let verdict = promote_gate(&rule, &edges, &splits, &threshold, default_drift_key());
+        let verdict =
+            promote_gate(&rule, &edges, &splits, &threshold, default_drift_key()).unwrap();
 
         assert!(verdict.is_promote(), "verdict: {:?}", verdict.summary());
     }
@@ -1080,7 +1157,8 @@ mod tests {
             min_precision: 0.0,
             min_recall: 0.50,
         };
-        let verdict = promote_gate(&rule, &edges, &splits, &threshold, default_drift_key());
+        let verdict =
+            promote_gate(&rule, &edges, &splits, &threshold, default_drift_key()).unwrap();
 
         assert!(
             !verdict.is_promote(),
@@ -1112,7 +1190,8 @@ mod tests {
             min_precision: 0.50,
             min_recall: 0.0,
         };
-        let verdict = promote_gate(&rule, &edges, &splits, &threshold, default_drift_key());
+        let verdict =
+            promote_gate(&rule, &edges, &splits, &threshold, default_drift_key()).unwrap();
 
         assert!(
             !verdict.is_promote(),
@@ -1131,7 +1210,7 @@ mod tests {
         // No splits → vacuous promote (nothing to fail on).
         let rule = derive_rule("r", &["owns"], "related_to");
         let threshold = PromoteThreshold::default();
-        let verdict = promote_gate(&rule, &[], &[], &threshold, default_drift_key());
+        let verdict = promote_gate(&rule, &[], &[], &threshold, default_drift_key()).unwrap();
         assert!(verdict.is_promote(), "empty splits must vacuously promote");
     }
 
@@ -1182,11 +1261,105 @@ mod tests {
         // But A -r1-> A -r2-> A (full self-loop chain) must be excluded.
         let rule = derive_rule("r", &["r1", "r2"], "derived");
         let edges = vec![undated_edge("a", "r1", "a"), undated_edge("a", "r2", "a")];
-        let predictions = apply_derive_edge_at(&rule, &edges, "2024-01-01T00:00:00Z");
+        let predictions = apply_derive_edge_at(&rule, &edges, "2024-01-01T00:00:00Z").unwrap();
         assert!(
             predictions.is_empty(),
-            "self-loop prediction must be excluded: {:?}",
-            predictions
+            "self-loop prediction must be excluded: {predictions:?}"
+        );
+    }
+
+    // ── Production-parity: user-authored edge exclusion ──────────────────────
+
+    /// Edges with `Provenance::Agent { gated: false }` (user-authored, ungated)
+    /// must be excluded from chain matching — matching production `InferEngine`
+    /// default `exclude_user_authored = true`.
+    #[test]
+    fn user_authored_ungated_edges_are_excluded_from_chain_matching() {
+        let rule = derive_rule("r", &["supplier_of", "listed_on"], "exposed_to");
+
+        // supplier_of is user-authored (ungated) — must be excluded from active set.
+        let user_authored = GraphEdge {
+            from: "a".to_string(),
+            to: "b".to_string(),
+            rel: "supplier_of".to_string(),
+            props: serde_json::Value::Null,
+            provenance: Provenance::Agent {
+                agent_id: "test-agent".to_string(),
+                gated: false,
+            },
+            valid_from: Some("2023-01-01T00:00:00Z".to_string()),
+            valid_to: None,
+        };
+        let listed_on = dated_edge("b", "listed_on", "x", "2023-06-01T00:00:00Z");
+
+        let as_of = "2024-01-01T00:00:00Z";
+        let predictions = apply_derive_edge_at(&rule, &[user_authored, listed_on], as_of).unwrap();
+
+        assert!(
+            predictions.is_empty(),
+            "user-authored (ungated) edge must not participate in chain matching; \
+             got {predictions:?}"
+        );
+    }
+
+    /// Gated agent edges (`Provenance::Agent { gated: true }`) are NOT
+    /// user-authored in the production sense and must NOT be excluded.
+    #[test]
+    fn gated_agent_edges_are_not_excluded_from_chain_matching() {
+        let rule = derive_rule("r", &["supplier_of", "listed_on"], "exposed_to");
+
+        let gated = GraphEdge {
+            from: "a".to_string(),
+            to: "b".to_string(),
+            rel: "supplier_of".to_string(),
+            props: serde_json::Value::Null,
+            provenance: Provenance::Agent {
+                agent_id: "test-agent".to_string(),
+                gated: true,
+            },
+            valid_from: Some("2023-01-01T00:00:00Z".to_string()),
+            valid_to: None,
+        };
+        let listed_on = dated_edge("b", "listed_on", "x", "2023-06-01T00:00:00Z");
+
+        let as_of = "2024-01-01T00:00:00Z";
+        let predictions = apply_derive_edge_at(&rule, &[gated, listed_on], as_of).unwrap();
+
+        assert_eq!(
+            predictions.len(),
+            1,
+            "gated agent edge must participate in chain matching; got {predictions:?}"
+        );
+    }
+
+    // ── Production-parity: join_bound enforcement ─────────────────────────────
+
+    /// When the intermediate `next` vec would exceed `REPLAY_JOIN_BOUND`, the
+    /// function returns `Err(ReplayError::JoinBoundExceeded)` instead of
+    /// silently continuing — matching production `InferEngine::match_chain`.
+    #[test]
+    fn join_bound_exceeded_returns_error() {
+        // Build a rule with a 2-hop chain.
+        let rule = derive_rule("r-fanout", &["hop1", "hop2"], "derived");
+
+        // Create a star fanout: one hub "h" has REPLAY_JOIN_BOUND + 1 outbound
+        // hop2 edges.  The single hop1 edge a→h seeds one partial; the hop2
+        // fan-out immediately exceeds the bound.
+        let mut edges: Vec<GraphEdge> = Vec::new();
+        edges.push(undated_edge("a", "hop1", "h"));
+        for i in 0..=REPLAY_JOIN_BOUND {
+            edges.push(undated_edge("h", "hop2", &format!("leaf_{i}")));
+        }
+
+        let result = apply_derive_edge_at(&rule, &edges, "2024-01-01T00:00:00Z");
+        assert!(
+            matches!(
+                result,
+                Err(ReplayError::JoinBoundExceeded {
+                    bound: REPLAY_JOIN_BOUND
+                })
+            ),
+            "expected JoinBoundExceeded; got {result:?}"
         );
     }
 
@@ -1204,7 +1377,7 @@ mod tests {
             max_hops: 1,
         };
         let edges = vec![undated_edge("a", "owned_by", "b")];
-        let predictions = apply_derive_edge_at(&rule, &edges, "2024-01-01T00:00:00Z");
+        let predictions = apply_derive_edge_at(&rule, &edges, "2024-01-01T00:00:00Z").unwrap();
         assert!(
             predictions.is_empty(),
             "PropagateTag has no edge predictions"
