@@ -244,9 +244,11 @@ fn spawn_worker_empty_graph_produces_no_patterns() {
     assert_eq!(result.motifs_examined, 0, "empty graph examines no motifs");
 }
 
-/// When enabled = true with a real tempdir index_path, a mining run persists
+/// When enabled = true with a real tempdir `index_path`, a mining run persists
 /// the index to disk and a subsequent load recovers the same entries.
 #[test]
+#[allow(clippy::too_many_lines)]
+// flat scenario test: seed/act/assert reads better unsplit
 fn spawn_worker_index_persists_across_restart() {
     use std::sync::Arc;
     use tdw_storage_graph::InMemoryGraphEngine;
@@ -432,14 +434,13 @@ fn similar_absent_without_runtime() {
     initialize(&mut bare);
     let listed =
         decode(&bare.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0]);
-    let names: Vec<String> = listed["result"]["tools"]
-        .as_array()
-        .unwrap_or_else(|| panic!("tools array"))
-        .iter()
-        .filter_map(|t| t["name"].as_str().map(ToString::to_string))
-        .collect();
     assert!(
-        !names.contains(&"tdw.kg.similar".to_string()),
+        !listed["result"]["tools"]
+            .as_array()
+            .unwrap_or_else(|| panic!("tools array"))
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(ToString::to_string))
+            .any(|x| x == "tdw.kg.similar"),
         "tdw.kg.similar must be absent without a knowledge runtime"
     );
 }
@@ -555,7 +556,7 @@ fn similar_returns_empty_for_unknown_entity() {
     );
 }
 
-/// top_k is respected: requesting top_k=1 returns at most 1 result.
+/// `top_k` is respected: requesting `top_k`=1 returns at most 1 result.
 #[test]
 fn similar_respects_top_k() {
     let mut server = server_with_runtime();
