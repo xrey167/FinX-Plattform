@@ -591,18 +591,22 @@ impl TdwConfig {
             }
         }
 
-        validate_rules_infer(&self.knowledge.rules, &self.knowledge.infer)?;
-        // User identity: grammar [A-Za-z0-9:._-]+, non-empty, ≤128 bytes.
-        validate_user_id(&self.knowledge.user.id)?;
+        validate_knowledge(&self.knowledge)?;
 
         Ok(())
     }
 }
 
-/// Validate `[knowledge.rules]` and `[knowledge.infer]` config sub-sections (K-L1).
+/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6).
 ///
 /// Extracted from [`TdwConfig::validate`] so that function stays under the
 /// 100-line function-length lint limit.
+fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
+    validate_rules_infer(&knowledge.rules, &knowledge.infer)?;
+    // User identity: grammar [A-Za-z0-9:._-]+, non-empty, ≤128 bytes.
+    validate_user_id(&knowledge.user.id)
+}
+
 fn validate_rules_infer(rules: &RulesConfig, infer: &InferLimitsConfig) -> Result<()> {
     // Rules dir: when set, the path must not be empty; existence is checked at
     // daemon boot (a nonexistent configured dir is a hard Init error there —
