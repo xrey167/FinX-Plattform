@@ -1830,7 +1830,8 @@ mod tests {
                 .iter()
                 .all(|d| d.spec_schema.is_some()
                     || d.kind.group() == Group::Domain
-                    || d.kind == EntityKind::Finding)
+                    || d.kind == EntityKind::Finding
+                    || d.kind == EntityKind::Pattern)
         );
         assert!(find(EntityKind::Instrument).spec_schema.is_none());
         // facet flags come straight from the kind registry.
