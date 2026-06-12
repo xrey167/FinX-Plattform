@@ -1,10 +1,15 @@
 //! Deterministic frequent-motif mining engine (knowledge-system K-R4).
 //!
 //! [`PatternEngine`] scans the temporal graph, enumerates candidate
-//! edge-label sub-sequences of size 1..=[`MiningLimits::max_motif_edges`],
-//! counts instances, and persists matching patterns as
-//! [`EntityKind::Pattern`] nodes in the graph with provenance edges to their
-//! instances.
+//! edge-label combinations of size 1..=[`MiningLimits::max_motif_edges`],
+//! counts the number of distinct *source entities* that participate in **all**
+//! labels in each combination (support counting), and persists combinations
+//! that meet `min_support` as [`EntityKind::Pattern`] nodes with provenance
+//! edges to their instances.
+//!
+//! **v1 algorithm note:** support is measured by `from`-entity overlap across
+//! edge-label sets — NOT by connected-subgraph matching. See the crate-level
+//! doc in `lib.rs` for the full description and planned evolution.
 //!
 //! # Determinism
 //!
@@ -325,6 +330,14 @@ impl PatternEngine {
         // Build (from, to) using the last label's `to` for each qualifying `from`.
         let last_label = &combo[combo.len() - 1];
         let last_pairs = by_label.get(last_label).map_or(&[] as &[_], Vec::as_slice);
+
+        // Enforce instance-scan budget on the final pass too (finding #6 — dead-cap class).
+        scan_count += last_pairs.len();
+        if scan_count > self.limits.max_instance_scan {
+            return Err(PatternError::InstanceBudgetExceeded {
+                limit: self.limits.max_instance_scan,
+            });
+        }
 
         let mut result: Vec<(String, String)> = Vec::new();
         for (f, t) in last_pairs {

@@ -1,4 +1,4 @@
-//! The entity-kind registry: the 52 classified kinds and their manifest groups.
+//! The entity-kind registry: the 53 classified kinds and their manifest groups.
 //!
 //! Serialized form matches the registry's lowercase token convention (e.g. `agentrouter`,
 //! `knowledgegraph`, `resourcedefinition`). `storage_mapping` is intentionally absent — it

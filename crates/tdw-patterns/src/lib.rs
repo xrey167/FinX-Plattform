@@ -3,12 +3,38 @@
 
 //! Deterministic frequent-motif mining over the temporal knowledge graph (knowledge-system K-R4).
 //!
-//! A **motif** is a small labeled subgraph shape defined by up to
-//! [`MiningLimits::max_motif_edges`] edge-relationship types (default 3). The
-//! mining pass counts how many distinct entity triples match each shape
-//! (support counting) within a temporal window, persists matching shapes as
-//! [`EntityKind::Pattern`] nodes with `described_by`-style provenance edges to
-//! their instances, and returns a [`PatternIndex`] the caller owns and persists.
+//! # What a "motif" is in v1
+//!
+//! A **motif** in this version is a **set of edge-relationship-type labels**
+//! (e.g. `{"listed_on", "supplier_of"}`), identified by up to
+//! [`MiningLimits::max_motif_edges`] labels (default 3).
+//!
+//! The mining pass counts how many distinct **source entities** (`from` nodes)
+//! participate in **all** edge-relationship types in the set simultaneously.
+//! That count is the motif's *support*. A motif survives the pass only when
+//! `support ≥ min_support`.
+//!
+//! Example:
+//!
+//! ```text
+//! Graph edges:
+//!   instrument:AAPL --listed_on--> venue:NASDAQ
+//!   instrument:MSFT --listed_on--> venue:NASDAQ
+//!   instrument:AAPL --supplier_of--> instrument:MSFT
+//!   instrument:MSFT --supplier_of--> instrument:GOOG
+//!
+//! Motif {"listed_on", "supplier_of"}:
+//!   from-entities in listed_on:  {AAPL, MSFT}
+//!   from-entities in supplier_of: {AAPL, MSFT}
+//!   intersection: {AAPL, MSFT} → support = 2
+//! ```
+//!
+//! **Limitation (documented evolution):** v1 matches only on `from`-entity
+//! overlap — it does not verify that the matched edges form a topologically
+//! connected subgraph (e.g. it does not check that the `to` side of
+//! `listed_on` is the same node as some other edge's endpoint). Full
+//! connected-subgraph motif semantics are planned for a future mining version
+//! and will be introduced as a non-breaking opt-in (`MiningLimits::connected`).
 //!
 //! # Motif encoding
 //!
@@ -17,19 +43,31 @@
 //! stable regardless of traversal order:
 //!
 //! ```text
-//! motif for (a --listed_on--> v, a --supplier_of--> b)
-//!   → sorted labels: ["listed_on", "supplier_of"]
-//!   → canonical: "listed_on::supplier_of"
+//! motif labels: ["listed_on", "supplier_of"]
+//! canonical:    "listed_on::supplier_of"
 //! ```
 //!
 //! Two mining runs over the same graph always produce the same canonical string
-//! for the same shape — the determinism gate test verifies this.
+//! for the same label set — the determinism gate test verifies this.
 //!
 //! # Idempotency
 //!
 //! Re-mining updates the support count on an existing `Pattern` node and
 //! refreshes its instance provenance edges; it does **not** duplicate nodes.
 //! Pattern node identity is `pattern:<canonical>` (stable across runs).
+//!
+//! # Inference posture (`tdw-infer` interaction)
+//!
+//! `pattern_instance_of` edges written by the miner are **excluded** from the
+//! miner's own edge collection (see [`mining::PatternEngine`]) so re-mining
+//! cannot discover its own provenance edges as new motifs.
+//!
+//! In `tdw-infer`, rules fire only when their `when` clause names the specific
+//! relationship type. Because no shipped rule names `pattern_instance_of` as a
+//! `when` rel, these edges cannot accidentally trigger derivation rules.
+//! If a future rule is authored that consumes `pattern_instance_of`, it must be
+//! reviewed explicitly for derivation-from-derivation safety — this is a design
+//! decision, not an accident.
 //!
 //! # Hard bounds (B7 posture)
 //!

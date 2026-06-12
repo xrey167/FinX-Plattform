@@ -1,20 +1,20 @@
 //! The `tdw.kg.similar` analogy-recall tool (knowledge-system K-R4).
 //!
 //! Given an `entity_id` (and optional `as_of`), the tool finds structurally
-//! similar entities via two explained channels:
+//! similar entities via the motif channel:
 //!
 //! 1. **Motif channel** (deterministic): entities that share participation in
 //!    the same [`EntityKind::Pattern`] nodes as the query entity. A Pattern node
 //!    is connected to its instances via `pattern_instance_of` edges. The score
 //!    is the number of shared patterns (Jaccard numerator).
 //!
-//! 2. **Embedding channel** (hybrid): if a vector engine is attached on the
-//!    `KnowledgeRuntime`, the entity's `described_by` documents are used to
-//!    build an embedding-similarity score against other entity documents via
-//!    the existing [`tdw_retrieve::Retriever`].
+//! **Embedding channel (K-R5):** document-cosine-similarity via the retriever
+//! requires exposing the embedder through [`tdw_knowledge::runtime::KnowledgeRuntime`]
+//! and moving the tool to the async runtime path. This is a planned K-R5
+//! follow-up. In K-R4 the tool is motif-only.
 //!
-//! Results are merged and returned with decomposed per-channel scores so the
-//! caller can see exactly *why* each entity was surfaced.
+//! Results are returned with the motif channel score so the caller can see
+//! exactly *why* each entity was surfaced.
 //!
 //! # Temporal visibility
 //!
@@ -26,7 +26,6 @@
 //!
 //! - `top_k` maximum: [`SIMILAR_MAX_TOP_K`] (32).
 //! - Pattern-neighbor scan: [`SIMILAR_MAX_PATTERN_SCAN`] (256) patterns examined.
-//! - Embedding channel: delegated to [`tdw_retrieve`] with the same `MAX_TOP_K`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -70,12 +69,13 @@ pub fn descriptor() -> ToolDescriptor {
     tool(
         TOOL_NAME,
         "Analogy Recall — Structurally Similar Entities",
-        "Find entities structurally similar to the query entity via two explained channels: \
-         (1) shared motif participation (deterministic — entities co-appearing in the same \
-         mined Pattern nodes); \
-         (2) embedding similarity (hybrid — document cosine similarity via the retriever). \
-         Results include decomposed per-channel scores so you can see exactly why each entity \
-         was surfaced. Temporal visibility: post-as_of Pattern nodes and edges are invisible.\n\
+        "Find entities structurally similar to the query entity via shared motif participation \
+         (deterministic — entities co-appearing in the same mined Pattern nodes). \
+         Score = number of shared Pattern nodes (Jaccard numerator). \
+         Temporal visibility: post-as_of Pattern nodes and edges are invisible.\n\
+         \n\
+         Note: embedding-similarity channel (document cosine via the retriever) is planned \
+         for K-R5 and is NOT available in this version.\n\
          \n\
          Caps: top_k ≤ 32; pattern scan ≤ 256 nodes.",
         json!({
@@ -95,12 +95,6 @@ pub fn descriptor() -> ToolDescriptor {
                     "minimum": 1,
                     "maximum": 32,
                     "description": "Maximum results to return (default 8, max 32)."
-                },
-                "channels": {
-                    "type": "array",
-                    "items": { "type": "string", "enum": ["motif", "embedding"] },
-                    "description": "Channels to activate (default: both). Pass [\"motif\"] \
-                                    for deterministic-only or [\"embedding\"] for vector-only."
                 }
             },
             "required": ["entity_id"],
@@ -143,38 +137,17 @@ pub fn execute(
         .unwrap_or(8)
         .clamp(1, SIMILAR_MAX_TOP_K);
 
-    // Determine which channels to activate.
-    let (want_motif, want_embedding) =
-        arguments
-            .get("channels")
-            .and_then(Value::as_array)
-            .map_or((true, true), |channels| {
-                let strs: Vec<&str> = channels.iter().filter_map(Value::as_str).collect();
-                (
-                    strs.contains(&"motif") || strs.is_empty(),
-                    strs.contains(&"embedding") || strs.is_empty(),
-                )
-            });
-
-    let result = block_on(run_similar(
-        graph,
-        entity_id,
-        as_of_ts.as_deref(),
-        top_k,
-        want_motif,
-        want_embedding,
-    ))?;
+    let result = block_on(run_similar(graph, entity_id, as_of_ts.as_deref(), top_k))?;
 
     Ok(structured(result))
 }
 
 // ── Core logic ────────────────────────────────────────────────────────────────
 
-/// Per-candidate similarity scores across channels.
+/// Per-candidate motif similarity score.
 #[derive(Default)]
 struct CandidateScore {
     motif_score: f64,
-    embedding_score: f64,
     matched_patterns: Vec<String>,
 }
 
@@ -183,8 +156,6 @@ async fn run_similar(
     entity_id: &str,
     as_of: Option<&str>,
     top_k: usize,
-    want_motif: bool,
-    want_embedding: bool, // embedding channel: deferred to K-R5; returns empty contribution in K-R4
 ) -> Result<Value, ToolFailure> {
     // Verify the entity exists.
     let entity_node = graph
@@ -202,54 +173,32 @@ async fn run_similar(
     }
 
     let mut candidates: BTreeMap<String, CandidateScore> = BTreeMap::new();
-    let mut channels_active: Vec<&str> = Vec::new();
 
-    // ── Motif channel ──────────────────────────────────────────────────────
-    if want_motif {
-        motif_channel(graph, entity_id, as_of, &mut candidates).await?;
-        channels_active.push("motif");
-    }
+    // ── Motif channel (only channel in K-R4) ──────────────────────────────
+    motif_channel(graph, entity_id, as_of, &mut candidates).await?;
 
-    // ── Embedding channel ─────────────────────────────────────────────────
-    // Honest scope note: the embedding similarity leg of K-R4 uses the
-    // retriever's vector KNN over entity documents. Wiring the retriever
-    // here requires the `KnowledgeRuntime` embedder + vector engine, which
-    // are not accessible from this sync tool path without restructuring the
-    // runtime handle (it exposes `retriever()` only through the
-    // `knowledge_tools` async path). This channel is scaffolded and returns
-    // an empty contribution in K-R4; K-R5 will wire the full hybrid leg
-    // when the tool is moved to the async runtime path.
-    if want_embedding {
-        channels_active.push("embedding");
-    }
-
-    // ── Merge and rank ────────────────────────────────────────────────────
+    // ── Rank ──────────────────────────────────────────────────────────────
     let mut results: Vec<Value> = candidates
         .iter()
         .filter(|(id, _)| *id != entity_id)
         .map(|(id, score)| {
-            let combined = score.motif_score + score.embedding_score;
             json!({
                 "entity_id": id,
-                "combined_score": combined,
+                "score": score.motif_score,
                 "channels": {
                     "motif": {
                         "score": score.motif_score,
                         "matched_patterns": score.matched_patterns
-                    },
-                    "embedding": {
-                        "score": score.embedding_score,
-                        "note": "embedding channel scaffolded; full vector leg lands in K-R5"
                     }
                 }
             })
         })
         .collect();
 
-    // Sort by combined score desc, then by entity_id asc for determinism.
+    // Sort by motif score desc, then by entity_id asc for determinism.
     results.sort_by(|a, b| {
-        let sa = a["combined_score"].as_f64().unwrap_or(0.0);
-        let sb = b["combined_score"].as_f64().unwrap_or(0.0);
+        let sa = a["score"].as_f64().unwrap_or(0.0);
+        let sb = b["score"].as_f64().unwrap_or(0.0);
         sb.partial_cmp(&sa)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
@@ -265,7 +214,7 @@ async fn run_similar(
         "entity_id": entity_id,
         "as_of": as_of,
         "top_k": top_k,
-        "channels_active": channels_active,
+        "channels_active": ["motif"],
         "result_count": results.len(),
         "results": results,
         "pattern_scan_cap": SIMILAR_MAX_PATTERN_SCAN

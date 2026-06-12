@@ -594,10 +594,14 @@ impl Backend {
             cancel.clone(),
         );
         // K-R4 — spawn the pattern-mining worker when enabled.
+        // index_path = None: daemon does not yet wire a configured data-dir for
+        // the pattern index; a future K-R5 config field will supply the path.
+        // Idempotency is still correct within the process lifetime.
         let pattern_mining_task = spawn_pattern_mining_worker(
             &cfg.tdw.knowledge.patterns,
             Arc::clone(&self.graph),
             cancel.clone(),
+            None,
         );
 
         self.daemon = Some(DaemonHandle {
@@ -2668,6 +2672,12 @@ fn spawn_pattern_mining_worker(
     cfg: &tdw_config::PatternConfig,
     graph: Arc<dyn GraphEngine>,
     cancel: CancellationToken,
+    // Path for persisting the PatternIndex across restarts (caller-owned
+    // persistence — same pattern as DerivationIndex in tdw-infer).
+    // Pass None to disable persistence (idempotency still works within the
+    // process lifetime; created/updated counts are correct within a run but
+    // reset to zero on restart).
+    index_path: Option<std::path::PathBuf>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     if !cfg.enabled {
         eprintln!(
@@ -2688,24 +2698,30 @@ fn spawn_pattern_mining_worker(
 
     let schedule = CronSchedule::parse(&cfg.cadence)
         .unwrap_or_else(|_| CronSchedule::parse("0 2 * * *").expect("fallback parse"));
+    // Build a sentinel trigger envelope (same pattern as spawn_eval_worker /
+    // K-L3). The pattern-mining worker fires run_pattern_mining_at inline on
+    // each due tick and never dispatches the action payload — the envelope is a
+    // required field on ScheduledTrigger, not a dispatch target.
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-pattern-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "pattern-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
     let mut registry = ScheduleRegistry::new();
     registry.add(ScheduledTrigger {
         id: "tdw-pattern-mining".to_string(),
         schedule,
         action: TriggerAction::Enqueue {
-            envelope: {
-                use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
-                OpEnvelope::new(
-                    SessionId::new("tdw-pattern-worker").expect("session id"),
-                    1,
-                    ActorRef {
-                        actor_id: "pattern-actor".to_string(),
-                        kind: ActorKind::Worker,
-                        tenant_id: None,
-                    },
-                    Op::Shutdown,
-                )
-            },
+            envelope: sentinel_envelope,
             queue: "tdw-patterns".to_string(),
             max_attempts: 1,
             priority: 0,
@@ -2715,7 +2731,15 @@ fn spawn_pattern_mining_worker(
     let tick = tdw_cron::cron_tick();
     let handle = tokio::spawn(async move {
         let engine = PatternEngine::with_limits(limits);
-        let mut index = PatternIndex::default();
+
+        // Load persisted index from disk on start (caller-owned persistence —
+        // same pattern as DerivationIndex in tdw-infer). If the path is absent
+        // or the file does not exist yet, start with an empty index.
+        let mut index: PatternIndex = index_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| PatternIndex::from_json(&raw).ok())
+            .unwrap_or_default();
 
         let mut last_tick_ms = {
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -2762,6 +2786,25 @@ fn spawn_pattern_mining_worker(
                         report.motifs_examined,
                         report.instance_edges_written,
                     );
+                    // Persist the updated index so idempotency survives restarts.
+                    if let Some(ref path) = index_path {
+                        match index.to_json() {
+                            Ok(json) => {
+                                if let Err(e) = std::fs::write(path, json) {
+                                    eprintln!(
+                                        "[tdw] K-R4 pattern index persist failed \
+                                         (non-fatal, will retry next slot): {e}"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[tdw] K-R4 pattern index serialize failed \
+                                     (non-fatal): {e}"
+                                );
+                            }
+                        }
+                    }
                 }
                 Err(error) => {
                     eprintln!("[tdw] K-R4 pattern mining error (will retry next slot): {error}");
@@ -3599,6 +3642,176 @@ mod tests {
             names.contains(&"tdw.kg.link"),
             "tdw.kg.link must appear in tools/list for the production construction path; \
              got: {names:?}"
+        );
+    }
+
+    // ── K-R4: spawn_pattern_mining_worker config-gate tests (finding #2a) ────
+
+    /// When `enabled = false` the function returns `None`; no trigger is
+    /// registered and no background work is spawned.
+    #[test]
+    fn pattern_worker_disabled_returns_none() {
+        use tdw_config::PatternConfig;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let cancel = CancellationToken::new();
+        let cfg = PatternConfig {
+            enabled: false,
+            ..PatternConfig::default()
+        };
+
+        let handle = rt.block_on(async { spawn_pattern_mining_worker(&cfg, graph, cancel, None) });
+        assert!(
+            handle.is_none(),
+            "disabled worker must return None (no task spawned)"
+        );
+    }
+
+    /// When `enabled = true` the function returns `Some(handle)`.
+    #[test]
+    fn pattern_worker_enabled_returns_some_handle() {
+        use tdw_config::PatternConfig;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let cancel = CancellationToken::new();
+        let cfg = PatternConfig {
+            enabled: true,
+            cadence: "0 2 * * *".to_string(),
+            ..PatternConfig::default()
+        };
+
+        let handle =
+            rt.block_on(async { spawn_pattern_mining_worker(&cfg, graph, cancel.clone(), None) });
+        assert!(handle.is_some(), "enabled worker must return Some(handle)");
+        cancel.cancel();
+        rt.block_on(async {
+            if let Some(task) = handle {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+            }
+        });
+    }
+
+    /// With a real `index_path`, the worker task persists the index to disk
+    /// after a mining run. We test this via the PatternEngine directly (same
+    /// caller-owned persistence contract).
+    #[test]
+    fn pattern_index_persists_across_process_boundary() {
+        use tdw_patterns::PatternIndex;
+        use tdw_storage_graph::InMemoryGraphEngine;
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        // Use std::env::temp_dir() to avoid adding a tempfile dev-dep.
+        let index_path = std::env::temp_dir().join(format!(
+            "pattern_index_test_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+
+        // Build fixture graph.
+        let graph = Arc::new(InMemoryGraphEngine::default());
+        let graph_dyn: Arc<dyn GraphEngine> = graph.clone();
+        let prov = tdw_core::Provenance::Ingest {
+            source: "test".to_string(),
+        };
+
+        rt.block_on(async {
+            graph
+                .upsert_nodes(vec![
+                    tdw_core::GraphNode {
+                        id: "instrument:A".to_string(),
+                        kind: tdw_kg::EntityKind::Instrument,
+                        label: "A".to_string(),
+                        aliases: vec![],
+                        props: serde_json::Value::Null,
+                        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+                        valid_to: None,
+                    },
+                    tdw_core::GraphNode {
+                        id: "instrument:B".to_string(),
+                        kind: tdw_kg::EntityKind::Instrument,
+                        label: "B".to_string(),
+                        aliases: vec![],
+                        props: serde_json::Value::Null,
+                        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+                        valid_to: None,
+                    },
+                    tdw_core::GraphNode {
+                        id: "instrument:C".to_string(),
+                        kind: tdw_kg::EntityKind::Instrument,
+                        label: "C".to_string(),
+                        aliases: vec![],
+                        props: serde_json::Value::Null,
+                        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+                        valid_to: None,
+                    },
+                ])
+                .await
+                .expect("upsert nodes");
+            graph
+                .upsert_edges(vec![
+                    tdw_core::GraphEdge {
+                        from: "instrument:A".to_string(),
+                        to: "instrument:B".to_string(),
+                        rel: "peer_of".to_string(),
+                        props: serde_json::Value::Null,
+                        provenance: prov.clone(),
+                        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+                        valid_to: None,
+                    },
+                    tdw_core::GraphEdge {
+                        from: "instrument:B".to_string(),
+                        to: "instrument:C".to_string(),
+                        rel: "peer_of".to_string(),
+                        props: serde_json::Value::Null,
+                        provenance: prov,
+                        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+                        valid_to: None,
+                    },
+                ])
+                .await
+                .expect("upsert edges");
+        });
+
+        // Run mining and persist.
+        let first_index = rt.block_on(async {
+            let engine = tdw_patterns::PatternEngine::default();
+            let mut index = tdw_patterns::PatternIndex::default();
+            engine
+                .run_pattern_mining_at(&graph_dyn, &mut index, "2025-06-01T00:00:00Z", "2025-06-01")
+                .await
+                .expect("first mining");
+            index
+        });
+
+        // Persist manually (simulating what the worker does).
+        let json = first_index.to_json().expect("serialize");
+        std::fs::write(&index_path, &json).expect("write index");
+
+        // Restore (simulating process restart).
+        let raw = std::fs::read_to_string(&index_path).expect("read index");
+        let restored = PatternIndex::from_json(&raw).expect("deserialize");
+
+        assert_eq!(restored, first_index, "restored index must equal original");
+        assert!(
+            restored.contains("peer_of"),
+            "peer_of motif must survive round-trip"
         );
     }
 }
