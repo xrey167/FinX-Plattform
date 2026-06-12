@@ -1160,6 +1160,7 @@ mod tests {
             plane: None,
             as_of: None,
             mentions: Vec::new(),
+            author: None,
         };
         let outcome = indexer
             .index_at(doc, "2026-06-12")

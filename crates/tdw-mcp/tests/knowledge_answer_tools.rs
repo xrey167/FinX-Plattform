@@ -109,6 +109,7 @@ fn document(id: &str, body: &str, entity_id: &str, label: &str, as_of: &str) -> 
         plane: Some("shared".to_string()),
         as_of: Some(as_of.to_string()),
         mentions: Vec::new(),
+        author: None,
     }
 }
 

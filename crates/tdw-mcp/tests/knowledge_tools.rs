@@ -788,6 +788,7 @@ fn server_with_trust_fixture() -> McpServer {
                     plane: Some("shared".to_string()),
                     as_of: Some(NOW.to_string()),
                     mentions: Vec::new(),
+                    author: None,
                 },
                 NOW,
             )
@@ -811,6 +812,7 @@ fn server_with_trust_fixture() -> McpServer {
                     plane: Some("shared".to_string()),
                     as_of: Some(NOW.to_string()),
                     mentions: Vec::new(),
+                    author: None,
                 },
                 NOW,
             )
@@ -1033,6 +1035,7 @@ async fn index_at_stamps_provenance_class_on_production_path() {
                 plane: Some("platform".to_string()),
                 as_of: Some(NOW.to_string()),
                 mentions: Vec::new(),
+                author: None,
             },
             NOW,
         )
@@ -1056,6 +1059,7 @@ async fn index_at_stamps_provenance_class_on_production_path() {
                 plane: Some("platform".to_string()),
                 as_of: Some(NOW.to_string()),
                 mentions: Vec::new(),
+                author: None,
             },
             NOW,
         )
