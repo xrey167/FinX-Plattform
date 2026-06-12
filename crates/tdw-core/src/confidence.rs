@@ -122,15 +122,18 @@ pub const SURVIVED_CONTRADICTION_BONUS: f64 = 1.0;
 /// Only K-M4's explicit annotation is authoritative; see [`survived_contradiction`].
 pub const INVALIDATED_PENALTY: f64 = 0.85;
 
-/// Hard ceiling on the corroboration scan to prevent pathological full-graph
-/// scans when a (from, rel, to) triple has hundreds of duplicate edges.
-/// The first `MAX_CORROBORATION_CAP` edges with the matching triple are
-/// examined; beyond that the count is capped.
+/// Hard ceiling on the corroboration scan.
+///
+/// Prevents pathological full-graph scans when a (from, rel, to) triple has
+/// hundreds of duplicate edges. The first `MAX_CORROBORATION_CAP` edges with
+/// the matching triple are examined; beyond that the count is capped.
 pub const MAX_CORROBORATION_CAP: usize = 64;
 
-/// Default confidence weight in hybrid retrieval ranking.  Low so relevance
-/// (RRF score) dominates; set to `0.0` to disable.  Configurable per query
-/// via [`crate::ConfidenceRankingWeight`] — see `tdw-retrieve`.
+/// Default confidence weight in hybrid retrieval ranking.
+///
+/// Low so relevance (RRF score) dominates; set to `0.0` to disable.
+/// Configurable per query via [`crate::ConfidenceRankingWeight`] — see
+/// `tdw-retrieve`.
 pub const DEFAULT_CONFIDENCE_WEIGHT: f64 = 0.05;
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -233,14 +236,11 @@ pub fn compute_confidence(
         .props
         .get("extraction_confidence")
         .and_then(serde_json::Value::as_f64)
-        .map(|v| v.clamp(0.0, 1.0))
-        .unwrap_or(NEUTRAL);
+        .map_or(NEUTRAL, |v| v.clamp(0.0, 1.0));
 
     // ── Component (b): source reliability ────────────────────────────────────
     // K-R3 seam: caller-supplied optional; absent → NEUTRAL.
-    let source_reliability = source_reliability
-        .map(|v| v.clamp(0.0, 1.0))
-        .unwrap_or(NEUTRAL);
+    let source_reliability = source_reliability.map_or(NEUTRAL, |v| v.clamp(0.0, 1.0));
 
     // ── Component (c): independent-corroboration count ────────────────────────
     // Count distinct source strings among Ingest-provenance edges that assert
@@ -338,7 +338,7 @@ pub fn survived_contradiction(subject: &EdgeConfidenceInput<'_>) -> bool {
     subject
         .props
         .get("invalidated_by")
-        .is_none_or(|v| v.is_null())
+        .is_none_or(serde_json::Value::is_null)
 }
 
 #[cfg(test)]
@@ -771,7 +771,7 @@ mod tests {
         let count = count_independent_sources(&subject, &refs);
         // Only MAX_CORROBORATION_CAP edges are examined.
         assert!(
-            count <= MAX_CORROBORATION_CAP as u32,
+            count as usize <= MAX_CORROBORATION_CAP,
             "count {count} must not exceed MAX_CORROBORATION_CAP {MAX_CORROBORATION_CAP}"
         );
         // The factor must be clamped at 1.5.
