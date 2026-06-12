@@ -385,6 +385,16 @@
           },
           "description": "Auto-tagging rule-set configuration (knowledge-system K-L1).\n\nWhen absent (the default), no tag rules are loaded and the fact is\nlogged loudly at boot. When present, `rules_dir` must exist and\ncontain valid `*.json` rule files — a missing directory or malformed\nfile is a **hard `Init` error**."
         },
+        "skills": {
+          "$ref": "#/$defs/SkillsConfig",
+          "default": {
+            "cadence": "0 3 * * *",
+            "enabled": false,
+            "promote_threshold": 0.6,
+            "retire_threshold": 0.3
+          },
+          "description": "Skill lifecycle + eval-tournament settings (knowledge-system-2 K-R2).\n\nControls the cron-driven skill-lifecycle tournament that promotes/retires\nskills exclusively through the gated B9 pipeline.\n\n**Default: `enabled = false`.** Skill lifecycle management is off by\ndefault so offline/keyless installs are unaffected; the operator must\nflip `enabled = true` explicitly. Promotion is a fail-closed, real\nout-of-sample eval — an insufficient golden set promotes nothing."
+        },
         "user": {
           "$ref": "#/$defs/UserConfig",
           "default": {
@@ -679,6 +689,34 @@
       ],
       "type": "object"
     },
+    "SkillsConfig": {
+      "description": "Skill lifecycle + eval-tournament configuration (knowledge-system-2 K-R2).\n\n# Important: enabled defaults to `false`\n\nSkill lifecycle management drives gated B9 proposals (promote/retire) and is\nOFF by default so offline/keyless installs are entirely unaffected. The\noperator must explicitly set `enabled = true` in `[knowledge.skills]`.\n\nPromotion is a REAL out-of-sample eval tournament and is **fail-closed**: an\nempty or insufficient golden task set promotes NOTHING. These thresholds tune\nthe bars; they cannot create a vacuous gate (the tournament floor is enforced\nin `tdw-knowledge::skills`).\n\n# Example TOML\n\n```toml\n[knowledge.skills]\nenabled = true\ncadence = \"0 3 * * *\"     # nightly at 03:00 UTC\npromote_threshold = 0.6\nretire_threshold = 0.3\n```",
+      "properties": {
+        "cadence": {
+          "default": "0 3 * * *",
+          "description": "5-field cron expression for the tournament cadence.\n\nDefault: `\"0 3 * * *\"` (daily at 03:00 UTC).",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Whether the cron-driven skill-lifecycle tournament is enabled.\n\n**Default: `false`.** Must be explicitly set to `true` by the operator.\nWhen `false`, no tournament worker is spawned and no skill counts are\nsurfaced in `tdw.kg.status` (the field is omitted — absence is explicit).",
+          "type": "boolean"
+        },
+        "promote_threshold": {
+          "default": 0.6,
+          "description": "Mean score a candidate skill must reach to be eligible for promotion,\nin `[0.0, 1.0]`. Default: `0.6`. Must be strictly greater than\n`retire_threshold`; an out-of-order pair falls back to the library\ndefaults (never a degenerate gate).",
+          "format": "double",
+          "type": "number"
+        },
+        "retire_threshold": {
+          "default": 0.3,
+          "description": "Score at/below which an active skill is retired, in `[0.0, 1.0]`.\nDefault: `0.3`.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "UserConfig": {
       "description": "Single-user identity for the knowledge finding surface (knowledge-system K-X6).\n\nK-L5 closed the host-binding gap for the user (finding) surface: identity is\nbound at runtime construction from this config value and NEVER accepted as a\ntool argument. The id is validated at config load with the same grammar as\n`tdw_knowledge::proposals::validate_agent_id`: `[A-Za-z0-9:._-]+`, non-empty,\n≤ 128 bytes.\n\nSet `[knowledge.user] id = \"analyst\"` in your daemon TOML (default).",
       "properties": {
@@ -801,6 +839,12 @@
           "max_files": null,
           "max_total_rules": null,
           "rules_dir": null
+        },
+        "skills": {
+          "cadence": "0 3 * * *",
+          "enabled": false,
+          "promote_threshold": 0.6,
+          "retire_threshold": 0.3
         },
         "user": {
           "id": "analyst"

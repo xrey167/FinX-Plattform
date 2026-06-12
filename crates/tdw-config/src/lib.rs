@@ -670,6 +670,66 @@ impl Default for InductionConfig {
     }
 }
 
+/// Configuration for the skill-lifecycle tournament worker (`knowledge.skills`).
+///
+/// ```toml
+/// [knowledge.skills]
+/// enabled = true
+/// cadence = "0 3 * * *"     # nightly at 03:00 UTC
+/// promote_threshold = 0.6
+/// retire_threshold = 0.3
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SkillsConfig {
+    /// Whether the cron-driven skill-lifecycle tournament is enabled.
+    ///
+    /// **Default: `false`.** Must be explicitly set to `true` by the operator.
+    /// When `false`, no tournament worker is spawned and no skill counts are
+    /// surfaced in `tdw.kg.status` (the field is omitted — absence is explicit).
+    #[serde(default)]
+    pub enabled: bool,
+    /// 5-field cron expression for the tournament cadence.
+    ///
+    /// Default: `"0 3 * * *"` (daily at 03:00 UTC).
+    #[serde(default = "SkillsConfig::default_cadence")]
+    pub cadence: String,
+    /// Mean score a candidate skill must reach to be eligible for promotion,
+    /// in `[0.0, 1.0]`. Default: `0.6`. Must be strictly greater than
+    /// `retire_threshold`; an out-of-order pair falls back to the library
+    /// defaults (never a degenerate gate).
+    #[serde(default = "SkillsConfig::default_promote_threshold")]
+    pub promote_threshold: f64,
+    /// Score at/below which an active skill is retired, in `[0.0, 1.0]`.
+    /// Default: `0.3`.
+    #[serde(default = "SkillsConfig::default_retire_threshold")]
+    pub retire_threshold: f64,
+}
+
+impl SkillsConfig {
+    fn default_cadence() -> String {
+        "0 3 * * *".to_string()
+    }
+
+    const fn default_promote_threshold() -> f64 {
+        0.6
+    }
+
+    const fn default_retire_threshold() -> f64 {
+        0.3
+    }
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cadence: Self::default_cadence(),
+            promote_threshold: Self::default_promote_threshold(),
+            retire_threshold: Self::default_retire_threshold(),
+        }
+    }
+}
+
 /// Source kind for a scheduled knowledge feed (knowledge-system K-L6).
 ///
 /// The enum is `#[non_exhaustive]` so future source kinds (e.g. `Http`,
@@ -1007,6 +1067,7 @@ pub struct KnowledgeConfig {
     /// ```
     #[serde(default)]
     pub induction: InductionConfig,
+    pub skills: SkillsConfig,
     /// Scheduled document-feed pipelines (knowledge-system K-L6).
     ///
     /// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop

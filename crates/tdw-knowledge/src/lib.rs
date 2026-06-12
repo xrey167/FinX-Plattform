@@ -8,10 +8,15 @@ pub mod lessons;
 pub mod proposals;
 pub mod reindex;
 pub mod runtime;
+pub mod skills;
 
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
 pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus};
+pub use skills::{
+    GoldenTask, ManagedSkill, SkillCounts, SkillLifecycle, SkillRegistry, SkillScore,
+    SkillTournament, SkillsAudit, TournamentOutcome,
+};
 
 use std::sync::Arc;
 
