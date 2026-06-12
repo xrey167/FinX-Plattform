@@ -413,7 +413,9 @@ impl Backend {
         }
         // K-X5: build the watchlist store and freshness cell before Arc-wrapping
         // the runtime so the cell can be attached via with_watchlist_freshness.
-        let watchlist_store = Arc::new(std::sync::Mutex::new(WatchlistStore::new()));
+        let watchlist_store = Arc::new(std::sync::Mutex::new(
+            tdw_mcp::knowledge_watchlist_tools::load_store_from_env(),
+        ));
         let watchlist_freshness_cell =
             Arc::new(std::sync::Mutex::new(WatchlistFreshness::default()));
         knowledge_runtime =

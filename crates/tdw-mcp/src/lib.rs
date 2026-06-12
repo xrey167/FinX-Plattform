@@ -1396,6 +1396,7 @@ pub fn run_stdio_json_rpc_with_knowledge(
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
 ) -> i32 {
     let stdin = std::io::stdin();
     let base = daemon.map_or_else(McpServer::new, McpServer::with_daemon_config);
@@ -1421,6 +1422,11 @@ pub fn run_stdio_json_rpc_with_knowledge(
     };
     let base = if let Some(detector) = contradiction {
         base.with_contradiction_detector(detector)
+    } else {
+        base
+    };
+    let base = if let Some(wl) = watchlist {
+        base.with_watchlist_store(wl)
     } else {
         base
     };
@@ -1926,6 +1932,7 @@ pub fn run_streamable_http_with_daemon(bind: &str, daemon: Option<DaemonClientCo
 /// When any of `knowledge`, `feedback`, or `indexer` are `None` the server
 /// behaves identically to [`run_streamable_http_with_daemon`] for those surfaces.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn run_streamable_http_with_knowledge(
     bind: &str,
     daemon: Option<DaemonClientConfig>,
@@ -1934,6 +1941,7 @@ pub fn run_streamable_http_with_knowledge(
     indexer: Option<Arc<tokio::sync::Mutex<KnowledgeIndexer>>>,
     infer: Option<Arc<tokio::sync::Mutex<InferEngine>>>,
     contradiction: Option<Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    watchlist: Option<Arc<Mutex<knowledge_watchlist_tools::WatchlistStore>>>,
 ) -> i32 {
     if !bind_is_loopback(bind) && std::env::var("TDW_MCP_HTTP_TOKEN").is_err() {
         eprintln!(
@@ -1980,6 +1988,11 @@ pub fn run_streamable_http_with_knowledge(
     };
     let base = if let Some(detector) = contradiction {
         base.with_contradiction_detector(detector)
+    } else {
+        base
+    };
+    let base = if let Some(wl) = watchlist {
+        base.with_watchlist_store(wl)
     } else {
         base
     };

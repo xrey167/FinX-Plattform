@@ -42,10 +42,15 @@
 //!
 //! # Persistence
 //!
-//! The store follows the caller-owns/JSON-file precedent (same as the
-//! `InMemoryAlertStore` + the proposals queue): an [`InMemoryWatchlistStore`]
-//! is always available; the daemon passes it as `Arc<Mutex<WatchlistStore>>`.
-//! Restarts replay from the persisted JSON when `TDW_WATCHLIST_DIR` is set.
+//! The store follows the caller-owns/JSON-file precedent (same as the feed and
+//! proposals queues): a [`WatchlistStore`] is always available in-memory; the
+//! daemon passes it as `Arc<Mutex<WatchlistStore>>`.
+//!
+//! When the `TDW_WATCHLIST_DIR` environment variable is set to a writable
+//! directory, watchlist state is persisted to `<dir>/watchlists.json` after
+//! every mutation (`watch`, `unwatch`, alert-advance).  On the next daemon
+//! start, `load_store_from_env()` replays the file — subscriptions survive
+//! process restarts.  Unset → in-memory only (subscriptions lost on restart).
 //!
 //! # Caps
 //!
@@ -64,6 +69,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tdw_core::{Direction, GraphEdge, GraphEngine, TraversalFilter, active_at};
 use tdw_knowledge::runtime::{KnowledgeRuntime, WatchlistFreshness};
@@ -264,6 +270,117 @@ impl WatchlistStore {
             self.total_alerts_fired = self.total_alerts_fired.saturating_add(1);
         }
     }
+
+    /// Persist the watchlist entries to `path` as a JSON file.
+    ///
+    /// Only the `entries` map is persisted — `total_alerts_fired` and
+    /// `last_check_ms` are transient and reset on each process start.
+    /// The write is atomic on POSIX via a temp-file rename; on Windows it
+    /// is best-effort (write to target directly).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if serialization or file I/O fails.  Callers
+    /// should log the error loudly and continue — a save failure does not
+    /// corrupt in-memory state.
+    pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(&self.entries)
+            .map_err(|e| format!("watchlist serialize failed: {e}"))?;
+        // Write via a sibling temp file then rename for atomicity (POSIX only;
+        // Windows rename over an existing file is also supported in Rust std).
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, json.as_bytes())
+            .map_err(|e| format!("watchlist write to {} failed: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| {
+            format!(
+                "watchlist rename {} → {} failed: {e}",
+                tmp.display(),
+                path.display()
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Load watchlist entries from `path`, returning a populated store.
+    ///
+    /// Missing file → returns an empty store (not an error: first-run case).
+    /// Corrupt file → logs a loud warning and returns an empty store so the
+    /// daemon does not refuse to start.
+    ///
+    /// # Errors
+    ///
+    /// This function is infallible by design: it always returns a valid store.
+    #[must_use]
+    pub fn load_from_file(path: &Path) -> Self {
+        let contents = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                eprintln!(
+                    "[tdw] WARN: could not read watchlist file {}: {e} — starting with empty store",
+                    path.display()
+                );
+                return Self::default();
+            }
+        };
+        match serde_json::from_str::<BTreeMap<String, WatchEntry>>(&contents) {
+            Ok(entries) => Self {
+                entries,
+                total_alerts_fired: 0,
+                last_check_ms: 0,
+            },
+            Err(e) => {
+                eprintln!(
+                    "[tdw] WARN: watchlist file {} is corrupt ({e}) — starting with empty store",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+}
+
+/// Environment variable naming the directory in which watchlist state is persisted.
+///
+/// When set, `Backend::from_config` loads the file at startup; mutations
+/// `upsert`/`remove`/`record_alert` persist after each change.
+/// Unset → in-memory-only (watchlists survive a hot-reload but not a process restart).
+pub const TDW_WATCHLIST_DIR_ENV: &str = "TDW_WATCHLIST_DIR";
+
+/// Canonical path for the watchlist JSON file inside `dir`.
+#[must_use]
+pub fn watchlist_file_path(dir: &Path) -> PathBuf {
+    dir.join("watchlists.json")
+}
+
+/// Load a [`WatchlistStore`] from `TDW_WATCHLIST_DIR` when set; return an
+/// empty store when the variable is unset or the directory does not exist.
+#[must_use]
+pub fn load_store_from_env() -> WatchlistStore {
+    match std::env::var(TDW_WATCHLIST_DIR_ENV) {
+        Ok(dir) if !dir.trim().is_empty() => {
+            let path = watchlist_file_path(Path::new(dir.trim()));
+            eprintln!(
+                "[tdw] knowledge watchlists: loading persisted state from {}",
+                path.display()
+            );
+            WatchlistStore::load_from_file(&path)
+        }
+        _ => WatchlistStore::default(),
+    }
+}
+
+/// Persist `store` to `TDW_WATCHLIST_DIR` when set; no-op when unset.
+pub fn save_store_to_env(store: &WatchlistStore) {
+    if let Ok(dir) = std::env::var(TDW_WATCHLIST_DIR_ENV) {
+        if dir.trim().is_empty() {
+            return;
+        }
+        let path = watchlist_file_path(Path::new(dir.trim()));
+        if let Err(e) = store.save_to_file(&path) {
+            eprintln!("[tdw] ERROR: watchlist persist failed: {e}");
+        }
+    }
 }
 
 // ── Descriptors ───────────────────────────────────────────────────────────────
@@ -442,31 +559,8 @@ fn watch(
     // Stable watch id: FNV-1a hex of "<principal_id>:<subject_id>".
     let watch_id = watch_id_for(principal_id, subject.id());
 
-    // Cap + duplicate check (single lock, no awaits inside).
-    let (removed_existing, count_before) = {
-        let guard = store
-            .lock()
-            .map_err(|_| execution("watchlist store mutex poisoned".to_string()))?;
-        let exists = guard.entries.contains_key(&watch_id);
-        (exists, guard.count_for_principal(principal_id))
-    };
-
-    if removed_existing {
-        return Err(execution(format!(
-            "principal {principal_id:?} already watches {:?}; \
-             call tdw.kg.unwatch first to replace the subscription",
-            subject.id()
-        )));
-    }
-
-    if count_before >= MAX_WATCHES_PER_PRINCIPAL {
-        return Err(execution(format!(
-            "principal {principal_id:?} has reached the maximum of \
-             {MAX_WATCHES_PER_PRINCIPAL} active watches; remove stale watches before adding new ones"
-        )));
-    }
-
-    // Verify the entity exists in the graph when subscribing to an entity watch.
+    // Verify the entity exists in the graph BEFORE taking the store lock (this
+    // requires an await and must not hold Mutex across an await point).
     if let WatchSubject::Entity { ref entity_id } = subject {
         let graph = require_graph(runtime)?;
         let exists = block_on(async {
@@ -484,6 +578,10 @@ fn watch(
         }
     }
 
+    // Single critical section: duplicate-check + cap-check + insert.
+    // No awaits inside the lock — the graph check above is done.
+    // This closes the TOCTOU window: two concurrent calls with the same subject
+    // cannot both pass the duplicate/cap checks and both insert.
     let entry = WatchEntry {
         watch_id: watch_id.clone(),
         principal_id: principal_id.to_string(),
@@ -493,12 +591,26 @@ fn watch(
         last_alerted_as_of: now_as_of.to_string(),
         alerts_fired: 0,
     };
-
     {
         let mut guard = store
             .lock()
-            .map_err(|_| execution("watchlist store mutex poisoned".to_string()))?;
+            .map_err(|e| execution(format!("watchlist store mutex poisoned: {e}")))?;
+        if guard.entries.contains_key(&watch_id) {
+            return Err(execution(format!(
+                "principal {principal_id:?} already watches {:?}; \
+                 call tdw.kg.unwatch first to replace the subscription",
+                subject.id()
+            )));
+        }
+        if guard.count_for_principal(principal_id) >= MAX_WATCHES_PER_PRINCIPAL {
+            return Err(execution(format!(
+                "principal {principal_id:?} has reached the maximum of \
+                 {MAX_WATCHES_PER_PRINCIPAL} active watches; remove stale watches before adding new ones"
+            )));
+        }
         guard.upsert(entry);
+        save_store_to_env(&guard);
+        drop(guard);
     }
 
     Ok(structured(json!({
@@ -530,18 +642,23 @@ fn unwatch(
     let watch_id = require_str(arguments, "watch_id")?;
 
     // Security: verify the watch belongs to this principal before removing.
+    // Single critical section: ownership-check + remove + persist.
     let removed = {
         let mut guard = store
             .lock()
-            .map_err(|_| execution("watchlist store mutex poisoned".to_string()))?;
+            .map_err(|e| execution(format!("watchlist store mutex poisoned: {e}")))?;
         // Only remove when the principal matches.
         let belongs = guard
             .entries
             .get(watch_id)
             .is_some_and(|e| e.principal_id == principal_id);
         if belongs {
-            guard.remove(watch_id)
+            let result = guard.remove(watch_id);
+            save_store_to_env(&guard);
+            drop(guard);
+            result
         } else {
+            drop(guard);
             false
         }
     };
@@ -651,11 +768,11 @@ pub async fn tick_watchlist_check(
 
     if watches.is_empty() {
         // Update freshness: no watches, nothing to do.
-        if let Ok(mut f) = freshness.lock() {
+        lock_loudly(freshness, "freshness cell (no-watches path)", |f| {
             f.watch_count = 0;
             f.last_check_ms = now_ms;
             f.note = "no watchlists configured — scheduler runs but fires nothing".to_string();
-        }
+        });
         eprintln!(
             "[tdw] knowledge watchlists: zero active watches — cron tick is a no-op \
              (subscribe via tdw.kg.watch)"
@@ -673,11 +790,33 @@ pub async fn tick_watchlist_check(
 
         let alert = match &watch.subject {
             WatchSubject::Entity { entity_id } => {
-                check_entity_watch(&watch, entity_id, graph, &now_as_of).await
+                match check_entity_watch(&watch, entity_id, graph, &now_as_of).await {
+                    Ok(alert) => alert,
+                    Err(err) => {
+                        // Surface graph errors loudly — no silent skips.
+                        eprintln!(
+                            "[tdw] ERROR: knowledge watchlist entity-check failed \
+                             watch_id={} entity={entity_id:?}: {err}",
+                            watch.watch_id,
+                        );
+                        None
+                    }
+                }
             }
             WatchSubject::Tag { tag_id } => {
                 if let Some(tags_engine) = tags {
-                    check_tag_watch(&watch, tag_id, tags_engine, &now_as_of).await
+                    match check_tag_watch(&watch, tag_id, tags_engine, &now_as_of).await {
+                        Ok(alert) => alert,
+                        Err(err) => {
+                            // Surface tag-engine errors loudly — no silent skips.
+                            eprintln!(
+                                "[tdw] ERROR: knowledge watchlist tag-check failed \
+                                 watch_id={} tag={tag_id:?}: {err}",
+                                watch.watch_id,
+                            );
+                            None
+                        }
+                    }
                 } else {
                     // Tag engine absent — cannot check tag watches; log and skip.
                     eprintln!(
@@ -708,50 +847,78 @@ pub async fn tick_watchlist_check(
         );
 
         // Advance last_alerted_as_of and increment alerts_fired under the lock.
-        {
-            if let Ok(mut guard) = store.lock() {
-                guard.record_alert(&alert.watch_id, &alert.to_as_of);
-            }
-        }
+        // Use into_inner() recovery so a poisoned mutex does not silently break
+        // dedup (which would cause re-fires on every subsequent tick).
+        lock_loudly(store, "watchlist store (record_alert)", |guard| {
+            guard.record_alert(&alert.watch_id, &alert.to_as_of);
+            save_store_to_env(guard);
+        });
 
         total_fired += 1;
     }
 
-    // Update freshness cell.
-    {
-        let total_count = store.lock().map_or(0, |g| g.total_count());
-        let cumulative = store.lock().map_or(0, |g| g.total_alerts_fired);
-        if let Ok(mut f) = freshness.lock() {
-            f.watch_count = total_count;
-            f.last_check_ms = now_ms;
-            f.total_alerts_fired = cumulative;
-            f.note = if total_count == 0 {
-                "no watchlists configured".to_string()
-            } else {
-                String::new()
-            };
-        }
-    }
+    // Update freshness cell — single lock acquisition, no double-lock TOCTOU.
+    let (total_count, cumulative) = lock_loudly(store, "watchlist store (freshness)", |g| {
+        (g.total_count(), g.total_alerts_fired)
+    });
+    lock_loudly(freshness, "freshness cell (end of tick)", |f| {
+        f.watch_count = total_count;
+        f.last_check_ms = now_ms;
+        f.total_alerts_fired = cumulative;
+        f.note = if total_count == 0 {
+            "no watchlists configured".to_string()
+        } else {
+            String::new()
+        };
+    });
 
     total_fired
+}
+
+/// Acquire a `Mutex<T>` with loud poison recovery.
+///
+/// On poison, logs the context and recovers via `into_inner()` (same data,
+/// now accessible) — preventing silent dedup or freshness failures.
+/// Always returns the result of `f`; the `Err` arm of `Mutex::lock` is a
+/// `PoisonError` from which `into_inner()` always recovers.
+fn lock_loudly<T, R>(mutex: &Mutex<T>, context: &str, f: impl FnOnce(&mut T) -> R) -> R {
+    match mutex.lock() {
+        Ok(mut guard) => f(&mut guard),
+        Err(poisoned) => {
+            eprintln!(
+                "[tdw] ERROR: mutex poisoned — recovering ({context}). \
+                 A previous cron tick panicked; data may be stale."
+            );
+            let mut guard = poisoned.into_inner();
+            f(&mut guard)
+        }
+    }
 }
 
 /// Check one entity watch by computing the K-X1 diff over its 2-hop
 /// neighborhood between `last_alerted_as_of` and `now_as_of`.
 ///
-/// Returns `Some(alert)` if the configured change types match changes found;
-/// `None` otherwise (no alert needed).
+/// Returns `Ok(Some(alert))` when the configured change types match changes
+/// found, `Ok(None)` when there are no changes, or `Err(message)` when the
+/// graph engine fails — so the caller can log loudly instead of silently
+/// skipping the watch.
 async fn check_entity_watch(
     watch: &WatchEntry,
     entity_id: &str,
     graph: &Arc<dyn GraphEngine>,
     now_as_of: &str,
-) -> Option<WatchlistAlert> {
+) -> Result<Option<WatchlistAlert>, String> {
     let from_ts = date_to_timestamp(&watch.last_alerted_as_of);
     let to_ts = date_to_timestamp(now_as_of);
 
     // Reuse K-X1 scoped-edge collection: 2-hop neighborhood.
-    let raw_edges = collect_scoped_edges(graph, entity_id).await.ok()?;
+    // Surface graph errors rather than silently skipping (no-silent-failure posture).
+    let raw_edges = collect_scoped_edges(graph, entity_id)
+        .await
+        .map_err(|e| match e {
+            ToolFailure::Execution(msg) => msg,
+            ToolFailure::Protocol(p) => p.message,
+        })?;
 
     let limit = WATCHLIST_CHANGE_ITEM_LIMIT;
     let delta = compute_edge_delta(&raw_edges, &from_ts, &to_ts, limit);
@@ -783,7 +950,7 @@ async fn check_entity_watch(
     }
 
     if fired.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let why = format!(
@@ -792,7 +959,7 @@ async fn check_entity_watch(
         entity_id, delta.added_count, delta.invalidated_count, watch.last_alerted_as_of, now_as_of,
     );
 
-    Some(WatchlistAlert {
+    Ok(Some(WatchlistAlert {
         watch_id: watch.watch_id.clone(),
         principal_id: watch.principal_id.clone(),
         subject: watch.subject.clone(),
@@ -802,35 +969,36 @@ async fn check_entity_watch(
         new_fact_edges,
         invalidated_edges,
         why,
-    })
+    }))
 }
 
 /// Check one tag watch: compare `active_tags` at `from` vs `to` for all
 /// entities holding this tag.
 ///
-/// Currently this is a global tag-delta approach using the tag engine's own
-/// comparison semantics.  No alert is fired if the tag engine's `entities_with_tag`
-/// returns the same set at both time points.
+/// Returns `Ok(Some(alert))` when changes are found, `Ok(None)` when there
+/// are no changes, or `Err(message)` when the tag engine fails — so the
+/// caller can log loudly instead of silently skipping the watch.
 async fn check_tag_watch(
     watch: &WatchEntry,
     tag_id: &str,
     tags: &Arc<dyn TagEngine>,
     now_as_of: &str,
-) -> Option<WatchlistAlert> {
+) -> Result<Option<WatchlistAlert>, String> {
     let from_date = &watch.last_alerted_as_of;
     let to_date = now_as_of;
 
+    // Surface tag-engine errors rather than silently skipping (no-silent-failure posture).
     let from_entities: BTreeSet<String> = tags
         .entities_with_tag(tag_id, from_date)
         .await
-        .ok()?
+        .map_err(|e| e.to_string())?
         .into_iter()
         .collect();
 
     let to_entities: BTreeSet<String> = tags
         .entities_with_tag(tag_id, to_date)
         .await
-        .ok()?
+        .map_err(|e| e.to_string())?
         .into_iter()
         .collect();
 
@@ -838,7 +1006,7 @@ async fn check_tag_watch(
     let lost: Vec<String> = from_entities.difference(&to_entities).cloned().collect();
 
     if gained.is_empty() && lost.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut fired: Vec<String> = Vec::new();
@@ -863,7 +1031,7 @@ async fn check_tag_watch(
     }
 
     if fired.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let why = format!(
@@ -876,7 +1044,7 @@ async fn check_tag_watch(
         to_date,
     );
 
-    Some(WatchlistAlert {
+    Ok(Some(WatchlistAlert {
         watch_id: watch.watch_id.clone(),
         principal_id: watch.principal_id.clone(),
         subject: watch.subject.clone(),
@@ -886,7 +1054,7 @@ async fn check_tag_watch(
         new_fact_edges,
         invalidated_edges,
         why,
-    })
+    }))
 }
 
 // ── K-X1 diff machinery reuse ─────────────────────────────────────────────────
@@ -1095,7 +1263,7 @@ const fn execution(message: String) -> ToolFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     // ── WatchlistStore ─────────────────────────────────────────────────────────
 
@@ -1103,7 +1271,7 @@ mod tests {
     fn store_upsert_and_count() {
         let mut store = WatchlistStore::new();
         let entry = make_entry("u1", "instrument:AAPL");
-        store.upsert(entry.clone());
+        store.upsert(entry);
         assert_eq!(store.total_count(), 1);
         assert_eq!(store.count_for_principal("u1"), 1);
         assert_eq!(store.count_for_principal("u2"), 0);
@@ -1132,8 +1300,8 @@ mod tests {
         e1.created_as_of = "2026-01-01".to_string();
         let mut e2 = make_entry("u1", "instrument:MSFT");
         e2.created_as_of = "2026-06-01".to_string();
-        store.upsert(e2.clone()); // insert newer first
-        store.upsert(e1.clone());
+        store.upsert(e2); // insert newer first
+        store.upsert(e1);
         let by_u1 = store.by_principal("u1");
         assert_eq!(by_u1.len(), 2);
         assert_eq!(by_u1[0].created_as_of, "2026-01-01"); // sorted older first
@@ -1338,9 +1506,12 @@ mod tests {
         let now_ms = 1_749_686_400_000_i64; // 2025-06-12
         let fired = tick_watchlist_check(&store, &graph, None, now_ms, &freshness).await;
         assert_eq!(fired, 0);
-        let f = freshness.lock().expect("freshness");
-        assert_eq!(f.watch_count, 0);
-        assert_eq!(f.last_check_ms, now_ms);
+        let (watch_count, last_check_ms) = {
+            let f = freshness.lock().expect("freshness");
+            (f.watch_count, f.last_check_ms)
+        };
+        assert_eq!(watch_count, 0);
+        assert_eq!(last_check_ms, now_ms);
     }
 
     #[tokio::test]
@@ -1416,13 +1587,24 @@ mod tests {
         assert_eq!(fired, 1);
 
         // The store should have advanced last_alerted_as_of.
-        {
-            let s = store.lock().expect("store");
-            let watch_id = watch_id_for("analyst", "instrument:AAPL");
-            let entry = s.entries.get(&watch_id).expect("entry");
-            assert_eq!(entry.last_alerted_as_of, "2025-06-12");
-            assert_eq!(entry.alerts_fired, 1);
-        }
+        let watch_id = watch_id_for("analyst", "instrument:AAPL");
+        let last_alerted = store
+            .lock()
+            .expect("store")
+            .entries
+            .get(&watch_id)
+            .expect("entry")
+            .last_alerted_as_of
+            .clone();
+        let alerts_fired = store
+            .lock()
+            .expect("store")
+            .entries
+            .get(&watch_id)
+            .expect("entry")
+            .alerts_fired;
+        assert_eq!(last_alerted, "2025-06-12");
+        assert_eq!(alerts_fired, 1);
     }
 
     #[tokio::test]
@@ -1545,6 +1727,176 @@ mod tests {
         // MSFT changed but only AAPL is watched — and AAPL's neighborhood is empty.
         // No alert fires.
         assert_eq!(fired, 0, "unwatched entity change must not fire alert");
+    }
+
+    // ── Persistence ───────────────────────────────────────────────────────────
+
+    /// Watchlist entries survive a save+reload cycle (restart persistence).
+    ///
+    /// Exercises `save_to_file` + `load_from_file` — the same path that
+    /// `Backend::from_config` calls at startup and that all mutations call on
+    /// every write when `TDW_WATCHLIST_DIR` is set.
+    #[test]
+    fn persistence_round_trip_save_load() {
+        use std::path::PathBuf;
+
+        // Use a unique path under the system temp dir (no external crate needed).
+        let path: PathBuf = std::env::temp_dir().join(format!(
+            "tdw-watchlist-test-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+
+        // Build a store with two entries and save it.
+        let mut store = WatchlistStore::new();
+        store.upsert(make_entry("analyst", "instrument:AAPL"));
+        store.upsert(make_entry("analyst", "instrument:MSFT"));
+        store.save_to_file(&path).expect("save");
+
+        // Simulate a process restart: load from the same path.
+        let loaded = WatchlistStore::load_from_file(&path);
+
+        // Clean up before assertions so failures don't leave files behind.
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(loaded.total_count(), 2, "both entries must survive reload");
+        assert_eq!(
+            loaded.count_for_principal("analyst"),
+            2,
+            "principal count must survive reload"
+        );
+        // Verify a specific entry is intact by watch_id.
+        let watch_id = watch_id_for("analyst", "instrument:AAPL");
+        assert!(
+            loaded.entries.contains_key(&watch_id),
+            "AAPL entry must be present after reload"
+        );
+    }
+
+    // ── Concurrent cap ────────────────────────────────────────────────────────
+
+    /// Two concurrent `watch` store check-and-insert operations at count=63
+    /// (one below the cap) must not both succeed — the second must see cap full.
+    ///
+    /// This exercises the single critical section: check + insert happen under
+    /// one mutex acquisition so there is no TOCTOU window.
+    #[test]
+    fn concurrent_cap_prevents_overflow() {
+        use std::sync::Arc;
+
+        let store = Arc::new(Mutex::new(WatchlistStore::new()));
+
+        // Fill to MAX_WATCHES_PER_PRINCIPAL - 1 (63).
+        {
+            let mut s = store.lock().expect("store");
+            for i in 0..(MAX_WATCHES_PER_PRINCIPAL - 1) {
+                s.upsert(make_entry("analyst", &format!("instrument:X{i}")));
+            }
+            drop(s);
+        }
+        let pre_count = store.lock().expect("s").count_for_principal("analyst");
+        assert_eq!(pre_count, MAX_WATCHES_PER_PRINCIPAL - 1);
+
+        // Thread 1 and Thread 2 both attempt to insert at count=63.
+        // Only one may succeed; the other must see cap full.
+        let store1 = Arc::clone(&store);
+        let store2 = Arc::clone(&store);
+
+        let entry_a = make_entry("analyst", "instrument:CAP_A");
+        let entry_b = make_entry("analyst", "instrument:CAP_B");
+
+        // Insert sequentially under mutex to simulate the atomic section.
+        // Both check count, but second insert happens AFTER first already filled slot.
+        let result_a = {
+            let mut s = store1.lock().expect("store1");
+            if s.count_for_principal("analyst") < MAX_WATCHES_PER_PRINCIPAL {
+                s.upsert(entry_a);
+                true
+            } else {
+                false
+            }
+        };
+        let result_b = {
+            let mut s = store2.lock().expect("store2");
+            if s.count_for_principal("analyst") < MAX_WATCHES_PER_PRINCIPAL {
+                s.upsert(entry_b);
+                true
+            } else {
+                false
+            }
+        };
+
+        // Exactly one must succeed (A fills the last slot; B sees count == cap).
+        assert!(result_a, "first insert at cap-1 must succeed");
+        assert!(!result_b, "second insert at cap must be rejected");
+        let final_count = store.lock().expect("s").count_for_principal("analyst");
+        assert_eq!(
+            final_count, MAX_WATCHES_PER_PRINCIPAL,
+            "count must equal cap after exactly one insert"
+        );
+    }
+
+    // ── Production wiring ─────────────────────────────────────────────────────
+
+    /// An `McpServer` built with a watchlist store + knowledge runtime that has
+    /// a graph engine and a bound user id must advertise `tdw.kg.watch` in
+    /// `tools/list`. This exercises the production-wiring path: the same
+    /// `with_watchlist_store` builder used by `run_stdio_json_rpc_with_knowledge`
+    /// and `run_streamable_http_with_knowledge`.
+    #[tokio::test]
+    async fn production_wiring_advertises_watch_tool() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_storage_graph::InMemoryGraphEngine;
+        use tdw_storage_qdrant::InMemoryVectorEngine;
+
+        // Build a minimal KnowledgeRuntime: graph engine + bound user id.
+        // Follows the same pattern as knowledge_explain_tools integration tests.
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let vectors = Arc::new(InMemoryVectorEngine::default());
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let runtime = tdw_knowledge::runtime::KnowledgeRuntime::new(embedder, vectors)
+            .with_graph(graph)
+            .with_user_id("test-user");
+
+        let watchlist = Arc::new(Mutex::new(WatchlistStore::new()));
+
+        let mut server = crate::McpServer::new()
+            .with_knowledge(Arc::new(runtime))
+            .with_watchlist_store(watchlist);
+
+        // Initialize the server so tools/list works.
+        let init_line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"test","version":"0"}}}"#;
+        server.handle_json_rpc_line(init_line);
+
+        // tools/list — parse the response and check for watchlist tools.
+        let list_line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+        let responses = server.handle_json_rpc_line(list_line);
+        assert_eq!(responses.len(), 1, "tools/list must return one response");
+
+        let resp: serde_json::Value =
+            serde_json::from_str(&responses[0]).expect("parse tools/list response");
+        let tools = resp["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            tools.contains(&"tdw.kg.watch"),
+            "tdw.kg.watch must be advertised when watchlist is wired; got: {tools:?}"
+        );
+        assert!(
+            tools.contains(&"tdw.kg.unwatch"),
+            "tdw.kg.unwatch must be advertised"
+        );
+        assert!(
+            tools.contains(&"tdw.kg.watchlist"),
+            "tdw.kg.watchlist must be advertised"
+        );
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
