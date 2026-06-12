@@ -192,7 +192,18 @@ fn bench_knowledge() -> Result<(), String> {
     // Two runs: prove the deterministic quality + drift-key blocks are stable.
     let first = run()?;
     let second = run()?;
-    if first.quality != second.quality || first.drift_key != second.drift_key {
+    // The reproducibility claim is *byte-identical* numbers, so compare the
+    // float fields bit-exactly via `to_bits` (no `float_cmp` lint, and stricter
+    // than `==`: NaN-vs-NaN and -0.0-vs-0.0 are treated as differences). An
+    // epsilon tolerance would silently weaken the determinism guarantee.
+    let q1 = &first.quality;
+    let q2 = &second.quality;
+    let quality_equal = q1.k == q2.k
+        && q1.tasks == q2.tasks
+        && q1.mean_recall_at_k.to_bits() == q2.mean_recall_at_k.to_bits()
+        && q1.mrr.to_bits() == q2.mrr.to_bits()
+        && q1.mean_ndcg_at_k.to_bits() == q2.mean_ndcg_at_k.to_bits();
+    if !quality_equal || first.drift_key != second.drift_key {
         return Err(format!(
             "bench-knowledge: NON-REPRODUCIBLE — quality/drift differ across runs:\n  run1 quality={:?} drift={:?}\n  run2 quality={:?} drift={:?}",
             first.quality, first.drift_key, second.quality, second.drift_key

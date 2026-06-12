@@ -143,6 +143,10 @@ pub struct QualityMetrics {
 
 impl QualityMetrics {
     /// Project the deterministic quality block out of a B11 report.
+    ///
+    /// `const` is valid here: `Vec::len` is a stable `const fn` since Rust 1.87
+    /// (`const_vec_string_slice`), and the toolchain floor is 1.95. `nursery`'s
+    /// `missing_const_for_fn` requires it.
     #[must_use]
     pub const fn from_report(report: &RetrievalEvalReport) -> Self {
         Self {
