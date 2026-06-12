@@ -519,7 +519,6 @@ async fn sweep_cap_limits_proposals_landed_per_tick() {
 /// Auto-landed edge matching a DeriveEdge rule → derived edge written by inference.
 #[tokio::test]
 async fn sweep_fires_inference_for_landed_edge_proposals() {
-    use std::sync::Mutex;
     use tdw_infer::rule::EdgePattern;
     use tdw_infer::{ChangeSet, InferEngine, InferRule};
 
