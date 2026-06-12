@@ -5597,6 +5597,7 @@ dependencies = [
  "tdw-embed",
  "tdw-embed-local",
  "tdw-kg",
+ "tdw-llm",
  "tdw-news-compose",
  "tdw-retrieve",
  "tdw-storage-graph",

@@ -20,6 +20,8 @@ tdw-core = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-kg = { path = "../tdw-kg" }
+# K-M1: LLM extraction-as-proposals — LanguageModel trait + is_production_grade stub gate.
+tdw-llm = { path = "../tdw-llm" }
 tdw-news-compose = { path = "../tdw-news-compose" }
 tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }

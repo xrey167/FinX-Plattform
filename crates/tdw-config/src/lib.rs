@@ -637,7 +637,74 @@ pub struct FeedsConfig {
     pub entries: Vec<FeedConfig>,
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4 + K-M4).
+/// LLM extraction-as-proposals configuration (knowledge-system K-M1).
+///
+/// **Default: `enabled = false`.**  Extraction is OFF by default so that
+/// keyless installs (no API key, stub model) run the full deterministic
+/// lexical/rule pipeline unchanged — this is the differentiator: TDW never
+/// writes LLM output directly to the graph, it routes everything through the
+/// B9 PROPOSAL GATE.
+///
+/// When `enabled = true` a production-grade [`LanguageModel`] must be wired
+/// by the composition root (tdw-backend) AND both cost-bound fields must be
+/// set — there is no unbounded default.  A missing or zero cost bound is a
+/// **hard config validation error**.
+///
+/// # Example (`tdw.toml`)
+///
+/// ```toml
+/// [knowledge.extraction]
+/// enabled             = true
+/// max_tokens_per_doc  = 512
+/// daily_token_budget  = 1_000_000
+/// ```
+///
+/// # Stub gate
+///
+/// Even with `enabled = true`, if the composition root wires a model whose
+/// `is_production_grade()` returns `false` (e.g. no API key is set), the
+/// stage is structurally absent — no LLM call is made, no proposal is
+/// submitted.  Status reports `"stub model — is_production_grade() = false"`.
+///
+/// # Differentiator (vs Zep / Mem0 / Cognee)
+///
+/// Competitors write LLM-extracted facts directly into memory.  TDW routes
+/// every extracted entity and relation through the B9 `ProposalQueue`
+/// (`Validated → Ready → materialize`), eval-gated before ground truth.
+/// Provenance `extraction:<model_id>@<doc_id>` is stamped on every proposal
+/// so the why-chain and K-R6 confidence aggregation can attribute the origin.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtractionConfig {
+    /// Whether the LLM extraction stage is active.
+    ///
+    /// **Default: `false`.**  Must be explicitly set to `true` by the operator.
+    /// A loud status note is emitted at every ingest when `false` (or when the
+    /// model is not production-grade) so operators notice the gap.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum output tokens requested per document.
+    ///
+    /// Required when `enabled = true`; must be `> 0`.  A document whose
+    /// prompt would exceed the model's context is skipped with a loud note;
+    /// the deterministic path continues unchanged.
+    ///
+    /// Default: `0` (invalid when enabled — the validator will reject it).
+    #[serde(default)]
+    pub max_tokens_per_doc: u32,
+
+    /// Daily token budget (input + output combined) across all extraction calls.
+    ///
+    /// Required when `enabled = true`; must be `> 0`.  Exhaustion stops the
+    /// extraction stage loudly for the remainder of the day; ingestion
+    /// continues on the deterministic path.
+    ///
+    /// Default: `0` (invalid when enabled — the validator will reject it).
+    #[serde(default)]
+    pub daily_token_budget: u64,
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4 + K-M4 + K-M1).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -754,6 +821,17 @@ pub struct KnowledgeConfig {
     /// matching loop.
     #[serde(default)]
     pub questions: QuestionsConfig,
+
+    /// LLM extraction-as-proposals settings (knowledge-system K-M1).
+    ///
+    /// **Default: `enabled = false`.**  Extraction is OFF by default so that
+    /// keyless installs run the full deterministic pipeline unchanged.
+    /// Set `enabled = true` and provide both cost bounds to activate.
+    ///
+    /// The differentiator: extracted facts are never written directly — they
+    /// route through the B9 `ProposalQueue` and require eval-gate promotion.
+    #[serde(default)]
+    pub extraction: ExtractionConfig,
 }
 
 /// Knowledge watchlist change-detection configuration (knowledge-system K-X5).
@@ -1284,7 +1362,34 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     // Contradiction config (K-M4): every extra functional rel must be a valid graph id.
     validate_contradiction(&knowledge.contradiction)?;
     // Feed entries (K-L6): validate id grammar, cadence, and max_items.
-    validate_feeds(&knowledge.feeds)
+    validate_feeds(&knowledge.feeds)?;
+    // Extraction config (K-M1): cost bounds are required when enabled.
+    validate_extraction(&knowledge.extraction)
+}
+
+/// Validate `[knowledge.extraction]` (K-M1).
+///
+/// When `enabled = true`, both `max_tokens_per_doc` and `daily_token_budget`
+/// must be `> 0`.  There is no unbounded default — an operator who enables
+/// extraction without cost bounds gets a hard config error at load, not a
+/// surprise at runtime.
+fn validate_extraction(extraction: &ExtractionConfig) -> Result<()> {
+    if !extraction.enabled {
+        return Ok(());
+    }
+    if extraction.max_tokens_per_doc == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.extraction.max_tokens_per_doc must be > 0 when extraction is enabled"
+                .to_string(),
+        ));
+    }
+    if extraction.daily_token_budget == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.extraction.daily_token_budget must be > 0 when extraction is enabled"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate `[knowledge.contradiction]` (K-M4).
