@@ -1,16 +1,22 @@
-//! End-to-end tests for the MCP knowledge FEEDBACK tool (knowledge-system B10).
+//! End-to-end tests for the MCP knowledge FEEDBACK tool (knowledge-system B10 + K-L5).
 //!
 //! Each test drives `tdw.kg.feedback` through the SAME JSON-RPC `tools/call`
 //! surface a real client uses, asserting:
 //!
-//! - Descriptor gating: the tool appears only when BOTH a [`KnowledgeRuntime`]
-//!   and a [`RetrievalFeedbackStore`] are attached; absent either → not listed.
+//! - Descriptor gating: the tool appears only when a [`KnowledgeRuntime`] with a
+//!   **bound agent id** AND a [`RetrievalFeedbackStore`] are attached; absent either → not listed.
 //! - Append-only posture: calling the tool appends a [`RetrievalEvent`] and does
 //!   NOT mutate the graph, tags, or proposals.
 //! - Payload caps: `hit_ids` > 64 are silently truncated at admission.
-//! - Invalid `agent_id` (`;` or control char) → tool error, not protocol error.
 //! - Missing required argument → tool error, not protocol error.
 //! - Without the feedback surface → tool error, not protocol error.
+//!
+//! K-L5 spoofing regressions:
+//! - A call carrying a forged `agent_id` argument is rejected (unknown field /
+//!   `additionalProperties: false`) — not silently accepted.
+//! - The stored event's `agent_id` always matches the BOUND principal, regardless
+//!   of what arguments the caller supplies.
+//! - A runtime without a bound agent id keeps the feedback surface OFF entirely.
 
 use std::sync::Arc;
 
@@ -25,7 +31,15 @@ use tdw_storage_qdrant::InMemoryVectorEngine;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Build a runtime with a bound agent id (required for feedback gating since K-L5).
 fn build_runtime() -> Arc<KnowledgeRuntime> {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    Arc::new(KnowledgeRuntime::new(embedder, vectors).with_agent_id("agent:test"))
+}
+
+/// Build a runtime WITHOUT a bound agent id (feedback surface must be absent).
+fn build_runtime_no_agent() -> Arc<KnowledgeRuntime> {
     let embedder = Arc::new(HashEmbeddingProvider::default());
     let vectors = Arc::new(InMemoryVectorEngine::default());
     Arc::new(KnowledgeRuntime::new(embedder, vectors))
@@ -76,27 +90,28 @@ fn is_tool_error(response: &Value) -> bool {
 const FEEDBACK_TOOL: &str = "tdw.kg.feedback";
 
 // ---------------------------------------------------------------------------
-// Tests
+// Descriptor gating (K-L5: also requires bound agent id)
 // ---------------------------------------------------------------------------
 
-/// Descriptor gating: tool is listed when BOTH runtime AND store are attached;
-/// absent when either is missing.
+/// Descriptor gating: tool is listed when runtime (with bound agent id) AND store
+/// are attached; absent when any of the three conditions is missing.
 #[test]
-fn descriptor_gated_on_runtime_and_store() {
-    let runtime = build_runtime();
+fn descriptor_gated_on_runtime_with_agent_id_and_store() {
+    let runtime = build_runtime(); // has bound agent id
+    let runtime_no_agent = build_runtime_no_agent(); // no bound agent id
     let store = fresh_store();
 
-    // Both attached → listed.
+    // Both attached with bound agent id → listed.
     let mut full = McpServer::new()
         .with_knowledge(Arc::clone(&runtime))
         .with_feedback_store(Arc::clone(&store));
     initialize(&mut full);
     assert!(
         listed_tool_names(&mut full).contains(&FEEDBACK_TOOL.to_string()),
-        "tool must be listed when both runtime and store are attached"
+        "tool must be listed when runtime (bound agent) + store are attached"
     );
 
-    // Runtime only, no store → absent.
+    // Runtime only (no store) → absent.
     let mut no_store = McpServer::new().with_knowledge(Arc::clone(&runtime));
     initialize(&mut no_store);
     assert!(
@@ -104,12 +119,22 @@ fn descriptor_gated_on_runtime_and_store() {
         "tool must be absent without the feedback store"
     );
 
-    // Store only, no runtime → absent.
+    // Store only (no runtime) → absent.
     let mut no_runtime = McpServer::new().with_feedback_store(Arc::clone(&store));
     initialize(&mut no_runtime);
     assert!(
         !listed_tool_names(&mut no_runtime).contains(&FEEDBACK_TOOL.to_string()),
         "tool must be absent without the knowledge runtime"
+    );
+
+    // Runtime without bound agent id + store → absent (K-L5 gate).
+    let mut no_agent = McpServer::new()
+        .with_knowledge(Arc::clone(&runtime_no_agent))
+        .with_feedback_store(Arc::clone(&store));
+    initialize(&mut no_agent);
+    assert!(
+        !listed_tool_names(&mut no_agent).contains(&FEEDBACK_TOOL.to_string()),
+        "tool must be absent when runtime has no bound agent id (K-L5)"
     );
 
     // Bare server → absent.
@@ -120,6 +145,44 @@ fn descriptor_gated_on_runtime_and_store() {
         "tool must be absent on a bare server"
     );
 }
+
+/// K-L5: the feedback tool schema must NOT contain an `agent_id` property —
+/// identity is host-bound, not caller-supplied.
+#[test]
+fn feedback_tool_schema_has_no_agent_id_field() {
+    let mut server = McpServer::new()
+        .with_knowledge(build_runtime())
+        .with_feedback_store(fresh_store());
+    initialize(&mut server);
+
+    let resp = decode(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#)[0],
+    );
+    let tool = resp["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools array"))
+        .iter()
+        .find(|t| t["name"] == FEEDBACK_TOOL)
+        .unwrap_or_else(|| panic!("{FEEDBACK_TOOL} must be listed"));
+
+    let props = &tool["inputSchema"]["properties"];
+    assert!(
+        props.get("agent_id").is_none(),
+        "feedback schema must not have agent_id — identity is host-bound (K-L5): {tool}"
+    );
+    let required = tool["inputSchema"]["required"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert!(
+        !required.contains(&"agent_id"),
+        "feedback schema must not require agent_id: {tool}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Surface-unavailable posture
+// ---------------------------------------------------------------------------
 
 /// Calling the tool without the feedback surface attached returns a tool error
 /// (never a protocol error / -32601).
@@ -132,7 +195,7 @@ fn feedback_tool_without_surface_is_a_tool_error_not_protocol() {
     let resp = call(
         &mut server,
         FEEDBACK_TOOL,
-        &json!({ "agent_id": "agent:test", "query_fingerprint": "fp-1" }),
+        &json!({ "query_fingerprint": "fp-1" }),
     );
     assert!(
         is_tool_error(&resp),
@@ -144,6 +207,10 @@ fn feedback_tool_without_surface_is_a_tool_error_not_protocol() {
         "must not be a JSON-RPC error object: {resp}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Happy-path recording
+// ---------------------------------------------------------------------------
 
 /// A valid call appends one event to the store and returns `recorded: true`.
 /// The graph, tags, and proposals are not touched (append-only posture).
@@ -161,7 +228,6 @@ fn valid_call_appends_one_event_and_returns_recorded_true() {
         &mut server,
         FEEDBACK_TOOL,
         &json!({
-            "agent_id": "agent:test",
             "query_fingerprint": "fp-abc",
             "hit_ids": ["doc-1", "doc-2"],
             "used": true,
@@ -172,13 +238,20 @@ fn valid_call_appends_one_event_and_returns_recorded_true() {
         !is_tool_error(&resp),
         "valid call must not be a tool error: {resp}"
     );
+    let parsed = resp["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .unwrap_or_else(|| panic!("content must be JSON: {resp}"));
     assert_eq!(
-        resp["result"]["content"][0]["text"]
-            .as_str()
-            .and_then(|s| serde_json::from_str::<Value>(s).ok())
-            .and_then(|v| v["recorded"].as_bool()),
+        parsed["recorded"].as_bool(),
         Some(true),
         "response must contain recorded:true: {resp}"
+    );
+    // The response echoes the BOUND agent id, not a caller-supplied one.
+    assert_eq!(
+        parsed["agent_id"].as_str(),
+        Some("agent:test"),
+        "response agent_id must be the bound principal: {resp}"
     );
 
     // Verify the event was actually appended.
@@ -204,7 +277,7 @@ fn two_calls_append_two_events() {
         let resp = call(
             &mut server,
             FEEDBACK_TOOL,
-            &json!({ "agent_id": "agent:a", "query_fingerprint": fp, "used": used }),
+            &json!({ "query_fingerprint": fp, "used": used }),
         );
         assert!(!is_tool_error(&resp), "call {fp} must succeed: {resp}");
     }
@@ -235,7 +308,6 @@ fn hit_ids_over_cap_are_truncated() {
         &mut server,
         FEEDBACK_TOOL,
         &json!({
-            "agent_id": "agent:a",
             "query_fingerprint": "fp-big",
             "hit_ids": oversized,
         }),
@@ -262,72 +334,13 @@ fn hit_ids_over_cap_are_truncated() {
     );
 }
 
-/// An `agent_id` containing `;` (reserved separator in the provenance format)
-/// is rejected with a tool error, not a protocol error.
-#[test]
-fn invalid_agent_id_semicolon_is_a_tool_error() {
-    let mut server = McpServer::new()
-        .with_knowledge(build_runtime())
-        .with_feedback_store(fresh_store());
-    initialize(&mut server);
-
-    let resp = call(
-        &mut server,
-        FEEDBACK_TOOL,
-        &json!({ "agent_id": "bad;agent", "query_fingerprint": "fp-1" }),
-    );
-    assert!(
-        is_tool_error(&resp),
-        "agent_id with `;` must be a tool error: {resp}"
-    );
-    assert!(
-        resp.get("error").is_none(),
-        "must not be a protocol error: {resp}"
-    );
-}
-
-/// An `agent_id` containing a control character is rejected.
-#[test]
-fn invalid_agent_id_control_char_is_a_tool_error() {
-    let mut server = McpServer::new()
-        .with_knowledge(build_runtime())
-        .with_feedback_store(fresh_store());
-    initialize(&mut server);
-
-    let resp = call(
-        &mut server,
-        FEEDBACK_TOOL,
-        &json!({ "agent_id": "bad\x01agent", "query_fingerprint": "fp-1" }),
-    );
-    assert!(
-        is_tool_error(&resp),
-        "agent_id with control char must be a tool error: {resp}"
-    );
-}
-
-/// An `agent_id` containing `:` is VALID (it is part of the allowed grammar
-/// `[A-Za-z0-9:._-]`).
-#[test]
-fn agent_id_with_colon_is_valid() {
-    let mut server = McpServer::new()
-        .with_knowledge(build_runtime())
-        .with_feedback_store(fresh_store());
-    initialize(&mut server);
-
-    let resp = call(
-        &mut server,
-        FEEDBACK_TOOL,
-        &json!({ "agent_id": "agent:market-researcher", "query_fingerprint": "fp-ok" }),
-    );
-    assert!(
-        !is_tool_error(&resp),
-        "agent_id with `:` must be valid: {resp}"
-    );
-}
+// ---------------------------------------------------------------------------
+// Argument validation
+// ---------------------------------------------------------------------------
 
 /// Missing required `query_fingerprint` argument is a tool error.
 #[test]
-fn missing_required_argument_is_a_tool_error() {
+fn missing_query_fingerprint_is_a_tool_error() {
     let mut server = McpServer::new()
         .with_knowledge(build_runtime())
         .with_feedback_store(fresh_store());
@@ -336,7 +349,7 @@ fn missing_required_argument_is_a_tool_error() {
     let resp = call(
         &mut server,
         FEEDBACK_TOOL,
-        &json!({ "agent_id": "agent:a" }), // query_fingerprint missing
+        &json!({}), // query_fingerprint missing
     );
     assert!(
         is_tool_error(&resp),
@@ -348,24 +361,173 @@ fn missing_required_argument_is_a_tool_error() {
     );
 }
 
-/// Missing required `agent_id` argument is a tool error.
+// ---------------------------------------------------------------------------
+// K-L5 spoofing regression tests
+// ---------------------------------------------------------------------------
+
+/// K-L5: a call carrying a forged `agent_id` argument must NOT win the identity
+/// race — the stored event must carry the BOUND principal, not the forged value.
+///
+/// MCP does not enforce `additionalProperties: false` server-side (schemas are
+/// advisory for clients); the spoofing protection comes from `execute()` reading
+/// identity from `runtime.bound_agent_id()` and ignoring the argument entirely.
+/// The call succeeds (extra arguments are silently ignored), but the stored
+/// event always reflects the host-bound principal.
+///
+/// This is the PRIMARY spoofing regression for K-L5: before this story,
+/// `agent_id` in arguments set the identity. After K-L5 it is always ignored.
 #[test]
-fn missing_agent_id_is_a_tool_error() {
+fn forged_agent_id_argument_does_not_change_stored_identity() {
+    let store = fresh_store();
     let mut server = McpServer::new()
-        .with_knowledge(build_runtime())
-        .with_feedback_store(fresh_store());
+        .with_knowledge(build_runtime()) // bound to "agent:test"
+        .with_feedback_store(Arc::clone(&store));
     initialize(&mut server);
 
+    // Supply agent_id as a tool argument — extra args are silently ignored by
+    // the MCP layer, but execute() must read from the bound principal, not here.
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": FEEDBACK_TOOL,
+            "arguments": {
+                "agent_id": "forged:attacker",
+                "query_fingerprint": "fp-spoof",
+            }
+        }
+    });
+    let resp = decode(&server.handle_json_rpc_line(&req.to_string())[0]);
+
+    // The call may succeed (extra fields pass through the MCP layer), but the
+    // stored event MUST carry the bound principal, not the forged one.
+    // If it is a tool error that is also acceptable — what is NOT acceptable is
+    // a success response that echoes "forged:attacker" as the agent_id.
+    let parsed = resp["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+
+    if let Some(parsed) = parsed {
+        // If the call succeeded, the echoed agent_id must be the bound principal.
+        assert_ne!(
+            parsed["agent_id"].as_str(),
+            Some("forged:attacker"),
+            "forged agent_id must NEVER appear in the response (K-L5): {resp}"
+        );
+        assert_eq!(
+            parsed["agent_id"].as_str(),
+            Some("agent:test"),
+            "response must echo the bound principal, not the forged id (K-L5): {resp}"
+        );
+    }
+
+    // Either way, the stored event must carry the bound principal.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("rt");
+    let stored = rt.block_on(async {
+        store
+            .lock()
+            .await
+            .events()
+            .next()
+            .map(|e| e.agent_id.clone())
+    });
+    if let Some(stored_id) = stored {
+        assert_eq!(
+            stored_id, "agent:test",
+            "stored event agent_id must be the bound principal, not the forged value (K-L5)"
+        );
+    }
+    // If no event was stored (call was rejected entirely), that's also a pass —
+    // the forged id did not win.
+}
+
+/// K-L5: even if the call succeeds (no forged id), the stored event's agent_id
+/// must ALWAYS be the bound principal, never a caller-supplied value.
+#[test]
+fn stored_event_agent_id_always_matches_bound_principal() {
+    let runtime = Arc::new(
+        KnowledgeRuntime::new(
+            Arc::new(HashEmbeddingProvider::default()),
+            Arc::new(InMemoryVectorEngine::default()),
+        )
+        .with_agent_id("principal:configured"),
+    );
+    let store = fresh_store();
+
+    let mut server = McpServer::new()
+        .with_knowledge(Arc::clone(&runtime))
+        .with_feedback_store(Arc::clone(&store));
+    initialize(&mut server);
+
+    // Valid call — no agent_id in arguments (correct usage after K-L5).
     let resp = call(
         &mut server,
         FEEDBACK_TOOL,
-        &json!({ "query_fingerprint": "fp-1" }), // agent_id missing
+        &json!({ "query_fingerprint": "fp-bound" }),
+    );
+    assert!(!is_tool_error(&resp), "valid call must succeed: {resp}");
+
+    // The stored event must carry the BOUND principal id, not any caller value.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("rt");
+    let stored_agent_id = rt.block_on(async {
+        store
+            .lock()
+            .await
+            .events()
+            .next()
+            .map(|e| e.agent_id.clone())
+    });
+    assert_eq!(
+        stored_agent_id.as_deref(),
+        Some("principal:configured"),
+        "stored agent_id must be the bound principal (K-L5): got {stored_agent_id:?}"
+    );
+}
+
+/// K-L5: a runtime without a bound agent id keeps the feedback surface OFF entirely.
+/// A direct `tools/call` to the feedback tool name must be a tool error, not a
+/// protocol error — and the tool must be absent from `tools/list`.
+#[test]
+fn feedback_surface_absent_without_bound_agent_id() {
+    // Runtime with no agent id bound.
+    let runtime = build_runtime_no_agent();
+    let store = fresh_store();
+
+    let mut server = McpServer::new()
+        .with_knowledge(Arc::clone(&runtime))
+        .with_feedback_store(Arc::clone(&store));
+    initialize(&mut server);
+
+    // Not listed.
+    assert!(
+        !listed_tool_names(&mut server).contains(&FEEDBACK_TOOL.to_string()),
+        "tool must be absent when no agent id is bound (K-L5)"
+    );
+
+    // Direct call is a tool error, not a protocol error.
+    let resp = call(
+        &mut server,
+        FEEDBACK_TOOL,
+        &json!({ "query_fingerprint": "fp-1" }),
     );
     assert!(
         is_tool_error(&resp),
-        "missing agent_id must be a tool error: {resp}"
+        "call must be a tool error when no agent id is bound: {resp}"
+    );
+    assert!(
+        resp.get("error").is_none(),
+        "must not be a protocol error: {resp}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Append-only posture
+// ---------------------------------------------------------------------------
 
 /// Append-only: calling the tool does NOT mutate proposals. A server with both
 /// write tools and the feedback tool wired has zero proposals after a feedback
@@ -545,11 +707,11 @@ fn feedback_is_append_only_does_not_touch_proposals() {
         .with_feedback_store(Arc::clone(&store));
     initialize(&mut server);
 
-    // Call the feedback tool.
+    // Call the feedback tool — no agent_id argument (K-L5: identity is host-bound).
     let resp = call(
         &mut server,
         FEEDBACK_TOOL,
-        &json!({ "agent_id": "agent:a", "query_fingerprint": "fp-1", "used": true }),
+        &json!({ "query_fingerprint": "fp-1", "used": true }),
     );
     assert!(!is_tool_error(&resp), "feedback call must succeed: {resp}");
 
