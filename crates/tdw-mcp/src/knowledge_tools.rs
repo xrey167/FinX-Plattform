@@ -70,9 +70,9 @@ fn search_descriptor() -> ToolDescriptor {
          rules_version, infer_version).\n\
          \n\
          Trust-dial (K-X3): supply provenance_classes to restrict hits to a trust bucket. \
-         Omit for all classes (default, unchanged behaviour). Valid classes: \
-         document_ingested (externally sourced, highest trust), rule_derived, \
-         agent_proposed (eval-gated), user_authored (analyst findings). \
+         Omit for all classes (default, unchanged behaviour). The doc-index retrieval path \
+         produces two classes today: document_ingested (externally sourced, highest trust) \
+         and user_authored (analyst findings — EntityKind::Finding). \
          An empty result under a restrictive filter is reported as 0 hits with the active \
          filter scope — it is not an error.",
         json!({
@@ -88,9 +88,9 @@ fn search_descriptor() -> ToolDescriptor {
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["document_ingested", "rule_derived", "agent_proposed", "user_authored"]
+                        "enum": ["document_ingested", "user_authored"]
                     },
-                    "description": "Trust-dial (K-X3): restrict hits to these provenance classes. Omit or null for all classes (default). Each hit in the response carries its trust_class so you can see why it qualified."
+                    "description": "Trust-dial (K-X3): restrict hits to these provenance classes. document_ingested = externally sourced content (highest trust). user_authored = analyst findings (EntityKind::Finding). Omit or null for all classes (default). Each hit in the response carries its trust_class so you can see why it qualified."
                 },
                 "expand": {
                     "type": "object",

@@ -682,3 +682,166 @@ async fn trust_class_token_round_trip() {
         "unknown tokens must return None"
     );
 }
+
+/// Fixture for the graph-expansion trust-gate e2e test.
+///
+/// Layout:
+/// - `doc-seed`   → `finding:seed`   — provenance_class: `user_authored`
+/// - `doc-neighbor` → `instrument:neighbor` — NO provenance_class stamp
+///   (backward-compat default → `DocumentIngested`)
+/// - Graph edge: `finding:seed` -[related_to]→ `instrument:neighbor`
+///
+/// With a `user_authored`-only filter the seed passes, but the expanded
+/// neighbour defaults to `DocumentIngested` and must be excluded by the
+/// post-expansion retain pass (K-X3 fix #1).
+async fn expand_trust_fixture() -> (
+    Arc<HashEmbeddingProvider>,
+    Arc<InMemoryVectorEngine>,
+    Arc<InMemoryGraphEngine>,
+) {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    let graph = Arc::new(InMemoryGraphEngine::default());
+
+    // Seed: user_authored
+    let seed_embedding = embedder
+        .embed("seed finding doc")
+        .await
+        .expect("embed seed");
+    vectors
+        .upsert(
+            COLLECTION,
+            vec![VectorPoint {
+                id: "doc-seed".to_string(),
+                vector: seed_embedding.vector,
+                payload: json!({
+                    "entity_id": "finding:seed",
+                    "tags": [],
+                    "entity_kind": "finding",
+                    "provenance_class": "user_authored",
+                }),
+            }],
+        )
+        .await
+        .expect("upsert seed");
+
+    // Neighbour: no provenance_class stamp → defaults to DocumentIngested
+    let nbr_embedding = embedder
+        .embed("neighbour instrument doc")
+        .await
+        .expect("embed neighbour");
+    vectors
+        .upsert(
+            COLLECTION,
+            vec![VectorPoint {
+                id: "doc-neighbor".to_string(),
+                vector: nbr_embedding.vector,
+                payload: json!({
+                    "entity_id": "instrument:neighbor",
+                    "tags": [],
+                    "entity_kind": "instrument",
+                    // intentionally no provenance_class — legacy backward-compat path
+                }),
+            }],
+        )
+        .await
+        .expect("upsert neighbour");
+
+    // Graph: entity nodes + described_by edges + the expansion edge
+    let seed_node = node("finding:seed", EntityKind::Finding);
+    let nbr_node = node("instrument:neighbor", EntityKind::Instrument);
+    let seed_doc_node = {
+        let mut n = node("document:doc-seed", EntityKind::Document);
+        n.props = json!({"plane": "platform"});
+        n
+    };
+    let nbr_doc_node = {
+        let mut n = node("document:doc-neighbor", EntityKind::Document);
+        n.props = json!({"plane": "platform"});
+        n
+    };
+    graph
+        .upsert_nodes(vec![seed_node, nbr_node, seed_doc_node, nbr_doc_node])
+        .await
+        .expect("upsert nodes");
+    graph
+        .upsert_edges(vec![
+            edge("finding:seed", "document:doc-seed", "described_by"),
+            edge(
+                "instrument:neighbor",
+                "document:doc-neighbor",
+                "described_by",
+            ),
+            edge("finding:seed", "instrument:neighbor", "related_to"),
+        ])
+        .await
+        .expect("upsert edges");
+
+    (embedder, vectors, graph)
+}
+
+#[tokio::test]
+async fn trust_dial_expand_filter_gates_expanded_neighbors() {
+    // K-X3 fix #1: graph-expanded neighbours must pass the trust-dial filter.
+    // Setup: seed (user_authored) expands to neighbour (no stamp → document_ingested).
+    // With user_authored filter: seed appears, neighbour must be excluded.
+    // Without filter: neighbour appears (confirming expansion is active).
+    let (embedder, vectors, graph) = expand_trust_fixture().await;
+
+    let expansion = GraphExpansion {
+        k_hop: 1,
+        decay: 0.5,
+        per_hit_limit: 10,
+        edge_types: vec![],
+    };
+
+    // --- Without filter: neighbour IS reached via expansion ---
+    let retriever_no_filter =
+        Retriever::new(embedder.clone(), vectors.clone(), COLLECTION).with_graph(graph.clone());
+    let query_no_filter = KnowledgeQuery::try_new(
+        "seed finding doc",
+        16,
+        QueryFilter::default(),
+        Some(expansion.clone()),
+    )
+    .expect("valid query");
+    let hits_no_filter = retriever_no_filter
+        .search(&query_no_filter)
+        .await
+        .expect("search without filter");
+    let ids_no_filter: std::collections::BTreeSet<&str> =
+        hits_no_filter.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        ids_no_filter.contains("doc-neighbor"),
+        "without filter, expansion must reach doc-neighbor: {ids_no_filter:?}"
+    );
+
+    // --- With user_authored filter: neighbour must be excluded by retain pass ---
+    let retriever_filtered =
+        Retriever::new(embedder.clone(), vectors.clone(), COLLECTION).with_graph(graph.clone());
+    let query_filtered = KnowledgeQuery::try_new(
+        "seed finding doc",
+        16,
+        QueryFilter {
+            provenance_classes: Some(vec![TrustClass::UserAuthored]),
+            ..QueryFilter::default()
+        },
+        Some(expansion),
+    )
+    .expect("valid query");
+    let hits_filtered = retriever_filtered
+        .search(&query_filtered)
+        .await
+        .expect("search with user_authored filter");
+    let ids_filtered: std::collections::BTreeSet<&str> =
+        hits_filtered.iter().map(|h| h.id.as_str()).collect();
+    assert!(
+        ids_filtered.contains("doc-seed"),
+        "seed (user_authored) must pass the filter: {ids_filtered:?}"
+    );
+    assert!(
+        !ids_filtered.contains("doc-neighbor"),
+        "neighbour (no stamp → document_ingested) must be excluded by \
+         the post-expansion trust-dial retain pass: {ids_filtered:?}"
+    );
+}

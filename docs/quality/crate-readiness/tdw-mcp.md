@@ -30,6 +30,13 @@ Owner tranche: G007-client-service-mcp-acp-runtime-and-worker-crates - Client, S
 - [x] Scaffold, dead-code, and fallback signals classified.
 - [x] Security and reliability risks reviewed.
 
+## K-X3 Trust-Dial (2026-06-12)
+
+- **`tdw.kg.search` schema extended**: new optional `provenance_classes` array parameter (JSON schema enum restricted to `["document_ingested", "user_authored"]` — the two classes the doc-index retrieval path can actually produce today). `rule_derived` and `agent_proposed` are reserved for a future graph-channel filter and are intentionally absent from the advertised schema.
+- **`trust_scope` response field**: every `tdw.kg.search` response carries `trust_scope: { filtered, provenance_classes?, note? }`. When `filtered=false` the caller sees unfiltered scope. When `filtered=true` the active classes and an honest note are included. Zero-hit responses report `"0 hits at this trust level"` (not an error).
+- **Unknown class token**: an unrecognized `provenance_class` value is a tool error (isError=true), not a protocol error or panic.
+- **Test coverage added** (6 new in `tests/knowledge_tools.rs`): default-unfiltered scope, document-only excludes findings, user-only returns findings, zero-hits honest scope, unknown class tool error, and `index_at_stamps_provenance_class_on_production_path` (production-path stamp assertion via `KnowledgeIndexer::index_at` → vector payload → `Retriever` → `RetrievedHit::trust_class`).
+
 ## Findings
 
 - `--stdio-json-rpc` now runs a stateful MCP 2025-06-18 stdio protocol handler

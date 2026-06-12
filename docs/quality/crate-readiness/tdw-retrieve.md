@@ -36,11 +36,22 @@ Owner tranche: knowledge-system overhaul B4 - Hybrid Retrieval.
 - The tag channel runs only when the query is temporal (as_of present): tag activity is a dated property, and an undated tag scan would reintroduce the leakage the design removes.
 - Hits explain themselves: per-channel rank + raw score, matched (subsumption-expanded) tags, and for graph-expanded hits the reaching path and seeding document. Agents can cite WHY a document surfaced (B8 read tools build on this).
 
+## K-X3 Trust-Dial (2026-06-12)
+
+- **`TrustClass` enum** added: `DocumentIngested` / `UserAuthored` (production-stamped), `RuleDerived` / `AgentProposed` (reserved — graph-channel only, not yet stamped on doc-index points). Rust enum is forward-compatible; MCP schema advertises only the two reachable classes today.
+- **`QueryFilter::provenance_classes`** (`Option<Vec<TrustClass>>`): `None` (default) = all classes unchanged; `Some([...])` = post-gate on effective class. Old index points without the field default to `DocumentIngested` (backward-safe).
+- **`RetrievedHit::trust_class`** (`Option<TrustClass>`): explainability field on every hit — `Some(class)` for directly-retrieved hits, `None` for graph-expanded stubs (effective class is `DocumentIngested` for gate purposes).
+- **`assemble_hits` trust gate**: directly-retrieved candidates are filtered here; hits that fail the class gate are silently excluded (never an error).
+- **Post-expansion retain pass**: after `expand_seed`, a `hits.retain` pass applies the same gate to expanded neighbors (trust_class: None → effective DocumentIngested). Without this pass a restrictive filter can be circumvented by graph expansion (K-X3 review fix #1).
+- **`build_payload_filter` MatchAny pre-filter**: when the requested class set does NOT include `DocumentIngested`, a MatchAny PayloadCondition on `provenance_class` is pushed into the B1 filter so the vector/lexical channels return only matching points before fusion, avoiding top_k under-fill (K-X3 review fix #4). When `DocumentIngested` is in the set, the MatchAny is skipped so old un-stamped points (backward-compat default) are not wrongly excluded.
+- **K-M3 reuse contract**: `QueryFilter::provenance_classes` is the shared filter field; `tdw.kg.answer` (K-M3) will thread the same field through at answer-synthesis time so trust-scope is consistent across search and answer. No duplication — one contract defined here.
+- **Test coverage added** (13 total in tests/hybrid.rs): default-no-filter, document-only excludes user+agent, user-only returns findings, zero-match-not-error, empty-vec-same-as-none, token round-trip, and `trust_dial_expand_filter_gates_expanded_neighbors` (the expand-bypass e2e: neighbor with no stamp defaults to DocumentIngested and is excluded under a user_authored filter).
+
 ## Verification
 
-- Focused crate check passed: cargo test --target-dir target -p tdw-retrieve -p tdw-knowledge.
-- Lint gate passed: cargo fmt -p tdw-retrieve -- --check; cargo clippy --target-dir target -p tdw-retrieve --all-targets (pedantic+nursery, inline deny).
+- Focused crate check passed: `cargo test --target-dir target -p tdw-retrieve` — 13 hybrid tests pass (7 new K-X3 + 6 pre-existing).
+- Lint gate passed: `cargo clippy --workspace --all-targets -- -D warnings` zero errors; `cargo fmt -p tdw-retrieve` clean.
 
 ## Verdict
 
-Ready with follow-ups. Channels fan out sequentially (concurrent join deferred until a real-backend latency profile justifies it); B5 wires ingestion payloads, B8 exposes the retriever over MCP, B11 adds the retrieval eval harness.
+Ready with follow-ups. Channels fan out sequentially (concurrent join deferred until a real-backend latency profile justifies it); B5 wires ingestion payloads, B8 exposes the retriever over MCP, B11 adds the retrieval eval harness. K-X3 trust-dial is shipped; K-M3 answer synthesis reuses the same filter contract.

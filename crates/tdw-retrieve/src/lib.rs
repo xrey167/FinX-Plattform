@@ -84,23 +84,55 @@ pub const MAX_PER_HIT_LIMIT: usize = 64;
 /// Use [`QueryFilter::provenance_classes`] to restrict a search to a subset.
 /// An absent or `null` filter means **all classes** (the pre-K-X3 default —
 /// no existing behaviour is changed).
+///
+/// ## Which classes the doc-index retrieval path can actually produce
+///
+/// The **vector and lexical channels** retrieve documents indexed via
+/// `tdw-knowledge::document_payload`.  That function stamps exactly two
+/// classes today:
+///
+/// - `DocumentIngested` — all entity kinds except `Finding`
+/// - `UserAuthored` — `EntityKind::Finding` (K-X6 user findings)
+///
+/// `RuleDerived` and `AgentProposed` are **reserved for future use**.
+/// Rule-derived and agent-gated facts currently write to the knowledge graph
+/// as edges (with the corresponding `Provenance` variants), not as retrievable
+/// documents, so the doc-index retrieval path cannot produce those classes
+/// today.  Filtering on them via `provenance_classes` is safe and well-defined
+/// (it will match zero hits against the current index) but the MCP tool
+/// descriptor only advertises `document_ingested` and `user_authored` to avoid
+/// advertising classes the vector/lexical path cannot deliver.  This variant
+/// is kept in the Rust enum so the type system is forward-compatible and
+/// future document kinds can be stamped without an API break.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustClass {
     /// External-source ingested document (provider data, news articles, manual
     /// knowledge entries).  Highest trust: content is externally authored and
     /// human-selected for ingestion.
+    ///
+    /// Produced by `document_payload` for all `EntityKind`s except `Finding`.
     DocumentIngested,
-    /// A fact derived by an inference/tag rule engine.  Operator-configured
-    /// rule sets produce these; they are deterministic but not human-reviewed
-    /// per-instance.
+    /// A fact derived by an inference/tag rule engine.
+    ///
+    /// **Reserved / future**: rule-derived facts currently write to the graph
+    /// as edges, not as retrievable documents.  This class will match zero
+    /// hits against the current index.  The MCP `tdw.kg.search` tool does not
+    /// advertise this variant in its schema enum today.
     RuleDerived,
     /// An agent proposal that passed the eval gate (`Provenance::Agent { gated:
-    /// true }`).  Operator-authority required; not yet in the default index.
+    /// true }`).
+    ///
+    /// **Reserved / future**: eval-gated proposals currently write to the graph,
+    /// not to the doc index.  This class will match zero hits against the
+    /// current index.  The MCP `tdw.kg.search` tool does not advertise this
+    /// variant in its schema enum today.
     AgentProposed,
     /// A user-authored finding (`Provenance::Agent { gated: false }`,
-    /// `entity_kind = finding`).  Personal analyst research notes; high
-    /// personal relevance, not operator-reviewed.
+    /// `EntityKind::Finding`).  Personal analyst research notes; high personal
+    /// relevance, not operator-reviewed.
+    ///
+    /// Produced by `document_payload` when `entity.kind == EntityKind::Finding`.
     UserAuthored,
 }
 
@@ -446,6 +478,19 @@ impl Retriever {
                 self.expand_seed(graph.as_ref(), expansion, &query.filter, &seed, &mut hits)
                     .await?;
             }
+            // Trust-dial gate on expanded hits (K-X3 fix): graph-expanded
+            // neighbours bypass `assemble_hits` and are inserted directly.
+            // Apply the same provenance-class gate here so a restrictive filter
+            // cannot be circumvented by expansion.  Expanded stubs carry no
+            // payload round-trip (trust_class: None) → effective class is
+            // `DocumentIngested` (the conservative default).
+            if query.filter.provenance_classes.is_some() {
+                let allowed = query.filter.provenance_classes.as_deref();
+                hits.retain(|_, hit| {
+                    let class = hit.trust_class.unwrap_or(TrustClass::DocumentIngested);
+                    trust_class_passes(class, allowed)
+                });
+            }
         }
 
         // 6. Final order: score desc, id asc; truncate.
@@ -749,14 +794,27 @@ fn document_visible(props: &serde_json::Value, filter: &QueryFilter) -> bool {
 /// (normalized timestamp — undated documents are EXCLUDED by temporal
 /// queries), and `provenance_class` (K-X3 trust-dial stamp).
 ///
-/// The `provenance_class` condition uses `MatchAny` over the token set for
-/// the requested classes.  Old index points that lack the field are handled
-/// by the post-assembly trust-class gate in [`assemble_hits`] — the payload
-/// filter cannot express "missing field = treat as X", so the `PayloadFilter`
-/// does not include the provenance condition when a class set is active;
-/// instead [`assemble_hits`] applies it after metadata is collected.  This
-/// keeps the payload filter free of backend-specific "exists" semantics while
-/// still enforcing the contract via the in-process gate.
+/// ## Provenance-class pre-filter (K-X3, fix #4)
+///
+/// When a restrictive class set is requested AND it does **not** include
+/// `DocumentIngested`, a `MatchAny` condition on `provenance_class` is added
+/// to the payload filter.  This is filter-before-scoring: only stamped index
+/// points with a matching token reach the scoring/fuse stage, which keeps
+/// `top_k` semantics honest (the result set is drawn from the matching
+/// population, not post-truncated from a larger unfiltered pool).
+///
+/// When `DocumentIngested` IS in the requested set we intentionally skip the
+/// payload condition: old index points that pre-date the stamp have no
+/// `provenance_class` field and would be wrongly excluded by a `MatchAny`
+/// condition (the in-memory `PayloadFilter` treats a missing key as
+/// non-matching).  Their effective class is `DocumentIngested` by the
+/// backward-compat rule, so they must pass a filter that includes that class.
+/// The post-assembly gate in [`assemble_hits`] handles them correctly.
+///
+/// Summary:
+/// - classes not including `DocumentIngested` → `MatchAny` pushed → efficient
+/// - classes including `DocumentIngested` → no `MatchAny` → post-gate only
+/// - no filter (default) → no `MatchAny` → unfiltered (pre-K-X3 behaviour)
 fn build_payload_filter(filter: &QueryFilter, expanded_tags: &[String]) -> PayloadFilter {
     let mut must = Vec::new();
     if !expanded_tags.is_empty() {
@@ -791,6 +849,20 @@ fn build_payload_filter(filter: &QueryFilter, expanded_tags: &[String]) -> Paylo
             lte: Some(date_to_timestamp(as_of)),
         });
     }
+    // Provenance-class pre-filter: push only when DocumentIngested is NOT in
+    // the requested set (see doc-comment above for the reasoning).
+    if let Some(classes) = &filter.provenance_classes
+        && !classes.is_empty()
+        && !classes.contains(&TrustClass::DocumentIngested)
+    {
+        must.push(PayloadCondition::MatchAny {
+            key: "provenance_class".to_string(),
+            values: classes
+                .iter()
+                .map(|c| c.payload_token().to_string())
+                .collect(),
+        });
+    }
     PayloadFilter { must }
 }
 
@@ -810,9 +882,7 @@ fn effective_trust_class(provenance_class_token: Option<&str>) -> TrustClass {
 ///
 /// `None` / empty class set = all classes pass (the pre-K-X3 default).
 fn trust_class_passes(class: TrustClass, allowed: Option<&[TrustClass]>) -> bool {
-    allowed.map_or(true, |classes| {
-        classes.is_empty() || classes.contains(&class)
-    })
+    allowed.is_none_or(|classes| classes.is_empty() || classes.contains(&class))
 }
 
 fn record_meta(meta: &mut BTreeMap<String, DocMeta>, id: &str, payload: &serde_json::Value) {

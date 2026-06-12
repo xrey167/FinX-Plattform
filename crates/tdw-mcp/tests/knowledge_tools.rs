@@ -23,7 +23,7 @@ use tdw_embed_local::HashEmbeddingProvider;
 use tdw_kg::{Entity, EntityKind};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::KnowledgeRuntime;
-use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex};
+use tdw_knowledge::{KnowledgeDocument, KnowledgeIndex, collection_name};
 use tdw_mcp::McpServer;
 use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
@@ -992,5 +992,101 @@ fn trust_dial_unknown_class_is_tool_error() {
     assert!(
         text.contains("unknown provenance_class") || text.contains("isError"),
         "unknown class must be a tool error: {text}"
+    );
+}
+
+/// K-X3 fix #5: production-path assertion — `index_at → document_payload →
+/// provenance_class_token` stamps the correct class on the stored vector point.
+///
+/// This test constructs a fresh `KnowledgeIndexer` (the real construction
+/// path, not the shared fixture), indexes one `Instrument` doc and one
+/// `Finding` doc, then searches via the `Retriever` and asserts each hit's
+/// `trust_class` matches the production stamp. It exercises the full chain:
+/// `index_at` → `document_payload` → `provenance_class_token` → vector upsert
+/// → retrieval → `effective_trust_class` → `RetrievedHit::trust_class`.
+#[tokio::test]
+async fn index_at_stamps_provenance_class_on_production_path() {
+    use tdw_retrieve::{KnowledgeQuery, QueryFilter, Retriever, TrustClass};
+
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+
+    // Use the real KnowledgeIndex + KnowledgeIndexer construction (production path).
+    let index = KnowledgeIndex::new(embedder.clone(), vectors.clone());
+    let mut indexer = KnowledgeIndexer::new(index);
+
+    // Instrument → provenance_class_token returns "document_ingested"
+    indexer
+        .index_at(
+            KnowledgeDocument {
+                id: "prod-doc-instrument".to_string(),
+                body: "production path instrument document ingested stamp".to_string(),
+                entity: Entity {
+                    entity_id: "instrument:PROD-INSTR".to_string(),
+                    kind: EntityKind::Instrument,
+                    label: "Prod Instrument".to_string(),
+                    aliases: Vec::new(),
+                },
+                tags: Vec::new(),
+                source: None,
+                plane: Some("platform".to_string()),
+                as_of: Some(NOW.to_string()),
+                mentions: Vec::new(),
+            },
+            NOW,
+        )
+        .await
+        .expect("index instrument doc");
+
+    // Finding → provenance_class_token returns "user_authored"
+    indexer
+        .index_at(
+            KnowledgeDocument {
+                id: "prod-doc-finding".to_string(),
+                body: "production path finding user authored stamp".to_string(),
+                entity: Entity {
+                    entity_id: "finding:PROD-FINDING".to_string(),
+                    kind: EntityKind::Finding,
+                    label: "Prod Finding".to_string(),
+                    aliases: Vec::new(),
+                },
+                tags: Vec::new(),
+                source: None,
+                plane: Some("platform".to_string()),
+                as_of: Some(NOW.to_string()),
+                mentions: Vec::new(),
+            },
+            NOW,
+        )
+        .await
+        .expect("index finding doc");
+
+    // Search via the real Retriever — same engines the indexer wrote to.
+    // HashEmbeddingProvider::model_id() == "local-hash-8"; derive the
+    // collection name via the same production helper `KnowledgeIndex::new` uses.
+    let collection = collection_name("local-hash-8");
+    let retriever = Retriever::new(embedder, vectors, &collection);
+    let query = KnowledgeQuery::try_new("production path", 16, QueryFilter::default(), None)
+        .expect("valid query");
+    let hits = retriever.search(&query).await.expect("search");
+
+    let instrument_hit = hits
+        .iter()
+        .find(|h| h.id == "prod-doc-instrument")
+        .expect("instrument doc must appear in results");
+    assert_eq!(
+        instrument_hit.trust_class,
+        Some(TrustClass::DocumentIngested),
+        "instrument doc must carry DocumentIngested from production stamp path"
+    );
+
+    let finding_hit = hits
+        .iter()
+        .find(|h| h.id == "prod-doc-finding")
+        .expect("finding doc must appear in results");
+    assert_eq!(
+        finding_hit.trust_class,
+        Some(TrustClass::UserAuthored),
+        "finding doc must carry UserAuthored from production stamp path"
     );
 }
