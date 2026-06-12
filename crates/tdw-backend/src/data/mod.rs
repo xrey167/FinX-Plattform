@@ -4073,6 +4073,27 @@ fn spawn_induction_worker(
              (knowledge.induction.enabled = false). \
              Set enabled = true in your daemon TOML to activate scheduled rule induction."
         );
+        // MED-1: retire_induced_on_disable — when the operator disables
+        // induction, remove all previously inducted rules from the engine on
+        // the next boot/reload. Inducted rules are identified by the
+        // `inducted-` prefix on their rule_id (set by InductionEngine).
+        if cfg.retire_induced_on_disable {
+            let infer = Arc::clone(&infer);
+            tokio::spawn(async move {
+                let mut guard = infer.lock().await;
+                let surviving: Vec<tdw_infer::InferRule> = guard
+                    .rules()
+                    .iter()
+                    .filter(|r| !r.rule_id().starts_with("inducted-"))
+                    .cloned()
+                    .collect();
+                if let Err(e) = guard.hot_reload(surviving) {
+                    eprintln!("[tdw] K-R5 retire_induced_on_disable: hot_reload failed: {e}");
+                } else {
+                    eprintln!("[tdw] K-R5 retire_induced_on_disable: all inducted rules retired.");
+                }
+            });
+        }
         return None;
     }
 
@@ -4085,6 +4106,9 @@ fn spawn_induction_worker(
     let min_recall = cfg.min_promote_recall;
     let max_candidates = cfg.max_candidates_per_cycle;
     let cadence = cfg.cadence.clone();
+    // CRITICAL-1: load path for walk-forward replay splits. FAIL-CLOSED: when
+    // None or the file is unreadable the worker promotes NOTHING that tick.
+    let replay_splits_path: Option<String> = cfg.replay_splits_path.clone();
 
     let schedule = CronSchedule::parse(&cadence)
         .unwrap_or_else(|_| CronSchedule::parse("0 3 * * *").expect("fallback parse"));
@@ -4147,13 +4171,55 @@ fn spawn_induction_worker(
                 continue;
             }
 
+            // ── Step 0: CRITICAL-1 — load walk-forward replay splits ─────────
+            // FAIL-CLOSED: if no path is configured or the file cannot be
+            // loaded, emit a loud WARNING and skip the cycle entirely.
+            // Zero splits → vacuous promote (precision=1.0, recall=1.0) which
+            // is NOT acceptable — every candidate would be promoted with no
+            // out-of-sample validation.
+            let splits: Vec<ReplaySplit> = match &replay_splits_path {
+                None => {
+                    eprintln!(
+                        "[tdw] WARNING: K-R5 induction: \
+                         `knowledge.induction.replay_splits_path` is not set. \
+                         No out-of-sample validation is possible — skipping cycle \
+                         (fail-closed). Set replay_splits_path in your daemon TOML \
+                         and check a splits file into the repository."
+                    );
+                    continue;
+                }
+                Some(path) => match tdw_induction::load_replay_splits(path) {
+                    Ok(s) if s.is_empty() => {
+                        eprintln!(
+                            "[tdw] WARNING: K-R5 induction: replay splits file \
+                                 {path:?} loaded but contains zero splits — skipping \
+                                 cycle (fail-closed). Add at least one split entry."
+                        );
+                        continue;
+                    }
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!(
+                            "[tdw] WARNING: K-R5 induction: cannot load replay \
+                                 splits from {path:?} — skipping cycle (fail-closed): \
+                                 {e}"
+                        );
+                        continue;
+                    }
+                },
+            };
+
             // ── Step 1: reconstruct PatternIndex from graph ───────────────────
             // Pattern nodes are identified by their `pattern_instance_of` edges.
             // We paginate those edges to collect all pattern node IDs, then
             // fetch each node to extract `canonical` and `support` from props.
+            //
+            // HIGH-1 fix: any pagination error ABORTS the cycle — we must never
+            // proceed on a truncated pattern index (corrupted replay evaluation).
             let mut pattern_node_ids: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             let mut offset = 0usize;
+            let mut pattern_load_ok = true;
             loop {
                 match graph
                     .edges(Some("pattern_instance_of"), offset, PAGE_SIZE)
@@ -4172,11 +4238,16 @@ fn spawn_induction_worker(
                     Err(err) => {
                         eprintln!(
                             "[tdw] K-R5 induction: failed to read pattern edges \
-                             (skipping cycle): {err}"
+                             (ABORTING cycle — partial data must not drive promotion): \
+                             {err}"
                         );
+                        pattern_load_ok = false;
                         break;
                     }
                 }
+            }
+            if !pattern_load_ok {
+                continue;
             }
 
             let mut pattern_index = PatternIndex::default();
@@ -4213,7 +4284,7 @@ fn spawn_induction_worker(
                     Err(err) => {
                         eprintln!(
                             "[tdw] K-R5 induction: failed to read pattern node \
-                             {node_id:?} (skipping): {err}"
+                             {node_id:?} (skipping node): {err}"
                         );
                     }
                 }
@@ -4228,8 +4299,11 @@ fn spawn_induction_worker(
             }
 
             // ── Step 2: load edge corpus for replay (paginated, capped) ───────
+            // HIGH-2 fix: any pagination error ABORTS the cycle — we must never
+            // run gate evaluation over a truncated edge corpus.
             let mut all_edges: Vec<tdw_core::GraphEdge> = Vec::new();
             let mut edge_offset = 0usize;
+            let mut edge_load_ok = true;
             'edge_load: loop {
                 match graph.edges(None, edge_offset, PAGE_SIZE).await {
                     Ok(page) => {
@@ -4251,61 +4325,90 @@ fn spawn_induction_worker(
                     Err(err) => {
                         eprintln!(
                             "[tdw] K-R5 induction: failed to load edge corpus \
-                             (skipping cycle): {err}"
+                             (ABORTING cycle — partial data must not drive promotion): \
+                             {err}"
                         );
+                        edge_load_ok = false;
                         break 'edge_load;
                     }
                 }
             }
+            if !edge_load_ok {
+                continue;
+            }
 
-            // ── Step 3: run induction cycle ───────────────────────────────────
-            // Empty splits = vacuous promote (no out-of-sample data configured).
-            // When the operator configures walk-forward splits (K-R7), they
-            // should be loaded and passed here.
-            let splits: Vec<ReplaySplit> = Vec::new();
+            // ── Step 3: run induction cycle (lock-free gate evaluation) ───────
+            // MED-2 fix: gate evaluation runs WITHOUT holding the infer lock.
+            // run_cycle returns rules_to_install; we do a single atomic
+            // hot_reload under the lock afterwards. This prevents blocking
+            // query tools for the duration of all per-candidate gate evals.
+            let current_rules: Vec<tdw_infer::InferRule> = {
+                let guard = infer.lock().await;
+                guard.rules().to_vec()
+            };
 
-            // Lock the infer engine for the duration of the cycle so
-            // hot_reload writes land atomically. `current_rules` is seeded
-            // from the engine's live rule set so inducted rules accumulate
-            // correctly across multiple ticks without wiping hand-authored ones.
-            let mut infer_guard = infer.lock().await;
-            let mut current_rules: Vec<tdw_infer::InferRule> = infer_guard.rules().to_vec();
-
-            let report = match engine.run_cycle(
+            let mut report = match engine.run_cycle(
                 &pattern_index,
-                &mut current_rules,
-                &mut infer_guard,
+                &current_rules,
                 &all_edges,
                 &splits,
                 &DriftKey::default(),
             ) {
                 Ok(r) => r,
                 Err(err) => {
-                    drop(infer_guard);
                     eprintln!("[tdw] K-R5 induction cycle error: {err}");
                     continue;
                 }
             };
-            drop(infer_guard);
+
+            // ── Step 4: single atomic hot_reload under the lock ───────────────
+            let rules_to_install = std::mem::take(&mut report.rules_to_install);
+            if !rules_to_install.is_empty() {
+                let mut infer_guard = infer.lock().await;
+                let mut all_rules = infer_guard.rules().to_vec();
+                // Re-seed from engine in case another task added rules since
+                // Step 3 snapshot; dedup by rule_id to avoid double-install.
+                let existing_ids: std::collections::BTreeSet<String> =
+                    all_rules.iter().map(|r| r.rule_id().to_string()).collect();
+                for rule in rules_to_install {
+                    if !existing_ids.contains(rule.rule_id()) {
+                        all_rules.push(rule);
+                    }
+                }
+                match infer_guard.hot_reload(all_rules) {
+                    Ok(()) => {
+                        report.promoted = report.new_rules.len();
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[tdw] K-R5 induction: hot_reload rejected inducted \
+                             rules: {err}"
+                        );
+                        // new_rules stays set for logging; promoted stays 0.
+                    }
+                }
+            }
 
             eprintln!(
                 "[tdw] K-R5 induction cycle complete: \
                  patterns_examined={} pre_rejected={} gate_rejected={} \
-                 promoted={} already_installed={}",
+                 promoted={} already_installed={} splits_evaluated={}",
                 report.patterns_examined,
                 report.pre_rejected,
                 report.gate_rejected,
                 report.promoted,
                 report.already_installed,
+                splits.len(),
             );
             for promoted in &report.new_rules {
                 eprintln!(
                     "[tdw] K-R5 inducted rule {:?} from pattern {:?} \
-                     (support={}, replay={})",
+                     (support={}, replay={}, splits_evaluated={})",
                     promoted.rule_id,
                     promoted.pattern_id,
                     promoted.support,
                     promoted.replay_summary,
+                    promoted.splits_evaluated,
                 );
             }
         }

@@ -511,6 +511,18 @@ fn append_pattern_steps(chain: &mut Vec<Value>, props: &Value) {
 /// For K-R5 inducted rules (identified by the `inducted-` prefix on `rule_id`),
 /// also appends an `inducted_rule_audit` step that traces back to the source
 /// pattern node and the K-R7 replay gate that validated it.
+///
+/// # Truthfulness (CRITICAL-3)
+///
+/// The audit step reports only what ACTUALLY occurred:
+/// - The rule was promoted through the K-R7 walk-forward replay gate (this is
+///   guaranteed by the fail-closed production path: zero splits → no promotion).
+/// - The exact split count is NOT embedded in the edge provenance record at
+///   induction time; to retrieve it, query the pattern node
+///   (`tdw.kg.why entity_id=<source_pattern_node_id>`) which carries the
+///   induction cycle summary in its props.
+/// - The `inducted-` prefix on `rule_id` is the machine-vs-human discriminator
+///   and is sufficient for audit filtering.
 fn append_rule_steps(chain: &mut Vec<Value>, rule_id: &str, version: u64, start_step: usize) {
     let inducted_pattern_id = tdw_induction::inducted_rule_provenance_label(rule_id);
     let summary = inducted_pattern_id.as_ref().map_or_else(
@@ -524,9 +536,11 @@ fn append_rule_steps(chain: &mut Vec<Value>, rule_id: &str, version: u64, start_
         |pid| {
             format!(
                 "Derived by INDUCTED rule {rule_id:?} at version {version}. \
-                 Self-authored from pattern node {pid:?} \
-                 (K-R5 induction; verified by K-R7 replay gate). \
-                 Use `tdw.kg.why entity_id={pid}` to trace the source motif."
+                 Machine-authored from pattern node {pid:?} via K-R5 induction; \
+                 promoted through K-R7 walk-forward replay gate (≥1 out-of-sample \
+                 split required — fail-closed). \
+                 Use `tdw.kg.why entity_id={pid}` to trace the source motif and \
+                 induction cycle details."
             )
         },
     );
@@ -553,14 +567,22 @@ fn append_rule_steps(chain: &mut Vec<Value>, rule_id: &str, version: u64, start_
             "source_pattern_node_id": pattern_node_id,
             "gate": "K-R7 walk-forward replay promote gate",
             "authorship": "machine (K-R5 induction pipeline)",
+            "splits_evaluated_note": "The exact count of out-of-sample replay splits \
+                used at promotion time is not embedded in the edge provenance record. \
+                The production induction worker is fail-closed: promotion is impossible \
+                when zero splits are configured (see `knowledge.induction.replay_splits_path`). \
+                Query the source pattern node for the induction cycle summary.",
             "audit_note": "This rule was synthesised by the K-R5 induction pipeline \
-                from a mined pattern (K-R4) and promoted only after passing the K-R7 \
-                walk-forward replay gate (min_precision/min_recall validated \
-                out-of-sample). It is auditable and distinguishable from \
+                from a mined pattern (K-R4) and promoted ONLY after passing the K-R7 \
+                walk-forward replay gate with ≥1 out-of-sample split. The worker is \
+                fail-closed: it skips every cycle tick when no splits are configured \
+                or the splits file cannot be loaded. Rules are distinguishable from \
                 hand-authored rules by the `inducted-` prefix on rule_id.",
             "summary": format!(
                 "Inducted rule {rule_id:?} traces to pattern {pattern_node_id:?}. \
-                 Promotion required passing the K-R7 replay gate."
+                 Promotion required passing the K-R7 replay gate with ≥1 out-of-sample \
+                 split (fail-closed — zero splits = no promotion). \
+                 Query `tdw.kg.why entity_id={pattern_node_id}` for induction details."
             ),
         }));
     }

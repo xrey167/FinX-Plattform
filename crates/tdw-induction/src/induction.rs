@@ -82,7 +82,7 @@ use tdw_eval_runner::{
     replay_eval::{PromoteThreshold, PromoteVerdict, ReplaySplit, promote_gate},
     retrieval_eval::DriftKey,
 };
-use tdw_infer::{EdgePattern, InferEngine, InferRule};
+use tdw_infer::{EdgePattern, InferRule};
 use tdw_patterns::{PatternIndex, PatternRecord};
 use thiserror::Error;
 
@@ -173,6 +173,12 @@ pub struct PromotedRule {
     pub replay_summary: String,
     /// Support count from the source pattern.
     pub support: usize,
+    /// Number of out-of-sample replay splits the gate evaluated.
+    ///
+    /// This is the ACTUAL split count used — never zero for a promoted rule
+    /// (zero splits = fail-closed, no promotion). Exposed so the why-chain
+    /// can report truthfully what validation actually occurred.
+    pub splits_evaluated: usize,
 }
 
 // ── InductionCycleReport ──────────────────────────────────────────────────────
@@ -186,12 +192,19 @@ pub struct InductionCycleReport {
     pub pre_rejected: usize,
     /// Candidates that reached the gate but were rejected by it.
     pub gate_rejected: usize,
-    /// Rules promoted and installed in this cycle.
+    /// Rules promoted (set by the caller after the atomic `hot_reload`).
     pub promoted: usize,
     /// Rules that were already installed (skipped dedup).
     pub already_installed: usize,
     /// Promoted rules in this cycle (non-empty only when `promoted > 0`).
     pub new_rules: Vec<PromotedRule>,
+    /// The [`InferRule`]s that passed the gate and should be installed by the
+    /// caller via a single atomic [`InferEngine::hot_reload`].
+    ///
+    /// The caller pops this after calling `run_cycle`, performs the
+    /// `hot_reload`, and sets `report.promoted = rules_to_install.len()`.
+    /// Parallel index to [`InductionCycleReport::new_rules`].
+    pub rules_to_install: Vec<InferRule>,
 }
 
 // ── InductionEngine ───────────────────────────────────────────────────────────
@@ -220,38 +233,41 @@ impl InductionEngine {
         }
     }
 
-    /// Run one induction cycle.
+    /// Run one induction cycle — **lock-free gate evaluation**.
     ///
     /// For each [`PatternRecord`] in `index` (in canonical-key order —
     /// deterministic), the engine:
     ///
     /// 1. Synthesises a candidate rule ([`induce_candidate`]).
     /// 2. Skips if the same `rule_id` is already in `current_rules`.
-    /// 3. Runs [`promote_gate`] over `all_edges` and `splits`.
-    /// 4. On `Promote`: adds the rule to `current_rules` and hot-reloads
-    ///    the engine.
+    /// 3. Runs [`promote_gate`] over `all_edges` and `splits` — **without
+    ///    holding the infer engine lock** (the engine is not taken here).
+    /// 4. Collects all gate-passing rules into the returned
+    ///    [`InductionCycleReport::rules_to_install`].
+    ///
+    /// The caller is responsible for a single atomic
+    /// [`InferEngine::hot_reload`] after this method returns (see
+    /// `spawn_induction_worker`). This avoids holding the infer lock across
+    /// all per-candidate gate evaluations (MED-2 fix).
     ///
     /// Stops with [`InductionError::CandidateBudgetExceeded`] if more
     /// than `self.max_candidates` candidates are attempted (pre-rejected
     /// candidates count against the budget).
     ///
-    /// The [`InductionCycleReport`] is returned even when a gate or
-    /// hot-reload error occurs for one rule — the error is stored in the
-    /// report and the cycle continues with the remaining patterns (best
-    /// effort, not all-or-nothing). The caller's logs show the per-rule
-    /// outcomes.
+    /// The [`InductionCycleReport`] is returned even when a gate error
+    /// occurs for one rule — the error contributes to `gate_rejected` and
+    /// the cycle continues with the remaining patterns (best effort). The
+    /// caller does the final `hot_reload` and updates `report.promoted`.
     ///
     /// # Errors
     ///
     /// Returns [`InductionError::CandidateBudgetExceeded`] when the
-    /// configured per-cycle cap is exceeded. Per-rule gate and hot-reload
-    /// errors are soft: they contribute to `gate_rejected` / are logged
-    /// but do not abort the cycle.
+    /// configured per-cycle cap is exceeded. Per-rule gate errors are soft:
+    /// they contribute to `gate_rejected` but do not abort the cycle.
     pub fn run_cycle(
         &self,
         index: &PatternIndex,
-        current_rules: &mut Vec<InferRule>,
-        infer: &mut InferEngine,
+        current_rules: &[InferRule],
         all_edges: &[GraphEdge],
         splits: &[ReplaySplit],
         drift_key: &DriftKey,
@@ -269,6 +285,8 @@ impl InductionEngine {
             .iter()
             .map(|r| r.rule_id().to_string())
             .collect();
+
+        let splits_count = splits.len();
 
         for (_canonical, record) in index.iter() {
             report.patterns_examined += 1;
@@ -304,7 +322,9 @@ impl InductionEngine {
                 continue;
             }
 
-            // Promote gate (K-R7 seam).
+            // Promote gate (K-R7 seam) — evaluated WITHOUT holding the infer
+            // engine lock. The caller does a single atomic hot_reload after
+            // this method returns.
             let verdict = match promote_gate(
                 &candidate.rule,
                 all_edges,
@@ -332,30 +352,14 @@ impl InductionEngine {
 
             let summary = verdict.summary().to_string();
 
-            // Atomic hot-reload: build the new full rule set.
-            let mut new_rules = current_rules.clone();
-            new_rules.push(candidate.rule.clone());
-
-            match infer.hot_reload(new_rules.clone()) {
-                Ok(()) => {
-                    *current_rules = new_rules;
-                    report.promoted += 1;
-                    report.new_rules.push(PromotedRule {
-                        rule_id: candidate.rule.rule_id().to_string(),
-                        pattern_id: record.node_id.clone(),
-                        replay_summary: summary,
-                        support: record.support,
-                    });
-                }
-                Err(err) => {
-                    // Hot-reload rejection is a soft error: log and skip this rule.
-                    eprintln!(
-                        "[tdw] K-R5 hot_reload rejected inducted rule {:?}: {err}",
-                        candidate.rule.rule_id()
-                    );
-                    report.gate_rejected += 1;
-                }
-            }
+            report.new_rules.push(PromotedRule {
+                rule_id: candidate.rule.rule_id().to_string(),
+                pattern_id: record.node_id.clone(),
+                replay_summary: summary,
+                support: record.support,
+                splits_evaluated: splits_count,
+            });
+            report.rules_to_install.push(candidate.rule);
         }
 
         Ok(report)
@@ -454,6 +458,30 @@ impl InductionEngine {
             support: record.support,
         })
     }
+}
+
+/// Load walk-forward replay splits from a JSON file on disk.
+///
+/// The file must be a JSON array of objects with fields `split_id` (string),
+/// `as_of` (RFC-3339), and `as_of_plus_window` (RFC-3339):
+///
+/// ```json
+/// [
+///   { "split_id": "s1", "as_of": "2024-01-01T00:00:00Z",
+///     "as_of_plus_window": "2024-07-01T00:00:00Z" }
+/// ]
+/// ```
+///
+/// # Errors
+///
+/// Returns a descriptive `String` error when the file cannot be read or the
+/// JSON cannot be parsed. The caller (induction worker) treats any error as
+/// **FAIL-CLOSED**: zero promotions on that tick.
+pub fn load_replay_splits(path: &str) -> Result<Vec<ReplaySplit>, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read replay splits file {path:?}: {e}"))?;
+    serde_json::from_str::<Vec<ReplaySplit>>(&contents)
+        .map_err(|e| format!("cannot parse replay splits file {path:?}: {e}"))
 }
 
 /// Build a human-readable provenance label for an inducted rule.
@@ -711,11 +739,12 @@ mod tests {
         );
     }
 
-    // ── promoted rule e2e: run_cycle installs the rule ────────────────────────
+    // ── promoted rule e2e: run_cycle collects rules; caller does hot_reload ───
 
     #[test]
-    fn run_cycle_promotes_and_installs_passing_candidate() {
+    fn run_cycle_promotes_passing_candidate_lock_free() {
         use tdw_core::{GraphEdge, Provenance};
+        use tdw_infer::InferEngine;
 
         fn ingest_edge(from: &str, rel: &str, to: &str, valid_from: &str) -> GraphEdge {
             GraphEdge {
@@ -735,51 +764,52 @@ mod tests {
         index.record(record("listed_on::supplier_of", 2));
 
         let eng = InductionEngine::new(0.0, 0.0, 100); // zero threshold: vacuous promote
-        let mut current_rules: Vec<InferRule> = Vec::new();
+        let current_rules: Vec<InferRule> = Vec::new();
         let mut infer = InferEngine::default();
 
         let edges: Vec<GraphEdge> =
             vec![ingest_edge("a", "listed_on", "b", "2023-01-01T00:00:00Z")];
-        // Empty splits → vacuous promote (nothing to fail on).
+        // Empty splits → vacuous promote (threshold=0 so still passes).
         let splits: Vec<ReplaySplit> = vec![];
 
-        let report = eng
+        let mut report = eng
             .run_cycle(
                 &index,
-                &mut current_rules,
-                &mut infer,
+                &current_rules,
                 &edges,
                 &splits,
                 &DriftKey::default(),
             )
             .unwrap();
 
-        assert_eq!(report.promoted, 1, "one rule should be promoted");
+        assert_eq!(report.rules_to_install.len(), 1, "one rule to install");
+        assert_eq!(report.new_rules.len(), 1);
         assert_eq!(report.gate_rejected, 0);
         assert_eq!(report.pre_rejected, 0);
-        assert_eq!(report.new_rules.len(), 1);
 
-        // The installed rule must be in current_rules.
+        // Caller does the single atomic hot_reload.
+        let rules_to_install = std::mem::take(&mut report.rules_to_install);
+        let mut all_rules = current_rules;
+        all_rules.extend(rules_to_install);
+        infer.hot_reload(all_rules.clone()).unwrap();
+        report.promoted = report.new_rules.len();
+
+        assert_eq!(report.promoted, 1, "one rule should be promoted");
+
+        // The installed rule must be in the engine.
         assert!(
-            current_rules
+            all_rules
                 .iter()
                 .any(|r| r.rule_id().starts_with("inducted-")),
-            "inducted rule must appear in current_rules"
+            "inducted rule must appear in installed rules"
         );
 
-        // Dedup: running the cycle again must not re-install.
+        // Dedup: running the cycle again with the now-installed rules must skip.
         let report2 = eng
-            .run_cycle(
-                &index,
-                &mut current_rules,
-                &mut infer,
-                &edges,
-                &splits,
-                &DriftKey::default(),
-            )
+            .run_cycle(&index, &all_rules, &edges, &splits, &DriftKey::default())
             .unwrap();
         assert_eq!(report2.already_installed, 1, "dedup must skip re-install");
-        assert_eq!(report2.promoted, 0);
+        assert_eq!(report2.rules_to_install.len(), 0);
     }
 
     // ── budget cap ────────────────────────────────────────────────────────────
@@ -792,21 +822,87 @@ mod tests {
         index.record(record("supplier_of", 2));
 
         let eng = InductionEngine::new(0.0, 0.0, 1); // cap = 1
-        let mut current_rules: Vec<InferRule> = Vec::new();
-        let mut infer = InferEngine::default();
+        let current_rules: Vec<InferRule> = Vec::new();
 
-        let result = eng.run_cycle(
-            &index,
-            &mut current_rules,
-            &mut infer,
-            &[],
-            &[],
-            &DriftKey::default(),
-        );
+        let result = eng.run_cycle(&index, &current_rules, &[], &[], &DriftKey::default());
 
         assert!(
             matches!(result, Err(InductionError::CandidateBudgetExceeded { .. })),
             "expected CandidateBudgetExceeded; got {result:?}"
+        );
+    }
+
+    // ── gate rejects when predictions exist but outcomes don't ──────────────
+    //
+    // CRITICAL-1 gate test: a rule that fires (makes predictions) but whose
+    // predicted edges are never observed in the forward window must be REJECTED.
+    // This is the real overfit scenario: in-sample patterns present, no
+    // out-of-sample confirmation.
+    //
+    // The fail-closed-at-zero-splits enforcement lives in the daemon worker
+    // (spawn_induction_worker in data/mod.rs): when replay_splits_path is None
+    // or the file is empty, the worker skips the entire cycle before calling
+    // run_cycle. This test validates the gate-level rejection behaviour.
+
+    #[test]
+    fn fail_closed_gate_rejects_predictions_without_outcomes() {
+        use tdw_core::{GraphEdge, Provenance};
+
+        fn ingest_edge(from: &str, rel: &str, to: &str, valid_from: &str) -> GraphEdge {
+            GraphEdge {
+                from: from.to_string(),
+                to: to.to_string(),
+                rel: rel.to_string(),
+                props: serde_json::Value::Null,
+                provenance: Provenance::Ingest {
+                    source: "test".to_string(),
+                },
+                valid_from: Some(valid_from.to_string()),
+                valid_to: None,
+            }
+        }
+
+        let mut index = PatternIndex::default();
+        index.record(record("listed_on::supplier_of", 5));
+
+        let eng = InductionEngine::new(0.60, 0.20, 100); // 60% precision threshold
+        let current_rules: Vec<InferRule> = Vec::new();
+
+        let splits = vec![ReplaySplit {
+            split_id: "s1".to_string(),
+            as_of: "2024-01-01T00:00:00Z".to_string(),
+            as_of_plus_window: "2024-07-01T00:00:00Z".to_string(),
+        }];
+
+        // Edges that allow the pattern to fire (a→b listed_on, b→x supplier_of)
+        // but NO outcome edge (inducted:listed_on--supplier_of) in the forward
+        // window → precision = 0/1 = 0.0 < 0.60 → gate REJECTS.
+        let edges = vec![
+            ingest_edge("a", "listed_on", "b", "2023-01-01T00:00:00Z"),
+            ingest_edge("b", "supplier_of", "x", "2023-06-01T00:00:00Z"),
+            // No outcome: "inducted:listed_on--supplier_of" edge absent
+        ];
+
+        let report = eng
+            .run_cycle(
+                &index,
+                &current_rules,
+                &edges,
+                &splits,
+                &DriftKey::default(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            report.rules_to_install.len(),
+            0,
+            "gate must reject overfit candidate (predictions with no outcomes, precision=0)"
+        );
+        assert_eq!(report.gate_rejected, 1, "must count as gate_rejected");
+        assert_eq!(
+            report.new_rules.len(),
+            0,
+            "new_rules must be empty when gate rejects"
         );
     }
 

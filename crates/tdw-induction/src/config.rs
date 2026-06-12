@@ -66,6 +66,27 @@ pub struct InductionConfig {
     /// next full reload even when induction is turned off).
     #[serde(default)]
     pub retire_induced_on_disable: bool,
+
+    /// Filesystem path to a JSON file containing the walk-forward replay
+    /// splits used to gate candidate rules.
+    ///
+    /// The file must be a JSON array of [`ReplaySplit`] objects:
+    /// ```json
+    /// [
+    ///   { "split_id": "s1", "as_of": "2024-01-01T00:00:00Z",
+    ///     "as_of_plus_window": "2024-07-01T00:00:00Z" }
+    /// ]
+    /// ```
+    ///
+    /// **FAIL-CLOSED**: when this field is `None` or the file cannot be
+    /// loaded, the induction worker promotes **nothing** and emits a loud
+    /// WARNING on every tick. A missing splits file is a configuration error,
+    /// not a reason to vacuously promote every candidate.
+    ///
+    /// Splits must be checked into the repository alongside the daemon config
+    /// (same posture as K-L3 golden splits).
+    #[serde(default)]
+    pub replay_splits_path: Option<String>,
 }
 
 impl InductionConfig {
@@ -95,6 +116,7 @@ impl Default for InductionConfig {
             min_promote_recall: Self::default_min_recall(),
             max_candidates_per_cycle: Self::default_max_candidates(),
             retire_induced_on_disable: false,
+            replay_splits_path: None,
         }
     }
 }
@@ -138,6 +160,7 @@ mod tests {
             min_promote_recall: 0.30,
             max_candidates_per_cycle: 10,
             retire_induced_on_disable: true,
+            replay_splits_path: Some("/etc/tdw/splits.json".to_string()),
         };
         let json = serde_json::to_string(&cfg).expect("serialize");
         let restored: InductionConfig = serde_json::from_str(&json).expect("deserialize");

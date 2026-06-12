@@ -578,6 +578,7 @@ impl Default for LessonsConfig {
 /// min_promote_recall    = 0.20
 /// max_candidates_per_cycle = 20
 /// retire_induced_on_disable = false
+/// replay_splits_path = "/etc/tdw/replay_splits.json"
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct InductionConfig {
@@ -618,6 +619,20 @@ pub struct InductionConfig {
     /// Default: `false`.
     #[serde(default)]
     pub retire_induced_on_disable: bool,
+
+    /// Filesystem path to a JSON file containing the walk-forward replay
+    /// splits used to gate candidate rules.
+    ///
+    /// The file must be a JSON array of objects with fields `split_id`,
+    /// `as_of`, and `as_of_plus_window` (RFC-3339 timestamps).
+    ///
+    /// **FAIL-CLOSED**: when `None` or the file cannot be loaded the worker
+    /// promotes **nothing** and emits a loud WARNING on every tick. A missing
+    /// splits file is a configuration error, not a reason to vacuously promote
+    /// every candidate. Splits must be checked into the repository alongside
+    /// the daemon config (same posture as K-L3 golden splits).
+    #[serde(default)]
+    pub replay_splits_path: Option<String>,
 }
 
 impl InductionConfig {
@@ -647,6 +662,7 @@ impl Default for InductionConfig {
             min_promote_recall: Self::default_min_recall(),
             max_candidates_per_cycle: Self::default_max_candidates(),
             retire_induced_on_disable: false,
+            replay_splits_path: None,
         }
     }
 }

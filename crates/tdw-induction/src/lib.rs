@@ -64,5 +64,5 @@ pub mod induction;
 pub use config::InductionConfig;
 pub use induction::{
     CandidateRule, InductionCycleReport, InductionEngine, InductionError, PromotedRule,
-    inducted_rule_provenance_label,
+    inducted_rule_provenance_label, load_replay_splits,
 };
