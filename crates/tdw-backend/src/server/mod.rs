@@ -717,6 +717,7 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
 /// the server omits those tools, exactly as the `tdw-mcp` standalone binary does.
 ///
 /// Returns the process exit code from the underlying loop.
+#[allow(clippy::too_many_arguments)]
 fn run_mcp_loop(
     transport: &McpTransport,
     daemon_addr: Option<&str>,
@@ -725,6 +726,9 @@ fn run_mcp_loop(
     indexer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_knowledge::indexer::KnowledgeIndexer>>>,
     infer: Option<std::sync::Arc<tokio::sync::Mutex<tdw_infer::InferEngine>>>,
     contradiction: Option<std::sync::Arc<tdw_infer::contradiction::ContradictionDetector>>,
+    watchlist: Option<
+        std::sync::Arc<std::sync::Mutex<tdw_mcp::knowledge_watchlist_tools::WatchlistStore>>,
+    >,
 ) -> i32 {
     let daemon = daemon_addr.map(|addr| {
         tdw_app_client::DaemonClientConfig::tcp(addr)
@@ -738,6 +742,7 @@ fn run_mcp_loop(
             indexer,
             infer,
             contradiction,
+            watchlist,
         ),
         McpTransport::Http(bind) => tdw_mcp::run_streamable_http_with_knowledge(
             bind,
@@ -747,6 +752,7 @@ fn run_mcp_loop(
             indexer,
             infer,
             contradiction,
+            watchlist,
         ),
     }
 }
@@ -778,9 +784,17 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             // No co-resident Backend in McpOnly mode: knowledge/feedback are None
             // (the standalone surface reaches knowledge via the daemon's loopback
             // transport, not in-process injection).
+            //
+            // K-X5: load the watchlist store from TDW_WATCHLIST_DIR so that
+            // subscriptions created in a previous session survive the restart.
+            // McpOnly has no co-resident Background so the store is owned here
+            // and injected directly — same pattern as Both mode.
+            let watchlist = Some(std::sync::Arc::new(std::sync::Mutex::new(
+                tdw_mcp::knowledge_watchlist_tools::load_store_from_env(),
+            )));
             let transport = cfg.mcp_transport.clone();
             let code = tokio::task::block_in_place(|| {
-                run_mcp_loop(&transport, None, None, None, None, None, None)
+                run_mcp_loop(&transport, None, None, None, None, None, None, watchlist)
             });
             exit_code_to_result(code)
         }
@@ -807,6 +821,7 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
     let indexer = Some(backend.knowledge_indexer_handle());
     let infer = Some(backend.infer_engine_handle());
     let contradiction_detector = backend.contradiction_detector_handle();
+    let watchlist = Some(backend.watchlist_store_handle());
 
     // Optional catalog-derived REST surface, env-gated on TDW_DAEMON_REST_BIND.
     // In Both mode the co-resident knowledge runtime is wired so
@@ -829,6 +844,7 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
                 indexer,
                 infer,
                 Some(contradiction_detector),
+                watchlist,
             )
         })
         .map_err(BackendError::Io)?;
