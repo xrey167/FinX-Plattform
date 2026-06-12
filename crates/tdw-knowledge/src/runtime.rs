@@ -596,6 +596,7 @@ mod status_tests {
             )
             .await
             .expect("submit 2");
+            drop(q);
         }
 
         let runtime = KnowledgeRuntime::new(embedder, vectors)
