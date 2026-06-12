@@ -6,22 +6,22 @@
 //!
 //! ## What is tested
 //!
-//! - **E2E (sweep_lands_ready_proposal_with_audit)**: a bound principal submits a
+//! - **E2E (`sweep_lands_ready_proposal_with_audit`)**: a bound principal submits a
 //!   proposal, a passing eval call promotes it to `Ready`, and
 //!   `materialize_ready` (the sweep core) writes it — the audit history carries
 //!   the landing entry and the `materialized` flag is set.
 //!
-//! - **Kill-switch (kill_switch_auto_materialize_false)**: `auto_materialize =
+//! - **Kill-switch (`kill_switch_auto_materialize_false`)**: `auto_materialize =
 //!   false` → `build_sweep_freshness_cell` returns `None` (sweep never
 //!   spawned); a `Ready` proposal stays `Ready`; the operator tool can still
 //!   call `materialize_ready` directly.
 //!
-//! - **Stub-eval regression (stub_eval_cannot_promote_proposal)**: an agent
+//! - **Stub-eval regression (`stub_eval_cannot_promote_proposal`)**: an agent
 //!   with `pass_rate < READY_THRESHOLD` or `cases_executed < MIN_EVAL_CASES`
 //!   cannot promote — `promote_for_agent` returns an empty vec and the
 //!   proposal stays `Validated`.
 //!
-//! - **TOCTOU (toctou_drift_after_ready_is_rejected_at_sweep)**: a proposal
+//! - **TOCTOU (`toctou_drift_after_ready_is_rejected_at_sweep`)**: a proposal
 //!   promoted to `Ready` referencing a non-existent tag is rejected with a
 //!   reason at `materialize_ready` time (TOCTOU re-validation catches the
 //!   world-changed state).
@@ -214,6 +214,9 @@ async fn kill_switch_ready_proposal_stays_ready_without_sweep() {
 // Kill-switch: auto_materialize=true → cell is Some(Pending)
 // ---------------------------------------------------------------------------
 
+// `guard` must outlive the assert that dereferences it — tightening the drop
+// would require reborrowing, not a real improvement in test code.
+#[allow(clippy::significant_drop_tightening)]
 #[test]
 fn auto_materialize_true_cell_is_pending() {
     let cfg = ProposalsConfig::default(); // auto_materialize defaults to true
@@ -516,7 +519,7 @@ async fn sweep_cap_limits_proposals_landed_per_tick() {
 // Finding 2: post-sweep inference fires for landed edge proposals
 // ---------------------------------------------------------------------------
 
-/// Auto-landed edge matching a DeriveEdge rule → derived edge written by inference.
+/// Auto-landed edge matching a `DeriveEdge` rule → derived edge written by inference.
 #[tokio::test]
 async fn sweep_fires_inference_for_landed_edge_proposals() {
     use tdw_infer::rule::EdgePattern;
@@ -626,6 +629,9 @@ async fn sweep_fires_inference_for_landed_edge_proposals() {
 /// The real `spawn_auto_materialize_sweep` task lands a Ready proposal when
 /// the cron slot fires. Uses a every-minute cadence and fast-forwards by
 /// calling the sweep core directly once — proves the production wiring path.
+// `guard` must outlive the assert that dereferences it — test: owner must
+// outlive guard block intentionally.
+#[allow(clippy::significant_drop_tightening)]
 #[tokio::test]
 async fn spawned_sweep_task_lands_ready_proposal() {
     use tdw_app_server::CancellationToken;
