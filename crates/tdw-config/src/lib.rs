@@ -486,7 +486,158 @@ impl Default for PatternConfig {
     }
 }
 
-/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-R4).
+/// Source kind for a scheduled knowledge feed (knowledge-system K-L6).
+///
+/// The enum is `#[non_exhaustive]` so future source kinds (e.g. `Http`,
+/// `Provider`) can be added in backwards-compatible minor releases without
+/// breaking existing match arms in caller code.
+///
+/// Currently only `Article` (the tdw-news-compose article seam) is supported.
+/// The serialized form is `snake_case`, e.g. `source_kind = "article"` in TOML.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum FeedSourceKind {
+    /// Poll the normalized [`tdw_news_compose::Article`] seam.
+    ///
+    /// Concrete source parameters (symbols, provider, API key env var) live
+    /// in `source_params` on the enclosing [`FeedConfig`].
+    Article,
+}
+
+/// Parameters for the `Article` feed source kind (knowledge-system K-L6).
+///
+/// Exactly one of `fixture_path` (offline fixture) or `provider` (live data
+/// provider) must be set for the feed to be valid. A feed with neither is
+/// rejected as a hard config error at load time. A live `provider` name that
+/// is not yet implemented is also a hard config error — there is no silent
+/// fallback to an empty source.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArticleSourceParams {
+    /// Ticker symbols to filter the article feed (e.g. `["AAPL", "MSFT"]`).
+    /// When absent or empty, no symbol filter is applied.
+    #[serde(default)]
+    pub symbols: Vec<String>,
+    /// Provider name for the article source (e.g. `"benzinga"`, `"tiingo"`).
+    /// When set, the daemon constructs a live provider source from this name.
+    /// Any provider name not yet implemented is a HARD config error at load —
+    /// never a silent empty fixture. Mutually exclusive with `fixture_path`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Environment variable holding the provider API key. Resolved at poll
+    /// time (never at config load) so key rotation requires no restart.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// Path to a fixture JSON file (array of [`tdw_news_compose::Article`]
+    /// values). Used in offline, CI, and dev environments. Mutually exclusive
+    /// with `provider`. When set and `provider` is absent, the feed reads
+    /// articles from this file on every poll. The file must exist at daemon
+    /// boot; a missing path is a hard Init error.
+    #[serde(default)]
+    pub fixture_path: Option<String>,
+}
+
+/// One scheduled knowledge-feed entry (knowledge-system K-L6).
+///
+/// A feed entry tells the daemon: on `cadence`, fetch up to `max_items_per_poll`
+/// articles from `source_kind` with `source_params`, map them through
+/// `article_to_document`, and ingest them through the K-E3 indexer.
+/// Content-hash idempotency in the indexer manifest makes re-polls safe by
+/// construction: unchanged items produce `SkippedUnchanged` outcomes and are
+/// reported as duplicates, never double-indexed.
+///
+/// # Example (`tdw.toml`)
+///
+/// ```toml
+/// [[knowledge.feeds]]
+/// id      = "benzinga-aapl"
+/// source_kind = "article"
+/// cadence = "*/15 * * * *"
+/// enabled = true
+/// max_items_per_poll = 20
+///
+/// [knowledge.feeds.source_params]
+/// symbols     = ["AAPL", "MSFT"]
+/// provider    = "benzinga"
+/// api_key_env = "TDW_BENZINGA_API_KEY"
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FeedConfig {
+    /// Stable unique identifier for this feed. Used as the cron trigger id
+    /// and appears in status fields and log lines. Must be non-empty and
+    /// contain only `[A-Za-z0-9:._-]` characters (same grammar as principal ids).
+    pub id: String,
+    /// Which source kind this feed polls.
+    pub source_kind: FeedSourceKind,
+    /// Provider-agnostic source parameters. The shape depends on `source_kind`:
+    /// for `Article` these are [`ArticleSourceParams`].
+    #[serde(default)]
+    pub source_params: ArticleSourceParams,
+    /// 5-field cron expression for the poll cadence (same validation as
+    /// `knowledge.evals.cadence`). Example: `"*/15 * * * *"` (every 15 min).
+    pub cadence: String,
+    /// Whether this feed is active. A disabled feed is parsed and validated but
+    /// registers no cron trigger. Default: `true`.
+    #[serde(default = "FeedConfig::default_enabled")]
+    pub enabled: bool,
+    /// Maximum number of items fetched per poll. Bounds network use and index
+    /// write latency. Default: `50`.
+    #[serde(default = "FeedConfig::default_max_items")]
+    pub max_items_per_poll: usize,
+    /// Knowledge plane to stamp on indexed documents. Must be a
+    /// `[a-z_]+` identifier. Default: `"shared"`.
+    #[serde(default = "FeedConfig::default_plane")]
+    pub plane: String,
+    /// Maximum body size (in bytes) for a single article before it is rejected
+    /// and counted as `rejected` in the feed status. Articles exceeding this
+    /// cap are logged and skipped; they do not enter `article_to_document`.
+    /// Default: 65 536 bytes (64 KiB). Set to 0 to disable the cap.
+    #[serde(default = "FeedConfig::default_max_body_bytes")]
+    pub max_body_bytes: usize,
+}
+
+impl FeedConfig {
+    const fn default_enabled() -> bool {
+        true
+    }
+    const fn default_max_items() -> usize {
+        50
+    }
+    fn default_plane() -> String {
+        "shared".to_string()
+    }
+    const fn default_max_body_bytes() -> usize {
+        65_536
+    }
+}
+
+/// Scheduled knowledge-feed pipeline settings (knowledge-system K-L6).
+///
+/// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop.
+/// Zero entries = no triggers registered + a loud status note (the K-L3
+/// zero-config honesty posture).
+///
+/// # Example (`tdw.toml`)
+///
+/// ```toml
+/// [[knowledge.feeds]]
+/// id          = "benzinga-aapl"
+/// source_kind = "article"
+/// cadence     = "*/15 * * * *"
+/// enabled     = true
+/// max_items_per_poll = 20
+///
+/// [knowledge.feeds.source_params]
+/// symbols = ["AAPL", "MSFT"]
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FeedsConfig {
+    /// The list of feed entries. Absent / empty = no feeds configured.
+    #[serde(default)]
+    pub entries: Vec<FeedConfig>,
+}
+
+/// Knowledge-system settings (knowledge-system B6 + F1 + K-L1 + K-L3 + K-X6 + K-L4 + K-L6 + K-R4).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeConfig {
     #[serde(default)]
@@ -562,6 +713,15 @@ pub struct KnowledgeConfig {
     /// intentionally visible, never silent.
     #[serde(default)]
     pub patterns: PatternConfig,
+    /// Scheduled document-feed pipelines (knowledge-system K-L6).
+    ///
+    /// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop
+    /// that polls a provider seam, maps items through `article_to_document`,
+    /// and ingests them via the K-E3 indexer (content-hash idempotency makes
+    /// re-polls safe by construction). Zero entries = no triggers registered
+    /// and a loud status note (the K-L3 zero-config honesty posture).
+    #[serde(default)]
+    pub feeds: FeedsConfig,
 }
 
 /// Auto-tagging rule-set configuration (knowledge-system K-L1).
@@ -977,7 +1137,7 @@ impl TdwConfig {
     }
 }
 
-/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4).
+/// Validate all `[knowledge.*]` sub-sections (K-L1 + K-X6 + K-L5 + K-L4 + K-L6).
 ///
 /// Extracted from [`TdwConfig::validate`] so that function stays under the
 /// 100-line function-length lint limit.
@@ -988,7 +1148,9 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     // Agent identity (K-L5): same grammar, bound to the write/feedback surface.
     validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")?;
     // Proposals sweep config (K-L4).
-    validate_proposals(&knowledge.proposals)
+    validate_proposals(&knowledge.proposals)?;
+    // Feed entries (K-L6): validate id grammar, cadence, and max_items.
+    validate_feeds(&knowledge.feeds)
 }
 
 /// Validate `[knowledge.proposals]` (K-L4).
@@ -1024,6 +1186,119 @@ fn validate_proposals(proposals: &ProposalsConfig) -> Result<()> {
         return Err(ConfigError::Validation(
             "knowledge.proposals.sweep_cap must be at least 1".to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Validate `[[knowledge.feeds]]` entries (K-L6).
+///
+/// Each entry must have:
+/// - A non-empty `id` matching `[A-Za-z0-9:._-]+`, ≤ 128 bytes.
+/// - A valid 5-field cron `cadence` (structural check, same as evals).
+/// - `max_items_per_poll > 0`.
+/// - A valid `plane` identifier (`[a-z_]+`).
+///
+/// The check runs on all entries regardless of `enabled` so typos are caught
+/// before the operator enables the feed.
+fn validate_feeds(feeds: &FeedsConfig) -> Result<()> {
+    for (idx, feed) in feeds.entries.iter().enumerate() {
+        let ctx = format!("knowledge.feeds[{idx}] (id={:?})", feed.id);
+        // id: non-empty, ≤128 bytes, [A-Za-z0-9:._-]+
+        if feed.id.is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: id must not be empty"
+            )));
+        }
+        if feed.id.len() > 128 {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: id is too long ({} bytes, max 128)",
+                feed.id.len()
+            )));
+        }
+        if let Some(bad) = feed
+            .id
+            .chars()
+            .find(|c| !c.is_ascii_alphanumeric() && !matches!(c, ':' | '.' | '_' | '-'))
+        {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: id {:?} contains invalid character {bad:?} \
+                 — only [A-Za-z0-9:._-] allowed",
+                feed.id
+            )));
+        }
+        // cadence: 5-field structural check (mirrors evals cadence validation)
+        {
+            let fields: Vec<&str> = feed.cadence.split_whitespace().collect();
+            if fields.len() != 5 {
+                return Err(ConfigError::Validation(format!(
+                    "{ctx}: cadence must be a 5-field cron expression \
+                     (e.g. \"*/15 * * * *\"), got {:?}",
+                    feed.cadence
+                )));
+            }
+            let legal: fn(char) -> bool = |c| {
+                c.is_ascii_digit()
+                    || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+            };
+            for field in &fields {
+                if field.chars().any(|c| !legal(c)) {
+                    return Err(ConfigError::Validation(format!(
+                        "{ctx}: cadence contains an invalid cron field {:?} \
+                         in expression {:?}",
+                        field, feed.cadence
+                    )));
+                }
+            }
+        }
+        // max_items_per_poll: must be > 0
+        if feed.max_items_per_poll == 0 {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: max_items_per_poll must be > 0"
+            )));
+        }
+        // plane: [a-z_]+, non-empty
+        if feed.plane.is_empty()
+            || !feed
+                .plane
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_')
+        {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: plane {:?} must be a non-empty lowercase identifier ([a-z_]+)",
+                feed.plane
+            )));
+        }
+        // source_params: exactly one of fixture_path or provider must be set.
+        // A live provider that is not yet implemented is a HARD error — never
+        // silently fall back to an empty fixture.
+        if let Some(provider) = &feed.source_params.provider {
+            // No live providers are supported in this slice. Any provider
+            // name is a hard config error so operators get an explicit
+            // message rather than silently polling nothing.
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params.provider {provider:?} is not yet supported — \
+                 remove the provider field and set fixture_path for offline use, \
+                 or wait for the provider integration to land"
+            )));
+        }
+        // No provider: fixture_path is required.
+        if feed.source_params.fixture_path.is_none() {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params must set fixture_path \
+                 (no live provider is configured)"
+            )));
+        }
+        // fixture_path must not be empty or whitespace-only.
+        if feed
+            .source_params
+            .fixture_path
+            .as_deref()
+            .is_some_and(|p| p.trim().is_empty())
+        {
+            return Err(ConfigError::Validation(format!(
+                "{ctx}: source_params.fixture_path must be a non-empty path"
+            )));
+        }
     }
     Ok(())
 }
@@ -1742,5 +2017,187 @@ postgres_url_env = "TDW_WORKER_POSTGRES_URL"
         let mut sorted = providers.clone();
         sorted.sort_unstable();
         assert_eq!(providers, sorted, "registry must be in provider-key order");
+    }
+
+    // ── K-L6: feed config validation ─────────────────────────────────────────
+
+    fn minimal_feed(id: &str) -> FeedConfig {
+        FeedConfig {
+            id: id.to_string(),
+            source_kind: FeedSourceKind::Article,
+            source_params: ArticleSourceParams {
+                fixture_path: Some("/tmp/fixture.json".to_string()),
+                ..ArticleSourceParams::default()
+            },
+            cadence: "*/15 * * * *".to_string(),
+            enabled: true,
+            max_items_per_poll: 50,
+            plane: "shared".to_string(),
+            max_body_bytes: 65_536,
+        }
+    }
+
+    #[test]
+    fn default_config_with_empty_feeds_passes_validation() {
+        let cfg = TdwConfig::default();
+        assert!(cfg.knowledge.feeds.entries.is_empty());
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn valid_feed_entry_passes() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge
+            .feeds
+            .entries
+            .push(minimal_feed("benzinga-aapl"));
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn feed_empty_id_fails() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.feeds.entries.push(minimal_feed(""));
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_invalid_id_character_fails() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.feeds.entries.push(minimal_feed("bad id!"));
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_id_too_long_fails() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge
+            .feeds
+            .entries
+            .push(minimal_feed(&"x".repeat(129)));
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_invalid_cadence_field_count_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.cadence = "* * * *".to_string(); // only 4 fields
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_invalid_cadence_character_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.cadence = "! * * * *".to_string();
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_zero_max_items_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.max_items_per_poll = 0;
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_invalid_plane_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.plane = "BAD-PLANE".to_string();
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feed_empty_plane_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.plane = String::new();
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn multiple_valid_feeds_pass() {
+        let mut cfg = TdwConfig::default();
+        cfg.knowledge.feeds.entries.push(minimal_feed("feed-a"));
+        cfg.knowledge.feeds.entries.push(FeedConfig {
+            id: "feed-b".to_string(),
+            source_kind: FeedSourceKind::Article,
+            source_params: ArticleSourceParams {
+                symbols: vec!["AAPL".to_string()],
+                fixture_path: Some("/tmp/aapl-fixture.json".to_string()),
+                provider: None,
+                api_key_env: None,
+            },
+            cadence: "0 * * * *".to_string(),
+            enabled: false,
+            max_items_per_poll: 20,
+            plane: "shared".to_string(),
+            max_body_bytes: 65_536,
+        });
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn feed_unsupported_provider_fails() {
+        // Any live provider name is a hard config error until provider
+        // integrations land. There is no silent fallback to empty fixture.
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.provider = Some("benzinga".to_string());
+        feed.source_params.fixture_path = None;
+        cfg.knowledge.feeds.entries.push(feed);
+        let err = cfg.validate().expect_err("unsupported provider must fail");
+        assert!(
+            err.to_string().contains("not yet supported"),
+            "error must mention 'not yet supported'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn feed_missing_fixture_path_fails() {
+        // No provider + no fixture_path = hard config error.
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.fixture_path = None;
+        feed.source_params.provider = None;
+        cfg.knowledge.feeds.entries.push(feed);
+        let err = cfg.validate().expect_err("missing source must fail");
+        assert!(
+            err.to_string().contains("fixture_path"),
+            "error must mention 'fixture_path'; got: {err}"
+        );
+    }
+
+    #[test]
+    fn feed_empty_fixture_path_fails() {
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.source_params.fixture_path = Some("  ".to_string());
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn disabled_feed_is_still_validated() {
+        // disabled=false does NOT skip validation — typos in cadence must still fail.
+        let mut cfg = TdwConfig::default();
+        let mut feed = minimal_feed("f");
+        feed.enabled = false;
+        feed.cadence = "nope".to_string();
+        cfg.knowledge.feeds.entries.push(feed);
+        assert!(matches!(cfg.validate(), Err(ConfigError::Validation(_))));
+    }
+
+    #[test]
+    fn feeds_config_defaults_to_empty() {
+        assert!(FeedsConfig::default().entries.is_empty());
     }
 }
