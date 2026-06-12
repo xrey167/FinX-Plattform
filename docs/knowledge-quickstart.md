@@ -182,6 +182,56 @@ tdw kg demo --json | jq -r '.step'
 The equivalent production API call for each step is printed alongside the demo
 output so you can copy it into your own code.
 
+## Trust-Dial: Filtering by Provenance Class (K-X3)
+
+`tdw.kg.search` accepts an optional `provenance_classes` array that restricts
+results to documents of the requested provenance class. This lets agents answer
+"from human-vetted knowledge only" in a single flag.
+
+**Available classes today (doc-index path):**
+
+| Class | When stamped | Meaning |
+|---|---|---|
+| `document_ingested` | Default — all non-Finding entity kinds | Externally sourced content (news, filings, provider data). |
+| `user_authored` | `EntityKind::Finding` documents | Analyst research notes and findings authored by a named user. |
+
+**Example — user-vetted knowledge only:**
+
+```json
+{
+  "query": "AAPL supply chain risk",
+  "top_k": 5,
+  "provenance_classes": ["user_authored"]
+}
+```
+
+The response includes a `trust_scope` field that honestly reports whether
+filtering was active and which classes are in scope:
+
+```json
+{
+  "hits": [...],
+  "trust_scope": {
+    "filtered": true,
+    "provenance_classes": ["user_authored"],
+    "note": "results restricted to user_authored provenance class"
+  }
+}
+```
+
+**Omitting `provenance_classes`** (or passing an empty array) returns all
+classes — behavior is identical to pre-K-X3 callers, so existing integrations
+are unaffected.
+
+**Old index points** that predate the stamp are treated as `document_ingested`
+(conservative default — they are never silently excluded from a
+`document_ingested`-only query).
+
+> **Note**: `rule_derived` and `agent_proposed` are reserved class tokens for a
+> future graph-channel filter pass and are not yet reachable via `tdw.kg.search`.
+> The MCP schema enum is intentionally restricted to the two classes that the
+> doc-index retrieval path produces today.
+
 ## Further reading
 
 - [`docs/ops/graph-db.md`](ops/graph-db.md) — Memgraph deployment, backup,
