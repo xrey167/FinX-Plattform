@@ -2895,12 +2895,7 @@ fn spawn_self_tuning_worker(
     let tick = tdw_cron::cron_tick();
     let task = tokio::spawn(async move {
         let mut cycle: u64 = 0;
-        let mut last_tick_ms = {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        };
+        let mut last_tick_ms = chrono::Utc::now().timestamp_millis();
 
         loop {
             tokio::select! {
@@ -2909,12 +2904,7 @@ fn spawn_self_tuning_worker(
                 () = tokio::time::sleep(tick) => {}
             }
 
-            let now_ms = {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-            };
+            let now_ms = chrono::Utc::now().timestamp_millis();
 
             let due = due_triggers(&registry, last_tick_ms, now_ms);
             last_tick_ms = now_ms;

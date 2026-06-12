@@ -1785,8 +1785,10 @@ fn validate_self_tune(cfg: &SelfTuneConfig) -> Result<()> {
             cfg.cadence
         )));
     }
-    let legal: fn(char) -> bool =
-        |c| c.is_ascii_alphanumeric() || matches!(c, '*' | '/' | ',' | '-');
+    let legal: fn(char) -> bool = |c| {
+        c.is_ascii_digit()
+            || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+    };
     for field in &fields {
         if field.is_empty() || !field.chars().all(legal) {
             return Err(ConfigError::Validation(format!(
