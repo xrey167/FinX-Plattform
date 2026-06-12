@@ -21,12 +21,17 @@ use std::time::Duration;
 
 use chrono::DateTime;
 use tdw_agent::{
-    ConsolidationAction, Memory, RegistryEntity, Retention, consolidation_plan,
-    entity_from_resource, load_resource,
+    ConsolidationAction, Memory, RegistryEntity, Retention, UsageHint, consolidation_plan,
+    consolidation_plan_with_usage, entity_from_resource, load_resource,
 };
+use tdw_knowledge::runtime::ConsolidationFreshness;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// Snapshot of a single feedback event used by the scheduler's usage-aware path.
+/// Fields: (`agent_id`, used, `recorded_at`, `hit_ids`, `query_fingerprint`).
+type FeedbackSnapshot = Vec<(String, bool, String, Vec<String>, String)>;
 
 /// An error from loading or persisting a [`MemoryStore`].
 #[derive(Debug)]
@@ -387,6 +392,193 @@ pub fn spawn_consolidation_scheduler(
                     }
                 }
             }
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+        }
+    })
+}
+
+/// Spawn the periodic consolidation scheduler with retrieval-feedback awareness (K-L2).
+///
+/// This is the **production replacement** for [`spawn_consolidation_scheduler`]:
+/// instead of calling the bare [`consolidate_at`] (which ignores usage data), each
+/// tick drains the [`crate::RetrievalFeedbackStore`] and calls the usage-aware
+/// planner ([`consolidation_plan_with_usage`]) so recency credit is applied before
+/// any tier change or expiration. The resulting plan is applied to the store **and
+/// persisted to `*.json5`** — tier changes survive a restart.
+///
+/// After every tick the [`ConsolidationFreshness`] cell is updated so
+/// `tdw.kg.status` reflects the last tick time and applied counts.
+///
+/// Behaviour is **byte-for-byte identical to [`spawn_consolidation_scheduler`]**
+/// when the feedback store is empty — the B10 regression contract is preserved.
+///
+/// Apply one consolidation tick with optional feedback events.
+///
+/// When `events` is `Some`, the usage-aware path computes recency credit and
+/// calls [`consolidation_plan_with_usage`]; when `None`, falls through to the
+/// bare [`consolidate_at`] (B10 regression contract).
+fn apply_feedback_tick(
+    guard: &mut MemoryStore,
+    events: Option<FeedbackSnapshot>,
+    now: &str,
+) -> Result<Vec<ConsolidationAction>, MemoryStoreError> {
+    let Some(events) = events else {
+        return consolidate_at(guard, now);
+    };
+
+    let references = |memory_name: &str, agent_id: &str, hit_ids: &[String]| -> bool {
+        agent_id == memory_name || hit_ids.iter().any(|h| h == memory_name)
+    };
+
+    let aged: Vec<_> = guard
+        .memories()
+        .map(|memory| {
+            let name = memory.meta.base.name.as_str();
+            let raw_age = age_days(memory.last_consolidated.as_deref(), now);
+            let last_used_at = events
+                .iter()
+                .filter(|(agent_id, used, _, hit_ids, _)| {
+                    *used && references(name, agent_id, hit_ids)
+                })
+                .map(|(_, _, recorded_at, _, _)| recorded_at.as_str())
+                .max();
+            let recency_credit_days = last_used_at.map_or(0, |t| {
+                let days_since = age_days(Some(t), now);
+                raw_age.saturating_sub(days_since)
+            });
+            let mut seen_fps = std::collections::HashSet::new();
+            let use_count = u32::try_from(
+                events
+                    .iter()
+                    .filter(|(agent_id, used, _, hit_ids, fp)| {
+                        *used && references(name, agent_id, hit_ids) && seen_fps.insert(fp.as_str())
+                    })
+                    .count(),
+            )
+            .unwrap_or(u32::MAX);
+            (
+                memory,
+                raw_age,
+                UsageHint {
+                    recency_credit_days,
+                    use_count,
+                },
+            )
+        })
+        .collect();
+
+    let actions = consolidation_plan_with_usage(aged);
+    for action in &actions {
+        match action {
+            ConsolidationAction::Promote { name, to, .. } => {
+                if let Some(entry) = guard.entries.get_mut(name) {
+                    entry.memory.retention = *to;
+                    entry.memory.last_consolidated = Some(now.to_string());
+                }
+                guard.persist(name)?;
+            }
+            ConsolidationAction::Expire { name } => {
+                guard.remove(name)?;
+            }
+        }
+    }
+    Ok(actions)
+}
+
+/// # Panic safety
+///
+/// The apply step is wrapped in `catch_unwind` (same as the bare scheduler): a
+/// panic on one tick is logged and the loop continues; the freshness cell is
+/// written to `Error` so the failure is never invisible.
+#[must_use]
+pub fn spawn_consolidation_scheduler_with_feedback(
+    store: Arc<Mutex<MemoryStore>>,
+    feedback: Arc<Mutex<crate::RetrievalFeedbackStore>>,
+    freshness: Arc<Mutex<ConsolidationFreshness>>,
+    tick: Duration,
+    cancel: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let now = chrono::Utc::now().to_rfc3339();
+
+            // Snapshot feedback events (lock held only for this, never across store lock).
+            let feedback_snapshot: Option<FeedbackSnapshot> = {
+                let fb = feedback.lock().await;
+                if fb.is_empty() {
+                    None
+                } else {
+                    Some(
+                        fb.events()
+                            .map(|e| {
+                                (
+                                    e.agent_id.clone(),
+                                    e.used,
+                                    e.recorded_at.clone(),
+                                    e.hit_ids.clone(),
+                                    e.query_fingerprint.clone(),
+                                )
+                            })
+                            .collect(),
+                    )
+                }
+            };
+
+            // Apply consolidation with usage-awareness.
+            let (outcome, before_count, after_count) = {
+                let mut guard = store.lock().await;
+                let before_count = guard.len();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    apply_feedback_tick(&mut guard, feedback_snapshot, &now)
+                }));
+                let after_count = guard.len();
+                drop(guard);
+                (outcome, before_count, after_count)
+            };
+
+            // Update the freshness cell and log.
+            match outcome {
+                Ok(Ok(actions)) => {
+                    let applied_count = actions.len();
+                    eprintln!(
+                        "tdw-agent-store: consolidation tick at {now}: \
+                         {before_count} memories before, {after_count} after, \
+                         {applied_count} actions applied"
+                    );
+                    let mut cell = freshness.lock().await;
+                    *cell = ConsolidationFreshness::Ok {
+                        last_tick_at: now,
+                        before_count,
+                        after_count,
+                        applied_count,
+                    };
+                }
+                Ok(Err(error)) => {
+                    let msg = error.to_string();
+                    eprintln!("tdw-agent-store: consolidation tick error at {now}: {msg}");
+                    let mut cell = freshness.lock().await;
+                    *cell = ConsolidationFreshness::Error {
+                        last_tick_at: now,
+                        error: msg,
+                    };
+                }
+                Err(_panic) => {
+                    eprintln!(
+                        "tdw-agent-store: consolidation tick panicked at {now}; \
+                         the scheduler continues"
+                    );
+                    let mut cell = freshness.lock().await;
+                    *cell = ConsolidationFreshness::Error {
+                        last_tick_at: now,
+                        error: "tick panicked".to_string(),
+                    };
+                }
+            }
+
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => break,
