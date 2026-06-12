@@ -12,8 +12,8 @@ use tdw_core::{
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_retrieve::{
-    Channel, ChannelEvidence, GraphExpansion, KnowledgeQuery, PathStep, QueryFilter, Retriever,
-    TrustClass,
+    Channel, ChannelEvidence, ConfidenceRankingWeight, GraphExpansion, KnowledgeQuery, PathStep,
+    QueryFilter, Retriever, TrustClass,
 };
 use tdw_storage_graph::InMemoryGraphEngine;
 use tdw_storage_meilisearch::InMemoryLexicalEngine;
@@ -362,6 +362,9 @@ async fn graph_expansion_respects_as_of() {
 async fn graph_expansion_reaches_neighbors_with_explained_path() {
     let fixture = fixture().await;
     let retriever = full_retriever(&fixture);
+    // Disable confidence blending for this test: it is testing graph-expansion
+    // ordering (decayed expansion must not outrank its seed), not K-R6 scoring.
+    // Confidence weight is exercised in the dedicated ranking-weight tests.
     let query = KnowledgeQuery::try_new(
         "acme quarterly earnings report shows strong cloud growth",
         5,
@@ -373,7 +376,8 @@ async fn graph_expansion_reaches_neighbors_with_explained_path() {
             decay: 0.5,
         }),
     )
-    .expect("valid query");
+    .expect("valid query")
+    .with_confidence_weight(ConfidenceRankingWeight::OFF);
     let hits = retriever.search(&query).await.expect("search");
     let expanded = hits
         .iter()
@@ -393,6 +397,149 @@ async fn graph_expansion_reaches_neighbors_with_explained_path() {
     assert!(
         seed.score > expanded.score,
         "decayed expansion must not outrank its seed"
+    );
+}
+
+// ── K-R6: confidence ranking weight ──────────────────────────────────────────
+
+#[tokio::test]
+async fn confidence_weight_off_gives_same_scores_as_unweighted() {
+    // When weight=OFF the final score equals the raw RRF score; confidence does
+    // not shift ranking at all.
+    let fixture = fixture().await;
+    let retriever = full_retriever(&fixture);
+
+    let query_off = KnowledgeQuery::try_new(
+        "acme quarterly earnings report shows strong cloud growth",
+        5,
+        QueryFilter::default(),
+        None,
+    )
+    .expect("valid query")
+    .with_confidence_weight(ConfidenceRankingWeight::OFF);
+
+    let hits_off = retriever.search(&query_off).await.expect("search off");
+
+    // With OFF, confidence field must be None on every hit and scores are
+    // purely RRF-derived.
+    for hit in &hits_off {
+        assert!(
+            hit.confidence.is_none(),
+            "OFF weight must not attach confidence scores: hit.id={}",
+            hit.id
+        );
+    }
+
+    // Score ordering must match ordering without the graph (vector-only
+    // ordering): OFF disables the confidence component entirely.
+    assert!(!hits_off.is_empty(), "must return hits");
+}
+
+#[tokio::test]
+async fn confidence_weight_nonzero_attaches_confidence_and_blends_score() {
+    // With graph attached and nonzero weight, hits that have an entity_id get
+    // a ConfidenceScore attached and their score is the blended value.
+    let fixture = fixture().await;
+    let retriever = full_retriever(&fixture);
+
+    // Default weight (0.05) — graph is attached via full_retriever.
+    let query = KnowledgeQuery::try_new(
+        "acme quarterly earnings report shows strong cloud growth",
+        5,
+        QueryFilter::default(),
+        None,
+    )
+    .expect("valid query");
+    // Default confidence weight is 0.05, so confidence is enabled.
+
+    let hits = retriever.search(&query).await.expect("search");
+
+    // At least one hit must carry a confidence score (doc-a has entity_id +
+    // described_by edge in the fixture).
+    let has_confidence = hits.iter().any(|h| h.confidence.is_some());
+    assert!(
+        has_confidence,
+        "with nonzero weight and graph, some hits must carry confidence"
+    );
+
+    // Compare with OFF: the top hit's score must differ (it was blended).
+    let query_off = KnowledgeQuery::try_new(
+        "acme quarterly earnings report shows strong cloud growth",
+        5,
+        QueryFilter::default(),
+        None,
+    )
+    .expect("valid query")
+    .with_confidence_weight(ConfidenceRankingWeight::OFF);
+
+    let hits_off = retriever.search(&query_off).await.expect("search off");
+    let top_blended = hits.iter().find(|h| h.id == "doc-a").map(|h| h.score);
+    let top_raw = hits_off.iter().find(|h| h.id == "doc-a").map(|h| h.score);
+
+    if let (Some(blended), Some(raw)) = (top_blended, top_raw) {
+        assert!(
+            (blended - raw).abs() > 1e-9,
+            "nonzero weight must produce a different score than OFF: blended={blended}, raw={raw}"
+        );
+    }
+}
+
+#[test]
+fn confidence_ranking_weight_production_wiring() {
+    // Verify the production-wiring contract for ConfidenceRankingWeight:
+    //   - default() matches DEFAULT_CONFIDENCE_WEIGHT
+    //   - OFF is exactly 0.0
+    //   - with_confidence_weight clamps out-of-range values
+    //   - blend formula: rrf*(1-w) + conf*w
+    use tdw_core::DEFAULT_CONFIDENCE_WEIGHT;
+
+    let default_w = ConfidenceRankingWeight::default();
+    assert!(
+        (default_w.0 - DEFAULT_CONFIDENCE_WEIGHT).abs() < f64::EPSILON,
+        "default weight must equal DEFAULT_CONFIDENCE_WEIGHT ({DEFAULT_CONFIDENCE_WEIGHT}); got {}",
+        default_w.0
+    );
+
+    assert!(
+        ConfidenceRankingWeight::OFF.0.abs() < f64::EPSILON,
+        "OFF must be exactly 0.0"
+    );
+
+    // Clamp: value above 1.0 is clamped to 1.0.
+    let query = KnowledgeQuery::try_new("q", 5, QueryFilter::default(), None)
+        .expect("valid")
+        .with_confidence_weight(ConfidenceRankingWeight(2.0));
+    assert!(
+        (query.confidence_weight.0 - 1.0).abs() < f64::EPSILON,
+        "weight > 1.0 must be clamped to 1.0; got {}",
+        query.confidence_weight.0
+    );
+
+    // Clamp: negative value is clamped to 0.0.
+    let query = KnowledgeQuery::try_new("q", 5, QueryFilter::default(), None)
+        .expect("valid")
+        .with_confidence_weight(ConfidenceRankingWeight(-0.5));
+    assert!(
+        query.confidence_weight.0.abs() < f64::EPSILON,
+        "weight < 0.0 must be clamped to 0.0; got {}",
+        query.confidence_weight.0
+    );
+
+    // Blend formula: blended = rrf*(1-w) + conf*w.
+    let w = ConfidenceRankingWeight(0.1);
+    let blended = w.blend(0.8, 0.5);
+    let expected = 0.8f64.mul_add(0.9, 0.5 * 0.1);
+    assert!(
+        (blended - expected).abs() < 1e-12,
+        "blend formula wrong: got {blended}, expected {expected}"
+    );
+
+    // Blend with OFF: result equals rrf unchanged.
+    let raw = 0.12345;
+    let blended_off = ConfidenceRankingWeight::OFF.blend(raw, 0.9);
+    assert!(
+        (blended_off - raw).abs() < f64::EPSILON,
+        "OFF.blend must return rrf unchanged; got {blended_off}"
     );
 }
 

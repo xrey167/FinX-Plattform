@@ -15,6 +15,7 @@ use thiserror::Error;
 
 #[cfg(feature = "compaction")]
 pub mod compaction;
+pub mod confidence;
 pub mod graph;
 #[cfg(feature = "http")]
 pub mod http_support;
@@ -22,6 +23,12 @@ pub mod turn;
 
 pub mod query_params;
 
+pub use confidence::{
+    CONFIDENCE_FORMULA_VERSION, CORROBORATION_STEP, ConfidenceScore, DEFAULT_CONFIDENCE_WEIGHT,
+    EdgeConfidenceInput, INVALIDATED_PENALTY, MAX_CORROBORATION_BONUS, MAX_CORROBORATION_CAP,
+    NEUTRAL, SURVIVED_CONTRADICTION_BONUS, compute_confidence, corroboration_factor,
+    count_independent_sources, survived_contradiction,
+};
 pub use graph::{
     Direction, GraphEdge, GraphEngine, GraphNode, MAX_HOPS, MergeDecision, MergeReport, Provenance,
     Subgraph, TraversalFilter, active_at, is_graph_id, validate_graph_edge, validate_graph_node,
