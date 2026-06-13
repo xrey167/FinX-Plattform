@@ -202,6 +202,7 @@ fn doc(id: &str, body: &str, ent: &str, tag: &str, as_of: &str) -> KnowledgeDocu
         plane: Some("platform".to_string()),
         as_of: Some(as_of.to_string()),
         mentions: Vec::new(),
+        author: None,
     }
 }
 
