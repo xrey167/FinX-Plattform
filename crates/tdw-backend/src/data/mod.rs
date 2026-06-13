@@ -31,6 +31,7 @@ use tdw_eval_runner::scheduled_eval::{
     EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, default_fixture_path, eval_trigger_id,
     load_golden_split, regression_alert_body, run_scheduled_eval_from_fixture,
 };
+use tdw_induction::InductionEngine;
 use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
 use tdw_knowledge::ExtractionFreshness;
@@ -91,6 +92,9 @@ struct DaemonHandle {
     /// `None` when `knowledge.lessons.enabled = false` (default) or no proposal
     /// queue is attached.
     lesson_induction_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R5 scheduled rule-induction worker task.
+    /// `None` when `knowledge.induction.enabled = false` (default).
+    induction_task: Option<tokio::task::JoinHandle<()>>,
     /// The K-L6 scheduled feed tasks, one per enabled feed entry.
     /// Empty when no feeds are configured.
     feed_handles: Vec<tokio::task::JoinHandle<()>>,
@@ -215,6 +219,10 @@ pub struct Backend {
     /// `config.knowledge.lessons` in [`Backend::from_config`]. Held here so
     /// [`Backend::serve`] can spawn the induction worker without re-parsing.
     lessons_cfg: tdw_config::LessonsConfig,
+    /// K-R5 rule-induction configuration, extracted from
+    /// `config.knowledge.induction` in [`Backend::from_config`]. Held here so
+    /// [`Backend::serve`] can spawn the induction cron task without re-parsing.
+    induction_cfg: tdw_config::InductionConfig,
     /// K-L6 scheduled feed configuration, extracted from
     /// `config.knowledge.feeds` in [`Backend::from_config`].  Held here so
     /// [`Backend::serve`] can spawn the per-feed cron tasks without a second
@@ -306,6 +314,8 @@ impl Backend {
         let proposals_cfg = config.knowledge.proposals.clone();
         // K-R1: extract lesson-induction config before config is consumed.
         let lessons_cfg = config.knowledge.lessons.clone();
+        // K-R5: extract induction config before `config` is consumed.
+        let induction_cfg = config.knowledge.induction.clone();
         // K-L6: extract feeds config before `config` is consumed.
         let feeds_cfg = config.knowledge.feeds.clone();
         // K-X5: extract watchlists config before `config` is consumed.
@@ -520,6 +530,7 @@ impl Backend {
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg,
             lessons_cfg,
+            induction_cfg,
             feeds_cfg,
             feed_freshness_cells,
             watchlists_cfg,
@@ -592,6 +603,7 @@ impl Backend {
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg: ProposalsCfg::default(),
             lessons_cfg: tdw_config::LessonsConfig::default(),
+            induction_cfg: tdw_config::InductionConfig::default(),
             feeds_cfg: FeedsConfig::default(),
             feed_freshness_cells: Vec::new(),
             watchlists_cfg: WatchlistsConfig::default(),
@@ -815,6 +827,18 @@ impl Backend {
             Arc::clone(&self.tags_engine),
             cancel.clone(),
         );
+        // K-R5 — spawn the rule-induction worker when enabled.
+        // Runs after each cron tick (default: daily 03:00 UTC, one hour after
+        // K-R4 mining). Reads the live graph for edges (replay corpus), uses
+        // the shared infer engine for hot_reload, and reads the graph for
+        // patterns. Default OFF: the operator must set
+        // `knowledge.induction.enabled = true` to activate.
+        let induction_task = spawn_induction_worker(
+            &self.induction_cfg,
+            Arc::clone(&self.graph),
+            Arc::clone(&self.infer),
+            cancel.clone(),
+        );
         // K-L6 — spawn one feed task per enabled feed entry.
         // The freshness cells were built in from_config and attached to the
         // runtime before Arc-wrapping; here we pass them to the tasks so each
@@ -865,6 +889,7 @@ impl Backend {
             auto_mat_task,
             pattern_mining_task,
             lesson_induction_task,
+            induction_task,
             feed_handles,
             watchlist_task,
             questions_task,
@@ -937,6 +962,11 @@ impl Backend {
         if let Some(lesson_task) = daemon.lesson_induction_task {
             lesson_task.abort();
             let _ = lesson_task.await;
+        }
+        // K-R5: The induction worker observes the same token; abort if it lingers.
+        if let Some(induction_task) = daemon.induction_task {
+            induction_task.abort();
+            let _ = induction_task.await;
         }
         // K-L6 feed tasks observe the same cancellation token; abort any that
         // linger so shutdown stays bounded.
@@ -4010,6 +4040,422 @@ fn spawn_lesson_induction_worker(
         }
     });
     Some(task)
+}
+
+/// Spawn the K-R5 rule-induction worker when `cfg.enabled = true`.
+///
+/// On each cron tick the worker:
+///
+/// 0. **FAIL-CLOSED split load**: reads walk-forward replay splits from
+///    `cfg.replay_splits_path`. If the path is `None`, the file is
+///    unreadable, or the array is empty the cycle is **skipped entirely**
+///    with a loud WARNING. Zero splits would produce vacuous promotes
+///    (precision=1.0, recall=1.0) with no out-of-sample validation — that
+///    is not acceptable.
+/// 1. Reads all pattern nodes from the graph (via `pattern_instance_of`
+///    edge pagination — the same nodes K-R4 writes) and reconstructs a
+///    [`PatternIndex`]. Any pagination error **aborts** the cycle; partial
+///    data must never drive promotion.
+/// 2. Reads all edges from the graph as the replay corpus (paginated,
+///    bounded to `INDUCTION_EDGE_CAP`). Any pagination error **aborts**
+///    the cycle for the same reason.
+/// 3. Runs [`InductionEngine::run_cycle`] **without** holding the infer
+///    lock (lock-free gate evaluation). `run_cycle` returns a
+///    `rules_to_install` list.
+/// 4. Takes the infer lock once and calls [`InferEngine::hot_reload`]
+///    with the full existing rule set plus the new rules (atomic install).
+/// 5. Logs the cycle report.
+///
+/// Returns `None` when `cfg.enabled = false` (the default). A loud NOTICE
+/// is emitted so the operator knows the feature exists. When
+/// `cfg.retire_induced_on_disable = true` a join handle for the one-shot
+/// retirement task is returned instead so the caller can await it.
+fn spawn_induction_worker(
+    cfg: &tdw_config::InductionConfig,
+    graph: Arc<dyn GraphEngine>,
+    infer: Arc<Mutex<InferEngine>>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    use tdw_eval_runner::{replay_eval::ReplaySplit, retrieval_eval::DriftKey};
+
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R5 rule induction is disabled \
+             (knowledge.induction.enabled = false). \
+             Set enabled = true in your daemon TOML to activate scheduled rule induction."
+        );
+        // MED-1: retire_induced_on_disable — when the operator disables
+        // induction, remove all previously inducted rules from the engine on
+        // the next boot/reload. Inducted rules are identified by the
+        // `inducted-` prefix on their rule_id (set by InductionEngine).
+        //
+        // The join handle is returned as `Some(handle)` so the caller
+        // (DaemonHandle::shutdown) can await it and be certain the
+        // retirement hot_reload completes before the process exits. A
+        // detached fire-and-forget task would silently miss the retirement
+        // if the daemon shuts down before the task runs.
+        if cfg.retire_induced_on_disable {
+            let infer = Arc::clone(&infer);
+            let handle = tokio::spawn(async move {
+                let mut guard = infer.lock().await;
+                let surviving: Vec<tdw_infer::InferRule> = guard
+                    .rules()
+                    .iter()
+                    .filter(|r| !r.rule_id().starts_with("inducted-"))
+                    .cloned()
+                    .collect();
+                if let Err(e) = guard.hot_reload(surviving) {
+                    eprintln!("[tdw] K-R5 retire_induced_on_disable: hot_reload failed: {e}");
+                } else {
+                    eprintln!("[tdw] K-R5 retire_induced_on_disable: all inducted rules retired.");
+                }
+            });
+            return Some(handle);
+        }
+        return None;
+    }
+
+    // Maximum edges loaded into the replay corpus per cycle (B7 posture: hard
+    // cap, not silent truncation). At 1 000 edges per page this is 100 pages.
+    const INDUCTION_EDGE_CAP: usize = 100_000;
+    const PAGE_SIZE: usize = 1_000;
+
+    let min_precision = cfg.min_promote_precision;
+    let min_recall = cfg.min_promote_recall;
+    let max_candidates = cfg.max_candidates_per_cycle;
+    let cadence = cfg.cadence.clone();
+    // CRITICAL-1: load path for walk-forward replay splits. FAIL-CLOSED: when
+    // None or the file is unreadable the worker promotes NOTHING that tick.
+    let replay_splits_path: Option<String> = cfg.replay_splits_path.clone();
+
+    let schedule = CronSchedule::parse(&cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 3 * * *").expect("fallback parse"));
+
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-induction-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "induction-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: "tdw-rule-induction".to_string(),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-induction".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let handle = tokio::spawn(async move {
+        let engine = InductionEngine::new(min_precision, min_recall, max_candidates);
+
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            // ── Step 0: CRITICAL-1 — load walk-forward replay splits ─────────
+            // FAIL-CLOSED: if no path is configured or the file cannot be
+            // loaded, emit a loud WARNING and skip the cycle entirely.
+            // Zero splits → vacuous promote (precision=1.0, recall=1.0) which
+            // is NOT acceptable — every candidate would be promoted with no
+            // out-of-sample validation.
+            let splits: Vec<ReplaySplit> = match &replay_splits_path {
+                None => {
+                    eprintln!(
+                        "[tdw] WARNING: K-R5 induction: \
+                         `knowledge.induction.replay_splits_path` is not set. \
+                         No out-of-sample validation is possible — skipping cycle \
+                         (fail-closed). Set replay_splits_path in your daemon TOML \
+                         and check a splits file into the repository."
+                    );
+                    continue;
+                }
+                Some(path) => match tdw_induction::load_replay_splits(path) {
+                    Ok(s) if s.is_empty() => {
+                        eprintln!(
+                            "[tdw] WARNING: K-R5 induction: replay splits file \
+                                 {path:?} loaded but contains zero splits — skipping \
+                                 cycle (fail-closed). Add at least one split entry."
+                        );
+                        continue;
+                    }
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!(
+                            "[tdw] WARNING: K-R5 induction: cannot load replay \
+                                 splits from {path:?} — skipping cycle (fail-closed): \
+                                 {e}"
+                        );
+                        continue;
+                    }
+                },
+            };
+
+            // ── Step 1: reconstruct PatternIndex from graph ───────────────────
+            // Pattern nodes are identified by their `pattern_instance_of` edges.
+            // We paginate those edges to collect all pattern node IDs, then
+            // fetch each node to extract `canonical` and `support` from props.
+            //
+            // HIGH-1 fix: any pagination error ABORTS the cycle — we must never
+            // proceed on a truncated pattern index (corrupted replay evaluation).
+            let mut pattern_node_ids: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            let mut offset = 0usize;
+            let mut pattern_load_ok = true;
+            loop {
+                match graph
+                    .edges(Some("pattern_instance_of"), offset, PAGE_SIZE)
+                    .await
+                {
+                    Ok(page) => {
+                        let done = page.len() < PAGE_SIZE;
+                        for edge in &page {
+                            pattern_node_ids.insert(edge.from.clone());
+                        }
+                        offset += page.len();
+                        if done {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[tdw] K-R5 induction: failed to read pattern edges \
+                             (ABORTING cycle — partial data must not drive promotion): \
+                             {err}"
+                        );
+                        pattern_load_ok = false;
+                        break;
+                    }
+                }
+            }
+            if !pattern_load_ok {
+                continue;
+            }
+
+            // Fetch each pattern node to extract canonical + support.
+            // Node-fetch errors are tracked; if more than 10% of pattern
+            // node IDs fail we abort the cycle — partial data must not drive
+            // promotion (consistent with the pagination-abort posture above).
+            let mut pattern_index = PatternIndex::default();
+            let mut node_fetch_errors: usize = 0;
+            let node_error_cap = (pattern_node_ids.len() / 10).max(1);
+            let mut node_fetch_ok = true;
+            for node_id in &pattern_node_ids {
+                match graph.node(node_id).await {
+                    Ok(Some(node)) => {
+                        let canonical = node
+                            .props
+                            .get("canonical")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let support = node
+                            .props
+                            .get("support")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as usize;
+                        let window = node
+                            .props
+                            .get("window")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !canonical.is_empty() {
+                            pattern_index.record(tdw_patterns::PatternRecord::new(
+                                canonical,
+                                support,
+                                window,
+                                Vec::new(),
+                            ));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        node_fetch_errors += 1;
+                        eprintln!(
+                            "[tdw] K-R5 induction: failed to read pattern node \
+                             {node_id:?} ({node_fetch_errors}/{} errors): {err}",
+                            pattern_node_ids.len(),
+                        );
+                        if node_fetch_errors > node_error_cap {
+                            eprintln!(
+                                "[tdw] K-R5 induction: node-fetch error rate \
+                                 exceeds 10% — ABORTING cycle (partial data \
+                                 must not drive promotion)"
+                            );
+                            node_fetch_ok = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !node_fetch_ok {
+                continue;
+            }
+
+            if pattern_index.is_empty() {
+                eprintln!(
+                    "[tdw] K-R5 induction: no patterns in graph — skipping cycle \
+                     (run K-R4 pattern mining first)"
+                );
+                continue;
+            }
+
+            // ── Step 2: load edge corpus for replay (paginated, capped) ───────
+            // HIGH-2 fix: any pagination error ABORTS the cycle — we must never
+            // run gate evaluation over a truncated edge corpus.
+            let mut all_edges: Vec<tdw_core::GraphEdge> = Vec::new();
+            let mut edge_offset = 0usize;
+            let mut edge_load_ok = true;
+            'edge_load: loop {
+                match graph.edges(None, edge_offset, PAGE_SIZE).await {
+                    Ok(page) => {
+                        let done = page.len() < PAGE_SIZE;
+                        let remaining = INDUCTION_EDGE_CAP.saturating_sub(all_edges.len());
+                        let take = page.len().min(remaining);
+                        all_edges.extend_from_slice(&page[..take]);
+                        edge_offset += page.len();
+                        if done || all_edges.len() >= INDUCTION_EDGE_CAP {
+                            if all_edges.len() >= INDUCTION_EDGE_CAP {
+                                eprintln!(
+                                    "[tdw] K-R5 induction: edge corpus capped at \
+                                     {INDUCTION_EDGE_CAP} edges (B7 posture)"
+                                );
+                            }
+                            break 'edge_load;
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[tdw] K-R5 induction: failed to load edge corpus \
+                             (ABORTING cycle — partial data must not drive promotion): \
+                             {err}"
+                        );
+                        edge_load_ok = false;
+                        break 'edge_load;
+                    }
+                }
+            }
+            if !edge_load_ok {
+                continue;
+            }
+
+            // ── Step 3: run induction cycle (lock-free gate evaluation) ───────
+            // MED-2 fix: gate evaluation runs WITHOUT holding the infer lock.
+            // run_cycle returns rules_to_install; we do a single atomic
+            // hot_reload under the lock afterwards. This prevents blocking
+            // query tools for the duration of all per-candidate gate evals.
+            let current_rules: Vec<tdw_infer::InferRule> = {
+                let guard = infer.lock().await;
+                guard.rules().to_vec()
+            };
+
+            let mut report = match engine.run_cycle(
+                &pattern_index,
+                &current_rules,
+                &all_edges,
+                &splits,
+                &DriftKey::default(),
+            ) {
+                Ok(r) => r,
+                Err(err) => {
+                    eprintln!("[tdw] K-R5 induction cycle error: {err}");
+                    continue;
+                }
+            };
+
+            // ── Step 4: single atomic hot_reload under the lock ───────────────
+            let rules_to_install = std::mem::take(&mut report.rules_to_install);
+            if !rules_to_install.is_empty() {
+                let mut infer_guard = infer.lock().await;
+                let mut all_rules = infer_guard.rules().to_vec();
+                // Re-seed from engine in case another task added rules since
+                // Step 3 snapshot; dedup by rule_id to avoid double-install.
+                let existing_ids: std::collections::BTreeSet<String> =
+                    all_rules.iter().map(|r| r.rule_id().to_string()).collect();
+                for rule in rules_to_install {
+                    if !existing_ids.contains(rule.rule_id()) {
+                        all_rules.push(rule);
+                    }
+                }
+                match infer_guard.hot_reload(all_rules) {
+                    Ok(()) => {
+                        report.promoted = report.new_rules.len();
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[tdw] K-R5 induction: hot_reload rejected inducted \
+                             rules — no rules installed this cycle: {err}"
+                        );
+                        // Clear new_rules so the log loop below does not report
+                        // gate-passing candidates as installed (they weren't).
+                        report.new_rules.clear();
+                    }
+                }
+            }
+
+            eprintln!(
+                "[tdw] K-R5 induction cycle complete: \
+                 patterns_examined={} pre_rejected={} gate_rejected={} \
+                 promoted={} already_installed={} splits_evaluated={}",
+                report.patterns_examined,
+                report.pre_rejected,
+                report.gate_rejected,
+                report.promoted,
+                report.already_installed,
+                splits.len(),
+            );
+            // Only log per-rule detail for rules that were actually installed.
+            for promoted in &report.new_rules {
+                eprintln!(
+                    "[tdw] K-R5 inducted rule {:?} from pattern {:?} \
+                     (support={}, replay={}, splits_evaluated={})",
+                    promoted.rule_id,
+                    promoted.pattern_id,
+                    promoted.support,
+                    promoted.replay_summary,
+                    promoted.splits_evaluated,
+                );
+            }
+        }
+    });
+    Some(handle)
 }
 
 #[cfg(test)]

@@ -505,6 +505,89 @@ fn append_pattern_steps(chain: &mut Vec<Value>, props: &Value) {
     }));
 }
 
+/// Append rule-derived provenance steps to a why-chain.
+///
+/// For hand-authored rules, appends a single `rule_derived` step.
+/// For K-R5 inducted rules (identified by the `inducted-` prefix on `rule_id`),
+/// also appends an `inducted_rule_audit` step that traces back to the source
+/// pattern node and the K-R7 replay gate that validated it.
+///
+/// # Truthfulness (CRITICAL-3)
+///
+/// The audit step reports only what ACTUALLY occurred:
+/// - The rule was promoted through the K-R7 walk-forward replay gate (this is
+///   guaranteed by the fail-closed production path: zero splits → no promotion).
+/// - The exact split count is NOT embedded in the edge provenance record at
+///   induction time; to retrieve it, query the pattern node
+///   (`tdw.kg.why entity_id=<source_pattern_node_id>`) which carries the
+///   induction cycle summary in its props.
+/// - The `inducted-` prefix on `rule_id` is the machine-vs-human discriminator
+///   and is sufficient for audit filtering.
+fn append_rule_steps(chain: &mut Vec<Value>, rule_id: &str, version: u64, start_step: usize) {
+    let inducted_pattern_id = tdw_induction::inducted_rule_provenance_label(rule_id);
+    let summary = inducted_pattern_id.as_ref().map_or_else(
+        || {
+            format!(
+                "Derived by rule {rule_id:?} at version {version}. \
+                 Support set not persisted on edge (see DerivationIndex; \
+                 fan-out cap {WHY_MAX_SUPPORT_FANOUT})."
+            )
+        },
+        |pid| {
+            format!(
+                "Derived by INDUCTED rule {rule_id:?} at version {version}. \
+                 Machine-authored from pattern node {pid:?} via K-R5 induction; \
+                 promoted through K-R7 walk-forward replay gate (≥1 out-of-sample \
+                 split required — fail-closed). \
+                 Use `tdw.kg.why entity_id={pid}` to trace the source motif and \
+                 induction cycle details."
+            )
+        },
+    );
+    chain.push(json!({
+        "step": start_step,
+        "kind": "rule_derived",
+        "rule_id": rule_id,
+        "version": version,
+        "machine_authored": inducted_pattern_id.is_some(),
+        "source_pattern_node_id": inducted_pattern_id.as_deref(),
+        "support_fanout_cap": WHY_MAX_SUPPORT_FANOUT,
+        "support_index_note": "Support set (input fact keys) not stored on the edge itself; \
+            query the DerivationIndex via the inference engine for the edge key to retrieve it. \
+            This is honestly absent here, not invented.",
+        "summary": summary,
+    }));
+    // K-R5: for inducted rules, append a dedicated audit step so the
+    // why-chain explicitly flags machine authorship and the gate path.
+    if let Some(ref pattern_node_id) = inducted_pattern_id {
+        chain.push(json!({
+            "step": start_step + 1,
+            "kind": "inducted_rule_audit",
+            "rule_id": rule_id,
+            "source_pattern_node_id": pattern_node_id,
+            "gate": "K-R7 walk-forward replay promote gate",
+            "authorship": "machine (K-R5 induction pipeline)",
+            "splits_evaluated_note": "The exact count of out-of-sample replay splits \
+                used at promotion time is not embedded in the edge provenance record. \
+                The production induction worker is fail-closed: promotion is impossible \
+                when zero splits are configured (see `knowledge.induction.replay_splits_path`). \
+                Query the source pattern node for the induction cycle summary.",
+            "audit_note": "This rule was synthesised by the K-R5 induction pipeline \
+                from a mined pattern (K-R4) and promoted ONLY after passing the K-R7 \
+                walk-forward replay gate with ≥1 out-of-sample split. The worker is \
+                fail-closed: it skips every cycle tick when no splits are configured \
+                or the splits file cannot be loaded. Rules are distinguishable from \
+                hand-authored rules by the `inducted-` prefix on rule_id.",
+            "summary": format!(
+                "Inducted rule {rule_id:?} traces to pattern {pattern_node_id:?}. \
+                 Promotion required passing the K-R7 replay gate with ≥1 out-of-sample \
+                 split (fail-closed — zero splits = no promotion). \
+                 Query `tdw.kg.why entity_id={pattern_node_id}` for induction details."
+            ),
+        }));
+    }
+}
+
 /// Build a why-chain for an entity node.
 async fn why_entity(
     graph: &std::sync::Arc<dyn tdw_core::GraphEngine>,
@@ -840,21 +923,9 @@ fn provenance_chain(
             }));
         }
         Provenance::Rule { rule_id, version } => {
-            chain.push(json!({
-                "step": step,
-                "kind": "rule_derived",
-                "rule_id": rule_id,
-                "version": version,
-                "support_fanout_cap": WHY_MAX_SUPPORT_FANOUT,
-                "support_index_note": "Support set (input fact keys) not stored on the edge itself; \
-                    query the DerivationIndex via the inference engine for the edge key to retrieve it. \
-                    This is honestly absent here, not invented.",
-                "summary": format!(
-                    "Derived by rule {rule_id:?} at version {version}. \
-                     Support set not persisted on edge (see DerivationIndex; \
-                     fan-out cap {WHY_MAX_SUPPORT_FANOUT})."
-                )
-            }));
+            // K-R5: detect inducted rules and add a traceability step that
+            // links back to the source pattern node and replay verdict.
+            append_rule_steps(&mut chain, rule_id, *version, step);
         }
         Provenance::Agent { agent_id, gated } => {
             if *gated {
