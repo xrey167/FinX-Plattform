@@ -184,9 +184,15 @@ fn submit_mcp_sequence(
 }
 
 fn connect_tcp(addr: &str) -> Result<TcpStream, CliError> {
-    let socket_addr: std::net::SocketAddr = addr
-        .parse()
-        .map_err(|e| format!("invalid MCP address {addr:?}: {e}"))?;
+    // Resolve through `ToSocketAddrs` so hostnames (e.g. `localhost:8788`) work,
+    // not just raw IPs. We still connect with an explicit timeout, so take the
+    // first resolved socket address.
+    use std::net::ToSocketAddrs;
+    let socket_addr = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("invalid MCP address {addr:?}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("no addresses resolved for MCP address {addr:?}"))?;
     TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))
         .map_err(|e| format!("cannot connect to MCP server at {addr}: {e}").into())
 }
@@ -207,17 +213,19 @@ fn read_jsonrpc_line(stream: &mut TcpStream) -> Result<serde_json::Value, CliErr
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .map_err(|e| format!("set read timeout: {e}"))?;
-    let mut line = String::new();
+    // Accumulate raw bytes and decode once at the end. A byte-by-byte
+    // `as char` cast would corrupt any multi-byte UTF-8 sequence (common in
+    // trail titles, snippets, and labels), so we never touch `char` mid-stream.
+    let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     loop {
         match stream.read(&mut byte) {
             Ok(0) => break,
             Ok(_) => {
-                let ch = byte[0] as char;
-                if ch == '\n' {
+                if byte[0] == b'\n' {
                     break;
                 }
-                line.push(ch);
+                bytes.push(byte[0]);
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::TimedOut
@@ -228,6 +236,8 @@ fn read_jsonrpc_line(stream: &mut TcpStream) -> Result<serde_json::Value, CliErr
             Err(e) => return Err(format!("read JSON-RPC: {e}").into()),
         }
     }
+    let line = String::from_utf8(bytes)
+        .map_err(|e| format!("invalid UTF-8 in JSON-RPC response: {e}"))?;
     serde_json::from_str(line.trim())
         .map_err(|e| format!("parse JSON-RPC response: {e} (got: {line:?})").into())
 }
@@ -247,13 +257,15 @@ fn extract_tool_result(response: &serde_json::Value) -> Result<&serde_json::Valu
 
 // ── Argument helpers ──────────────────────────────────────────────────────────
 
-/// First occurrence of `--flag <value>`.
+/// First occurrence of `--flag <value>`. A following token that itself looks
+/// like a flag (`-…`) is not treated as the value, so `--thesis --finding`
+/// surfaces a clear "missing root" error rather than swallowing `--finding`.
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|a| a == flag)
         .and_then(|idx| args.get(idx + 1))
         .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+        .filter(|v| !v.is_empty() && !v.starts_with('-'))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

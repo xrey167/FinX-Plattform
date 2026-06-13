@@ -595,6 +595,13 @@ async fn assemble_trail(
         }
     }
 
+    // Dedup finding ids before resolving: the root finding (when it is the
+    // root) and a neighbor may name the same id, and multiple inbound edges can
+    // share a source. Deduping here avoids redundant graph lookups in
+    // `resolve_described_by_citations` (which queries `node`/`neighbors` per id).
+    evidence_finding_ids.sort();
+    evidence_finding_ids.dedup();
+
     // Resolve `described_by` document targets into cited answers — reading real
     // graph ids, never inventing. A document or source finding that cannot be
     // fetched is recorded as unavailable, not dropped.
@@ -751,14 +758,19 @@ fn provenance_one_liner(provenance: &tdw_core::Provenance) -> String {
 // ── Validation / argument helpers ──────────────────────────────────────────────
 
 /// Validate a YYYY-MM-DD date string (same grammar as the finding tools).
+///
+/// All checks run on the raw bytes: a `YYYY-MM-DD` date is strictly ASCII, so
+/// byte and char indices coincide and a multi-byte input simply fails the
+/// length/digit checks rather than misaligning indices.
 fn validate_date(value: &str) -> Result<(), ToolFailure> {
-    if value.len() != 10
-        || value.as_bytes().get(4) != Some(&b'-')
-        || value.as_bytes().get(7) != Some(&b'-')
-        || !value
-            .chars()
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
             .enumerate()
-            .all(|(i, c)| matches!(i, 4 | 7) || c.is_ascii_digit())
+            .all(|(i, &b)| matches!(i, 4 | 7) || b.is_ascii_digit())
     {
         return Err(execution(format!("as_of must be YYYY-MM-DD, got {value:?}")));
     }
