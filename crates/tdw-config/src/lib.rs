@@ -2539,7 +2539,10 @@ mod tests {
     #[test]
     fn self_tune_defaults_are_off_and_valid() {
         let cfg = SelfTuneConfig::default();
-        assert!(!cfg.enabled, "self-tuning must be OFF by default (kill-switch)");
+        assert!(
+            !cfg.enabled,
+            "self-tuning must be OFF by default (kill-switch)"
+        );
         assert!(cfg.rrf_k_min < cfg.rrf_k_max);
         validate_self_tune(&cfg).expect("default self_tune must validate");
     }

@@ -19,9 +19,7 @@ use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
 use tdw_config::SkillsConfig as SkillsCfg;
-use tdw_config::{
-    ExtractionConfig, FeedsConfig, SelfTuneConfig, TdwConfig, WatchlistsConfig,
-};
+use tdw_config::{ExtractionConfig, FeedsConfig, SelfTuneConfig, TdwConfig, WatchlistsConfig};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
@@ -565,8 +563,7 @@ impl Backend {
                 tdw_knowledge::self_tune::SelfTuneLog::new(),
             ));
             let handle = tdw_retrieve::RrfKHandle::new(tdw_retrieve::RRF_K);
-            knowledge_runtime =
-                knowledge_runtime.with_self_tune(Arc::clone(&log), handle.clone());
+            knowledge_runtime = knowledge_runtime.with_self_tune(Arc::clone(&log), handle.clone());
             (Some(log), Some(handle))
         } else {
             eprintln!(
@@ -2787,7 +2784,13 @@ async fn run_self_tune_cycle(
     let candidate_score = candidate_report.mean_ndcg_at_k;
 
     // Step 4 — gate decision.
-    let outcome = decide(incumbent, candidate, incumbent_score, candidate_score, margin);
+    let outcome = decide(
+        incumbent,
+        candidate,
+        incumbent_score,
+        candidate_score,
+        margin,
+    );
 
     // Step 5 — hot-apply ONLY on a real promotion. The value is already clamped
     // at the source, so the live handle can never hold an out-of-bounds value.
@@ -2860,7 +2863,8 @@ fn spawn_self_tuning_worker(
         .clone()
         .unwrap_or_else(|| default_fixture_path(&split_id));
 
-    let clamp = tdw_knowledge::self_tune::TuneClamp::new(cfg.rrf_k_min, cfg.rrf_k_max, cfg.rrf_k_step);
+    let clamp =
+        tdw_knowledge::self_tune::TuneClamp::new(cfg.rrf_k_min, cfg.rrf_k_max, cfg.rrf_k_step);
     let margin = cfg.margin;
 
     let schedule = CronSchedule::parse(&cfg.cadence)
@@ -2924,9 +2928,7 @@ fn spawn_self_tuning_worker(
                     let mut guard = log.lock().await;
                     guard.record(
                         tdw_knowledge::self_tune::TunableParam::RrfK,
-                        tdw_knowledge::self_tune::TuneOutcome::NoEvalData {
-                            reason: load_err,
-                        },
+                        tdw_knowledge::self_tune::TuneOutcome::NoEvalData { reason: load_err },
                         &now_ts,
                     );
                     continue;
@@ -6865,11 +6867,17 @@ mod tests {
         );
         let guard = log.lock().await;
         let rec = guard.last().expect("record written");
-        assert!(rec.outcome.applied(), "equal-objective at margin 0 promotes");
+        assert!(
+            rec.outcome.applied(),
+            "equal-objective at margin 0 promotes"
+        );
         assert_eq!(guard.applied_count(), 1);
         assert_eq!(rec.provenance, "agent:system:self-tuner;gated:true");
         assert!(rec.summary.contains("APPLIED"));
-        assert!(rec.summary.contains("60.0000 → 70.0000"), "truthful old→new audit");
+        assert!(
+            rec.summary.contains("60.0000 → 70.0000"),
+            "truthful old→new audit"
+        );
     }
 
     /// A positive margin rejects an equal-objective candidate → the handle is

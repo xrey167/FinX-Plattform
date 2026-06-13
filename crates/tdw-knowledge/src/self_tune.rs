@@ -136,7 +136,12 @@ enum Direction {
 /// Pure and deterministic: identical `(incumbent, clamp, cycle)` always yields
 /// the same candidate.
 #[must_use]
-pub fn propose_candidate(_param: TunableParam, incumbent: f64, clamp: &TuneClamp, cycle: u64) -> f64 {
+pub fn propose_candidate(
+    _param: TunableParam,
+    incumbent: f64,
+    clamp: &TuneClamp,
+    cycle: u64,
+) -> f64 {
     let direction = if cycle.is_multiple_of(2) {
         Direction::Up
     } else {
@@ -382,8 +387,14 @@ mod tests {
     #[test]
     fn clamp_pins_values_to_bounds() {
         let c = clamp();
-        assert!((c.clamp(5.0) - 10.0).abs() < 1e-12, "below min pinned to min");
-        assert!((c.clamp(200.0) - 120.0).abs() < 1e-12, "above max pinned to max");
+        assert!(
+            (c.clamp(5.0) - 10.0).abs() < 1e-12,
+            "below min pinned to min"
+        );
+        assert!(
+            (c.clamp(200.0) - 120.0).abs() < 1e-12,
+            "above max pinned to max"
+        );
         assert!((c.clamp(60.0) - 60.0).abs() < 1e-12, "in-range unchanged");
     }
 
@@ -447,8 +458,14 @@ mod tests {
 
     #[test]
     fn decide_with_zero_margin_still_requires_non_negative_improvement() {
-        assert!(decide(60.0, 70.0, 0.80, 0.80, 0.0).applied(), "equal passes at margin 0");
-        assert!(!decide(60.0, 70.0, 0.80, 0.79, 0.0).applied(), "worse never passes");
+        assert!(
+            decide(60.0, 70.0, 0.80, 0.80, 0.0).applied(),
+            "equal passes at margin 0"
+        );
+        assert!(
+            !decide(60.0, 70.0, 0.80, 0.79, 0.0).applied(),
+            "worse never passes"
+        );
     }
 
     // ── audit log honesty (requirement 2) ─────────────────────────────────────
@@ -460,7 +477,10 @@ mod tests {
         let rec = log.record(TunableParam::RrfK, outcome, "2026-06-12T00:00:00Z");
         assert_eq!(rec.id, "t1");
         assert_eq!(rec.provenance, "agent:system:self-tuner;gated:true");
-        assert!(rec.provenance.contains("gated:true"), "must be a GATED change");
+        assert!(
+            rec.provenance.contains("gated:true"),
+            "must be a GATED change"
+        );
         assert!(rec.summary.contains("APPLIED"));
         assert!(rec.summary.contains("60.0000 → 70.0000"));
         assert_eq!(log.applied_count(), 1);

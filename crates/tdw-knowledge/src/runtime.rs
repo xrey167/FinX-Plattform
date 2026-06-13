@@ -1388,10 +1388,8 @@ impl KnowledgeRuntime {
         // "snapshot busy" notice rather than deadlocking.
         let self_tune = self.rrf_k_handle.as_ref().map(|handle| {
             let rrf_k_current = format!("{:.4}", handle.load());
-            let (last_decision, decisions_total, applied_total) = self
-                .self_tune_log
-                .as_ref()
-                .map_or_else(
+            let (last_decision, decisions_total, applied_total) =
+                self.self_tune_log.as_ref().map_or_else(
                     || ("no self-tuning log wired".to_string(), 0, 0),
                     |cell| {
                         cell.try_lock().map_or_else(

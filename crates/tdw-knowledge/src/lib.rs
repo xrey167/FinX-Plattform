@@ -13,9 +13,7 @@ pub mod skills;
 
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
-pub use runtime::{
-    KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus, SelfTuneStatus,
-};
+pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus, SelfTuneStatus};
 pub use self_tune::{
     SelfTuneLog, TUNER_AGENT_ID, TunableParam, TuneClamp, TuneOutcome, TuneRecord,
 };
