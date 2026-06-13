@@ -116,6 +116,11 @@ pub struct KnowledgeRuntime {
     /// sweep worker in `tdw-backend`. `None` when the sweep is not registered
     /// (status reports [`SweepFreshness::Disabled`]).
     auto_materialize_freshness: Option<Arc<tokio::sync::Mutex<SweepFreshness>>>,
+    /// Live hygiene-freshness cell (K-R8). Shared with the governed-forgetting
+    /// worker in `tdw-backend`, which writes [`HygieneFreshness`] after each
+    /// sweep. `None` when the worker is not registered (status reports
+    /// [`HygieneFreshness::Disabled`]).
+    hygiene_freshness: Option<Arc<tokio::sync::Mutex<HygieneFreshness>>>,
     /// Live per-feed freshness cells (K-L6). One cell per enabled feed,
     /// shared with the spawned feed tasks that write [`FeedFreshness`] after
     /// each poll. Empty when no feeds are configured.
@@ -182,6 +187,7 @@ impl KnowledgeRuntime {
             eval_freshness: None,
             consolidation_freshness: None,
             auto_materialize_freshness: None,
+            hygiene_freshness: None,
             feed_freshness_cells: Vec::new(),
             watchlist_freshness: None,
             questions_freshness: None,
@@ -460,6 +466,31 @@ impl KnowledgeRuntime {
         &self,
     ) -> Option<&Arc<tokio::sync::Mutex<SweepFreshness>>> {
         self.auto_materialize_freshness.as_ref()
+    }
+
+    /// Attach the governed-forgetting (hygiene) freshness cell (K-R8).
+    ///
+    /// Pass an `Arc<tokio::sync::Mutex<HygieneFreshness>>` constructed by the
+    /// composition root (`tdw-backend`) so the hygiene worker and
+    /// `tdw.kg.status` share the same live cell. Consumes and returns `self`.
+    #[must_use]
+    pub fn with_hygiene_freshness(
+        mut self,
+        cell: Arc<tokio::sync::Mutex<HygieneFreshness>>,
+    ) -> Self {
+        self.hygiene_freshness = Some(cell);
+        self
+    }
+
+    /// The hygiene-freshness cell, when attached.
+    ///
+    /// The hygiene worker in `tdw-backend` writes [`HygieneFreshness`] after
+    /// every sweep via this handle.
+    #[must_use]
+    pub const fn hygiene_freshness_cell(
+        &self,
+    ) -> Option<&Arc<tokio::sync::Mutex<HygieneFreshness>>> {
+        self.hygiene_freshness.as_ref()
     }
 
     /// Attach a per-feed freshness cell (K-L6).
@@ -845,6 +876,39 @@ pub enum SweepFreshness {
     },
 }
 
+/// Governed-forgetting (knowledge-hygiene) freshness snapshot (knowledge-system K-R8).
+///
+/// Updated by the hygiene worker after each sweep; read by `status()` without
+/// blocking (`try_lock`).  Surfaces cold-plane and pending-hygiene visibility
+/// additively in `tdw.kg.status` — operators see how much knowledge was retired
+/// (always reversibly) and how many forgetting proposals are pending the gate.
+///
+/// `Disabled` means `[knowledge.hygiene] enabled = false` (the kill-switch) —
+/// the worker is not registered and no fact is ever retired automatically.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum HygieneFreshness {
+    /// `enabled = false` — governed forgetting is intentionally off.
+    Disabled,
+    /// The worker is enabled but has not swept yet since daemon start.
+    Pending,
+    /// The last sweep completed.
+    Ran {
+        /// Epoch-ms timestamp of the last sweep.
+        last_run_ms: i64,
+        /// Forgetting candidates identified and enqueued as PROPOSALS this
+        /// sweep (NOT immediate deletions — every one is gated).
+        proposed: usize,
+        /// Edges scanned in the last sweep.
+        scanned: usize,
+        /// `true` when the per-sweep cap truncated the candidate list.
+        capped: bool,
+        /// First error from the last sweep, if any.  `None` = clean sweep.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_error: Option<String>,
+    },
+}
+
 /// Watchlist change-detection freshness snapshot (knowledge-system K-X5).
 ///
 /// Updated by the cron task after each tick; read by `status()` without
@@ -1224,7 +1288,45 @@ pub struct KgStatus {
     /// whether the last session distilled to an honest empty result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distillation_freshness: Option<crate::DistillationFreshness>,
+
+    // --- Governed forgetting / knowledge hygiene (K-R8) ---
+    /// Live governed-forgetting freshness snapshot (K-R8).
+    ///
+    /// `None` when no hygiene cell is attached (kill-switch off-and-unwired);
+    /// `Disabled` when `[knowledge.hygiene] enabled = false`. When present and
+    /// `Ran`, carries the last sweep's proposed/scanned/capped counts. Surfaced
+    /// additively so existing status consumers are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hygiene_freshness: Option<HygieneFreshness>,
+    /// Cold-plane + pending-hygiene observability (K-R8 req 4).
+    ///
+    /// `None` when no graph engine is attached. When present, carries the count
+    /// of cold (forgotten, reversibly-retired) edges and the count of pending
+    /// `Forget` proposals awaiting the gate — both from bounded scans so an
+    /// operator can see retired-knowledge volume without a full health scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cold_plane: Option<KgColdPlaneCounts>,
 }
+
+/// Cold-plane + pending-hygiene counts for `tdw.kg.status` (K-R8).
+///
+/// Both counts come from BOUNDED scans (capped at
+/// [`COLD_PLANE_STATUS_PAGE_CAP`] edges and the proposal page cap) so status
+/// stays cheap. `scan_note` is set when the cold scan was bounded and the true
+/// count may be higher — the same honest-bound posture as `KgThesesStatus`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KgColdPlaneCounts {
+    /// Number of cold (forgotten) edges visible in the bounded scan.
+    pub cold_edges: usize,
+    /// Number of pending `Forget` proposals (gated, not yet materialized).
+    pub pending_forget_proposals: usize,
+    /// Set when the cold-edge scan was bounded by the page cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_note: Option<String>,
+}
+
+/// Page cap for the cold-edge count scan in `status()`.
+pub const COLD_PLANE_STATUS_PAGE_CAP: usize = 4_096;
 
 impl KnowledgeRuntime {
     /// Collect a full observability snapshot for this runtime instance (K-E2).
@@ -1487,6 +1589,24 @@ impl KnowledgeRuntime {
                     }
                 });
 
+        // Hygiene freshness (K-R8): read the shared cell if wired, else None.
+        // `try_lock` avoids blocking: if the worker is mid-sweep return the last
+        // known state rather than deadlocking the status handler.
+        let hygiene_freshness = self.hygiene_freshness.as_ref().map(|cell| {
+            cell.try_lock()
+                .map_or(HygieneFreshness::Pending, |g| g.clone())
+        });
+
+        // Cold-plane + pending-hygiene counts (K-R8 req 4): bounded scans. Only
+        // computed when a graph engine is attached. Cold edges are those
+        // carrying the `forgotten` props block; pending forget proposals are
+        // read from the queue with a non-blocking try_lock.
+        let cold_plane = if let Some(graph) = self.graph.as_ref() {
+            Some(collect_cold_plane_counts(graph, self.proposals.as_ref()).await)
+        } else {
+            None
+        };
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1514,7 +1634,73 @@ impl KnowledgeRuntime {
             self_tune,
             distilled_pending,
             distillation_freshness,
+            hygiene_freshness,
+            cold_plane,
         }
+    }
+}
+
+/// Count cold (forgotten) edges and pending `Forget` proposals for `status()`
+/// (K-R8 req 4).  Both scans are bounded: the cold-edge scan walks at most
+/// [`COLD_PLANE_STATUS_PAGE_CAP`] edges (honest `scan_note` when exceeded), and
+/// the proposal count uses a non-blocking `try_lock` so a contended queue never
+/// stalls the status handler.
+async fn collect_cold_plane_counts(
+    graph: &Arc<dyn GraphEngine>,
+    proposals: Option<&Arc<tokio::sync::Mutex<ProposalQueue>>>,
+) -> KgColdPlaneCounts {
+    use crate::forgetting::edge_forgotten_block;
+
+    const PAGE: usize = 256;
+    let mut cold_edges = 0usize;
+    let mut scanned = 0usize;
+    let mut offset = 0usize;
+    let mut bounded = false;
+    loop {
+        let Ok(page) = graph.edges(None, offset, PAGE).await else {
+            break;
+        };
+        let page_len = page.len();
+        if page_len == 0 {
+            break;
+        }
+        for edge in &page {
+            if edge_forgotten_block(&edge.props).is_some() {
+                cold_edges += 1;
+            }
+        }
+        scanned += page_len;
+        offset += page_len;
+        if scanned >= COLD_PLANE_STATUS_PAGE_CAP {
+            bounded = true;
+            break;
+        }
+        if page_len < PAGE {
+            break;
+        }
+    }
+
+    // Pending Forget proposals: non-blocking read (report 0 if contended).
+    let pending_forget_proposals = proposals.map_or(0, |queue| {
+        queue.try_lock().map_or(0, |q| {
+            use crate::proposals::ProposalKind;
+            q.list(None, Some(crate::proposals::LIST_PAGE_MAX))
+                .proposals
+                .iter()
+                .filter(|p| p.is_pending() && matches!(p.kind, ProposalKind::Forget { .. }))
+                .count()
+        })
+    });
+
+    KgColdPlaneCounts {
+        cold_edges,
+        pending_forget_proposals,
+        scan_note: bounded.then(|| {
+            format!(
+                "cold-edge scan bounded at {COLD_PLANE_STATUS_PAGE_CAP} edges; true count may be \
+                 higher"
+            )
+        }),
     }
 }
 

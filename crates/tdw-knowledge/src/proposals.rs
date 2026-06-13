@@ -130,6 +130,31 @@ pub enum ProposalKind {
     /// A free-text note attached to an entity (stored as an annotation node
     /// + `annotated_by` edge).
     Annotation { entity_id: String, note: String },
+    /// A governed-forgetting decision (knowledge-system K-R8): retire an
+    /// existing active edge to the COLD plane.
+    ///
+    /// This is the trust-layer counterpart to a write. Materializing it does
+    /// NOT add a fact — it RETIRES one: the matching active `(from, rel, to)`
+    /// edge's validity window is closed at `now` (reusing the K-M4 temporal-
+    /// close machinery via [`tdw_core::GraphEngine::replace_edges`]) and its
+    /// props are annotated with a `forgotten` audit block (`reason`, `score`,
+    /// the firing policies, and `forgotten_at`). The historical record is
+    /// preserved — `as_of` queries over past time still return the fact — and
+    /// the move is fully REVERSIBLE via [`crate::forgetting::recall_cold_edge`].
+    ///
+    /// `reason` is a human/audit string recording WHY (which policies fired and
+    /// the combined score); it flows into the `forgotten` props block so
+    /// `tdw.kg.why` can surface it.
+    Forget {
+        /// The `from` node of the edge to retire.
+        from: String,
+        /// The relationship type of the edge to retire.
+        rel: String,
+        /// The `to` node of the edge to retire.
+        to: String,
+        /// Audit reason (which policies fired + combined score).
+        reason: String,
+    },
 }
 
 /// One gated write request.
@@ -751,7 +776,68 @@ async fn validate_kind(
             }
             Ok(())
         }
+        ProposalKind::Forget {
+            from,
+            rel,
+            to,
+            reason,
+        } => validate_forget(graph, from, rel, to, reason).await,
     }
+}
+
+/// Validate a `Forget` proposal (K-R8).
+///
+/// Unlike `Edge` (which requires the triple NOT to exist), a Forget proposal
+/// targets an edge that MUST exist and still be active and NOT already cold —
+/// otherwise there is nothing to retire (and we must never claim a fact was
+/// forgotten when it was not).  The `reason` must be a bounded, control-char-
+/// free audit string (it flows into the `forgotten` props block and
+/// `tdw.kg.why`).
+async fn validate_forget(
+    graph: &Arc<dyn GraphEngine>,
+    from: &str,
+    rel: &str,
+    to: &str,
+    reason: &str,
+) -> Result<()> {
+    use tdw_core::{Direction, TraversalFilter};
+
+    let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
+    if reason.trim().is_empty() || reason.chars().count() > MAX_NOTE_CHARS {
+        return Err(KnowledgeError::Storage(format!(
+            "forget reason must be non-empty and at most {MAX_NOTE_CHARS} characters"
+        )));
+    }
+    if reason
+        .chars()
+        .any(|character| character.is_control() && character != '\n')
+    {
+        return Err(KnowledgeError::Storage(
+            "forget reason must not contain control characters".to_string(),
+        ));
+    }
+    // Query only the `(from, rel, *)` neighborhood for a matching active edge
+    // (`valid_to == None`, not already tagged `forgotten`). This is bounded by
+    // the subject's out-degree, NOT the global size of `rel` — a global
+    // `edges(Some(rel), ..)` scan would be a severe bottleneck on common
+    // relations (Gemini K-R8 HIGH). Mirrors `retire_edge_to_cold`'s scan so
+    // validation and materialization look at the same neighborhood.
+    let filter = TraversalFilter {
+        rels: Some(vec![rel.to_owned()]),
+        direction: Direction::Out,
+        ..TraversalFilter::default()
+    };
+    let neighbors = graph.neighbors(from, &filter).await.map_err(storage)?;
+    if neighbors.into_iter().any(|(edge, _node)| {
+        edge.to == to
+            && edge.valid_to.is_none()
+            && crate::forgetting::edge_forgotten_block(&edge.props).is_none()
+    }) {
+        return Ok(());
+    }
+    Err(KnowledgeError::Storage(format!(
+        "forget target {from} -{rel}-> {to} has no active (open, non-cold) edge to retire"
+    )))
 }
 
 /// Tag existence via the engine contract's `is_defined`.
@@ -837,6 +923,29 @@ async fn write_proposal(
                 }])
                 .await
                 .map_err(storage)
+        }
+        ProposalKind::Forget {
+            from,
+            rel,
+            to,
+            reason,
+        } => {
+            // Governed forgetting (K-R8): MOVE the active edge to the COLD
+            // plane — close its validity window at `now` and annotate the
+            // `forgotten` audit block. Never a hard delete; fully reversible.
+            // The provenance string ties the retirement to this gated proposal.
+            let provenance_text = format!("agent:{};proposal:{}", proposal.agent_id, proposal.id);
+            crate::forgetting::retire_edge_to_cold(
+                graph,
+                from,
+                rel,
+                to,
+                reason,
+                &provenance_text,
+                now,
+            )
+            .await
+            .map(|_outcome| ())
         }
     }
 }

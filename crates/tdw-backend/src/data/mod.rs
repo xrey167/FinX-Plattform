@@ -15,6 +15,7 @@ use tdw_agent_store::{
 };
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
+use tdw_config::HygieneConfig as HygieneCfg;
 use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
@@ -41,7 +42,7 @@ use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::QuestionsFreshness;
 use tdw_knowledge::runtime::WatchlistFreshness;
 use tdw_knowledge::runtime::{
-    ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
+    ConsolidationFreshness, EvalFreshness, HygieneFreshness, KnowledgeRuntime, SweepFreshness,
 };
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_mcp::knowledge_question_tools::{
@@ -96,6 +97,9 @@ struct DaemonHandle {
     /// The K-R5 scheduled rule-induction worker task.
     /// `None` when `knowledge.induction.enabled = false` (default).
     induction_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R8 governed-forgetting (hygiene) worker task.
+    /// `None` when `knowledge.hygiene.enabled = false` (kill-switch).
+    hygiene_task: Option<tokio::task::JoinHandle<()>>,
     /// The K-L6 scheduled feed tasks, one per enabled feed entry.
     /// Empty when no feeds are configured.
     feed_handles: Vec<tokio::task::JoinHandle<()>>,
@@ -231,6 +235,16 @@ pub struct Backend {
     /// `config.knowledge.induction` in [`Backend::from_config`]. Held here so
     /// [`Backend::serve`] can spawn the induction cron task without re-parsing.
     induction_cfg: tdw_config::InductionConfig,
+    /// K-R8 governed-forgetting (hygiene) configuration, extracted from
+    /// `config.knowledge.hygiene` in [`Backend::from_config`]. Held here so
+    /// [`Backend::serve`] can register the hygiene worker without re-parsing.
+    hygiene_cfg: HygieneCfg,
+    /// K-R8 hygiene-freshness cell. Shared between the [`KnowledgeRuntime`]
+    /// (read side: `tdw.kg.status`) and the hygiene worker spawned in
+    /// [`Backend::serve`] (write side). `None` when the kill-switch
+    /// (`hygiene.enabled = false`) is set — status reports
+    /// [`HygieneFreshness::Disabled`].
+    hygiene_freshness: Option<Arc<Mutex<HygieneFreshness>>>,
     /// K-L6 scheduled feed configuration, extracted from
     /// `config.knowledge.feeds` in [`Backend::from_config`].  Held here so
     /// [`Backend::serve`] can spawn the per-feed cron tasks without a second
@@ -351,6 +365,9 @@ impl Backend {
         let lessons_cfg = config.knowledge.lessons.clone();
         // K-R5: extract induction config before `config` is consumed.
         let induction_cfg = config.knowledge.induction.clone();
+        // K-R8: extract governed-forgetting (hygiene) config before config is
+        // consumed so the hygiene worker trigger can be registered in serve().
+        let hygiene_cfg = config.knowledge.hygiene.clone();
         // K-L6: extract feeds config before `config` is consumed.
         let feeds_cfg = config.knowledge.feeds.clone();
         // K-X5: extract watchlists config before `config` is consumed.
@@ -435,6 +452,11 @@ impl Backend {
         // `auto_materialize = true` (the default). When disabled, the cell is
         // absent — `KgStatus` reports `SweepFreshness::Disabled`.
         let sweep_freshness_cell = build_sweep_freshness_cell(&proposals_cfg);
+        // K-R8: build the hygiene freshness cell. `Some(Pending)` when
+        // `hygiene.enabled = true` (the default, ship-enabled-but-cautious);
+        // `None` when the kill-switch is set — `KgStatus` then reports
+        // `HygieneFreshness::Disabled`.
+        let hygiene_freshness_cell = build_hygiene_freshness_cell(&hygiene_cfg);
         // Build the full KnowledgeRuntime (hybrid retriever + graph + lexical +
         // tag channels). The runtime is attached to the MCP server so agents
         // can search/traverse the graph via the read tools (B8 surface).
@@ -477,6 +499,10 @@ impl Backend {
         }
         if let Some(cell) = sweep_freshness_cell {
             knowledge_runtime = knowledge_runtime.with_auto_materialize_freshness(cell);
+        }
+        // K-R8: attach the hygiene-freshness cell when enabled.
+        if let Some(cell) = hygiene_freshness_cell.clone() {
+            knowledge_runtime = knowledge_runtime.with_hygiene_freshness(cell);
         }
         // K-L6: build per-feed freshness cells before Arc-wrapping the runtime
         // so they can be attached via with_feed_freshness (which takes &mut self).
@@ -626,6 +652,8 @@ impl Backend {
             proposals_cfg,
             lessons_cfg,
             induction_cfg,
+            hygiene_cfg,
+            hygiene_freshness: hygiene_freshness_cell,
             feeds_cfg,
             feed_freshness_cells,
             watchlists_cfg,
@@ -708,6 +736,8 @@ impl Backend {
             proposals_cfg: ProposalsCfg::default(),
             lessons_cfg: tdw_config::LessonsConfig::default(),
             induction_cfg: tdw_config::InductionConfig::default(),
+            hygiene_cfg: HygieneCfg::default(),
+            hygiene_freshness: None,
             feeds_cfg: FeedsConfig::default(),
             feed_freshness_cells: Vec::new(),
             watchlists_cfg: WatchlistsConfig::default(),
@@ -1023,6 +1053,23 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-R8 — spawn the governed-forgetting (hygiene) worker when enabled
+        // (`knowledge.hygiene.enabled = true`, ship-enabled-but-cautious). The
+        // worker identifies forgetting candidates by the configurable policy
+        // and enqueues them as GATED `Forget` PROPOSALS (never immediate
+        // deletions) into the same ProposalQueue the operator/MCP path drains.
+        // `now` is injected (no wall-clock in the policy). `None` when the
+        // kill-switch is set OR no ProposalQueue is attached (inert + loud).
+        let hygiene_task = spawn_hygiene_worker(
+            &self.hygiene_cfg,
+            self.hygiene_freshness.clone(),
+            self.runtime.proposals().cloned(),
+            Arc::clone(&self.graph),
+            Arc::clone(&self.tags_engine),
+            cfg.tdw.knowledge.agent.id.clone(),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
@@ -1034,6 +1081,7 @@ impl Backend {
             pattern_mining_task,
             lesson_induction_task,
             induction_task,
+            hygiene_task,
             feed_handles,
             watchlist_task,
             questions_task,
@@ -1113,6 +1161,12 @@ impl Backend {
         if let Some(induction_task) = daemon.induction_task {
             induction_task.abort();
             let _ = induction_task.await;
+        }
+        // K-R8: The governed-forgetting (hygiene) worker observes the same
+        // token; abort if it lingers so shutdown stays bounded.
+        if let Some(hygiene_task) = daemon.hygiene_task {
+            hygiene_task.abort();
+            let _ = hygiene_task.await;
         }
         // K-L6 feed tasks observe the same cancellation token; abort any that
         // linger so shutdown stays bounded.
@@ -2175,6 +2229,28 @@ pub fn build_sweep_freshness_cell(
     Some(Arc::new(tokio::sync::Mutex::new(SweepFreshness::Pending)))
 }
 
+/// Build the hygiene-freshness shared cell for the K-R8 governed-forgetting
+/// worker.
+///
+/// Returns `Some(Arc<Mutex<HygieneFreshness>>)` pre-populated with
+/// [`HygieneFreshness::Pending`] when `config.enabled = true` (the default,
+/// ship-enabled-but-cautious). Returns `None` when the kill-switch is set
+/// (`enabled = false`) — the caller omits `.with_hygiene_freshness(...)` and
+/// `KnowledgeRuntime::status` reports [`HygieneFreshness::Disabled`].
+///
+/// The returned `Arc` is shared between the `KnowledgeRuntime` (read side:
+/// `tdw.kg.status`) and the hygiene worker task spawned during
+/// [`Backend::serve`] (write side: updated after each sweep).
+#[must_use]
+pub fn build_hygiene_freshness_cell(
+    config: &HygieneCfg,
+) -> Option<Arc<tokio::sync::Mutex<HygieneFreshness>>> {
+    if !config.enabled {
+        return None;
+    }
+    Some(Arc::new(tokio::sync::Mutex::new(HygieneFreshness::Pending)))
+}
+
 /// Build the LLM-extraction freshness shared cell (K-M1).
 ///
 /// Returns an `Arc<std::sync::Mutex<ExtractionFreshness>>` seeded from the
@@ -2394,6 +2470,231 @@ pub fn spawn_auto_materialize_sweep(
                         }
                     }
                 }
+            }
+        }
+    });
+
+    Some(task)
+}
+
+/// Spawn the K-R8 governed-forgetting (knowledge-hygiene) worker.
+///
+/// On each cron slot (deliberately conservative cadence, default weekly):
+///
+/// 1. Builds a [`ForgettingPolicy`] from `[knowledge.hygiene]` config.
+/// 2. Calls [`tdw_knowledge::forgetting::identify_candidates`] over the graph
+///    with an INJECTED `now` (date-only, no wall-clock in the policy) and the
+///    per-sweep cap — only ACTIVE, non-cold edges are considered, and the HARD
+///    fail-safe guards (high-confidence / well-corroborated / ingest retention
+///    floor) protect ground truth.
+/// 3. Submits each candidate as a GATED `Forget` PROPOSAL into the shared
+///    `ProposalQueue` (provenance `Agent { gated: true }`) — NEVER an immediate
+///    deletion. The operator/MCP materialize path later performs the reversible
+///    cold-move. A submission that fails validation (e.g. the edge was already
+///    superseded since the scan) is logged and skipped.
+/// 4. Writes [`HygieneFreshness::Ran`] so `tdw.kg.status` reflects the sweep.
+///
+/// Returns `None` when `config.enabled = false` (kill-switch) OR no
+/// `ProposalQueue` is attached — in the latter case a loud NOTICE is emitted so
+/// the operator knows forgetting is inert until the gate is wired.
+/// Public only for integration tests. Production callers use [`Backend::serve`].
+#[doc(hidden)]
+#[allow(clippy::too_many_lines)]
+pub fn spawn_hygiene_worker(
+    cfg: &HygieneCfg,
+    cell: Option<Arc<tokio::sync::Mutex<HygieneFreshness>>>,
+    proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
+    graph: Arc<dyn tdw_core::GraphEngine>,
+    tags: Arc<dyn tdw_tags::TagEngine>,
+    agent_id: String,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // Kill-switch: disabled means no task.
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R8 governed forgetting is disabled \
+             (knowledge.hygiene.enabled = false). No knowledge is ever retired."
+        );
+        return None;
+    }
+    // No ProposalQueue attached → the worker cannot enqueue gated proposals.
+    // Be loud and inert rather than silently doing nothing.
+    let Some(proposals) = proposals else {
+        eprintln!(
+            "[tdw] NOTICE: K-R8 governed forgetting is enabled but no ProposalQueue is attached \
+             to the runtime — the hygiene worker is inert (no gate to enqueue into)."
+        );
+        return None;
+    };
+
+    let policy = tdw_knowledge::forgetting::ForgettingPolicy {
+        staleness_days: i64::from(cfg.staleness_days),
+        forget_score_threshold: cfg.forget_score_threshold,
+        protect_confidence_at_or_above: cfg.protect_confidence_at_or_above,
+        protect_corroboration_at_or_above: cfg.protect_corroboration_at_or_above,
+        ingest_retention_floor_days: i64::from(cfg.ingest_retention_floor_days),
+    };
+    let cap = cfg.sweep_cap;
+    let cadence = cfg.cadence.clone();
+
+    let schedule = CronSchedule::parse(&cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 4 * * SUN").expect("fallback parse"));
+
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-hygiene").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "hygiene-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: "tdw-hygiene".to_string(),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-hygiene".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+            if due.is_empty() {
+                continue;
+            }
+
+            // Inject `now` as a date-only string — the policy reads NO wall-clock.
+            let now_date = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                tdw_core::date::unix_seconds_to_iso_date(i64::try_from(secs).unwrap_or(0))
+            };
+
+            // 1. Identify candidates (read-only; no retirement here).
+            let report = match tdw_knowledge::forgetting::identify_candidates(
+                &graph, &policy, cap, &now_date,
+            )
+            .await
+            {
+                Ok(report) => report,
+                Err(error) => {
+                    let error_str = error.to_string();
+                    eprintln!("[tdw] K-R8 hygiene sweep error at={now_date}: {error_str}");
+                    if let Some(ref c) = cell {
+                        let mut guard = c.lock().await;
+                        *guard = HygieneFreshness::Ran {
+                            last_run_ms: now_ms,
+                            proposed: 0,
+                            scanned: 0,
+                            capped: false,
+                            last_error: Some(error_str),
+                        };
+                    }
+                    continue;
+                }
+            };
+
+            // 2. Submit each candidate as a GATED Forget proposal (never a
+            // delete). A validation failure (e.g. edge changed since the scan)
+            // is logged and skipped — the sweep is best-effort and bounded.
+            let scanned = report.scanned;
+            let capped = report.capped;
+            let mut proposed = 0usize;
+            let mut first_error: Option<String> = None;
+            {
+                use tdw_knowledge::proposals::ProposalKind;
+                use tdw_taxonomy::Adaptivity;
+                // Lock the queue PER candidate, not across the whole batch:
+                // `submit` awaits async graph/tag validation, and holding the
+                // mutex across every candidate would block concurrent MCP
+                // submissions/listings for the full sweep (Gemini K-R8 MEDIUM,
+                // lock-across-async-IO). Releasing between candidates lets other
+                // tasks interleave; the sweep is best-effort so a candidate
+                // racing in mid-loop is fine (it re-validates at materialize).
+                for candidate in report.candidates {
+                    let reason = candidate.assessment.audit_reason();
+                    let result = {
+                        let mut queue = proposals.lock().await;
+                        queue
+                            .submit(
+                                &agent_id,
+                                Adaptivity::Learning,
+                                ProposalKind::Forget {
+                                    from: candidate.from.clone(),
+                                    rel: candidate.rel.clone(),
+                                    to: candidate.to.clone(),
+                                    reason,
+                                },
+                                &graph,
+                                &tags,
+                                &now_date,
+                            )
+                            .await
+                    };
+                    match result {
+                        Ok(_) => proposed += 1,
+                        Err(error) => {
+                            let msg = error.to_string();
+                            eprintln!(
+                                "[tdw] K-R8 hygiene: skipped forget proposal for \
+                                 {}-{}->{}: {msg}",
+                                candidate.from, candidate.rel, candidate.to
+                            );
+                            if first_error.is_none() {
+                                first_error = Some(msg);
+                            }
+                        }
+                    }
+                }
+            }
+
+            eprintln!(
+                "[tdw] K-R8 hygiene sweep: scanned={scanned} proposed={proposed} \
+                 capped={capped} at={now_date}"
+            );
+            if let Some(ref c) = cell {
+                let mut guard = c.lock().await;
+                *guard = HygieneFreshness::Ran {
+                    last_run_ms: now_ms,
+                    proposed,
+                    scanned,
+                    capped,
+                    last_error: first_error,
+                };
             }
         }
     });

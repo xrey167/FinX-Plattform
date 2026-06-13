@@ -4,6 +4,7 @@
 pub mod distillation;
 pub mod extraction;
 pub mod feeds;
+pub mod forgetting;
 pub mod indexer;
 pub mod lessons;
 pub mod proposals;
@@ -15,7 +16,10 @@ pub mod skills;
 pub use distillation::DistillationFreshness;
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
-pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus, SelfTuneStatus};
+pub use runtime::{
+    HygieneFreshness, KgColdPlaneCounts, KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus,
+    SelfTuneStatus,
+};
 pub use self_tune::{
     SelfTuneLog, TUNER_AGENT_ID, TunableParam, TuneClamp, TuneOutcome, TuneRecord,
 };
