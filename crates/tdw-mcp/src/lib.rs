@@ -1134,20 +1134,20 @@ impl McpServer {
         // Injected-now: the reference time is computed here, never inside the
         // digest library, so staleness is reproducible and as_of-correct.
         let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        let messages =
-            match knowledge_digest_tools::execute(runtime, name, &arguments_object, &now) {
-                Ok(ToolExecution { structured, .. }) => {
-                    vec![success_message(id, &tool_result(&structured))]
-                }
-                Err(ToolFailure::Execution(message)) => {
-                    vec![success_message(id, &tool_error_result(&message))]
-                }
-                Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                    problem
-                        .with_id(id.clone())
-                        .with_data(json!({ "tool": name })),
-                )],
-            };
+        let messages = match knowledge_digest_tools::execute(runtime, name, &arguments_object, &now)
+        {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
         Some(messages)
     }
 

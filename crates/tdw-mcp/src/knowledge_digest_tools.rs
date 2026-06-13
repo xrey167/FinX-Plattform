@@ -31,14 +31,14 @@
 //!   the same [`crate::knowledge_tools::block_on`] helper the other read tools
 //!   use; no synchronous IO runs on an async executor thread.
 
-use serde_json::{json, Map, Value};
-use tdw_core::{active_at, GraphEngine};
+use serde_json::{Map, Value, json};
+use tdw_core::{GraphEngine, active_at};
 use tdw_knowledge::runtime::{EvalFreshness, KgStatus, KnowledgeRuntime};
 use tdw_tags::date_to_timestamp;
 use tdw_taxonomy::EntityKind;
 
 use crate::{
-    knowledge_tools::block_on, structured, tool, ToolDescriptor, ToolExecution, ToolFailure,
+    ToolDescriptor, ToolExecution, ToolFailure, knowledge_tools::block_on, structured, tool,
 };
 
 /// The single tool name this module owns.
