@@ -149,6 +149,12 @@ pub struct KnowledgeRuntime {
     /// worker (so it can read the incumbent and apply an accepted candidate).
     /// `None` when self-tuning is not wired.
     rrf_k_handle: Option<RrfKHandle>,
+    /// Live session-distillation freshness cell (K-X9). Shared with the
+    /// [`SessionDistiller`](crate::distillation::SessionDistiller) which writes
+    /// [`DistillationFreshness`](crate::DistillationFreshness) after each run.
+    /// `None` when the distiller is not wired (status field omitted from JSON so
+    /// absence is explicit).
+    distillation_freshness: Option<Arc<std::sync::Mutex<crate::DistillationFreshness>>>,
 }
 
 impl KnowledgeRuntime {
@@ -183,6 +189,7 @@ impl KnowledgeRuntime {
             skill_counts: None,
             self_tune_log: None,
             rrf_k_handle: None,
+            distillation_freshness: None,
         }
     }
 
@@ -618,6 +625,30 @@ impl KnowledgeRuntime {
     #[must_use]
     pub const fn rrf_k_handle(&self) -> Option<&RrfKHandle> {
         self.rrf_k_handle.as_ref()
+    }
+
+    /// Attach the session-distillation freshness cell (K-X9) so `tdw.kg.status`
+    /// reports the real last-run state of the [`SessionDistiller`] instead of a
+    /// stale default. `None` (the default) omits the field from JSON so the
+    /// absence of a wired distiller is explicit (loud by design).
+    #[must_use]
+    pub fn with_distillation_freshness(
+        mut self,
+        cell: Arc<std::sync::Mutex<crate::DistillationFreshness>>,
+    ) -> Self {
+        self.distillation_freshness = Some(cell);
+        self
+    }
+
+    /// The distillation-freshness cell, when attached. The
+    /// [`SessionDistiller`](crate::distillation::SessionDistiller) writes
+    /// [`DistillationFreshness`](crate::DistillationFreshness) after each run via
+    /// this shared handle.
+    #[must_use]
+    pub const fn distillation_freshness_cell(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<crate::DistillationFreshness>>> {
+        self.distillation_freshness.as_ref()
     }
 }
 
@@ -1174,6 +1205,25 @@ pub struct KgStatus {
     /// decision / applied counts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub self_tune: Option<SelfTuneStatus>,
+
+    // --- Session → findings distillation (K-X9) ---
+    /// Count of pending distilled-finding proposals (`agent_id` prefix
+    /// `distill:`) still awaiting promotion (K-X9). Additive, exact (single-pass
+    /// scan, not pagination-capped). `0` when the queue is attached but holds no
+    /// pending distilled findings; the field is always present so operators can
+    /// distinguish "none pending" from "queue not attached" (which omits the
+    /// sibling `proposals` block entirely).
+    #[serde(default)]
+    pub distilled_pending: usize,
+    /// Live session-distillation freshness snapshot (K-X9).
+    ///
+    /// `None` when no [`SessionDistiller`](crate::distillation::SessionDistiller)
+    /// is wired — field omitted from JSON so absence is explicit (loud by
+    /// design). When present, carries the last-distilled session id, the count
+    /// of findings enqueued as proposals, the count skipped at the gate, and
+    /// whether the last session distilled to an honest empty result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distillation_freshness: Option<crate::DistillationFreshness>,
 }
 
 impl KnowledgeRuntime {
@@ -1224,6 +1274,10 @@ impl KnowledgeRuntime {
             None
         };
 
+        // Distilled-pending count (K-X9): exact single-pass count of pending
+        // `distill:`-authored proposals. Computed in the same `try_lock` as the
+        // proposal-state counts so we take the queue lock at most once.
+        let mut distilled_pending = 0usize;
         let proposals = self.proposals.as_ref().map(|queue_mutex| {
             // The `ProposalQueue` lock is sync; `try_lock()` avoids blocking the
             // async context. If the lock is contended (another tool is mid-write)
@@ -1238,11 +1292,12 @@ impl KnowledgeRuntime {
                     active_lessons: 0,
                 },
                 |queue| {
-                    // Single-pass exact count — not subject to LIST_PAGE caps.
+                    // Single-pass exact counts — not subject to LIST_PAGE caps.
                     let (draft, validated, ready) = queue.pending_counts_by_state();
                     // K-R1: additive lesson counts (truthful — active counts
                     // only materialized lessons).
                     let lessons = queue.lesson_counts();
+                    distilled_pending = queue.distilled_pending();
                     KgProposalCounts {
                         draft,
                         validated,
@@ -1418,6 +1473,20 @@ impl KnowledgeRuntime {
             }
         });
 
+        // Distillation freshness (K-X9): read the shared cell if wired, else
+        // None. Same `try_lock` discipline as extraction — never block
+        // `status()`; on contention report the Pending default.
+        let distillation_freshness =
+            self.distillation_freshness
+                .as_ref()
+                .map(|cell| match cell.try_lock() {
+                    Ok(guard) => guard.clone(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().clone(),
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        crate::DistillationFreshness::Pending
+                    }
+                });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1443,6 +1512,8 @@ impl KnowledgeRuntime {
             extraction_freshness,
             skills,
             self_tune,
+            distilled_pending,
+            distillation_freshness,
         }
     }
 }

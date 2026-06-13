@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 
+pub mod distillation;
 pub mod extraction;
 pub mod feeds;
 pub mod indexer;
@@ -11,6 +12,7 @@ pub mod runtime;
 pub mod self_tune;
 pub mod skills;
 
+pub use distillation::DistillationFreshness;
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
 pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus, SelfTuneStatus};

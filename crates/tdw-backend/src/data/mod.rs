@@ -339,6 +339,9 @@ impl Backend {
         // is always grammar-valid here. It is bound at runtime construction,
         // never accepted from tool arguments.
         let agent_id = config.knowledge.agent.id.clone();
+        // K-X9: capture the bound agent id for the distill adaptivity resolver
+        // before `agent_id` is moved into `with_agent_id` below.
+        let distill_agent_id = agent_id.clone();
         // Extract eval config before `config` is consumed by AppState::from_config
         // (K-L3: used to initialise the freshness cell and cron trigger).
         let evals_cfg = config.knowledge.evals.clone();
@@ -532,17 +535,41 @@ impl Backend {
         let extraction_freshness_cell = build_extraction_freshness_cell(&extraction_cfg);
         knowledge_runtime =
             knowledge_runtime.with_extraction_freshness(Arc::clone(&extraction_freshness_cell));
-        // B9 / K-L4 / K-R1: attach the single canonical gated ProposalQueue to
-        // the co-resident runtime. Without this the runtime's `proposals()` is
-        // `None`, which silently disables the MCP write surface (`write_context`
-        // requires it), the K-L4 auto-materialize sweep, AND the K-R1 lesson-
-        // induction worker — every gated-writeback path is dead at runtime. One
-        // shared handle keeps the write surface, the sweep, and lesson induction
-        // operating on the same queue.
+        // B9 / K-L4 / K-R1 / K-X9: attach the single canonical gated
+        // ProposalQueue to the co-resident runtime. Without this the runtime's
+        // `proposals()` is `None`, which silently disables the MCP write surface
+        // (`write_context` requires it), the K-L4 auto-materialize sweep, the
+        // K-R1 lesson-induction worker, AND the K-X9 session-distillation tool
+        // (tdw.kg.distill routes candidate findings as PROPOSALS — never direct
+        // writes). One shared handle keeps the write surface, the sweep, lesson
+        // induction, and distillation operating on the same queue.
         let proposal_queue = Arc::new(tokio::sync::Mutex::new(
             tdw_knowledge::proposals::ProposalQueue::default(),
         ));
-        knowledge_runtime = knowledge_runtime.with_proposals(Arc::clone(&proposal_queue));
+        // K-X9: the adaptivity resolver admits the host-bound agent (and its
+        // `distill:<session>` derived identities) at `Learning` — the floor the
+        // B9 gate requires to PROPOSE; promotion still needs passing evals or
+        // operator approval. Everything else is denied (writes unavailable for
+        // an unknown agent).
+        let adaptivity_resolver: tdw_knowledge::runtime::AdaptivityResolver =
+            Arc::new(move |requesting_agent_id: &str| {
+                if requesting_agent_id == distill_agent_id
+                    || requesting_agent_id.starts_with("distill:")
+                {
+                    Some(tdw_taxonomy::Adaptivity::Learning)
+                } else {
+                    None
+                }
+            });
+        // K-X9: distillation-freshness cell shared with the SessionDistiller so
+        // `tdw.kg.status` reports the REAL last-run state.
+        let distillation_freshness_cell = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::DistillationFreshness::Pending,
+        ));
+        knowledge_runtime = knowledge_runtime
+            .with_proposals(Arc::clone(&proposal_queue))
+            .with_adaptivity_resolver(adaptivity_resolver)
+            .with_distillation_freshness(Arc::clone(&distillation_freshness_cell));
         // K-R2: build the skill-counts cell and attach it BEFORE Arc-wrapping so
         // the tournament worker (write side) and `tdw.kg.status` (read side)
         // share one live cell. Attached unconditionally so status reflects an
