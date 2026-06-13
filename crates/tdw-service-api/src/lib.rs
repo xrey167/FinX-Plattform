@@ -173,12 +173,14 @@ use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetch
 use tdw_provider_fmp::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
     FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
-    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher,
-    FmpHttpIncomeFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
     FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
     FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
-    FmpHttpTranscriptFetcher,
+    FmpHttpScreenerFetcher, FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher,
+    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -207,8 +209,9 @@ use tdw_provider_oecd::OecdHttpDataFetcher;
 use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
 use tdw_provider_sec::{
-    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
-    SecFilingsHttpFetcher, SecForm13FHttpFetcher, SecXbrlHttpFetcher,
+    SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
 };
 #[cfg(feature = "provider-seeking-alpha")]
 use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
@@ -422,6 +425,23 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpEmployeeCountFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpFilingsFetcher::registry_entry())?;
+    // FMP equity discovery/estimates/ownership breadth (openbb-parity P4W2):
+    // search / historical market cap / split calendar / latest filings feed /
+    // insider / institutional / government trades.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpSearchFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpHistoricalMarketCapFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpSplitCalendarFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpLatestFilingsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpInsiderTradingFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpInstitutionalOwnershipFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpGovernmentTradesFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
@@ -508,6 +528,12 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(SecFailsToDeliverHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecEtfHoldingsHttpFetcher::registry_entry())?;
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecCompanyFactsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecLatestFinancialReportsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]

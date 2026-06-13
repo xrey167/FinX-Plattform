@@ -881,6 +881,57 @@ pub struct CompanyFiling {
     pub final_link: Option<String>,
 }
 
+/// A single historical market-capitalization observation.
+///
+/// Standardizes `equity/historical_market_cap` (FMP
+/// `historical-market-capitalization`). One row = one (symbol, date) market-cap
+/// point. `market_cap` is [`Option`] because a date may report only metadata.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct HistoricalMarketCap {
+    /// Ticker symbol the observation belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Observation date (`YYYY-MM-DD`).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Market capitalization in the listing currency.
+    pub market_cap: Option<f64>,
+}
+
+/// A single reported company fact (an XBRL concept value for a period).
+///
+/// Standardizes `equity/compare/company_facts` (SEC
+/// `api/xbrl/companyfacts/CIK*.json`). One row = one (concept, period) value the
+/// filer reported. The taxonomy/concept/unit identify the fact; `value` and the
+/// period anchors are [`Option`] because the SEC fact set reports a variable
+/// subset per concept.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CompanyFacts {
+    /// Central Index Key (CIK) the facts belong to, unpadded.
+    #[validate(length(min = 1))]
+    pub cik: String,
+    /// Entity (company) name where reported.
+    pub entity_name: Option<String>,
+    /// XBRL taxonomy the concept comes from, e.g. `"us-gaap"`, `"dei"`.
+    #[validate(length(min = 1))]
+    pub taxonomy: String,
+    /// XBRL concept / tag, e.g. `"Revenues"`, `"Assets"`.
+    #[validate(length(min = 1))]
+    pub concept: String,
+    /// Unit of measure, e.g. `"USD"`, `"shares"`.
+    pub unit: Option<String>,
+    /// Period end date the fact covers (`YYYY-MM-DD`).
+    pub end: Option<String>,
+    /// Fiscal year the fact is tagged to.
+    pub fiscal_year: Option<i32>,
+    /// Fiscal period the fact is tagged to, e.g. `"FY"`, `"Q1"`.
+    pub fiscal_period: Option<String>,
+    /// Source form the fact was reported on, e.g. `"10-K"`, `"10-Q"`.
+    pub form: Option<String>,
+    /// Reported numeric value of the fact.
+    pub value: Option<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1454,6 +1505,47 @@ mod tests {
         let bad = CompanyFiling {
             form_type: String::new(),
             ..filing
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn historical_market_cap_round_trips_and_validates() {
+        let cap = HistoricalMarketCap {
+            symbol: "AAPL".to_string(),
+            date: "2024-09-28".to_string(),
+            market_cap: Some(3.45e12),
+        };
+        assert!(cap.validate().is_ok());
+        round_trip(&cap);
+
+        let bad = HistoricalMarketCap {
+            date: String::new(),
+            ..cap
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn company_facts_round_trips_and_validates() {
+        let fact = CompanyFacts {
+            cik: "320193".to_string(),
+            entity_name: Some("Apple Inc.".to_string()),
+            taxonomy: "us-gaap".to_string(),
+            concept: "Revenues".to_string(),
+            unit: Some("USD".to_string()),
+            end: Some("2024-09-28".to_string()),
+            fiscal_year: Some(2024),
+            fiscal_period: Some("FY".to_string()),
+            form: Some("10-K".to_string()),
+            value: Some(391_035_000_000.0),
+        };
+        assert!(fact.validate().is_ok());
+        round_trip(&fact);
+
+        let bad = CompanyFacts {
+            concept: String::new(),
+            ..fact
         };
         assert!(bad.validate().is_err());
     }

@@ -16,11 +16,14 @@ use tdw_provider_fmp::{
     BASE_URL, FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpAnalystEstimatesFetcher,
     FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
     FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher, FmpHttpExecutiveCompensationFetcher,
-    FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
-    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
-    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
-    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher, FmpStatement,
+    FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpInsiderTradingFetcher,
+    FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpLatestFilingsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
+    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher, FmpHttpSearchFetcher,
+    FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpTranscriptFetcher, FmpStatement,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -1075,6 +1078,150 @@ fn cassette_parse_fmp_statement_growth_response() {
 }
 
 // ---------------------------------------------------------------------------
+// P4W2 cassette tests: search / market-cap / split-calendar / latest-filings /
+// insider / institutional / government trades
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_fmp_search_response() {
+    let fetcher = FmpHttpSearchFetcher::default();
+    let query = FmpHttpSearchFetcher::transform_query(json!({"query": "apple", "limit": 5}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "AAPL", "name": "Apple Inc.", "exchangeShortName": "NASDAQ"},
+        {"symbol": "APLE", "name": "Apple Hospitality REIT", "stockExchange": "NYSE"},
+        {"symbol": "", "name": "ignored blank symbol"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].name, "Apple Inc.");
+    assert_eq!(rows[0].venue, "NASDAQ");
+    assert_eq!(rows[1].venue, "NYSE");
+}
+
+#[test]
+fn cassette_parse_fmp_historical_market_cap_response() {
+    let fetcher = FmpHttpHistoricalMarketCapFetcher::default();
+    let query =
+        FmpHttpHistoricalMarketCapFetcher::transform_query(json!({"symbol": "AAPL", "limit": 3}))
+            .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "AAPL", "date": "2024-09-28", "marketCap": 3450000000000.0},
+        {"symbol": "AAPL", "date": "2024-09-27", "marketCap": 3440000000000.0}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].date, "2024-09-28");
+    assert_eq!(rows[0].market_cap, Some(3_450_000_000_000.0));
+}
+
+#[test]
+fn cassette_parse_fmp_split_calendar_response() {
+    let fetcher = FmpHttpSplitCalendarFetcher::default();
+    let query = FmpHttpSplitCalendarFetcher::transform_query(json!({"from": "2024-01-01"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "NVDA", "date": "2024-06-10", "label": "June 10, 24", "numerator": 10.0, "denominator": 1.0},
+        {"symbol": "", "date": "2024-07-01"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "split");
+    assert_eq!(rows[0].symbol, "NVDA");
+    assert_eq!(rows[0].date.as_deref(), Some("2024-06-10"));
+    assert_eq!(rows[0].price, Some(10.0));
+}
+
+#[test]
+fn cassette_parse_fmp_latest_filings_response() {
+    let fetcher = FmpHttpLatestFilingsFetcher::default();
+    let query = FmpHttpLatestFilingsFetcher::transform_query(json!({"limit": 50}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "AAPL", "type": "8-K", "date": "2024-11-01", "cik": "0000320193", "link": "https://sec.gov/a"},
+        {"symbol": "MSFT", "type": "", "date": "2024-11-01"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].form_type, "8-K");
+    assert_eq!(rows[0].filing_date.as_deref(), Some("2024-11-01"));
+}
+
+#[test]
+fn cassette_parse_fmp_insider_trading_response() {
+    let fetcher = FmpHttpInsiderTradingFetcher::default();
+    let query = FmpHttpInsiderTradingFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL", "reportingName": "COOK TIMOTHY", "typeOfOwner": "officer: CEO",
+            "transactionDate": "2024-04-02", "transactionType": "S-Sale",
+            "securitiesTransacted": 100.0, "price": 170.0
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "insider");
+    assert_eq!(rows[0].holder.as_deref(), Some("COOK TIMOTHY"));
+    assert_eq!(rows[0].transaction_type.as_deref(), Some("S-Sale"));
+    assert_eq!(rows[0].shares, Some(100.0));
+    assert_eq!(rows[0].value, Some(17_000.0));
+}
+
+#[test]
+fn cassette_parse_fmp_institutional_ownership_response() {
+    let fetcher = FmpHttpInstitutionalOwnershipFetcher::default();
+    let query = FmpHttpInstitutionalOwnershipFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"holder": "VANGUARD GROUP INC", "shares": 1300000000.0, "dateReported": "2024-06-30", "change": 5000000.0},
+        {"holder": "", "shares": 1.0}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "institutional");
+    assert_eq!(rows[0].holder.as_deref(), Some("VANGUARD GROUP INC"));
+    assert_eq!(rows[0].shares, Some(1_300_000_000.0));
+}
+
+#[test]
+fn cassette_parse_fmp_government_trades_response() {
+    let fetcher = FmpHttpGovernmentTradesFetcher::default();
+    let query = FmpHttpGovernmentTradesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL", "representative": "Jane Senator", "office": "Senate",
+            "transactionDate": "2024-03-01", "type": "Purchase", "amount": "$1,001 - $15,000"
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "government_trade");
+    assert_eq!(rows[0].holder.as_deref(), Some("Jane Senator"));
+    assert_eq!(rows[0].relationship.as_deref(), Some("Senate"));
+    assert_eq!(rows[0].transaction_type.as_deref(), Some("Purchase"));
+    assert_eq!(rows[0].value, Some(1001.0));
+}
+
+// ---------------------------------------------------------------------------
 // Live test (gated by TDW_FMP_LIVE=1 and TDW_FMP_API_KEY)
 // ---------------------------------------------------------------------------
 
@@ -1368,4 +1515,119 @@ async fn live_fmp_filings_returns_data_when_env_var_set() {
     let rows = live_fetch_nonempty!(fetcher, query);
     assert!(!rows.is_empty(), "live filings must include a row");
     assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_search_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP search integration test");
+        return;
+    }
+    let fetcher = FmpHttpSearchFetcher::default();
+    let query = FmpHttpSearchFetcher::transform_query(json!({"query": "apple", "limit": 5}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live search must include a row");
+}
+
+#[tokio::test]
+async fn live_fmp_historical_market_cap_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP historical-market-cap integration test");
+        return;
+    }
+    let fetcher = FmpHttpHistoricalMarketCapFetcher::default();
+    let query =
+        FmpHttpHistoricalMarketCapFetcher::transform_query(json!({"symbol": "AAPL", "limit": 5}))
+            .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live market-cap must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_split_calendar_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP split-calendar integration test");
+        return;
+    }
+    let fetcher = FmpHttpSplitCalendarFetcher::default();
+    let query = FmpHttpSplitCalendarFetcher::transform_query(json!({}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    // The split calendar may legitimately be empty for the default window, so do
+    // not require non-empty; just confirm a live round trip succeeds.
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+}
+
+#[tokio::test]
+async fn live_fmp_latest_filings_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP latest-filings integration test");
+        return;
+    }
+    let fetcher = FmpHttpLatestFilingsFetcher::default();
+    let query = FmpHttpLatestFilingsFetcher::transform_query(json!({"limit": 25}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live latest-filings must include a row");
+}
+
+#[tokio::test]
+async fn live_fmp_insider_trading_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP insider-trading integration test");
+        return;
+    }
+    let fetcher = FmpHttpInsiderTradingFetcher::default();
+    let query = FmpHttpInsiderTradingFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+}
+
+#[tokio::test]
+async fn live_fmp_institutional_ownership_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP institutional-ownership integration test");
+        return;
+    }
+    let fetcher = FmpHttpInstitutionalOwnershipFetcher::default();
+    let query = FmpHttpInstitutionalOwnershipFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
+}
+
+#[tokio::test]
+async fn live_fmp_government_trades_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP government-trades integration test");
+        return;
+    }
+    let fetcher = FmpHttpGovernmentTradesFetcher::default();
+    let query = FmpHttpGovernmentTradesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let raw = fetcher
+        .extract_data(&query, &Credentials::default())
+        .await
+        .unwrap_or_else(|e| panic!("live extract_data must succeed: {e}"));
+    fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("live transform_data must succeed: {e}"));
 }

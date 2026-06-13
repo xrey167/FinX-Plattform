@@ -13,7 +13,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tdw_core::http_support::prelude::*;
-use tdw_domain::{EtfHolding, MarketDataBar, OwnershipRecord, SymbolMapping, TimeGranularity};
+use tdw_domain::{
+    CompanyFacts, CompanyFiling, EtfHolding, MarketDataBar, OwnershipRecord, SymbolMapping,
+    TimeGranularity,
+};
 use tokio::time::sleep;
 
 use crate::{BASE_URL, SecCikMapQuery, SecFilingsQuery, SecHistoricalQuery};
@@ -349,6 +352,232 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
             });
         }
 
+        Ok(rows)
+    }
+}
+
+// ── XBRL company-facts fetcher → CompanyFacts (equity/compare/company_facts) ──
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC EDGAR XBRL company-facts fetcher, normalized to
+    /// [`tdw_domain::CompanyFacts`].
+    ///
+    /// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json` and
+    /// flattens the `us-gaap` / `dei` taxonomy fact tree into one
+    /// [`CompanyFacts`] row per (concept, unit, fact). Standardizes
+    /// `equity/compare/company_facts`.
+    pub SecCompanyFactsHttpFetcher,
+    BASE_URL
+);
+
+/// Wire shape for `GET /api/xbrl/companyfacts/CIK*.json` (full taxonomy tree).
+#[derive(Deserialize)]
+struct SecCompanyFactsEnvelope {
+    #[serde(default)]
+    cik: Option<u64>,
+    #[serde(rename = "entityName", default)]
+    entity_name: Option<String>,
+    #[serde(default)]
+    facts: Option<std::collections::BTreeMap<String, serde_json::Map<String, Value>>>,
+}
+
+#[derive(Deserialize)]
+struct SecConceptFacts {
+    #[serde(default)]
+    units: Option<std::collections::BTreeMap<String, Vec<SecCompanyFact>>>,
+}
+
+#[derive(Deserialize)]
+struct SecCompanyFact {
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    val: Option<f64>,
+    #[serde(default)]
+    fy: Option<i32>,
+    #[serde(default)]
+    fp: Option<String>,
+    #[serde(default)]
+    form: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFacts> for SecCompanyFactsHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "company_facts";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/api/xbrl/companyfacts/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec company_facts extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec company_facts returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec company_facts read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFacts>> {
+        let envelope: SecCompanyFactsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec company_facts parse_json: {e}")))?;
+        let cik = envelope
+            .cik
+            .map_or_else(|| query.cik.clone(), |c| c.to_string());
+        let entity_name = envelope.entity_name;
+        let mut rows = Vec::new();
+        let Some(taxonomies) = envelope.facts else {
+            return Ok(rows);
+        };
+        for (taxonomy, concepts) in taxonomies {
+            for (concept, raw_concept) in concepts {
+                let Ok(parsed) = serde_json::from_value::<SecConceptFacts>(raw_concept) else {
+                    continue;
+                };
+                let Some(units) = parsed.units else { continue };
+                for (unit, facts) in units {
+                    for fact in facts {
+                        rows.push(CompanyFacts {
+                            cik: cik.clone(),
+                            entity_name: entity_name.clone(),
+                            taxonomy: taxonomy.clone(),
+                            concept: concept.clone(),
+                            unit: Some(unit.clone()),
+                            end: fact.end,
+                            fiscal_year: fact.fy,
+                            fiscal_period: fact.fp,
+                            form: fact.form,
+                            value: fact.val,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(rows)
+    }
+}
+
+// ── Latest financial reports fetcher (equity/discovery/latest_financial_reports) ─
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC latest-financial-reports fetcher, normalized to
+    /// [`tdw_domain::CompanyFiling`].
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` and selects the
+    /// periodic financial-report filings (10-K / 10-Q / 20-F / 40-F), emitting one
+    /// [`CompanyFiling`] per report (the filer CIK is carried in `symbol`).
+    /// Standardizes `equity/discovery/latest_financial_reports`.
+    pub SecLatestFinancialReportsHttpFetcher,
+    BASE_URL
+);
+
+/// SEC form types that carry periodic financial statements.
+const FINANCIAL_REPORT_FORMS: &[&str] = &["10-K", "10-Q", "20-F", "40-F"];
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFiling> for SecLatestFinancialReportsHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "latest_financial_reports";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client.get(&url).send().await.map_err(|e| {
+            Error::Provider(format!("sec latest_financial_reports extract_data: {e}"))
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec latest_financial_reports returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec latest_financial_reports read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFiling>> {
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw).map_err(|e| {
+            Error::Provider(format!("sec latest_financial_reports parse_json: {e}"))
+        })?;
+        let cik = envelope.cik.clone().map_or_else(
+            || query.cik.clone(),
+            |c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            },
+        );
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .unwrap_or(SecRecentFilings {
+                accession_number: Vec::new(),
+                form: Vec::new(),
+                filing_date: Vec::new(),
+            });
+        let len = recent.accession_number.len();
+        let mut rows = Vec::new();
+        for i in 0..len {
+            let form = recent.form.get(i).cloned().unwrap_or_default();
+            let is_financial = FINANCIAL_REPORT_FORMS
+                .iter()
+                .any(|f| form.eq_ignore_ascii_case(f));
+            if !is_financial {
+                continue;
+            }
+            rows.push(CompanyFiling {
+                symbol: cik.clone(),
+                form_type: form,
+                filing_date: recent.filing_date.get(i).cloned(),
+                accepted_date: None,
+                cik: Some(cik.clone()),
+                link: recent.accession_number.get(i).cloned(),
+                final_link: None,
+            });
+        }
         Ok(rows)
     }
 }
@@ -975,5 +1204,114 @@ mod tests {
     #[test]
     fn transform_query_xbrl_rejects_missing_symbol() {
         assert!(SecXbrlHttpFetcher::transform_query(serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn transform_data_company_facts_flattens_taxonomy_tree() {
+        let fetcher = SecCompanyFactsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": 320_193,
+                "entityName": "Apple Inc.",
+                "facts": {
+                    "us-gaap": {
+                        "Revenues": {
+                            "label": "Revenues",
+                            "units": {
+                                "USD": [
+                                    {"end": "2024-09-28", "val": 391_035_000_000.0_f64,
+                                     "fy": 2024, "fp": "FY", "form": "10-K"},
+                                    {"end": "2023-09-30", "val": 383_285_000_000.0_f64,
+                                     "fy": 2023, "fp": "FY", "form": "10-K"}
+                                ]
+                            }
+                        }
+                    },
+                    "dei": {
+                        "EntityCommonStockSharesOutstanding": {
+                            "units": {
+                                "shares": [
+                                    {"end": "2024-10-18", "val": 15_115_823_000.0_f64,
+                                     "fy": 2024, "fp": "FY", "form": "10-K"}
+                                ]
+                            }
+                        }
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 3, "rows={rows:#?}");
+        let revenue = rows
+            .iter()
+            .find(|r| r.concept == "Revenues" && r.end.as_deref() == Some("2024-09-28"))
+            .expect("revenue fact present");
+        assert_eq!(revenue.cik, "320193");
+        assert_eq!(revenue.taxonomy, "us-gaap");
+        assert_eq!(revenue.unit.as_deref(), Some("USD"));
+        assert_eq!(revenue.fiscal_year, Some(2024));
+        assert_eq!(revenue.form.as_deref(), Some("10-K"));
+        assert!((revenue.value.unwrap_or_default() - 391_035_000_000.0).abs() < 1.0);
+        assert!(rows.iter().any(|r| r.taxonomy == "dei"));
+    }
+
+    #[test]
+    fn transform_data_company_facts_empty_when_no_facts() {
+        let fetcher = SecCompanyFactsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({"cik": 320_193, "entityName": "Apple Inc."})
+                .to_string()
+                .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("empty facts must not error");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn transform_data_latest_financial_reports_filters_to_periodic_forms() {
+        let fetcher = SecLatestFinancialReportsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": "320193",
+                "name": "Apple Inc.",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000320193-24-000123", "0000320193-24-000099",
+                                            "0000320193-24-000050"],
+                        "form": ["10-K", "8-K", "10-Q"],
+                        "filingDate": ["2024-11-01", "2024-10-15", "2024-08-01"]
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 2, "only 10-K and 10-Q kept: {rows:#?}");
+        assert!(
+            rows.iter()
+                .all(|r| r.form_type == "10-K" || r.form_type == "10-Q")
+        );
+        assert_eq!(rows[0].symbol, "320193");
+        assert_eq!(rows[0].cik.as_deref(), Some("320193"));
+    }
+
+    #[test]
+    fn transform_query_company_facts_requires_cik() {
+        assert!(SecCompanyFactsHttpFetcher::transform_query(serde_json::json!({})).is_err());
+        let q = SecCompanyFactsHttpFetcher::transform_query(serde_json::json!({"cik": "320193"}))
+            .expect("valid cik");
+        assert_eq!(q.padded_cik(), "0000320193");
     }
 }

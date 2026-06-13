@@ -3,10 +3,11 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, EarningsTranscript,
-    EmployeeCount, EquityHistoricalData, EsgScore, Estimate, ExecutiveCompensation,
-    FinancialStatement, Instrument, KeyExecutive, KeyMetrics, OwnershipRecord, PricePerformance,
-    QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow,
+    CalendarEvent, CompanyFacts, CompanyFiling, CompanyProfile, CorporateAction,
+    EarningsTranscript, EmployeeCount, EquityHistoricalData, EsgScore, Estimate,
+    ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument, KeyExecutive,
+    KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios, RevenueSegment,
+    ScreenerRow,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -156,6 +157,28 @@ const EQUITY_CALENDAR_EARNINGS: &[ProviderCandidate] =
 const EQUITY_CALENDAR_IPO: &[ProviderCandidate] =
     &[ProviderCandidate::new("nasdaq", "equity_calendar_ipo")];
 
+// FMP equity discovery/estimates/ownership breadth (openbb-parity P4W2). Each
+// route is its own FMP fetcher keyed by its `ENDPOINT` const, except the two
+// SEC routes (company_facts and latest_financial_reports) served by the keyless
+// SEC EDGAR data API. All free-tier (FMP / SEC) only.
+const EQUITY_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "search")];
+const EQUITY_HISTORICAL_MARKET_CAP: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "historical_market_cap")];
+const EQUITY_CALENDAR_SPLITS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "split_calendar")];
+const EQUITY_COMPARE_COMPANY_FACTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "company_facts")];
+const EQUITY_DISCOVERY_FILINGS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "latest_filings")];
+const EQUITY_DISCOVERY_LATEST_FINANCIAL_REPORTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "latest_financial_reports")];
+const EQUITY_OWNERSHIP_INSIDER_TRADING: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "insider_trading")];
+const EQUITY_OWNERSHIP_INSTITUTIONAL: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "institutional_ownership")];
+const EQUITY_OWNERSHIP_GOVERNMENT_TRADES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "government_trades")];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
 }
@@ -238,6 +261,14 @@ fn employee_count() -> Schema {
 
 fn company_filing() -> Schema {
     schema_for!(CompanyFiling)
+}
+
+fn company_facts() -> Schema {
+    schema_for!(CompanyFacts)
+}
+
+fn historical_market_cap() -> Schema {
+    schema_for!(HistoricalMarketCap)
 }
 
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
@@ -399,7 +430,82 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries.extend(fundamental_entries());
     entries.extend(completion_entries());
     entries.extend(p4w1_entries());
+    entries.extend(p4w2_entries());
     entries
+}
+
+/// FMP/SEC equity discovery/estimates/ownership breadth entries (openbb-parity
+/// P4W2): ticker search, historical market cap, the split calendar, SEC company
+/// facts, the latest-filings discovery feeds (FMP cross-issuer + SEC periodic
+/// reports), and the insider / institutional / government-trade ownership
+/// records. Split out of [`entries`] to keep each function compact; appended in
+/// declaration order. Free-tier (FMP / keyless SEC) only.
+fn p4w2_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/search",
+            instrument,
+            EQUITY_SEARCH,
+            "raw.instrument",
+            "Ticker/company search by name or symbol fragment, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/historical_market_cap",
+            historical_market_cap,
+            EQUITY_HISTORICAL_MARKET_CAP,
+            "raw.historical_market_cap",
+            "Historical market-capitalization time series for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/splits",
+            calendar_event,
+            EQUITY_CALENDAR_SPLITS,
+            "raw.calendar_event",
+            "Upcoming stock-split calendar (split factor, date), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/compare/company_facts",
+            company_facts,
+            EQUITY_COMPARE_COMPANY_FACTS,
+            "raw.company_facts",
+            "Reported XBRL company facts (concept values per period), SEC-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/filings",
+            company_filing,
+            EQUITY_DISCOVERY_FILINGS,
+            "raw.company_filing",
+            "Latest SEC filings reported to EDGAR (cross-issuer feed), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/discovery/latest_financial_reports",
+            company_filing,
+            EQUITY_DISCOVERY_LATEST_FINANCIAL_REPORTS,
+            "raw.company_filing",
+            "Latest periodic financial reports (10-K/10-Q) for a filer, SEC-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/ownership/insider_trading",
+            ownership_record,
+            EQUITY_OWNERSHIP_INSIDER_TRADING,
+            "raw.ownership_record",
+            "Insider (management/board) trading activity for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/ownership/institutional",
+            ownership_record,
+            EQUITY_OWNERSHIP_INSTITUTIONAL,
+            "raw.ownership_record",
+            "Institutional holders and ownership over time for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/ownership/government_trades",
+            ownership_record,
+            EQUITY_OWNERSHIP_GOVERNMENT_TRADES,
+            "raw.ownership_record",
+            "Government official (congressional) trades for a symbol, FMP-backed.",
+        ),
+    ]
 }
 
 /// FMP equity/fundamental breadth entries (openbb-parity P4W1): statement-growth

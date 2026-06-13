@@ -12,8 +12,9 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
-    SecFilingsHttpFetcher, SecForm13FHttpFetcher, SecXbrlHttpFetcher,
+    SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
 };
 
 pub use catalog::{ENDPOINTS, SecEndpoint, SecModel};
