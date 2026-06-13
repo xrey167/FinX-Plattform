@@ -32,8 +32,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 /// Build a graph-backed `KnowledgeRuntime` seeded with a small ego-graph:
-/// `instrument:AAPL` --listed_on--> `exchange:NASDAQ`, and
-/// `instrument:AAPL` --has_ceo--> `person:tim_cook`.
+/// `instrument:AAPL` `--listed_on-->` `exchange:NASDAQ`, and
+/// `instrument:AAPL` `--has_ceo-->` `person:tim_cook`.
 async fn seeded_runtime() -> Arc<KnowledgeRuntime> {
     let graph = Arc::new(InMemoryGraphEngine::default());
     let node = |id: &str, kind: EntityKind, label: &str| GraphNode {

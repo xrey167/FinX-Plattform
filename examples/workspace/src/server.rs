@@ -102,10 +102,11 @@ pub async fn start_workspace(config: WorkspaceConfig) -> std::io::Result<Running
     Ok(RunningServer { addr, cancel, task })
 }
 
-/// Boot the **Workspace data backend** surface WITH the read-only knowledge
-/// graph handler attached (K-M6), so `GET /widget-data/knowledge/graph` serves a
-/// live ego-graph through the same `serve_workspace_http_with_graph` path the
-/// daemon uses.
+/// Boot the **Workspace data backend** with the read-only knowledge graph handler
+/// attached (K-M6).
+///
+/// `GET /widget-data/knowledge/graph` serves a live ego-graph through the same
+/// `serve_workspace_http_with_graph` path the daemon uses.
 ///
 /// # Errors
 ///
