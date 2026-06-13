@@ -141,8 +141,16 @@ async fn seed_graph() -> Arc<InMemoryGraphEngine> {
             valid_from: Some(AS_OF_TS.to_string()),
             valid_to: None,
         },
-        finding_node("finding:f1", "Q3 revenue beat", Some(("finding-doc:f1", "Revenue beat consensus."))),
-        finding_node("finding:f2", "Margin compression risk", Some(("finding-doc:f2", "Margins fell QoQ."))),
+        finding_node(
+            "finding:f1",
+            "Q3 revenue beat",
+            Some(("finding-doc:f1", "Revenue beat consensus.")),
+        ),
+        finding_node(
+            "finding:f2",
+            "Margin compression risk",
+            Some(("finding-doc:f2", "Margins fell QoQ.")),
+        ),
         doc_node("finding-doc:f1"),
         doc_node("finding-doc:f2"),
     ];
@@ -150,8 +158,18 @@ async fn seed_graph() -> Arc<InMemoryGraphEngine> {
 
     graph
         .upsert_edges(vec![
-            user_edge("finding:f1", "supports", "finding:thesis1", Some("revenue supports valuation")),
-            user_edge("finding:f2", "contradicts", "finding:thesis1", Some("margin risk")),
+            user_edge(
+                "finding:f1",
+                "supports",
+                "finding:thesis1",
+                Some("revenue supports valuation"),
+            ),
+            user_edge(
+                "finding:f2",
+                "contradicts",
+                "finding:thesis1",
+                Some("margin risk"),
+            ),
             user_edge("finding:f1", "described_by", "finding-doc:f1", None),
             user_edge("finding:f2", "described_by", "finding-doc:f2", None),
         ])
@@ -448,12 +466,18 @@ fn ambiguous_or_missing_root_is_tool_error() {
     let mut server = server_with_graph(graph);
 
     let none = call(&mut server, "tdw.kg.export", &json!({ "as_of": NOW }));
-    assert_eq!(none["result"]["isError"], true, "no root must error: {none}");
+    assert_eq!(
+        none["result"]["isError"], true,
+        "no root must error: {none}"
+    );
 
     let both = call(
         &mut server,
         "tdw.kg.export",
         &json!({ "thesis_id": "finding:thesis1", "finding_id": "finding:f1" }),
     );
-    assert_eq!(both["result"]["isError"], true, "two roots must error: {both}");
+    assert_eq!(
+        both["result"]["isError"], true,
+        "two roots must error: {both}"
+    );
 }

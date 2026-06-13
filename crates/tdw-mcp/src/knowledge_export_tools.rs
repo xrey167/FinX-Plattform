@@ -187,14 +187,17 @@ pub fn execute(
         "entity"
     };
 
-    let as_of = optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
+    let as_of =
+        optional_str(arguments, "as_of").map_or_else(|| now.to_string(), ToString::to_string);
     validate_date(&as_of)?;
     let as_of_ts = tdw_tags::date_to_timestamp(&as_of);
 
     // generated_at is caller-injected; absent → an explicit sentinel so the
     // artifact always carries a (truthful) stamp rather than a silent gap.
-    let generated_at = optional_str(arguments, "generated_at")
-        .map_or_else(|| "(generation time not provided)".to_string(), ToString::to_string);
+    let generated_at = optional_str(arguments, "generated_at").map_or_else(
+        || "(generation time not provided)".to_string(),
+        ToString::to_string,
+    );
 
     let trail = block_on(assemble_trail(graph, root_id, root_kind_arg, &as_of_ts))?;
 
@@ -577,7 +580,11 @@ async fn assemble_trail(
         evidence_finding_ids.push(root_node.id.clone());
     }
     for (edge, neighbor) in &inbound {
-        if !active_at(edge.valid_from.as_deref(), edge.valid_to.as_deref(), as_of_ts) {
+        if !active_at(
+            edge.valid_from.as_deref(),
+            edge.valid_to.as_deref(),
+            as_of_ts,
+        ) {
             continue;
         }
         if active_seen >= MAX_EVIDENCE_EDGES {
@@ -621,9 +628,7 @@ async fn assemble_trail(
         (&a.from, &a.rel, &a.to, &a.valid_from).cmp(&(&b.from, &b.rel, &b.to, &b.valid_from))
     });
 
-    citations.sort_by(|a, b| {
-        (&a.finding_id, &a.document_id).cmp(&(&b.finding_id, &b.document_id))
-    });
+    citations.sort_by(|a, b| (&a.finding_id, &a.document_id).cmp(&(&b.finding_id, &b.document_id)));
     citations.dedup_by(|a, b| a.finding_id == b.finding_id && a.document_id == b.document_id);
 
     unavailable.sort();
@@ -772,7 +777,9 @@ fn validate_date(value: &str) -> Result<(), ToolFailure> {
             .enumerate()
             .all(|(i, &b)| matches!(i, 4 | 7) || b.is_ascii_digit())
     {
-        return Err(execution(format!("as_of must be YYYY-MM-DD, got {value:?}")));
+        return Err(execution(format!(
+            "as_of must be YYYY-MM-DD, got {value:?}"
+        )));
     }
     Ok(())
 }
@@ -861,9 +868,7 @@ mod tests {
             "missing evidence must be explicit in markdown: {md}"
         );
         let value = trail.to_json("2026-06-13", "inject-1");
-        let unavailable = value["unavailable"]
-            .as_array()
-            .expect("unavailable array");
+        let unavailable = value["unavailable"].as_array().expect("unavailable array");
         assert!(
             unavailable
                 .iter()

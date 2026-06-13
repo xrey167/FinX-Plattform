@@ -104,9 +104,9 @@ pub fn run(args: &[String]) -> Result<(), CliError> {
         .and_then(serde_json::Value::as_str);
 
     // Prefer the structured artifact; fall back to the raw content text.
-    let parsed = structured.cloned().or_else(|| {
-        content_text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok())
-    });
+    let parsed = structured
+        .cloned()
+        .or_else(|| content_text.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()));
 
     match (out.as_str(), parsed) {
         ("markdown", Some(v)) => {
@@ -148,9 +148,7 @@ pub fn run(args: &[String]) -> Result<(), CliError> {
 /// Format the current UTC instant as an RFC 3339 string. This is the ONLY
 /// wall-clock read in the export path, and it lives in the client by design.
 fn current_utc_rfc3339() -> String {
-    chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 // ── MCP transport (mirrors kg note) ────────────────────────────────────────────
@@ -236,8 +234,8 @@ fn read_jsonrpc_line(stream: &mut TcpStream) -> Result<serde_json::Value, CliErr
             Err(e) => return Err(format!("read JSON-RPC: {e}").into()),
         }
     }
-    let line = String::from_utf8(bytes)
-        .map_err(|e| format!("invalid UTF-8 in JSON-RPC response: {e}"))?;
+    let line =
+        String::from_utf8(bytes).map_err(|e| format!("invalid UTF-8 in JSON-RPC response: {e}"))?;
     serde_json::from_str(line.trim())
         .map_err(|e| format!("parse JSON-RPC response: {e} (got: {line:?})").into())
 }
