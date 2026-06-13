@@ -81,12 +81,18 @@ const SPREAD_TCM_EFFR_10Y: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_spreads_tcm_effr_10y",
 )];
-const CORP_HQM_2Y: &[ProviderCandidate] =
-    &[ProviderCandidate::new("fred", "fixedincome_corporate_hqm_2y")];
-const CORP_HQM_5Y: &[ProviderCandidate] =
-    &[ProviderCandidate::new("fred", "fixedincome_corporate_hqm_5y")];
-const CORP_HQM_30Y: &[ProviderCandidate] =
-    &[ProviderCandidate::new("fred", "fixedincome_corporate_hqm_30y")];
+const CORP_HQM_2Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_2y",
+)];
+const CORP_HQM_5Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_5y",
+)];
+const CORP_HQM_30Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_30y",
+)];
 const SPREAD_TCM_10Y2Y: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_spreads_tcm_10y2y",
