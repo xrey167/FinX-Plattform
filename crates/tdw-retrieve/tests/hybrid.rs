@@ -833,10 +833,10 @@ async fn trust_class_token_round_trip() {
 /// Fixture for the graph-expansion trust-gate e2e test.
 ///
 /// Layout:
-/// - `doc-seed`   → `finding:seed`   — provenance_class: `user_authored`
-/// - `doc-neighbor` → `instrument:neighbor` — NO provenance_class stamp
+/// - `doc-seed`   → `finding:seed`   — `provenance_class`: `user_authored`
+/// - `doc-neighbor` → `instrument:neighbor` — NO `provenance_class` stamp
 ///   (backward-compat default → `DocumentIngested`)
-/// - Graph edge: `finding:seed` -[related_to]→ `instrument:neighbor`
+/// - Graph edge: `finding:seed` -[`related_to`]→ `instrument:neighbor`
 ///
 /// With a `user_authored`-only filter the seed passes, but the expanded
 /// neighbour defaults to `DocumentIngested` and must be excluded by the

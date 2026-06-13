@@ -1,4 +1,4 @@
-//! Integration tests for `tdw.kg.answer` — cited GraphRAG answer synthesis (K-M3).
+//! Integration tests for `tdw.kg.answer` — cited `GraphRAG` answer synthesis (K-M3).
 //!
 //! Tests cover the six gates defined in the K-M3 spec:
 //!
@@ -266,7 +266,7 @@ fn extractive_mode_returns_structured_answer_with_valid_citations() {
     // The retrieved_count tells us how many hits were returned.
     let retrieved_count = s["retrieved_count"].as_u64().unwrap_or(0);
     assert!(
-        citations.len() <= retrieved_count as usize,
+        citations.len() <= usize::try_from(retrieved_count).unwrap_or(usize::MAX),
         "citation count ({}) must not exceed retrieved_count ({})",
         citations.len(),
         retrieved_count
@@ -354,7 +354,7 @@ fn synthesized_mode_with_stub_override_cites_only_valid_ids() {
     let cited_ids: Vec<&str> = citations.iter().filter_map(|c| c["id"].as_str()).collect();
     let retrieved_count = s["retrieved_count"].as_u64().unwrap_or(0);
     assert!(
-        cited_ids.len() <= retrieved_count as usize,
+        cited_ids.len() <= usize::try_from(retrieved_count).unwrap_or(usize::MAX),
         "cited ids ({}) must not exceed retrieved_count ({}): {s}",
         cited_ids.len(),
         retrieved_count
@@ -416,7 +416,7 @@ fn point_in_time_as_of_before_indexed_docs_yields_no_citations() {
     );
 }
 
-/// Point-in-time: querying with as_of = NOW (the exact index date) DOES return results,
+/// Point-in-time: querying with `as_of` = NOW (the exact index date) DOES return results,
 /// confirming the leakage guard is not over-aggressive.
 #[test]
 fn point_in_time_as_of_at_index_date_returns_hits() {

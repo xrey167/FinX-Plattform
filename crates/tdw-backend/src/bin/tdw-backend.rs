@@ -26,7 +26,7 @@ async fn main() -> Result<(), MainError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cfg = BackendConfig::load().await?;
     apply_flags(&mut cfg, &args)?;
-    server::run(cfg).await?;
+    Box::pin(server::run(cfg)).await?;
     Ok(())
 }
 

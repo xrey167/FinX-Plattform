@@ -810,6 +810,7 @@ impl Backend {
     /// Returns [`BackendError::Init`] if the transport cannot bind (e.g. an
     /// invalid `tcp_bind` address, an address already in use, or a transport
     /// requested but not compiled into this build).
+    #[allow(clippy::too_many_lines)] // single logical unit: transport + relay + service loop + shutdown wiring
     pub async fn serve(&mut self, cfg: &BackendConfig) -> BackendResult<()> {
         let (handle, events_rx, service_loop) =
             tdw_app_server::service_channel(self.state.clone(), self.state.clone());
@@ -4354,6 +4355,7 @@ fn spawn_pattern_mining_worker(
 ///
 /// Returns `None` when `cfg.enabled = false` (a loud notice is logged) or when
 /// no proposal queue is attached (induction would have nowhere to enqueue).
+#[allow(clippy::too_many_lines)] // single logical unit: cron-tick loop + induction pass + proposal submission
 fn spawn_lesson_induction_worker(
     cfg: &tdw_config::LessonsConfig,
     proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
@@ -4444,7 +4446,7 @@ fn spawn_lesson_induction_worker(
             // graph round-trips, and holding the lock across them would block the
             // MCP write surface and the K-L4 sweep for the whole pass (Gemini
             // HIGH). The lock is acquired ONLY for `submit_lessons`.
-            let now_ts = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let now_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
             let episodes = match tdw_knowledge::lessons::read_episodes_from_graph(&graph, max_scan)
                 .await
             {
@@ -4474,7 +4476,7 @@ fn spawn_lesson_induction_worker(
                     tdw_taxonomy::Adaptivity::Learning,
                     &graph,
                     &tags,
-                    &now_ts,
+                    &now_date,
                 )
                 .await
             };
@@ -4521,6 +4523,7 @@ fn spawn_lesson_induction_worker(
 /// is emitted so the operator knows the feature exists. When
 /// `cfg.retire_induced_on_disable = true` a join handle for the one-shot
 /// retirement task is returned instead so the caller can await it.
+#[allow(clippy::too_many_lines)] // single logical unit: cron-tick loop + pattern-index load + induction cycle
 fn spawn_induction_worker(
     cfg: &tdw_config::InductionConfig,
     graph: Arc<dyn GraphEngine>,
@@ -4528,6 +4531,11 @@ fn spawn_induction_worker(
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     use tdw_eval_runner::{replay_eval::ReplaySplit, retrieval_eval::DriftKey};
+
+    // Maximum edges loaded into the replay corpus per cycle (B7 posture: hard
+    // cap, not silent truncation). At 1 000 edges per page this is 100 pages.
+    const INDUCTION_EDGE_CAP: usize = 100_000;
+    const PAGE_SIZE: usize = 1_000;
 
     if !cfg.enabled {
         eprintln!(
@@ -4565,11 +4573,6 @@ fn spawn_induction_worker(
         }
         return None;
     }
-
-    // Maximum edges loaded into the replay corpus per cycle (B7 posture: hard
-    // cap, not silent truncation). At 1 000 edges per page this is 100 pages.
-    const INDUCTION_EDGE_CAP: usize = 100_000;
-    const PAGE_SIZE: usize = 1_000;
 
     let min_precision = cfg.min_promote_precision;
     let min_recall = cfg.min_promote_recall;
@@ -4736,11 +4739,13 @@ fn spawn_induction_worker(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let support = node
-                            .props
-                            .get("support")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as usize;
+                        let support = usize::try_from(
+                            node.props
+                                .get("support")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0),
+                        )
+                        .unwrap_or(0);
                         let window = node
                             .props
                             .get("window")
