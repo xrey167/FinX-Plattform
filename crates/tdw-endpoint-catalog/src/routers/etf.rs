@@ -10,7 +10,7 @@
 //! sync.
 //!
 //! `etf/discovery/{active,gainers,losers}` are intentionally not wired here: their
-//! only OpenBB provider is WSJ (scrape-only, no public API), so they are deferred
+//! only `OpenBB` provider is WSJ (scrape-only, no public API), so they are deferred
 //! by documented business decision.
 
 use schemars::{Schema, schema_for};
