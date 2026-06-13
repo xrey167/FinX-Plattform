@@ -811,7 +811,7 @@ pub async fn run(cfg: BackendConfig) -> BackendResult<()> {
             exit_code_to_result(code)
         }
 
-        Surfaces::Both => run_both(cfg).await,
+        Surfaces::Both => Box::pin(run_both(cfg)).await,
     }
 }
 
@@ -1307,7 +1307,7 @@ mod tests {
             ..Default::default()
         };
 
-        let server = tokio::spawn(async move { run(cfg).await });
+        let server = tokio::spawn(async move { Box::pin(run(cfg)).await });
 
         submit_loopback_shutdown(addr).await;
 
@@ -1349,7 +1349,7 @@ mod tests {
             mcp_transport: McpTransport::Stdio,
         };
 
-        let joined = tokio::time::timeout(Duration::from_secs(10), run(cfg))
+        let joined = tokio::time::timeout(Duration::from_secs(10), Box::pin(run(cfg)))
             .await
             .expect("run(Both) must complete within the bounded timeout");
         match joined {

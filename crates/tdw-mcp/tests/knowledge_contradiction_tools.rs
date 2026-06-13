@@ -152,13 +152,15 @@ fn call(server: &mut McpServer, name: &str, arguments: &Value) -> Value {
 fn result_content(response: &Value) -> Value {
     response["result"]["content"][0]["text"]
         .as_str()
-        .map(|s| serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.to_string())))
-        .unwrap_or_else(|| panic!("expected result.content[0].text, got: {response}"))
+        .map_or_else(
+            || panic!("expected result.content[0].text, got: {response}"),
+            |s| serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.to_string())),
+        )
 }
 
 // ── ingest-path fixture ───────────────────────────────────────────────────────
 
-/// Build a fully wired MCP server with a ContradictionDetector on the
+/// Build a fully wired MCP server with a `ContradictionDetector` on the
 /// `tdw.kg.ingest` path.  Returns the server plus the bare graph engine so
 /// tests can read edges directly after the tool call.
 ///
@@ -223,6 +225,7 @@ async fn build_ingest_server_with_prior_edge(t1: &str) -> (McpServer, Arc<InMemo
 /// Ingest a new `ceo_of` fact (bob at T2) after a prior fact (alice at T1)
 /// already sits in the graph.  The detector fires after the ingest batch and
 /// must close alice's edge at T2, preserving history.
+#[allow(clippy::too_many_lines)] // flat scenario test: seed/act/assert reads better unsplit
 #[test]
 fn ingest_path_closes_superseded_edge_and_preserves_history() {
     let t1 = "2024-01-01T00:00:00Z";
@@ -501,6 +504,7 @@ fn ingest_path_never_closes_user_provenance_edge() {
 /// `tdw.kg.annotate` only accepts `Annotation` proposals (note text), so we
 /// inject the `ProposalKind::Edge` directly into the queue during setup, then
 /// drive approve + materialize through the real MCP surface.
+#[allow(clippy::too_many_lines)] // flat scenario test: seed/act/assert reads better unsplit
 #[test]
 fn materialize_path_closes_superseded_edge() {
     use tdw_knowledge::proposals::{ProposalKind, ProposalQueue};
@@ -563,7 +567,7 @@ fn materialize_path_closes_superseded_edge() {
             .await
             .unwrap_or_else(|e| panic!("submit proposal: {e}"))
         };
-        let proposal_id = proposal.id.clone();
+        let proposal_id = proposal.id;
 
         let index = KnowledgeIndex::new(embedder.clone(), vectors.clone());
         let indexer = Arc::new(tokio::sync::Mutex::new(

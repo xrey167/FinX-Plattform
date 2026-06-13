@@ -20,7 +20,8 @@ async fn builds_both_facades() {
 
 /// Gate (K-X8): `Backend::in_memory_for_tests()` exposes a non-poisoned
 /// `question_store_handle()`, proving that the composition root wires the
-/// open-question store end-to-end (from_config production-registration gate).
+/// open-question store end-to-end (`from_config` production-registration gate).
+#[allow(clippy::significant_drop_tightening)] // test: cell owner must outlive guard block intentionally
 #[tokio::test]
 async fn in_memory_backend_wires_question_store() {
     let backend = Backend::in_memory_for_tests().await;
