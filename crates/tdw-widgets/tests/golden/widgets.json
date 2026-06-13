@@ -563,6 +563,120 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "economy_central_bank_holdings": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Federal Reserve SOMA securities holdings (keyless).",
+    "endpoint": "/widget-data/economy/central_bank_holdings",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_central_bank_holdings",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Central Bank Holdings",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_composite_leading_indicator": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "OECD Composite Leading Indicator (SDMX-JSON, keyless).",
+    "endpoint": "/widget-data/economy/composite_leading_indicator",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_composite_leading_indicator",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Composite Leading Indicator",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "economy_cpi": {
     "category": "economy",
     "data": {
@@ -734,6 +848,85 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "economy_fomc_documents": {
+    "category": "economy",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "doc_type",
+            "headerName": "Doc Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "FOMC meeting documents index (Federal Reserve, keyless).",
+    "endpoint": "/widget-data/economy/fomc_documents",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "economy_fomc_documents",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Fomc Documents",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "economy_fred_search": {
     "category": "economy",
     "data": {
@@ -818,6 +1011,63 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "economy_gdp_forecast": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "OECD Economic Outlook real GDP forecast (SDMX-JSON, keyless).",
+    "endpoint": "/widget-data/economy/gdp/forecast",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_gdp_forecast",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Forecast",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "economy_gdp_nominal": {
     "category": "economy",
     "data": {
@@ -897,6 +1147,63 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Real",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_house_price_index": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "OECD House Price Index (SDMX-JSON, keyless).",
+    "endpoint": "/widget-data/economy/house_price_index",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_house_price_index",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "House Price Index",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",
@@ -1068,6 +1375,63 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "International Financial Statistics",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_interest_rates": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "OECD Main Economic Indicators interest rates (SDMX-JSON, keyless).",
+    "endpoint": "/widget-data/economy/interest_rates",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_interest_rates",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Interest Rates",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",
@@ -1331,6 +1695,291 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "economy_primary_dealer_fails": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "FRBNY primary-dealer settlement fails (keyless).",
+    "endpoint": "/widget-data/economy/primary_dealer_fails",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_primary_dealer_fails",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Primary Dealer Fails",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_primary_dealer_positioning": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "FRBNY primary-dealer net positioning (keyless).",
+    "endpoint": "/widget-data/economy/primary_dealer_positioning",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_primary_dealer_positioning",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Primary Dealer Positioning",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_retail_prices": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Advance retail and food services sales, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/retail_prices",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_retail_prices",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Retail Prices",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_share_price_index": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "OECD share price index (SDMX-JSON, keyless).",
+    "endpoint": "/widget-data/economy/share_price_index",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_share_price_index",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Share Price Index",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_economic_conditions_chicago": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Chicago Fed National Activity Index, FRED-backed macro series.",
+    "endpoint": "/widget-data/economy/survey/economic_conditions_chicago",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_economic_conditions_chicago",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Economic Conditions Chicago",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "economy_survey_inflation_expectations": {
     "category": "economy",
     "data": {
@@ -1388,6 +2037,120 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "economy_survey_manufacturing_outlook_ny": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Empire State Manufacturing Survey general business conditions, FRED-backed.",
+    "endpoint": "/widget-data/economy/survey/manufacturing_outlook_ny",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_manufacturing_outlook_ny",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Manufacturing Outlook Ny",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_manufacturing_outlook_texas": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Dallas Fed Texas Manufacturing Outlook general business activity, FRED-backed.",
+    "endpoint": "/widget-data/economy/survey/manufacturing_outlook_texas",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_manufacturing_outlook_texas",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Manufacturing Outlook Texas",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "economy_survey_nonfarm_payrolls": {
     "category": "economy",
     "data": {
@@ -1410,6 +2173,63 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Nonfarm Payrolls",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "economy_survey_sloos": {
+    "category": "economy",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Senior Loan Officer Opinion Survey net tightening (C&I loans), FRED-backed.",
+    "endpoint": "/widget-data/economy/survey/sloos",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "economy_survey_sloos",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sloos",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",

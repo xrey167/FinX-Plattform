@@ -29,7 +29,11 @@ const USER_AGENT: &str = "tdw-provider-federal-reserve/0.1 (contact@finx.example
 /// is release-specific, so this keeps the relative resource the fetcher GETs.
 fn release_path(command: &str) -> &'static str {
     match command {
-        "fixedincome/government/dealer_stats" => "/releases/pd/dataviz/pd/series.json",
+        "fixedincome/government/dealer_stats" | "economy/primary_dealer_positioning" => {
+            "/releases/pd/dataviz/pd/series.json"
+        }
+        "economy/primary_dealer_fails" => "/releases/pd/dataviz/pd/fails.json",
+        "economy/central_bank_holdings" => "/releases/h41/current/h41.json",
         // economy/money_measures (H.6) is the default macro release.
         _ => "/releases/h6/current/h6.json",
     }

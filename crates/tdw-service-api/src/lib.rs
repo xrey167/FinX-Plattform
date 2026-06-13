@@ -206,7 +206,7 @@ use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
 };
 #[cfg(feature = "provider-oecd")]
-use tdw_provider_oecd::OecdHttpDataFetcher;
+use tdw_provider_oecd::{OecdHttpDataFetcher, OecdHttpMacroSeriesFetcher};
 #[cfg(feature = "provider-polygon")]
 use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
@@ -536,6 +536,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(NasdaqHttpCalendarFetcher::registry_entry())?;
     #[cfg(feature = "provider-oecd")]
     registry.register(OecdHttpDataFetcher::registry_entry())?;
+    // Catalog-facing OECD SDMX-JSON macro fetcher (OpenBB-parity P4W4).
+    #[cfg(feature = "provider-oecd")]
+    registry.register(OecdHttpMacroSeriesFetcher::registry_entry())?;
     #[cfg(feature = "provider-polygon")]
     registry.register(PolygonHttpAggregatesFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]

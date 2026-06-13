@@ -1746,6 +1746,8 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_imf_fetch_bindings(&mut table);
     #[cfg(feature = "provider-econdb")]
     insert_econdb_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-oecd")]
+    insert_oecd_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -2045,6 +2047,62 @@ fn econdb_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
         .map(|candidate| (candidate.provider, candidate.endpoint))
 }
 
+/// Build a [`FetchBinding`] for the OECD catalog-backed macro fetcher that injects
+/// the fixed `economy/*` `command` into the caller's params before the shared
+/// fetcher runs (the caller may override the per-request dimension `filter`).
+/// Mirrors [`econdb_command_fetch_binding`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_command_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::OecdHttpMacroSeriesFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the OECD catalog fetch bindings (OpenBB-parity **P4W4**) into
+/// `table`, keyed by the route-derived endpoint key (`<route with '/'→'_'>`)
+/// resolved through the catalog so the dispatch key never drifts from the
+/// candidate. Each binding injects its route's `command`.
+#[cfg(feature = "provider-oecd")]
+fn insert_oecd_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    for endpoint in tdw_provider_oecd::ENDPOINTS {
+        let Some(key) = oecd_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, oecd_command_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an OECD `economy/*` `command` to the `'static` `(provider, endpoint)`
+/// dispatch key declared for it in the endpoint catalog. Returns `None` only if
+/// an OECD command is missing its catalog route — a bug the conformance test
+/// catches. Mirrors [`econdb_catalog_key`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "oecd")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
 /// Build a [`FetchBinding`] for a Federal Reserve catalog-backed fetcher that
 /// resolves a fixed `OpenBB` `command` to its series/document set. The command
 /// is injected into the caller's params before the shared fetcher runs, so one
@@ -2102,6 +2160,31 @@ fn insert_federal_reserve_fetch_bindings(
         ("federal_reserve", "regulators_fed_fomc_documents"),
         fed_command_fetch_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
             "regulators/fed/fomc_documents",
+        ),
+    );
+    // OpenBB-parity P4W4: SOMA holdings + primary-dealer + economy-namespaced FOMC.
+    table.insert(
+        ("federal_reserve", "economy_central_bank_holdings"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/central_bank_holdings",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_positioning"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_positioning",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_fails"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_fails",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_fomc_documents"),
+        fed_command_fetch_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "economy/fomc_documents",
         ),
     );
 }
@@ -3085,6 +3168,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_imf_ingest_bindings(&mut table);
     #[cfg(feature = "provider-econdb")]
     insert_econdb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-oecd")]
+    insert_oecd_ingest_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_ingest_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -3696,6 +3781,47 @@ fn insert_econdb_ingest_bindings(
     }
 }
 
+/// Build an [`IngestBinding`] for the OECD catalog-backed macro fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it to the
+/// shared `raw.macro_series` bronze table. Mirrors [`econdb_command_ingest_binding`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_command_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::OecdHttpMacroSeriesFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the OECD ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-oecd")]
+fn insert_oecd_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    for endpoint in tdw_provider_oecd::ENDPOINTS {
+        let Some(key) = oecd_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            oecd_command_ingest_binding(endpoint.command, "raw.macro_series"),
+        );
+    }
+}
+
 /// Build an [`IngestBinding`] for a Federal Reserve catalog-backed fetcher that
 /// injects a fixed `command` before fetching one batch and persisting it.
 #[cfg(feature = "provider-federal-reserve")]
@@ -3747,6 +3873,35 @@ fn insert_federal_reserve_ingest_bindings(
         ("federal_reserve", "regulators_fed_fomc_documents"),
         fed_command_ingest_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
             "regulators/fed/fomc_documents",
+            "raw.fomc_document",
+        ),
+    );
+    // OpenBB-parity P4W4: SOMA holdings + primary-dealer + economy-namespaced FOMC.
+    table.insert(
+        ("federal_reserve", "economy_central_bank_holdings"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/central_bank_holdings",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_positioning"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_positioning",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_fails"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_fails",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_fomc_documents"),
+        fed_command_ingest_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "economy/fomc_documents",
             "raw.fomc_document",
         ),
     );
@@ -5299,6 +5454,49 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "econdb candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog <-> OECD `ENDPOINTS` sync (OpenBB-parity **P4W4**): every
+    /// standardized OECD command has a catalog route whose `oecd` candidate
+    /// endpoint is the route's `'/'→'_'` form and is dispatchable in both tables
+    /// under `provider-oecd`. Mirrors `econdb_catalog_routes_match_provider_endpoints`.
+    #[cfg(feature = "provider-oecd")]
+    #[test]
+    fn oecd_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_oecd::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("oecd command {} has no catalog route", endpoint.command)
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "oecd")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no oecd candidate", endpoint.command)
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} oecd endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "oecd candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "oecd candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command
