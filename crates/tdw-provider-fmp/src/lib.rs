@@ -7,6 +7,8 @@ pub mod http_fetcher;
 pub use http_fetcher::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
     FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
+    FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher, FmpHttpEtfInfoFetcher,
+    FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher, FmpHttpEtfSectorsFetcher,
     FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
     FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
     FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
@@ -472,7 +474,7 @@ impl FmpLimitQuery {
     /// # Errors
     ///
     /// Returns [`FmpError::InvalidLimit`] if `limit` is zero.
-    pub fn new(limit: u32) -> Result<Self> {
+    pub const fn new(limit: u32) -> Result<Self> {
         if limit == 0 {
             return Err(FmpError::InvalidLimit);
         }

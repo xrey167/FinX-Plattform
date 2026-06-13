@@ -378,7 +378,9 @@ struct SecCompanyFactsEnvelope {
     #[serde(rename = "entityName", default)]
     entity_name: Option<String>,
     #[serde(default)]
-    facts: Option<std::collections::BTreeMap<String, serde_json::Map<String, Value>>>,
+    facts: Option<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, SecConceptFacts>>,
+    >,
 }
 
 #[derive(Deserialize)]
@@ -453,10 +455,7 @@ impl Fetcher<SecFilingsQuery, CompanyFacts> for SecCompanyFactsHttpFetcher {
             return Ok(rows);
         };
         for (taxonomy, concepts) in taxonomies {
-            for (concept, raw_concept) in concepts {
-                let Ok(parsed) = serde_json::from_value::<SecConceptFacts>(raw_concept) else {
-                    continue;
-                };
+            for (concept, parsed) in concepts {
                 let Some(units) = parsed.units else { continue };
                 for (unit, facts) in units {
                     for fact in facts {
@@ -566,6 +565,111 @@ impl Fetcher<SecFilingsQuery, CompanyFiling> for SecLatestFinancialReportsHttpFe
                 .iter()
                 .any(|f| form.eq_ignore_ascii_case(f));
             if !is_financial {
+                continue;
+            }
+            rows.push(CompanyFiling {
+                symbol: cik.clone(),
+                form_type: form,
+                filing_date: recent.filing_date.get(i).cloned(),
+                accepted_date: None,
+                cik: Some(cik.clone()),
+                link: recent.accession_number.get(i).cloned(),
+                final_link: None,
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ── N-PORT disclosure index fetcher (etf/nport_disclosure) ────────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC N-PORT disclosure-index fetcher, normalized to
+    /// [`tdw_domain::CompanyFiling`].
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` and selects the fund
+    /// portfolio-disclosure filings (`NPORT-P` / `NPORT-EX`), emitting one
+    /// [`CompanyFiling`] per disclosure (the filer CIK is carried in `symbol`).
+    /// This is the filing-level disclosure index — distinct from `etf/holdings`,
+    /// which parses an individual N-PORT filing's portfolio XML into per-holding
+    /// rows. Standardizes `etf/nport_disclosure`.
+    pub SecNportDisclosureHttpFetcher,
+    BASE_URL
+);
+
+/// SEC form types that carry fund portfolio (N-PORT) disclosures.
+const NPORT_DISCLOSURE_FORMS: &[&str] = &["NPORT-P", "NPORT-EX"];
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFiling> for SecNportDisclosureHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "nport_disclosure";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec nport_disclosure returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFiling>> {
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure parse_json: {e}")))?;
+        let cik = envelope.cik.clone().map_or_else(
+            || query.cik.clone(),
+            |c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            },
+        );
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .unwrap_or(SecRecentFilings {
+                accession_number: Vec::new(),
+                form: Vec::new(),
+                filing_date: Vec::new(),
+            });
+        let len = recent.accession_number.len();
+        let mut rows = Vec::new();
+        for i in 0..len {
+            let form = recent.form.get(i).cloned().unwrap_or_default();
+            let is_nport = NPORT_DISCLOSURE_FORMS
+                .iter()
+                .any(|f| form.eq_ignore_ascii_case(f));
+            if !is_nport {
                 continue;
             }
             rows.push(CompanyFiling {
@@ -1236,6 +1340,11 @@ mod tests {
                                      "fy": 2024, "fp": "FY", "form": "10-K"}
                                 ]
                             }
+                        },
+                        // A concept with no `units` key must be skipped cleanly by
+                        // the single-pass typed deserializer (no `Value` round-trip).
+                        "EntityRegistrantName": {
+                            "label": "Entity Registrant Name"
                         }
                     }
                 }
@@ -1247,6 +1356,10 @@ mod tests {
             .transform_data(&query, raw)
             .expect("transform_data must succeed");
         assert_eq!(rows.len(), 3, "rows={rows:#?}");
+        assert!(
+            !rows.iter().any(|r| r.concept == "EntityRegistrantName"),
+            "concept without units must be skipped",
+        );
         let revenue = rows
             .iter()
             .find(|r| r.concept == "Revenues" && r.end.as_deref() == Some("2024-09-28"))
@@ -1313,5 +1426,45 @@ mod tests {
         let q = SecCompanyFactsHttpFetcher::transform_query(serde_json::json!({"cik": "320193"}))
             .expect("valid cik");
         assert_eq!(q.padded_cik(), "0000320193");
+    }
+
+    #[test]
+    fn transform_data_nport_disclosure_filters_to_nport_forms() {
+        let fetcher = SecNportDisclosureHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": "884394",
+                "name": "SPDR S&P 500 ETF Trust",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000884394-24-000010", "0000884394-24-000008",
+                                            "0000884394-24-000005"],
+                        "form": ["NPORT-P", "8-K", "NPORT-EX"],
+                        "filingDate": ["2024-11-01", "2024-10-15", "2024-08-01"]
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 2, "only NPORT-P and NPORT-EX kept: {rows:#?}");
+        assert!(
+            rows.iter()
+                .all(|r| r.form_type == "NPORT-P" || r.form_type == "NPORT-EX")
+        );
+        assert_eq!(rows[0].cik.as_deref(), Some("884394"));
+    }
+
+    #[test]
+    fn transform_query_nport_disclosure_requires_cik() {
+        assert!(SecNportDisclosureHttpFetcher::transform_query(serde_json::json!({})).is_err());
+        let q =
+            SecNportDisclosureHttpFetcher::transform_query(serde_json::json!({"cik": "884394"}))
+                .expect("valid cik");
+        assert_eq!(q.padded_cik(), "0000884394");
     }
 }

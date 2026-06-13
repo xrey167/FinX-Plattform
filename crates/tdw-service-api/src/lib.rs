@@ -173,6 +173,8 @@ use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetch
 use tdw_provider_fmp::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
     FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
+    FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher, FmpHttpEtfInfoFetcher,
+    FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher, FmpHttpEtfSectorsFetcher,
     FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
     FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
     FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
@@ -211,7 +213,7 @@ use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 use tdw_provider_sec::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
     SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
-    SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecNportDisclosureHttpFetcher, SecXbrlHttpFetcher,
 };
 #[cfg(feature = "provider-seeking-alpha")]
 use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
@@ -236,10 +238,10 @@ use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 #[cfg(feature = "provider-yahoo-http")]
 use tdw_provider_yahoo::{
-    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
-    YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
-    YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
-    YahooHttpShareStatisticsFetcher,
+    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpEtfInfoFetcher,
+    YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpPredefinedScreenerFetcher, YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher,
+    YahooHttpQuoteFetcher, YahooHttpShareStatisticsFetcher,
 };
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
@@ -301,6 +303,12 @@ pub fn default_registry() -> Result<ProviderRegistry> {
         registry.register(YahooHttpOptionsChainFetcher::registry_entry())?;
         registry.register(YahooHttpFuturesHistoricalFetcher::registry_entry())?;
         registry.register(YahooHttpFuturesCurveFetcher::registry_entry())?;
+        // ETF info + yfinance discovery screeners (openbb-parity P4W3). The
+        // predefined-screener fetcher registers once under its `ENDPOINT`; the
+        // four per-screen dispatch keys live only in the dispatch tables (the
+        // FMP-discovery pattern).
+        registry.register(YahooHttpEtfInfoFetcher::registry_entry())?;
+        registry.register(YahooHttpPredefinedScreenerFetcher::registry_entry())?;
     }
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
@@ -442,6 +450,20 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpInstitutionalOwnershipFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpGovernmentTradesFetcher::registry_entry())?;
+    // FMP ETF cluster (openbb-parity P4W3): search / info / sectors / countries /
+    // price performance / equity exposure.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfSearchFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfInfoFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfSectorsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfCountriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfPricePerformanceFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfEquityExposureFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
@@ -534,6 +556,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(SecCompanyFactsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecLatestFinancialReportsHttpFetcher::registry_entry())?;
+    // ETF cluster (openbb-parity P4W3): keyless SEC N-PORT disclosure index.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecNportDisclosureHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]

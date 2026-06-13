@@ -32,6 +32,8 @@ pub enum SecModel {
     CompanyFacts,
     /// Standardizes to the filings-index row (latest periodic financial reports).
     LatestFinancialReports,
+    /// Standardizes to the filings-index row (N-PORT portfolio disclosures).
+    NportDisclosure,
 }
 
 /// One standardized SEC-backed endpoint.
@@ -84,6 +86,11 @@ pub const ENDPOINTS: &[SecEndpoint] = &[
         model: SecModel::LatestFinancialReports,
         description: "Latest periodic financial reports (10-K/10-Q) from submissions.",
     },
+    SecEndpoint {
+        command: "etf/nport_disclosure",
+        model: SecModel::NportDisclosure,
+        description: "Fund N-PORT portfolio-disclosure filing index from submissions.",
+    },
 ];
 
 /// Resolve a catalog entry by its `OpenBB` `command` path.
@@ -132,6 +139,7 @@ mod tests {
             SecModel::EtfHoldings,
             SecModel::CompanyFacts,
             SecModel::LatestFinancialReports,
+            SecModel::NportDisclosure,
         ] {
             assert!(
                 ENDPOINTS.iter().any(|e| e.model == model),

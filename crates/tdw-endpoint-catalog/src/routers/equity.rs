@@ -179,6 +179,27 @@ const EQUITY_OWNERSHIP_INSTITUTIONAL: &[ProviderCandidate] =
 const EQUITY_OWNERSHIP_GOVERNMENT_TRADES: &[ProviderCandidate] =
     &[ProviderCandidate::new("fmp", "government_trades")];
 
+// yfinance discovery screeners (openbb-parity P4W3). The four predefined-screen
+// routes share one keyless Yahoo predefined-screener fetcher (the screen id is
+// injected per dispatch binding), so each route gets a distinct dispatch endpoint
+// key — `discovery_<screen>` — to avoid a dispatch-key collision (the
+// FMP-discovery / NASDAQ-calendar pattern). All keyless (Yahoo only). These
+// complement the existing FMP discovery active/gainers/losers routes.
+const EQUITY_DISCOVERY_AGGRESSIVE_SMALL_CAPS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_aggressive_small_caps",
+)];
+const EQUITY_DISCOVERY_GROWTH_TECH: &[ProviderCandidate] =
+    &[ProviderCandidate::new("yahoo", "discovery_growth_tech")];
+const EQUITY_DISCOVERY_UNDERVALUED_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_undervalued_growth",
+)];
+const EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_undervalued_large_caps",
+)];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
 }
@@ -431,7 +452,46 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries.extend(completion_entries());
     entries.extend(p4w1_entries());
     entries.extend(p4w2_entries());
+    entries.extend(p4w3_entries());
     entries
+}
+
+/// yfinance discovery-screener entries (openbb-parity P4W3): the four predefined
+/// Yahoo screens, each its own dispatch key over the shared keyless
+/// predefined-screener fetcher (the screen id is injected per binding). All emit
+/// [`ScreenerRow`]. Split out of [`entries`] to keep each function compact;
+/// appended in declaration order. Keyless (Yahoo only).
+fn p4w3_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/discovery/aggressive_small_caps",
+            screener_row,
+            EQUITY_DISCOVERY_AGGRESSIVE_SMALL_CAPS,
+            "raw.screener_row",
+            "Aggressive small-cap discovery screen (high earnings growth), Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/growth_tech",
+            screener_row,
+            EQUITY_DISCOVERY_GROWTH_TECH,
+            "raw.screener_row",
+            "Growth technology-stocks discovery screen, Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/undervalued_growth",
+            screener_row,
+            EQUITY_DISCOVERY_UNDERVALUED_GROWTH,
+            "raw.screener_row",
+            "Undervalued growth-stocks discovery screen, Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/undervalued_large_caps",
+            screener_row,
+            EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS,
+            "raw.screener_row",
+            "Undervalued large-cap discovery screen, Yahoo-backed (keyless).",
+        ),
+    ]
 }
 
 /// FMP/SEC equity discovery/estimates/ownership breadth entries (openbb-parity

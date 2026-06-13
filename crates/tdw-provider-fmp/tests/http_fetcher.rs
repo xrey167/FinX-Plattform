@@ -15,7 +15,9 @@ use tdw_domain::StatementKind;
 use tdw_provider_fmp::{
     BASE_URL, FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpAnalystEstimatesFetcher,
     FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher, FmpHttpExecutiveCompensationFetcher,
+    FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher,
+    FmpHttpEtfEquityExposureFetcher, FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher,
+    FmpHttpEtfSearchFetcher, FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher,
     FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
     FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpInsiderTradingFetcher,
     FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
@@ -1141,6 +1143,28 @@ fn cassette_parse_fmp_split_calendar_response() {
 }
 
 #[test]
+fn cassette_parse_fmp_split_calendar_zero_denominator_yields_no_ratio() {
+    // A denominator of exactly 0.0 makes the split ratio undefined: the row must
+    // still be emitted but with `price` (the ratio) left as None, rather than
+    // falling through to the numerator-only arm.
+    let fetcher = FmpHttpSplitCalendarFetcher::default();
+    let query = FmpHttpSplitCalendarFetcher::transform_query(json!({"from": "2024-01-01"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "ZERO", "date": "2024-06-10", "numerator": 10.0, "denominator": 0.0}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "ZERO");
+    assert_eq!(
+        rows[0].price, None,
+        "zero denominator must not yield a ratio"
+    );
+}
+
+#[test]
 fn cassette_parse_fmp_latest_filings_response() {
     let fetcher = FmpHttpLatestFilingsFetcher::default();
     let query = FmpHttpLatestFilingsFetcher::transform_query(json!({"limit": 50}))
@@ -1219,6 +1243,154 @@ fn cassette_parse_fmp_government_trades_response() {
     assert_eq!(rows[0].relationship.as_deref(), Some("Senate"));
     assert_eq!(rows[0].transaction_type.as_deref(), Some("Purchase"));
     assert_eq!(rows[0].value, Some(1001.0));
+}
+
+#[test]
+fn cassette_parse_fmp_government_trades_open_ended_low_buckets() {
+    // Open-ended low buckets ("$1,000 or less", "under $1,001", "below $1,001")
+    // have a lower bound of zero; the leading number must not be mistaken for the
+    // disclosed minimum.
+    let fetcher = FmpHttpGovernmentTradesFetcher::default();
+    let query = FmpHttpGovernmentTradesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL", "representative": "A", "office": "House",
+            "transactionDate": "2024-03-01", "type": "Purchase", "amount": "$1,000 or less"
+        },
+        {
+            "symbol": "AAPL", "representative": "B", "office": "House",
+            "transactionDate": "2024-03-02", "type": "Purchase", "amount": "under $1,001"
+        },
+        {
+            "symbol": "AAPL", "representative": "C", "office": "House",
+            "transactionDate": "2024-03-03", "type": "Purchase", "amount": "below $1,001"
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    assert!(
+        rows.iter().all(|r| r.value == Some(0.0)),
+        "open-ended low buckets must report a zero lower bound: {rows:#?}",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ETF cluster cassette tests (openbb-parity P4W3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_fmp_etf_search_filters_by_query() {
+    let fetcher = FmpHttpEtfSearchFetcher::default();
+    let query = FmpHttpEtfSearchFetcher::transform_query(json!({"query": "S&P", "limit": 10}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchangeShortName": "NYSE Arca"},
+        {"symbol": "QQQ", "name": "Invesco QQQ Trust", "exchangeShortName": "NASDAQ"},
+        {"symbol": "", "name": "junk"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "only the S&P match survives: {rows:#?}");
+    assert_eq!(rows[0].symbol, "SPY");
+    assert_eq!(rows[0].venue, "NYSE Arca");
+}
+
+#[test]
+fn cassette_parse_fmp_etf_info_response() {
+    let fetcher = FmpHttpEtfInfoFetcher::default();
+    let query = FmpHttpEtfInfoFetcher::transform_query(json!({"symbol": "SPY"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "etfCompany": "State Street",
+            "expenseRatio": 0.000945, "holdingsCount": 503, "exchangeShortName": "NYSE Arca",
+            "inceptionDate": "1993-01-22"
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "SPY");
+    assert_eq!(rows[0].issuer.as_deref(), Some("State Street"));
+    assert_eq!(rows[0].holdings_count, Some(503));
+}
+
+#[test]
+fn cassette_parse_fmp_etf_sectors_parses_percent_strings() {
+    let fetcher = FmpHttpEtfSectorsFetcher::default();
+    let query = FmpHttpEtfSectorsFetcher::transform_query(json!({"symbol": "SPY"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"sector": "Technology", "weightPercentage": "29.50%"},
+        {"sector": "Financials", "weightPercentage": "13.10%"},
+        {"sector": "", "weightPercentage": "1.00%"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 2, "blank sector dropped: {rows:#?}");
+    assert_eq!(rows[0].fund_symbol, "SPY");
+    assert_eq!(rows[0].sector, "Technology");
+    assert_eq!(rows[0].weight_pct, Some(29.50));
+}
+
+#[test]
+fn cassette_parse_fmp_etf_countries_parses_percent_strings() {
+    let fetcher = FmpHttpEtfCountriesFetcher::default();
+    let query = FmpHttpEtfCountriesFetcher::transform_query(json!({"symbol": "SPY"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"country": "United States", "weightPercentage": "98.70%"},
+        {"country": "Ireland", "weightPercentage": "1.30%"}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].country, "United States");
+    assert_eq!(rows[0].weight_pct, Some(98.70));
+}
+
+#[test]
+fn cassette_parse_fmp_etf_price_performance_scales_to_fraction() {
+    let fetcher = FmpHttpEtfPricePerformanceFetcher::default();
+    let query = FmpHttpEtfPricePerformanceFetcher::transform_query(json!({"symbol": "SPY"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    // FMP reports period changes as whole-number percentages.
+    let raw = cassette_bytes!([
+        {"symbol": "SPY", "1D": 0.5, "5D": 1.2, "1M": 3.4, "3M": 8.0, "ytd": 15.0, "1Y": 27.0}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "SPY");
+    // 0.5% -> 0.005 fraction.
+    assert!((rows[0].one_day.unwrap_or_default() - 0.005).abs() < 1e-9);
+    assert!((rows[0].one_year.unwrap_or_default() - 0.27).abs() < 1e-9);
+}
+
+#[test]
+fn cassette_parse_fmp_etf_equity_exposure_response() {
+    let fetcher = FmpHttpEtfEquityExposureFetcher::default();
+    let query = FmpHttpEtfEquityExposureFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query: {e}"));
+    let raw = cassette_bytes!([
+        {"etfSymbol": "SPY", "weightPercentage": 7.10, "sharesNumber": 1234567.0, "marketValue": 250000000.0},
+        {"etfSymbol": "", "weightPercentage": 1.0}
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1, "blank fund dropped: {rows:#?}");
+    assert_eq!(rows[0].equity_symbol, "AAPL");
+    assert_eq!(rows[0].fund_symbol, "SPY");
+    assert_eq!(rows[0].weight_pct, Some(7.10));
 }
 
 // ---------------------------------------------------------------------------

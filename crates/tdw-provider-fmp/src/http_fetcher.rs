@@ -33,10 +33,10 @@ use serde_json::Map;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
     CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, EarningsTranscript,
-    EmployeeCount, EsgScore, Estimate, ExecutiveCompensation, FinancialStatement,
-    HistoricalMarketCap, Instrument, KeyExecutive, KeyMetrics, MarketDataBar, Ohlcv,
-    OwnershipRecord, QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow, StatementKind,
-    TimeGranularity,
+    EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure, EtfInfo,
+    EtfSectorWeight, ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument,
+    KeyExecutive, KeyMetrics, MarketDataBar, Ohlcv, OwnershipRecord, PricePerformance,
+    QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow, StatementKind, TimeGranularity,
 };
 
 use crate::{
@@ -2296,10 +2296,13 @@ impl Fetcher<FmpCalendarRangeQuery, CalendarEvent> for FmpHttpSplitCalendarFetch
             .into_iter()
             .filter_map(|entry| {
                 let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
-                // The split factor (new-for-old) carried in the price field.
+                // The split factor (new-for-old) carried in the price field. A
+                // denominator of exactly `0.0` makes the ratio mathematically
+                // undefined, so it is rejected explicitly rather than falling
+                // through to the numerator-only arm.
                 let ratio = match (entry.numerator, entry.denominator) {
-                    (Some(n), Some(d)) if d != 0.0 => Some(n / d),
-                    (Some(n), _) => Some(n),
+                    (Some(n), Some(d)) => (d != 0.0).then_some(n / d),
+                    (Some(n), None) => Some(n),
                     _ => None,
                 };
                 Some(CalendarEvent {
@@ -2627,9 +2630,472 @@ impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpGovernmentTradesFetcher
     }
 }
 
+// ===========================================================================
+// ETF cluster (openbb-parity P4W3). FMP-keyed ETF endpoints, each normalized to
+// a `tdw-domain` ETF model. All use FMP's documented legacy ETF endpoints (the
+// same v3/v4 legacy surface the rest of this crate targets):
+//   - etf/search           → /etf/list (filtered by the query fragment)
+//   - etf/info             → /etf-info?symbol=
+//   - etf/sectors          → /etf-sector-weightings/{symbol}
+//   - etf/countries        → /etf-country-weightings/{symbol}
+//   - etf/price_performance→ /stock-price-change/{symbol}
+//   - etf/equity_exposure  → /etf-stock-exposure/{symbol}
+// All keyed (FMP only). etf/historical reuses the existing FMP historical
+// fetcher (an ETF ticker resolves through /historical-price-full like any
+// symbol), so no dedicated fetcher is added here.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfSearchFetcher — /etf/list → Instrument (etf/search)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF-search fetcher, normalized to [`Instrument`].
+    ///
+    /// Calls `/etf/list` (the full keyless ETF universe) and filters to rows whose
+    /// symbol or name contains the caller's `query` fragment (case-insensitive),
+    /// capped at the query's `limit`. Standardizes `etf/search`.
+    pub FmpHttpEtfSearchFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf/list` entry.
+#[derive(Deserialize)]
+struct FmpEtfListRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(default)]
+    exchange: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSearchQuery, Instrument> for FmpHttpEtfSearchFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_search";
+
+    fn transform_query(params: Value) -> Result<FmpSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("fmp etf search query must be a string".to_string())
+            })?;
+        let limit = limit_param(&params, 10)?;
+        FmpSearchQuery::new(query, limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, _query: &FmpSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/etf/list", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[], "fmp etf_search").await
+    }
+
+    fn transform_data(&self, query: &FmpSearchQuery, raw: Bytes) -> Result<Vec<Instrument>> {
+        let entries: Vec<FmpEtfListRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_search parse_json: {e}")))?;
+        let needle = query.query.to_ascii_lowercase();
+        let limit = query.limit as usize;
+        let instruments = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                let name = entry.name.unwrap_or_else(|| symbol.clone());
+                let matches = symbol.to_ascii_lowercase().contains(&needle)
+                    || name.to_ascii_lowercase().contains(&needle);
+                if !matches {
+                    return None;
+                }
+                Some(Instrument {
+                    name,
+                    symbol,
+                    venue: entry
+                        .exchange_short_name
+                        .or(entry.exchange)
+                        .unwrap_or_else(|| "fmp".to_string()),
+                })
+            })
+            .take(limit)
+            .collect();
+        Ok(instruments)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfInfoFetcher — /etf-info?symbol= → EtfInfo (etf/info)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF-info fetcher, normalized to [`EtfInfo`].
+    ///
+    /// Calls `/etf-info?symbol=` and maps the fund's profile (name, issuer, NAV,
+    /// AUM, expense ratio, holdings count) to an [`EtfInfo`]. Standardizes
+    /// `etf/info`.
+    pub FmpHttpEtfInfoFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-info` entry.
+#[derive(Deserialize)]
+struct FmpEtfInfoRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "etfCompany", default)]
+    etf_company: Option<String>,
+    #[serde(default)]
+    nav: Option<f64>,
+    #[serde(default)]
+    aum: Option<f64>,
+    #[serde(rename = "expenseRatio", default)]
+    expense_ratio: Option<f64>,
+    #[serde(rename = "holdingsCount", default)]
+    holdings_count: Option<u64>,
+    #[serde(default)]
+    domicile: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(rename = "inceptionDate", default)]
+    inception_date: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfInfo> for FmpHttpEtfInfoFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_info";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/etf-info", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[("symbol", query.symbol.clone())], "fmp etf_info").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfInfo>> {
+        let entries: Vec<FmpEtfInfoRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_info parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .map(|entry| EtfInfo {
+                symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                name: entry.name.unwrap_or_else(|| query.symbol.clone()),
+                issuer: entry.etf_company,
+                nav: entry.nav,
+                aum: entry.aum,
+                expense_ratio: entry.expense_ratio,
+                holdings_count: entry.holdings_count,
+                currency: None,
+                exchange: entry.exchange_short_name,
+                inception_date: entry.inception_date,
+                description: entry.description.or(entry.domicile),
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfSectorsFetcher — /etf-sector-weightings/{symbol} → EtfSectorWeight
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF sector-weighting fetcher, normalized to
+    /// [`EtfSectorWeight`].
+    ///
+    /// Calls `/etf-sector-weightings/{symbol}` and maps each (sector, weight) pair
+    /// to an [`EtfSectorWeight`]. Standardizes `etf/sectors`.
+    pub FmpHttpEtfSectorsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-sector-weightings/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfSectorRaw {
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfSectorWeight> for FmpHttpEtfSectorsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_sectors";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-sector-weightings/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_sectors").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfSectorWeight>> {
+        let entries: Vec<FmpEtfSectorRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_sectors parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let sector = entry.sector.filter(|s| !s.trim().is_empty())?;
+                Some(EtfSectorWeight {
+                    fund_symbol: query.symbol.clone(),
+                    report_date: None,
+                    sector,
+                    weight_pct: entry.weight_percentage.and_then(parse_weight_percentage),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfCountriesFetcher — /etf-country-weightings/{symbol} → EtfCountryWeight
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF country-weighting fetcher, normalized to
+    /// [`EtfCountryWeight`].
+    ///
+    /// Calls `/etf-country-weightings/{symbol}` and maps each (country, weight)
+    /// pair to an [`EtfCountryWeight`]. Standardizes `etf/countries`.
+    pub FmpHttpEtfCountriesFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-country-weightings/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfCountryRaw {
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfCountryWeight> for FmpHttpEtfCountriesFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_countries";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-country-weightings/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_countries").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfCountryWeight>> {
+        let entries: Vec<FmpEtfCountryRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_countries parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let country = entry.country.filter(|s| !s.trim().is_empty())?;
+                Some(EtfCountryWeight {
+                    fund_symbol: query.symbol.clone(),
+                    country,
+                    weight_pct: entry.weight_percentage.and_then(parse_weight_percentage),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfPricePerformanceFetcher — /stock-price-change/{symbol} →
+// PricePerformance (etf/price_performance)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF price-performance fetcher, normalized to
+    /// [`PricePerformance`].
+    ///
+    /// Calls `/stock-price-change/{symbol}` and maps the documented period
+    /// percentage changes (`1D`, `5D`, `1M`, `3M`, `ytd`, `1Y`) to a
+    /// [`PricePerformance`]. FMP reports these as whole-number percentages; they
+    /// are scaled to fractions to match the domain contract. Standardizes
+    /// `etf/price_performance`.
+    pub FmpHttpEtfPricePerformanceFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/stock-price-change/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpPriceChangeRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "1D", default)]
+    one_day: Option<f64>,
+    #[serde(rename = "5D", default)]
+    five_day: Option<f64>,
+    #[serde(rename = "1M", default)]
+    one_month: Option<f64>,
+    #[serde(rename = "3M", default)]
+    three_month: Option<f64>,
+    #[serde(default)]
+    ytd: Option<f64>,
+    #[serde(rename = "1Y", default)]
+    one_year: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, PricePerformance> for FmpHttpEtfPricePerformanceFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_price_performance";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/stock-price-change/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_price_performance").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<PricePerformance>> {
+        let entries: Vec<FmpPriceChangeRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_price_performance parse_json: {e}")))?;
+        // FMP reports each period change as a whole-number percentage; the domain
+        // contract is a fraction, so divide by 100.
+        let to_fraction = |value: Option<f64>| value.map(|v| v / 100.0);
+        let rows = entries
+            .into_iter()
+            .map(|entry| PricePerformance {
+                symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                price: None,
+                one_day: to_fraction(entry.one_day),
+                one_week: to_fraction(entry.five_day),
+                one_month: to_fraction(entry.one_month),
+                three_month: to_fraction(entry.three_month),
+                ytd: to_fraction(entry.ytd),
+                one_year: to_fraction(entry.one_year),
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfEquityExposureFetcher — /etf-stock-exposure/{symbol} →
+// EtfEquityExposure (etf/equity_exposure)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF equity-exposure fetcher, normalized to
+    /// [`EtfEquityExposure`].
+    ///
+    /// Calls `/etf-stock-exposure/{symbol}` (the reverse lookup: every ETF that
+    /// holds the queried stock) and maps each fund to an [`EtfEquityExposure`].
+    /// Standardizes `etf/equity_exposure`.
+    pub FmpHttpEtfEquityExposureFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-stock-exposure/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfExposureRaw {
+    #[serde(rename = "etfSymbol", default)]
+    etf_symbol: Option<String>,
+    #[serde(rename = "assetExposure", default)]
+    asset_exposure: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<f64>,
+    #[serde(rename = "sharesNumber", default)]
+    shares_number: Option<f64>,
+    #[serde(rename = "marketValue", default)]
+    market_value: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfEquityExposure> for FmpHttpEtfEquityExposureFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_equity_exposure";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-stock-exposure/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_equity_exposure").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfEquityExposure>> {
+        let entries: Vec<FmpEtfExposureRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_equity_exposure parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let fund_symbol = entry
+                    .etf_symbol
+                    .or(entry.asset_exposure)
+                    .filter(|s| !s.trim().is_empty())?;
+                Some(EtfEquityExposure {
+                    equity_symbol: query.symbol.clone(),
+                    fund_symbol,
+                    weight_pct: entry.weight_percentage,
+                    shares: entry.shares_number,
+                    market_value: entry.market_value,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+/// Parse an FMP weight-percentage field (`"7.10%"` / `"7.10"` / `""`) into a
+/// number, stripping a trailing `%`. Returns `None` when the field is blank or
+/// non-numeric.
+fn parse_weight_percentage(raw: String) -> Option<f64> {
+    let trimmed = raw.trim().trim_end_matches('%').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok()
+}
+
 /// Parse the lower bound of an FMP amount bucket like `"$1,001 - $15,000"` into a
 /// number, returning `None` when no leading numeric portion is present.
+///
+/// Open-ended low buckets (`"$1,000 or less"`, `"under $1,001"`, `"below $1,001"`)
+/// have a lower bound of zero; without this guard the leading number of the bucket
+/// would be mistaken for the lower bound, overstating the disclosed minimum.
 fn parse_amount_lower_bound(amount: &str) -> Option<f64> {
+    let amount_lower = amount.to_ascii_lowercase();
+    if amount_lower.contains("less")
+        || amount_lower.contains("under")
+        || amount_lower.contains("below")
+    {
+        return Some(0.0);
+    }
     let first = amount.split('-').next().unwrap_or(amount);
     let cleaned: String = first
         .chars()
