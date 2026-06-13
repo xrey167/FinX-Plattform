@@ -1453,6 +1453,45 @@ fn insert_fmp_p4w1_fetch_bindings(
     // equity/fundamental/historical_eps reuses the existing FMP earnings fetcher,
     // already registered by insert_fmp_completion_fetch_bindings under the same
     // ("fmp", "historical_eps") key — no extra binding needed here.
+    insert_fmp_p4w2_fetch_bindings(table);
+}
+
+/// Insert the FMP equity discovery/estimates/ownership breadth fetch bindings
+/// (openbb-parity P4W2): search, historical market cap, split calendar, the
+/// latest-filings feed, and the insider / institutional / government-trade
+/// ownership records. Each is its own FMP fetcher keyed by its `ENDPOINT` const.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w2_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpSearchFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSearchFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalMarketCapFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpHistoricalMarketCapFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitCalendarFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSplitCalendarFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpLatestFilingsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpLatestFilingsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInsiderTradingFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpInsiderTradingFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInstitutionalOwnershipFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpInstitutionalOwnershipFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>(),
+    );
 }
 
 /// Build a [`FetchBinding`] for the FMP market-movers discovery fetcher that
@@ -1684,6 +1723,16 @@ fn insert_sec_government_fetch_bindings(
     table.insert(
         ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
         fetch_binding::<crate::SecEtfHoldingsHttpFetcher, _, _>(),
+    );
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    table.insert(
+        ("sec", crate::SecCompanyFactsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecCompanyFactsHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>(),
     );
 }
 
@@ -3128,6 +3177,45 @@ fn insert_fmp_p4w1_ingest_bindings(
         ("fmp", crate::FmpHttpFilingsFetcher::ENDPOINT),
         binding::<crate::FmpHttpFilingsFetcher, _, _>("raw.company_filing"),
     );
+    insert_fmp_p4w2_ingest_bindings(table);
+}
+
+/// Register the FMP equity discovery/estimates/ownership breadth ingest bindings
+/// (openbb-parity P4W2), keyed by each route's catalog candidate endpoint and
+/// bound to its bronze landing table. Mirrors [`insert_fmp_p4w2_fetch_bindings`]
+/// so the fetch and ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w2_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpSearchFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSearchFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalMarketCapFetcher::ENDPOINT),
+        binding::<crate::FmpHttpHistoricalMarketCapFetcher, _, _>("raw.historical_market_cap"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitCalendarFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSplitCalendarFetcher, _, _>("raw.calendar_event"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpLatestFilingsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpLatestFilingsFetcher, _, _>("raw.company_filing"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInsiderTradingFetcher::ENDPOINT),
+        binding::<crate::FmpHttpInsiderTradingFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInstitutionalOwnershipFetcher::ENDPOINT),
+        binding::<crate::FmpHttpInstitutionalOwnershipFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>("raw.ownership_record"),
+    );
 }
 
 /// Build an [`IngestBinding`] for the FMP market-movers discovery fetcher that
@@ -3233,6 +3321,16 @@ fn insert_sec_government_ingest_bindings(
     table.insert(
         ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
         binding::<crate::SecEtfHoldingsHttpFetcher, _, _>("raw.etf_holding"),
+    );
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    table.insert(
+        ("sec", crate::SecCompanyFactsHttpFetcher::ENDPOINT),
+        binding::<crate::SecCompanyFactsHttpFetcher, _, _>("raw.company_facts"),
+    );
+    table.insert(
+        ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
+        binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>("raw.company_filing"),
     );
 }
 
@@ -5283,6 +5381,64 @@ mod tests {
             assert!(
                 covered.contains(key),
                 "P4W1 FMP endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
+            );
+        }
+    }
+
+    /// Catalog <-> P4W2 breadth sync (openbb-parity P4W2): every FMP/SEC
+    /// discovery/estimates/ownership candidate added in this wave must have both a
+    /// fetch and an ingest binding, and must be referenced by a catalog route.
+    #[test]
+    #[cfg(all(feature = "provider-fmp", feature = "provider-sec"))]
+    fn p4w2_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        const EXPECTED: &[(&str, &str)] = &[
+            ("fmp", "search"),
+            ("fmp", "historical_market_cap"),
+            ("fmp", "split_calendar"),
+            ("fmp", "latest_filings"),
+            ("fmp", "insider_trading"),
+            ("fmp", "institutional_ownership"),
+            ("fmp", "government_trades"),
+            ("sec", "company_facts"),
+            ("sec", "latest_financial_reports"),
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                let key = (candidate.provider, candidate.endpoint);
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no fetch binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no ingest binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "P4W2 endpoint {}/{} is not referenced by any catalog route",
                 key.0,
                 key.1
             );

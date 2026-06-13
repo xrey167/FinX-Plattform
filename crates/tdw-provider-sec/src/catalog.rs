@@ -28,6 +28,10 @@ pub enum SecModel {
     FailsToDeliver,
     /// Standardizes to [`tdw_domain::EtfHolding`] (N-PORT portfolio).
     EtfHoldings,
+    /// Standardizes to [`tdw_domain::CompanyFacts`] (XBRL company facts).
+    CompanyFacts,
+    /// Standardizes to the filings-index row (latest periodic financial reports).
+    LatestFinancialReports,
 }
 
 /// One standardized SEC-backed endpoint.
@@ -69,6 +73,16 @@ pub const ENDPOINTS: &[SecEndpoint] = &[
         command: "etf/holdings",
         model: SecModel::EtfHoldings,
         description: "ETF constituent holdings from NPORT-P portfolio disclosures.",
+    },
+    SecEndpoint {
+        command: "equity/compare/company_facts",
+        model: SecModel::CompanyFacts,
+        description: "XBRL company facts (reported concept values) from companyfacts.",
+    },
+    SecEndpoint {
+        command: "equity/discovery/latest_financial_reports",
+        model: SecModel::LatestFinancialReports,
+        description: "Latest periodic financial reports (10-K/10-Q) from submissions.",
     },
 ];
 
@@ -116,6 +130,8 @@ mod tests {
             SecModel::Form13F,
             SecModel::FailsToDeliver,
             SecModel::EtfHoldings,
+            SecModel::CompanyFacts,
+            SecModel::LatestFinancialReports,
         ] {
             assert!(
                 ENDPOINTS.iter().any(|e| e.model == model),

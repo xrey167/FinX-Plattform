@@ -14,9 +14,9 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_sec::{
-    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
-    SecFilingsHttpFetcher, SecFilingsQuery, SecForm13FHttpFetcher, SecHistoricalQuery,
-    SecXbrlHttpFetcher,
+    SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecFilingsQuery, SecForm13FHttpFetcher,
+    SecHistoricalQuery, SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_rows_expect};
 
@@ -324,4 +324,39 @@ async fn live_sec_etf_holdings_returns_constituents_when_env_var_set() {
         "live N-PORT must return at least one holding"
     );
     assert!(rows.iter().all(|r| r.fund_symbol == "884394"));
+}
+
+#[tokio::test]
+async fn live_sec_company_facts_returns_facts_when_env_var_set() {
+    if std::env::var("TDW_SEC_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_SEC_LIVE != 1; skipping live SEC company_facts integration test");
+        return;
+    }
+    let fetcher = SecCompanyFactsHttpFetcher::default();
+    let query = SecCompanyFactsHttpFetcher::transform_query(json!({"cik": "320193"}))
+        .expect("transform_query must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
+    assert!(!rows.is_empty(), "live company_facts must return facts");
+    assert_eq!(rows[0].cik, "320193");
+}
+
+#[tokio::test]
+async fn live_sec_latest_financial_reports_returns_data_when_env_var_set() {
+    if std::env::var("TDW_SEC_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_SEC_LIVE != 1; skipping live SEC latest_financial_reports integration test");
+        return;
+    }
+    let fetcher = SecLatestFinancialReportsHttpFetcher::default();
+    let query = SecLatestFinancialReportsHttpFetcher::transform_query(json!({"cik": "320193"}))
+        .expect("transform_query must succeed");
+    let rows = live_fetch_rows_expect!(fetcher, query);
+    assert!(
+        !rows.is_empty(),
+        "live latest_financial_reports must return at least one periodic report"
+    );
+    assert!(
+        rows.iter()
+            .all(|r| ["10-K", "10-Q", "20-F", "40-F"].contains(&r.form_type.as_str())),
+        "all rows must be periodic financial reports"
+    );
 }

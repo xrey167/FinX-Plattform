@@ -7,12 +7,14 @@ pub mod http_fetcher;
 pub use http_fetcher::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
     FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
-    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher,
-    FmpHttpIncomeFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
+    FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
     FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
     FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
-    FmpHttpTranscriptFetcher,
+    FmpHttpScreenerFetcher, FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher,
+    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 
 use schemars::JsonSchema;
@@ -386,11 +388,11 @@ impl FmpTranscriptQuery {
     /// # Errors
     ///
     /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
-    /// symbol, or [`FmpError::InvalidLimit`] if `year` or `quarter` is zero or
-    /// `quarter` exceeds 4.
+    /// symbol, or [`FmpError::InvalidTranscriptPeriod`] if `year` or `quarter` is
+    /// zero or `quarter` exceeds 4.
     pub fn new(symbol: &str, year: u32, quarter: u32) -> Result<Self> {
         if year == 0 || quarter == 0 || quarter > 4 {
-            return Err(FmpError::InvalidLimit);
+            return Err(FmpError::InvalidTranscriptPeriod);
         }
         Ok(Self {
             symbol: normalize_symbol(symbol)?,
@@ -400,14 +402,98 @@ impl FmpTranscriptQuery {
     }
 }
 
+/// Query for the FMP ticker-search endpoint (`/search`).
+///
+/// `query` is a free-text name/symbol fragment; `limit` caps the result count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpSearchQuery {
+    pub query: String,
+    pub limit: u32,
+}
+
+impl FmpSearchQuery {
+    /// Construct a validated search query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptyQuery`] if `query` is blank, or
+    /// [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(query: &str, limit: u32) -> Result<Self> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(FmpError::EmptyQuery);
+        }
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            query: query.to_string(),
+            limit,
+        })
+    }
+}
+
+/// Query for the FMP date-range calendar endpoints (e.g. split calendar).
+///
+/// Both bounds are optional; an empty query returns the calendar's default
+/// window. Dates are validated to `YYYY-MM-DD` so they cannot inject extra query
+/// parameters.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpCalendarRangeQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+impl FmpCalendarRangeQuery {
+    /// Construct a validated date-range calendar query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidDate`] if either bound is present and not in
+    /// `YYYY-MM-DD` form.
+    pub fn new(from: Option<&str>, to: Option<&str>) -> Result<Self> {
+        Ok(Self {
+            from: from.map(normalize_date).transpose()?,
+            to: to.map(normalize_date).transpose()?,
+        })
+    }
+}
+
+/// Query for the symbol-free, limit-only FMP endpoints (e.g. the latest-filings
+/// RSS feed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpLimitQuery {
+    pub limit: u32,
+}
+
+impl FmpLimitQuery {
+    /// Construct a validated limit-only query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(limit: u32) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self { limit })
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FmpError {
     #[error("fmp symbol must not be empty")]
     EmptySymbol,
+    #[error("fmp search query must not be empty")]
+    EmptyQuery,
+    #[error("fmp date must be YYYY-MM-DD")]
+    InvalidDate,
     #[error("fmp symbol contains unsupported characters")]
     InvalidSymbol,
     #[error("fmp limit must be greater than zero")]
     InvalidLimit,
+    #[error("fmp transcript period must have a non-zero year and a quarter in 1..=4")]
+    InvalidTranscriptPeriod,
     #[error("fmp provider error: {0}")]
     Provider(String),
 }
@@ -424,6 +510,26 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
         return Err(FmpError::InvalidSymbol);
     }
     Ok(symbol.to_ascii_uppercase())
+}
+
+/// Validate a `YYYY-MM-DD` date string, returning it unchanged on success.
+///
+/// Used by the date-range calendar queries so a caller-supplied bound cannot
+/// inject extra query parameters into the FMP request URL.
+fn normalize_date(date: &str) -> Result<String> {
+    let date = date.trim();
+    let bytes = date.as_bytes();
+    let valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, byte)| idx == 4 || idx == 7 || byte.is_ascii_digit());
+    if !valid {
+        return Err(FmpError::InvalidDate);
+    }
+    Ok(date.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -721,9 +827,71 @@ mod tests {
                 .contains("greater than zero")
         );
         assert!(
+            FmpError::InvalidTranscriptPeriod
+                .to_string()
+                .contains("transcript period")
+        );
+        assert!(
             FmpError::Provider("timeout".to_string())
                 .to_string()
                 .contains("timeout")
+        );
+    }
+
+    #[test]
+    fn search_query_validates_query_and_limit() {
+        let q = FmpSearchQuery::new("  apple ", 10).unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.query, "apple");
+        assert_eq!(q.limit, 10);
+        assert_eq!(FmpSearchQuery::new("", 10), Err(FmpError::EmptyQuery));
+        assert_eq!(FmpSearchQuery::new("   ", 10), Err(FmpError::EmptyQuery));
+        assert_eq!(FmpSearchQuery::new("apple", 0), Err(FmpError::InvalidLimit));
+    }
+
+    #[test]
+    fn calendar_range_query_validates_dates() {
+        let q = FmpCalendarRangeQuery::new(Some("2024-01-01"), Some("2024-12-31"))
+            .unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.from.as_deref(), Some("2024-01-01"));
+        assert_eq!(q.to.as_deref(), Some("2024-12-31"));
+        assert!(FmpCalendarRangeQuery::new(None, None).is_ok());
+        assert_eq!(
+            FmpCalendarRangeQuery::new(Some("2024/01/01"), None),
+            Err(FmpError::InvalidDate)
+        );
+        assert_eq!(
+            FmpCalendarRangeQuery::new(None, Some("20241231")),
+            Err(FmpError::InvalidDate)
+        );
+    }
+
+    #[test]
+    fn limit_query_rejects_zero() {
+        let q = FmpLimitQuery::new(50).unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.limit, 50);
+        assert_eq!(FmpLimitQuery::new(0), Err(FmpError::InvalidLimit));
+    }
+
+    #[test]
+    fn transcript_query_validates_year_and_quarter() {
+        let q = FmpTranscriptQuery::new("aapl", 2024, 4)
+            .unwrap_or_else(|e| panic!("query should build: {e}"));
+        assert_eq!(q.symbol, "AAPL");
+        assert_eq!(q.year, 2024);
+        assert_eq!(q.quarter, 4);
+        // Invalid year/quarter yields the dedicated period variant, not the
+        // misleading row-limit error.
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 0, 1),
+            Err(FmpError::InvalidTranscriptPeriod)
+        );
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 2024, 0),
+            Err(FmpError::InvalidTranscriptPeriod)
+        );
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 2024, 5),
+            Err(FmpError::InvalidTranscriptPeriod)
         );
     }
 }
