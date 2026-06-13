@@ -399,6 +399,147 @@ impl Default for ProposalsConfig {
     }
 }
 
+/// Governed-forgetting (knowledge-hygiene) settings (knowledge-system K-R8).
+///
+/// Controls the periodic hygiene worker that retires stale / superseded /
+/// low-value knowledge to a COLD plane through the SAME gate (B9 proposals) —
+/// auditable, bounded, and REVERSIBLE.  Forgetting never hard-deletes: it
+/// closes a fact's validity window (the K-M4 temporal-close machinery) and
+/// tags it cold, so the historical record and `as_of` queries over past time
+/// still return it.
+///
+/// # Ship-enabled-but-cautious
+///
+/// Default: **`enabled = true`** with a deliberately conservative cadence
+/// (`"0 4 * * 0"` — weekly, Sunday 04:00) and a small per-sweep cap.  The
+/// fail-safe guards below are HARD floors the policy cannot override.
+///
+/// # Kill-switch
+///
+/// Set `enabled = false` to disable the worker entirely.  No candidate is ever
+/// identified and no fact is ever retired without the worker; the
+/// `tdw.kg.proposals action=materialize` operator path is unaffected.
+///
+/// # Fail-safe guards (policy CANNOT override)
+///
+/// - `protect_confidence_at_or_above`: a fact whose K-R6 confidence is at or
+///   above this floor is NEVER a candidate.
+/// - `protect_corroboration_at_or_above`: a fact corroborated by at least this
+///   many independent sources is NEVER a candidate.
+/// - `ingest_retention_floor_days`: an `Ingest`-provenance ground-truth fact
+///   younger than this many days is NEVER a candidate, regardless of score.
+/// - `sweep_cap`: at most this many candidates are proposed per sweep.
+///
+/// # Defaults
+///
+/// ```toml
+/// [knowledge.hygiene]
+/// enabled                            = true
+/// cadence                            = "0 4 * * 0"   # weekly, Sun 04:00
+/// sweep_cap                          = 16
+/// staleness_days                     = 365           # untouched ≥1y → stale
+/// forget_score_threshold             = 0.6           # combined score to retire
+/// protect_confidence_at_or_above     = 0.8
+/// protect_corroboration_at_or_above  = 3
+/// ingest_retention_floor_days        = 180           # ground-truth floor
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct HygieneConfig {
+    /// Enable the governed-forgetting worker (default: `true`).
+    ///
+    /// When `false` the worker is not registered: no candidate is identified
+    /// and no proposal is enqueued. Status reports `disabled` for the
+    /// `hygiene` freshness line.
+    #[serde(default = "HygieneConfig::default_enabled")]
+    pub enabled: bool,
+
+    /// 5-field cron expression for the hygiene sweep cadence.
+    ///
+    /// Default: `"0 4 * * 0"` (weekly, Sunday 04:00 — deliberately
+    /// conservative so a freshly-shipped install does not churn the graph).
+    #[serde(default = "HygieneConfig::default_cadence")]
+    pub cadence: String,
+
+    /// Maximum number of forgetting PROPOSALS the worker enqueues per sweep
+    /// (hard cap — bounded like K-R3 clamps). Default: `16`.
+    #[serde(default = "HygieneConfig::default_sweep_cap")]
+    pub sweep_cap: usize,
+
+    /// Age in days past which a fact's last corroboration / validity start is
+    /// considered stale (vs injected-now). Default: `365`.
+    #[serde(default = "HygieneConfig::default_staleness_days")]
+    pub staleness_days: u32,
+
+    /// Combined forgetting-score threshold `[0.0, 1.0]`: a candidate is
+    /// proposed only when its score is at or above this. Default: `0.6`.
+    #[serde(default = "HygieneConfig::default_forget_score_threshold")]
+    pub forget_score_threshold: f64,
+
+    /// FAIL-SAFE: a fact whose K-R6 confidence is at or above this floor is
+    /// NEVER forgotten. Default: `0.8`.
+    #[serde(default = "HygieneConfig::default_protect_confidence")]
+    pub protect_confidence_at_or_above: f64,
+
+    /// FAIL-SAFE: a fact corroborated by at least this many independent
+    /// sources is NEVER forgotten. Default: `3`.
+    #[serde(default = "HygieneConfig::default_protect_corroboration")]
+    pub protect_corroboration_at_or_above: u32,
+
+    /// FAIL-SAFE: an `Ingest`-provenance ground-truth fact younger than this
+    /// many days is NEVER forgotten, regardless of score. Default: `180`.
+    #[serde(default = "HygieneConfig::default_ingest_retention_floor_days")]
+    pub ingest_retention_floor_days: u32,
+}
+
+impl HygieneConfig {
+    const fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_cadence() -> String {
+        "0 4 * * 0".to_string()
+    }
+
+    const fn default_sweep_cap() -> usize {
+        16
+    }
+
+    const fn default_staleness_days() -> u32 {
+        365
+    }
+
+    const fn default_forget_score_threshold() -> f64 {
+        0.6
+    }
+
+    const fn default_protect_confidence() -> f64 {
+        0.8
+    }
+
+    const fn default_protect_corroboration() -> u32 {
+        3
+    }
+
+    const fn default_ingest_retention_floor_days() -> u32 {
+        180
+    }
+}
+
+impl Default for HygieneConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Self::default_enabled(),
+            cadence: Self::default_cadence(),
+            sweep_cap: Self::default_sweep_cap(),
+            staleness_days: Self::default_staleness_days(),
+            forget_score_threshold: Self::default_forget_score_threshold(),
+            protect_confidence_at_or_above: Self::default_protect_confidence(),
+            protect_corroboration_at_or_above: Self::default_protect_corroboration(),
+            ingest_retention_floor_days: Self::default_ingest_retention_floor_days(),
+        }
+    }
+}
+
 /// Pattern-mining configuration (knowledge-system K-R4).
 ///
 /// # Important: enabled defaults to `false`
@@ -1014,6 +1155,16 @@ pub struct KnowledgeConfig {
     /// then becomes the only landing path.
     #[serde(default)]
     pub proposals: ProposalsConfig,
+    /// Governed-forgetting (knowledge-hygiene) settings (knowledge-system K-R8).
+    ///
+    /// When `enabled = true` (the default, shipped enabled-but-cautious), the
+    /// daemon registers a conservative-cadence cron worker that identifies
+    /// stale / superseded / low-value facts and enqueues forgetting PROPOSALS
+    /// through the B9 gate. Forgetting MOVES a fact to a COLD plane (closes its
+    /// validity window + tags it cold) — it NEVER hard-deletes, and is fully
+    /// reversible via the recall path. Set `enabled = false` to disable.
+    #[serde(default)]
+    pub hygiene: HygieneConfig,
     /// Contradiction-driven temporal invalidation settings (knowledge-system K-M4).
     ///
     /// Controls the functional-predicate set used by the contradiction detector.
@@ -1735,6 +1886,8 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     validate_proposals(&knowledge.proposals)?;
     // Lessons-as-proposals config (K-R1).
     validate_lessons(&knowledge.lessons)?;
+    // Governed-forgetting config (K-R8): bounded clamps + cadence grammar.
+    validate_hygiene(&knowledge.hygiene)?;
     // Contradiction config (K-M4): every extra functional rel must be a valid graph id.
     validate_contradiction(&knowledge.contradiction)?;
     // Feed entries (K-L6): validate id grammar, cadence, and max_items.
@@ -1935,6 +2088,70 @@ fn validate_lessons(lessons: &LessonsConfig) -> Result<()> {
         return Err(ConfigError::Validation(
             "knowledge.lessons.max_episode_scan must be at least 1".to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Validate `[knowledge.hygiene]` (governed forgetting, K-R8).
+///
+/// Even when `enabled = false` the bounds are checked so a typo is caught
+/// before the operator turns the worker on.  All checks run regardless of the
+/// kill-switch — the K-L3 zero-config honesty posture.
+fn validate_hygiene(hygiene: &HygieneConfig) -> Result<()> {
+    // cadence: same structural 5-field cron check as proposals/evals.
+    {
+        let fields: Vec<&str> = hygiene.cadence.split_whitespace().collect();
+        if fields.len() != 5 {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.hygiene.cadence must be a 5-field cron expression \
+                 (e.g. \"0 4 * * 0\"), got {:?}",
+                hygiene.cadence
+            )));
+        }
+        let legal: fn(char) -> bool = |c| {
+            c.is_ascii_digit()
+                || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+        };
+        for field in &fields {
+            if field.chars().any(|c| !legal(c)) {
+                return Err(ConfigError::Validation(format!(
+                    "knowledge.hygiene.cadence contains an invalid cron field {:?} \
+                     in expression {:?}",
+                    field, hygiene.cadence
+                )));
+            }
+        }
+    }
+    // sweep_cap must be at least 1 — a cap of 0 would propose nothing, silently.
+    if hygiene.sweep_cap == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.hygiene.sweep_cap must be at least 1".to_string(),
+        ));
+    }
+    // staleness_days must be positive — a 0-day staleness window would mark
+    // every fact stale the instant it lands.
+    if hygiene.staleness_days == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.hygiene.staleness_days must be at least 1".to_string(),
+        ));
+    }
+    // forget_score_threshold and protect_confidence_at_or_above are
+    // probabilities — must be in [0.0, 1.0] and finite.
+    for (name, value) in [
+        (
+            "knowledge.hygiene.forget_score_threshold",
+            hygiene.forget_score_threshold,
+        ),
+        (
+            "knowledge.hygiene.protect_confidence_at_or_above",
+            hygiene.protect_confidence_at_or_above,
+        ),
+    ] {
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(ConfigError::Validation(format!(
+                "{name} must be a finite value in [0.0, 1.0], got {value}"
+            )));
+        }
     }
     Ok(())
 }
