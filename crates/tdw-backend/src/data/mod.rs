@@ -2538,7 +2538,7 @@ pub fn spawn_hygiene_worker(
     let cadence = cfg.cadence.clone();
 
     let schedule = CronSchedule::parse(&cadence)
-        .unwrap_or_else(|_| CronSchedule::parse("0 4 * * 0").expect("fallback parse"));
+        .unwrap_or_else(|_| CronSchedule::parse("0 4 * * SUN").expect("fallback parse"));
 
     let sentinel_envelope = {
         use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};

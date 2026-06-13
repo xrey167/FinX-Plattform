@@ -934,8 +934,7 @@ async fn write_proposal(
             // plane — close its validity window at `now` and annotate the
             // `forgotten` audit block. Never a hard delete; fully reversible.
             // The provenance string ties the retirement to this gated proposal.
-            let provenance_text =
-                format!("agent:{};proposal:{}", proposal.agent_id, proposal.id);
+            let provenance_text = format!("agent:{};proposal:{}", proposal.agent_id, proposal.id);
             crate::forgetting::retire_edge_to_cold(
                 graph,
                 from,

@@ -245,9 +245,7 @@ impl ForgettingPolicy {
 
         // ── Signal (d): never retrieved ──────────────────────────────────────
         // Conservative proxy: a stale fact with no retrieval timestamp.
-        let never_retrieved = if staleness >= 1.0
-            && edge.props.get("last_retrieved_at").is_none()
-        {
+        let never_retrieved = if staleness >= 1.0 && edge.props.get("last_retrieved_at").is_none() {
             1.0
         } else {
             0.0
@@ -280,8 +278,7 @@ impl ForgettingPolicy {
     /// meet the threshold AND no fail-safe guard fired.
     #[must_use]
     pub fn is_candidate(&self, assessment: &ForgettingAssessment) -> bool {
-        assessment.protected_reason.is_none()
-            && assessment.score >= self.forget_score_threshold
+        assessment.protected_reason.is_none() && assessment.score >= self.forget_score_threshold
     }
 
     /// Apply the HARD fail-safe guards.  Returns `Some(reason)` when the edge
@@ -761,7 +758,13 @@ mod tests {
         use tdw_tags::InMemoryTagEngine;
         use tdw_taxonomy::Adaptivity;
 
-        let stale = ingest_edge("company:ACME", "ceo_of", "person:old", "src:a", "2018-01-01");
+        let stale = ingest_edge(
+            "company:ACME",
+            "ceo_of",
+            "person:old",
+            "src:a",
+            "2018-01-01",
+        );
         let graph = seeded(&["company:ACME", "person:old"], &[stale]).await;
         let graph: Arc<dyn GraphEngine> = graph;
         let tags: Arc<dyn tdw_tags::TagEngine> = Arc::new(InMemoryTagEngine::default());
@@ -806,7 +809,13 @@ mod tests {
         use tdw_tags::InMemoryTagEngine;
         use tdw_taxonomy::Adaptivity;
 
-        let edge = ingest_edge("company:ACME", "ceo_of", "person:old", "src:a", "2010-01-01");
+        let edge = ingest_edge(
+            "company:ACME",
+            "ceo_of",
+            "person:old",
+            "src:a",
+            "2010-01-01",
+        );
         let graph = seeded(&["company:ACME", "person:old"], &[edge]).await;
         let graph: Arc<dyn GraphEngine> = graph;
         let tags: Arc<dyn tdw_tags::TagEngine> = Arc::new(InMemoryTagEngine::default());
@@ -829,7 +838,9 @@ mod tests {
             .await
             .expect("submit");
         // Promote (human approval path) then materialize.
-        queue.approve(&p.id, "operator", "2024-06-01").expect("approve");
+        queue
+            .approve(&p.id, "operator", "2024-06-01")
+            .expect("approve");
         let report = queue
             .materialize_ready(&graph, &tags, "2024-06-01")
             .await
@@ -911,7 +922,13 @@ mod tests {
     fn high_confidence_fact_is_never_forgotten_failsafe() {
         let policy = ForgettingPolicy::default();
         // Ancient + would-be-stale, but confidence is above the protect floor.
-        let edge = ingest_edge("company:ACME", "sector", "sector:tech", "src:a", "2000-01-01");
+        let edge = ingest_edge(
+            "company:ACME",
+            "sector",
+            "sector:tech",
+            "src:a",
+            "2000-01-01",
+        );
         let assessment = policy.evaluate(&edge, 0.95, 1, "2024-06-01");
         assert!(
             assessment.protected_reason.is_some(),
@@ -926,7 +943,13 @@ mod tests {
     #[test]
     fn well_corroborated_fact_is_never_forgotten_failsafe() {
         let policy = ForgettingPolicy::default();
-        let edge = ingest_edge("company:ACME", "sector", "sector:tech", "src:a", "2000-01-01");
+        let edge = ingest_edge(
+            "company:ACME",
+            "sector",
+            "sector:tech",
+            "src:a",
+            "2000-01-01",
+        );
         // 4 independent sources ≥ protect floor of 3 → protected.
         let assessment = policy.evaluate(&edge, 0.1, 4, "2024-06-01");
         assert!(assessment.protected_reason.is_some());
@@ -937,7 +960,13 @@ mod tests {
     fn fresh_ingest_ground_truth_within_floor_is_never_forgotten() {
         let policy = ForgettingPolicy::default();
         // Ingest fact 10 days old, far below the 180-day retention floor.
-        let edge = ingest_edge("company:ACME", "ceo_of", "person:new", "src:a", "2024-05-22");
+        let edge = ingest_edge(
+            "company:ACME",
+            "ceo_of",
+            "person:new",
+            "src:a",
+            "2024-05-22",
+        );
         let assessment = policy.evaluate(&edge, 0.1, 1, "2024-06-01");
         assert!(
             assessment.protected_reason.is_some(),
@@ -955,7 +984,12 @@ mod tests {
         let graph: Arc<dyn GraphEngine> = graph;
 
         retire_edge_to_cold(
-            &graph, "company:ACME", "hq_in", "city:old", "reason", "agent:w;proposal:p1",
+            &graph,
+            "company:ACME",
+            "hq_in",
+            "city:old",
+            "reason",
+            "agent:w;proposal:p1",
             "2024-06-01",
         )
         .await

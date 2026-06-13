@@ -17,8 +17,8 @@ pub use distillation::DistillationFreshness;
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
 pub use runtime::{
-    HygieneFreshness, KgColdPlaneCounts, KgGraphHealth, KgProposalCounts, KgStatus,
-    KgThesesStatus, SelfTuneStatus,
+    HygieneFreshness, KgColdPlaneCounts, KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus,
+    SelfTuneStatus,
 };
 pub use self_tune::{
     SelfTuneLog, TUNER_AGENT_ID, TunableParam, TuneClamp, TuneOutcome, TuneRecord,

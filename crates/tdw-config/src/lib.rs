@@ -411,7 +411,7 @@ impl Default for ProposalsConfig {
 /// # Ship-enabled-but-cautious
 ///
 /// Default: **`enabled = true`** with a deliberately conservative cadence
-/// (`"0 4 * * 0"` — weekly, Sunday 04:00) and a small per-sweep cap.  The
+/// (`"0 4 * * SUN"` — weekly, Sunday 04:00) and a small per-sweep cap.  The
 /// fail-safe guards below are HARD floors the policy cannot override.
 ///
 /// # Kill-switch
@@ -435,7 +435,7 @@ impl Default for ProposalsConfig {
 /// ```toml
 /// [knowledge.hygiene]
 /// enabled                            = true
-/// cadence                            = "0 4 * * 0"   # weekly, Sun 04:00
+/// cadence                            = "0 4 * * SUN" # weekly, Sun 04:00
 /// sweep_cap                          = 16
 /// staleness_days                     = 365           # untouched ≥1y → stale
 /// forget_score_threshold             = 0.6           # combined score to retire
@@ -455,7 +455,7 @@ pub struct HygieneConfig {
 
     /// 5-field cron expression for the hygiene sweep cadence.
     ///
-    /// Default: `"0 4 * * 0"` (weekly, Sunday 04:00 — deliberately
+    /// Default: `"0 4 * * SUN"` (weekly, Sunday 04:00 — deliberately
     /// conservative so a freshly-shipped install does not churn the graph).
     #[serde(default = "HygieneConfig::default_cadence")]
     pub cadence: String,
@@ -497,7 +497,10 @@ impl HygieneConfig {
     }
 
     fn default_cadence() -> String {
-        "0 4 * * 0".to_string()
+        // Weekly, Sunday 04:00. Use the named DOW (`SUN`) rather than `0`:
+        // tdw-cron expands 5-field → 7-field quartz where DOW must be 1-7, so a
+        // numeric `0` is rejected as a parse error (see tdw-cron parse tests).
+        "0 4 * * SUN".to_string()
     }
 
     const fn default_sweep_cap() -> usize {
@@ -2104,7 +2107,7 @@ fn validate_hygiene(hygiene: &HygieneConfig) -> Result<()> {
         if fields.len() != 5 {
             return Err(ConfigError::Validation(format!(
                 "knowledge.hygiene.cadence must be a 5-field cron expression \
-                 (e.g. \"0 4 * * 0\"), got {:?}",
+                 (e.g. \"0 4 * * SUN\"), got {:?}",
                 hygiene.cadence
             )));
         }

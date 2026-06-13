@@ -1592,10 +1592,10 @@ impl KnowledgeRuntime {
         // Hygiene freshness (K-R8): read the shared cell if wired, else None.
         // `try_lock` avoids blocking: if the worker is mid-sweep return the last
         // known state rather than deadlocking the status handler.
-        let hygiene_freshness =
-            self.hygiene_freshness
-                .as_ref()
-                .map(|cell| cell.try_lock().map_or(HygieneFreshness::Pending, |g| g.clone()));
+        let hygiene_freshness = self.hygiene_freshness.as_ref().map(|cell| {
+            cell.try_lock()
+                .map_or(HygieneFreshness::Pending, |g| g.clone())
+        });
 
         // Cold-plane + pending-hygiene counts (K-R8 req 4): bounded scans. Only
         // computed when a graph engine is attached. Cold edges are those
