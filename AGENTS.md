@@ -117,6 +117,12 @@
 5. PR opened (or, for in-progress work, branch pushed and `gh pr status`
    reviewed). Tool output, not assumption, is the evidence.
 
+These four commands are the floor (debug, single-snapshot). They do **not** cover
+the release build, schema-drift goldens, date-pinned tests, or post-rebase
+workspace checks that CI gates on. Before arming auto-merge, run the CI-only steps
+in [`docs/review-gate.md`](docs/review-gate.md) — the local gate must mirror what
+`.github/workflows/ci.yml` actually runs.
+
 ## Batch Improvement Mode
 
 For systematic debt burn-down (lint waves, test gaps, provider wiring), use
