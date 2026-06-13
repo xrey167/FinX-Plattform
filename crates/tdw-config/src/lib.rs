@@ -571,6 +571,9 @@ impl Default for LessonsConfig {
     }
 }
 
+/// Configuration for the rule-induction background worker (`knowledge.induction`).
+///
+/// ```toml
 /// [knowledge.induction]
 /// enabled = true
 /// cadence = "0 3 * * *"          # nightly at 03:00
