@@ -65,6 +65,13 @@ pub enum DocumentSource {
     Provider { provider: String },
     /// Manually authored.
     Manual,
+    /// A windowed slice of an agent session transcript (K-M2).
+    ///
+    /// `session_id` is a stable opaque identifier for the session; `window`
+    /// is the zero-based window index within that session (the Nth group of
+    /// `window_size` turns).  Together they form the stable document id used
+    /// by the content-hash manifest.
+    AgentSession { session_id: String, window: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +94,14 @@ pub struct KnowledgeDocument {
     /// at index time (stub nodes are created for unknown targets).
     #[serde(default)]
     pub mentions: Vec<String>,
+    /// When set, the graph edges for this document are stamped with
+    /// `Provenance::Agent { agent_id, gated: false }` instead of
+    /// `Provenance::Ingest`.  Used by the episodic surface (K-M2) so that
+    /// trust-dial (K-X3) and why-chains classify episodes as agent/user memory
+    /// as documented.  Left `None` for all non-episodic ingestion paths so
+    /// their existing provenance is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 
 impl KnowledgeDocument {
@@ -108,6 +123,7 @@ impl KnowledgeDocument {
             plane: None,
             as_of: None,
             mentions: Vec::new(),
+            author: None,
         }
     }
 }
@@ -590,6 +606,7 @@ mod tests {
                     plane: None,
                     as_of: None,
                     mentions: Vec::new(),
+                    author: None,
                 },
                 "2026-05-22",
             )
@@ -635,6 +652,7 @@ mod tests {
                     plane: None,
                     as_of: None,
                     mentions: Vec::new(),
+                    author: None,
                 },
                 "2026-05-22",
             )
@@ -716,6 +734,7 @@ mod tests {
             plane: None,
             as_of: None,
             mentions: Vec::new(),
+            author: None,
         };
 
         let error = index
@@ -739,6 +758,7 @@ mod tests {
             plane: None,
             as_of: None,
             mentions: Vec::new(),
+            author: None,
         };
         let error = index
             .index_document_at(tagless, "not-a-date")
@@ -789,6 +809,7 @@ fn build_context() {}
                 plane: None,
                 as_of: None,
                 mentions: Vec::new(),
+                author: None,
             }),
             Err(KnowledgeError::InvalidDocumentField("body"))
         ));
@@ -807,6 +828,7 @@ fn build_context() {}
                 plane: None,
                 as_of: None,
                 mentions: Vec::new(),
+                author: None,
             }),
             Err(KnowledgeError::InvalidDocumentField("entity"))
         ));
@@ -821,6 +843,7 @@ fn build_context() {}
                 plane: None,
                 as_of: None,
                 mentions: Vec::new(),
+                author: None,
             }),
             Err(KnowledgeError::InvalidDocumentField("tags"))
         ));

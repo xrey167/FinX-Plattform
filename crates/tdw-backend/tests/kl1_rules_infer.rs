@@ -69,6 +69,7 @@ fn make_doc(id: &str, entity_id: &str, tags: &[&str]) -> KnowledgeDocument {
         source: None,
         plane: None,
         as_of: None,
+        author: None,
         mentions: vec![],
     }
 }

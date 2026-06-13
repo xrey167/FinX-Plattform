@@ -182,12 +182,50 @@ pub enum EntityKind {
     /// host-bound identity (K-L5), instant-write.  `DeriveEdge` rules do NOT
     /// consume `OpenQuestion` edges by default.
     OpenQuestion,
+    /// A windowed slice of an agent session transcript (knowledge-system K-M2).
+    ///
+    /// Episode nodes represent a fixed-turn window of agent/user conversation
+    /// turns, ingested as searchable temporal `KnowledgeDocument`s on the
+    /// `episodic` plane.  They carry:
+    ///
+    /// * `as_of` from the window's first injected timestamp (NO wall-clock
+    ///   except at the public ingestion edge — same discipline as every other
+    ///   dated document).
+    /// * Lexical mention-matching auto-links to known entities (tickers,
+    ///   graph nodes) exactly as findings and news articles do.
+    /// * Content-hash idempotency via the K-E3 `KnowledgeIndexer` path so
+    ///   re-submitting the same transcript slice is a silent no-op.
+    ///
+    /// # Trust class
+    ///
+    /// Episodes are **agent/user-authored memory**: they carry
+    /// `Provenance::Agent { agent_id: bound_principal, gated: false }`.  The
+    /// `bound_principal` is HOST-BOUND (set at runtime construction via
+    /// `with_user_id`, identical to the K-X6 finding surface) — callers
+    /// cannot forge a different author through the MCP argument map.
+    ///
+    /// # Inference boundary
+    ///
+    /// * `PropagateTag` rules CAN reach episodes — auto-tagging aids retrieval.
+    /// * `DeriveEdge` rules do NOT consume episode edges by default
+    ///   (`exclude_user_authored = true` in `InferEngine`).  The operator may
+    ///   opt in via `with_user_authored_inference(true)`.  This prevents
+    ///   episode content from silently minting derived facts the operator never
+    ///   sanctioned — the same posture as findings (K-X6).
+    ///
+    /// # Temporal leakage safety
+    ///
+    /// `as_of` is the injected date of the first turn in the window.  The B4
+    /// retrieval contract's `document_visible` predicate ensures a query with
+    /// `as_of = T` never surfaces an episode whose `as_of > T`, preventing
+    /// future-context leakage.
+    Episode,
 }
 
 impl EntityKind {
     /// Every classified kind, in manifest-group order (domain appended last; see the
     /// declaration-order note on the enum).
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 55] = [
         Self::Agent,
         Self::Personality,
         Self::Prompt,
@@ -245,6 +283,8 @@ impl EntityKind {
         Self::Pattern,
         // OpenQuestion appended after Pattern so existing ordinals stay stable (K-X8).
         Self::OpenQuestion,
+        // Episode appended after OpenQuestion so existing ordinals stay stable (K-M2).
+        Self::Episode,
     ];
 
     /// The manifest group this kind belongs to.
@@ -287,7 +327,9 @@ impl EntityKind {
             // Pattern is a mined subgraph shape (K-R4).
             | Self::Pattern
             // OpenQuestion is a standing query that self-answers (K-X8).
-            | Self::OpenQuestion => Group::Knowledge,
+            | Self::OpenQuestion
+            // Episode is a windowed agent-session transcript slice (K-M2).
+            | Self::Episode => Group::Knowledge,
             Self::Guardrail
             | Self::Rule
             | Self::Evaluation
@@ -331,6 +373,8 @@ impl EntityKind {
                 | Self::Pattern
                 // OpenQuestion carries content facets (as_of, status, match criteria) — K-X8.
                 | Self::OpenQuestion
+                // Episode carries content facets (as_of=turn timestamp, plane=episodic) — K-M2.
+                | Self::Episode
         )
     }
 
@@ -352,7 +396,7 @@ mod tests {
         for kind in EntityKind::ALL {
             assert!(seen.insert(kind), "duplicate kind: {kind:?}");
         }
-        assert_eq!(seen.len(), 54);
+        assert_eq!(seen.len(), 55);
     }
 
     #[test]
@@ -366,7 +410,7 @@ mod tests {
         assert_eq!(count(Group::Core), 10);
         assert_eq!(count(Group::Tools), 6);
         assert_eq!(count(Group::Orchestration), 7);
-        assert_eq!(count(Group::Knowledge), 11); // +Finding (K-X6) +Pattern (K-R4) +OpenQuestion (K-X8)
+        assert_eq!(count(Group::Knowledge), 12); // +Finding (K-X6) +Pattern (K-R4) +OpenQuestion (K-X8) +Episode (K-M2)
         assert_eq!(count(Group::Governance), 6);
         assert_eq!(count(Group::Infra), 5);
         assert_eq!(count(Group::Meta), 1);
@@ -395,6 +439,7 @@ mod tests {
         check(EntityKind::Finding, "finding"); // K-X6
         check(EntityKind::Pattern, "pattern"); // K-R4
         check(EntityKind::OpenQuestion, "openquestion"); // K-X8
+        check(EntityKind::Episode, "episode"); // K-M2
     }
 
     #[test]
@@ -456,5 +501,27 @@ mod tests {
         assert_eq!(EntityKind::ALL[53], EntityKind::OpenQuestion);
         assert_eq!(EntityKind::OpenQuestion.group(), Group::Knowledge);
         assert!(EntityKind::OpenQuestion.is_data_kind());
+    }
+
+    #[test]
+    fn episode_kind_is_in_knowledge_group_at_expected_ordinal() {
+        // Episode is appended at index 54 (after OpenQuestion at 53) so the 54
+        // pre-existing kinds keep their ordinals stable (K-M2).
+        assert_eq!(EntityKind::ALL[54], EntityKind::Episode);
+        assert_eq!(EntityKind::Episode.group(), Group::Knowledge);
+        assert!(EntityKind::Episode.is_data_kind());
+    }
+
+    #[test]
+    fn episode_serializes_and_is_data_kind() {
+        // Serializes to the lowercase "episode" token and is_data_kind consistent
+        // with Group::Knowledge membership — the is_data_kind ↔ Knowledge equivalence
+        // test above already covers this, but the explicit pin makes the K-M2
+        // intent visible.
+        let token = serde_json::to_value(EntityKind::Episode).expect("episode serializes");
+        assert_eq!(token, serde_json::Value::String("episode".to_string()));
+        let roundtrip: EntityKind =
+            serde_json::from_value(serde_json::json!("episode")).expect("episode deserializes");
+        assert_eq!(roundtrip, EntityKind::Episode);
     }
 }

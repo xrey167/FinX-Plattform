@@ -5353,6 +5353,7 @@ mod tests {
                 source: None,
                 plane: None,
                 as_of: None,
+                author: None,
                 mentions: Vec::new(),
             })
             .await
@@ -6627,6 +6628,7 @@ mod tests {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: vec![],
         };
         let result = ingest.ingest_at(vec![bad_doc], "2026-06-12").await;

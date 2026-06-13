@@ -65,6 +65,7 @@ async-trait = { workspace = true }
 tdw-app-server = { workspace = true, features = ["transport-http"] }
 # Knowledge-tool tests build a KnowledgeRuntime over in-memory engines (hash
 # embedder + in-process graph/tags/vector/lexical) and index a few documents.
+tdw-embed = { path = "../tdw-embed" }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-kg = { path = "../tdw-kg" }
 tdw-storage-graph = { path = "../tdw-storage-graph" }

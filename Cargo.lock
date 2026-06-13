@@ -5715,6 +5715,7 @@ dependencies = [
  "tdw-app-server",
  "tdw-config",
  "tdw-core",
+ "tdw-embed",
  "tdw-embed-local",
  "tdw-endpoint-catalog",
  "tdw-induction",

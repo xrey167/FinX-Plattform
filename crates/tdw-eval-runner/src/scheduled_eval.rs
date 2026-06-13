@@ -791,6 +791,7 @@ mod tests {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: vec![],
         }];
 
@@ -846,6 +847,7 @@ mod tests {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: vec![],
         }];
 
@@ -1038,6 +1040,7 @@ mod tests {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: vec![],
         };
         let case = RetrievalEvalCase {
@@ -1079,6 +1082,7 @@ mod tests {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: vec![],
         };
         let case = RetrievalEvalCase {

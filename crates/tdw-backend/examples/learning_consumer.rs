@@ -67,6 +67,7 @@ async fn knowledge_flow(backend: &Backend) -> Result<(), Box<dyn Error>> {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: Vec::new(),
         })
         .await?;

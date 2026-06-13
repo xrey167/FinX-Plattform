@@ -38,6 +38,7 @@ async fn knowledge_index_then_search_returns_the_document() {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: Vec::new(),
         })
         .await

@@ -59,6 +59,7 @@ async fn e2e_real_qdrant_knowledge_persists_across_index_instances() {
         source: None,
         plane: None,
         as_of: None,
+        author: None,
         mentions: Vec::new(),
     };
 

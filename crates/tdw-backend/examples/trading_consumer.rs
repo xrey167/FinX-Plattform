@@ -114,6 +114,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             source: None,
             plane: None,
             as_of: None,
+            author: None,
             mentions: Vec::new(),
         })
         .await?;
