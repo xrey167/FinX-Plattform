@@ -218,6 +218,99 @@ async fn example_80_absent_root_is_an_honest_empty_graph() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_unknown_root_is_an_honest_empty_graph() {
+    // A root IS supplied but resolves to no node: honest-empty, not fabricated.
+    let payload = graph::fetch_unknown_root_graph()
+        .await
+        .expect("unknown-root graph");
+    let block = &payload["graph"];
+    assert_eq!(block["node_count"], 0, "no fabricated node for unknown root");
+    assert_eq!(block["edge_count"], 0);
+    assert!(
+        block["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not found"),
+        "honest note: the root was not found, got {:?}",
+        block["note"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_runtime_without_a_graph_engine_is_honest_empty() {
+    // No graph plane attached to the runtime → honest-empty (200), not an error.
+    let payload = graph::fetch_graph_without_engine()
+        .await
+        .expect("graphless runtime");
+    let block = &payload["graph"];
+    assert_eq!(block["node_count"], 0, "no graph engine → empty, not invented");
+    assert!(
+        block["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no graph engine"),
+        "honest note explains the missing engine, got {:?}",
+        block["note"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_oversized_depth_is_clamped_and_as_of_is_threaded() {
+    // depth=99 is clamped to the handler ceiling; as_of is echoed verbatim
+    // (leakage-safe — no future substitution).
+    let payload = graph::fetch_clamped_depth_graph()
+        .await
+        .expect("clamped-depth graph");
+    let block = &payload["graph"];
+    let depth = block["depth"].as_u64().expect("depth is a number");
+    assert!(
+        (1..=8).contains(&depth) && depth < 99,
+        "oversized depth clamped to the bounded ceiling (well under the engine's \
+         MAX_HOPS), got {depth}"
+    );
+    assert_eq!(
+        block["as_of"], "2024-01-01T00:00:00Z",
+        "as_of threaded verbatim into the structured block"
+    );
+    let markdown = payload["results"].as_str().expect("results markdown");
+    assert!(
+        markdown.contains("2024-01-01T00:00:00Z"),
+        "the rendered markdown surfaces the as_of instant"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_malformed_depth_is_a_400() {
+    // The one caller mistake the handler surfaces as an error (not honest-empty).
+    let status = graph::fetch_invalid_depth_status()
+        .await
+        .expect("issue request");
+    assert_eq!(status, 400, "a non-numeric depth is a 400 Bad Request");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_hub_node_is_truncated_to_the_fan_out_budget() {
+    // A hub with more neighbors than the node budget must be clipped, with an
+    // honest truncation note — never an unbounded payload.
+    let payload = graph::fetch_hub_graph().await.expect("hub graph");
+    let block = &payload["graph"];
+    let node_count = block["node_count"].as_u64().expect("node_count");
+    assert!(
+        node_count >= 1 && node_count < graph::HUB_NEIGHBORS as u64,
+        "the hub neighborhood was clipped below the seeded {} neighbors, got {node_count}",
+        graph::HUB_NEIGHBORS
+    );
+    assert!(
+        block["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("truncated"),
+        "honest truncation note present, got {:?}",
+        block["note"]
+    );
+}
+
 // --- Example 70: table + chart artifacts ------------------------------------
 
 #[test]
