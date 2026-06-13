@@ -11,7 +11,8 @@
 
 use tdw_openbb_agent::SseEvent;
 use tdw_workspace_examples::{
-    agent_echo, app, charts_tables, client, derived, minimal, reasoning_citations, widget_data,
+    agent_echo, app, charts_tables, client, derived, graph, minimal, reasoning_citations,
+    widget_data,
 };
 
 // --- Example 10: hand-written minimal backend -------------------------------
@@ -185,6 +186,35 @@ async fn example_60_two_request_round_trip() {
     assert!(
         round_trip.leg2.sse_data().contains("185.6"),
         "folded widget data reaches the answer context"
+    );
+}
+
+// --- Example 80: knowledge graph-visualization widget (K-M6) ----------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_serves_a_bounded_ego_graph_from_the_live_backend() {
+    let payload = graph::fetch_ego_graph().await.expect("ego-graph");
+    let block = &payload["graph"];
+    // Root + two neighbors, two edges — a bounded ego-graph, not unbounded.
+    assert_eq!(block["node_count"], 3, "root + 2 neighbors");
+    assert_eq!(block["edge_count"], 2);
+    // The markdown widget's dataKey carries a rendered graph naming the root.
+    let markdown = payload["results"].as_str().expect("results markdown");
+    assert!(markdown.contains(graph::ROOT), "markdown names the root");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn example_80_absent_root_is_an_honest_empty_graph() {
+    let payload = graph::fetch_empty_graph().await.expect("empty graph");
+    let block = &payload["graph"];
+    assert_eq!(
+        block["node_count"], 0,
+        "no fabricated nodes for an absent root"
+    );
+    assert_eq!(block["edge_count"], 0);
+    assert!(
+        block["nodes"].as_array().expect("nodes array").is_empty(),
+        "honest empty: no nodes invented"
     );
 }
 

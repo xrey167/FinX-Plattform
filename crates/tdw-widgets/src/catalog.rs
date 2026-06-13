@@ -41,6 +41,12 @@ pub fn catalog_widgets() -> Vec<WidgetConfig> {
 ///
 /// Keys are inserted into a [`BTreeMap`], so the document serializes in sorted
 /// `id` order regardless of catalog order — deterministic and diff-friendly.
+///
+/// The document is the catalog-derived `Fetch` widgets PLUS the curated,
+/// read-only knowledge graph-visualization widget (K-M6), which is authored
+/// directly ([`crate::graph::graph_widget`]) rather than projected from a
+/// catalog route (the knowledge graph is a runtime read API, not a provider
+/// fetch route).
 #[must_use]
 pub fn widgets_json() -> Value {
     let mut map: BTreeMap<String, Value> = BTreeMap::new();
@@ -49,6 +55,11 @@ pub fn widgets_json() -> Value {
         if let Ok(value) = serde_json::to_value(&widget) {
             map.insert(id, value);
         }
+    }
+    // K-M6: merge the curated knowledge graph widget (not a catalog Fetch route).
+    let graph = crate::graph::graph_widget();
+    if let Ok(value) = serde_json::to_value(&graph) {
+        map.insert(graph.id, value);
     }
     serde_json::to_value(map).unwrap_or(Value::Null)
 }
@@ -140,6 +151,18 @@ mod tests {
         assert_eq!(widget["type"], "chart");
         assert_eq!(widget["endpoint"], "/widget-data/equity/price/historical");
         assert_eq!(widget["data"]["dataKey"], "results");
+    }
+
+    #[test]
+    fn widgets_json_contains_the_curated_knowledge_graph_widget() {
+        // K-M6: the read-only graph-visualization widget is merged in alongside
+        // the catalog-derived widgets, even though it is not a Fetch route.
+        let document = widgets_json();
+        let widget = &document[crate::graph::GRAPH_WIDGET_ID];
+        assert!(widget.is_object(), "knowledge graph widget present");
+        assert_eq!(widget["type"], "markdown");
+        assert_eq!(widget["category"], "knowledge");
+        assert_eq!(widget["endpoint"], crate::graph::GRAPH_WIDGET_ENDPOINT);
     }
 
     #[test]

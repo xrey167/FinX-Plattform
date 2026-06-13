@@ -51,6 +51,37 @@ const MAX_HEADER_BYTES: usize = 16 * 1024;
 /// route (slash form).
 const WIDGET_DATA_PREFIX: &str = "/widget-data/";
 
+/// The widget-data path for the read-only knowledge graph-visualization widget
+/// (K-M6). Handled out-of-band of the catalog dispatch by an optional
+/// [`KnowledgeGraphHandler`], mirroring how the REST family handles
+/// `/api/v1/knowledge/status` via [`crate::rest_route::KnowledgeStatusHandler`].
+const KNOWLEDGE_GRAPH_PATH: &str = "/widget-data/knowledge/graph";
+
+/// Abstract interface over the daemon's read-only knowledge graph for the
+/// graph-visualization Workspace widget (K-M6).
+///
+/// Implemented by the crate that holds the `KnowledgeRuntime` (e.g.
+/// `tdw-service-api`) to avoid a dependency cycle — `tdw-app-server` has no
+/// dependency on `tdw-knowledge`. Returning `None` from a workspace listener's
+/// optional handler keeps the route absent (the catalog dispatch then 400s the
+/// unknown route, as for any other non-catalog widget-data path).
+///
+/// The handler is **read-only**: it resolves an ego-graph (a root node plus its
+/// bounded neighborhood) or a taxonomy slice and returns the rendered widget
+/// payload. It performs no graph writes.
+#[async_trait::async_trait]
+pub trait KnowledgeGraphHandler: Send + Sync {
+    /// Resolve the graph-visualization widget data for `params` (the parsed
+    /// query string: `root`, optional `depth`, `as_of`, `rels`, `direction`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a descriptive message when the request is malformed (mapped to
+    /// HTTP 400) — an absent or empty root is NOT an error: it yields an honest
+    /// empty graph payload with HTTP 200.
+    async fn graph_widget_data(&self, params: &Value) -> Result<Value, String>;
+}
+
 /// The header carrying the optional shared API key.
 const API_KEY_HEADER: &str = "x-tdw-api-key";
 
@@ -128,6 +159,27 @@ pub async fn serve_workspace_http(
     config: WorkspaceConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<()> {
+    serve_workspace_http_with_graph(listener, handler, None, config, cancel).await
+}
+
+/// Spawn the Workspace bridge listener with an optional read-only knowledge
+/// graph handler (K-M6) backing `GET /widget-data/knowledge/graph`.
+///
+/// Pass `graph` as `Some(handler)` to serve the graph-visualization widget's
+/// data from the live knowledge runtime; `None` leaves the route absent (it
+/// falls through to the catalog dispatch, which 400s it as an unknown route).
+/// [`serve_workspace_http`] is the `None` convenience wrapper.
+///
+/// # Errors
+///
+/// Returns an `io::Error` if accepting a connection fails.
+pub async fn serve_workspace_http_with_graph(
+    listener: TcpListener,
+    handler: Arc<dyn RestApiHandler>,
+    graph: Option<Arc<dyn KnowledgeGraphHandler>>,
+    config: WorkspaceConfig,
+    cancel: CancellationToken,
+) -> std::io::Result<()> {
     let config = Arc::new(config);
     loop {
         tokio::select! {
@@ -136,8 +188,9 @@ pub async fn serve_workspace_http(
             accept = listener.accept() => {
                 let (stream, _peer) = accept?;
                 let h = Arc::clone(&handler);
+                let g = graph.as_ref().map(Arc::clone);
                 let c = Arc::clone(&config);
-                tokio::spawn(handle_workspace_conn(stream, h, c));
+                tokio::spawn(handle_workspace_conn(stream, h, g, c));
             }
         }
     }
@@ -166,6 +219,7 @@ pub(crate) struct RequestHead {
 async fn handle_workspace_conn(
     mut stream: TcpStream,
     handler: Arc<dyn RestApiHandler>,
+    graph: Option<Arc<dyn KnowledgeGraphHandler>>,
     config: Arc<WorkspaceConfig>,
 ) {
     let Some(head) = read_request_head(&mut stream).await else {
@@ -190,19 +244,32 @@ async fn handle_workspace_conn(
         return;
     }
 
-    route_request(&mut stream, &handler, &head, &cors).await;
+    route_request(&mut stream, &handler, graph.as_ref(), &head, &cors).await;
 }
 
 /// Dispatch an authorized `GET` to the right handler.
 async fn route_request(
     stream: &mut TcpStream,
     handler: &Arc<dyn RestApiHandler>,
+    graph: Option<&Arc<dyn KnowledgeGraphHandler>>,
     head: &RequestHead,
     cors: &[(String, String)],
 ) {
     match head.path.as_str() {
         "/widgets.json" => write_json(stream, &tdw_widgets::widgets_json(), cors).await,
         "/apps.json" => write_json(stream, &tdw_widgets::apps_json(), cors).await,
+        // K-M6: the read-only knowledge graph-visualization widget. Served by
+        // the optional graph handler when attached; otherwise it falls through
+        // to the catalog dispatch (which 400s it as a non-catalog route).
+        KNOWLEDGE_GRAPH_PATH if graph.is_some() => {
+            serve_knowledge_graph(
+                stream,
+                graph.expect("graph handler present"),
+                &head.query,
+                cors,
+            )
+            .await;
+        }
         path => {
             if let Some(route) = path.strip_prefix(WIDGET_DATA_PREFIX) {
                 serve_widget_data(stream, handler, route, &head.query, cors).await;
@@ -210,6 +277,23 @@ async fn route_request(
                 write_error(stream, 404, "not a workspace route", cors).await;
             }
         }
+    }
+}
+
+/// Resolve the read-only knowledge graph-visualization widget data (K-M6)
+/// through the optional [`KnowledgeGraphHandler`]. An absent/empty root is NOT
+/// an error — the handler returns an honest empty graph with HTTP 200; only a
+/// malformed request maps to 400.
+async fn serve_knowledge_graph(
+    stream: &mut TcpStream,
+    graph: &Arc<dyn KnowledgeGraphHandler>,
+    query: &str,
+    cors: &[(String, String)],
+) {
+    let params = parse_query_params(query);
+    match graph.graph_widget_data(&params).await {
+        Ok(body) => write_json(stream, &body, cors).await,
+        Err(message) => write_error(stream, 400, &message, cors).await,
     }
 }
 

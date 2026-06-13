@@ -6,9 +6,11 @@
 //! server, makes a request, and cancels it deterministically.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use tdw_app_server::{
-    CancellationToken, WorkspaceConfig, serve_agent_http, serve_rest_http, serve_workspace_http,
+    CancellationToken, KnowledgeGraphHandler, WorkspaceConfig, serve_agent_http, serve_rest_http,
+    serve_workspace_http, serve_workspace_http_with_graph,
 };
 use tdw_service_api::{AgentBridgeState, AppState, RestApiState};
 use tokio::net::TcpListener;
@@ -96,6 +98,30 @@ pub async fn start_workspace(config: WorkspaceConfig) -> std::io::Result<Running
     let cancel_srv = cancel.clone();
     let task = tokio::spawn(async move {
         let _ = serve_workspace_http(listener, handler, config, cancel_srv).await;
+    });
+    Ok(RunningServer { addr, cancel, task })
+}
+
+/// Boot the **Workspace data backend** surface WITH the read-only knowledge
+/// graph handler attached (K-M6), so `GET /widget-data/knowledge/graph` serves a
+/// live ego-graph through the same `serve_workspace_http_with_graph` path the
+/// daemon uses.
+///
+/// # Errors
+///
+/// Returns any error binding the ephemeral listener.
+pub async fn start_workspace_with_graph(
+    config: WorkspaceConfig,
+    graph: Arc<dyn KnowledgeGraphHandler>,
+) -> std::io::Result<RunningServer> {
+    let state = AppState::in_memory_for_tests().await;
+    let handler = RestApiState::new(state).into_handler();
+    let (listener, addr) = bind_ephemeral().await?;
+    let cancel = CancellationToken::new();
+    let cancel_srv = cancel.clone();
+    let task = tokio::spawn(async move {
+        let _ = serve_workspace_http_with_graph(listener, handler, Some(graph), config, cancel_srv)
+            .await;
     });
     Ok(RunningServer { addr, cancel, task })
 }

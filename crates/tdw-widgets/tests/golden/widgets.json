@@ -6173,6 +6173,52 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "knowledge_graph": {
+    "category": "knowledge",
+    "data": {
+      "dataKey": "results"
+    },
+    "description": "Read-only ego-graph and taxonomy view of the knowledge graph: a root entity/tag plus its bounded neighborhood, rendered from the live knowledge read API.",
+    "endpoint": "/widget-data/knowledge/graph",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "knowledge_graph",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.kg.traverse"
+    },
+    "name": "Knowledge Graph",
+    "params": [
+      {
+        "description": "Entity or tag node id to anchor the ego-graph on (e.g. instrument:AAPL). Leave empty for an honest empty graph.",
+        "label": "Root node",
+        "multiSelect": false,
+        "paramName": "root",
+        "type": "text"
+      },
+      {
+        "description": "Hop budget for the ego-graph (bounded by the engine's MAX_HOPS ceiling).",
+        "label": "Depth",
+        "multiSelect": false,
+        "paramName": "depth",
+        "type": "number",
+        "value": 1
+      },
+      {
+        "description": "Leakage-safe point-in-time (RFC 3339): only facts valid at or before this instant are shown. Empty applies no temporal filter.",
+        "label": "As of",
+        "multiSelect": false,
+        "paramName": "as_of",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "markdown"
+  },
   "news_company": {
     "category": "news",
     "data": {
