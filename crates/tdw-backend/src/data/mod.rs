@@ -4042,7 +4042,6 @@ fn spawn_lesson_induction_worker(
     Some(task)
 }
 
-
 /// Spawn the K-R5 rule-induction worker when `cfg.enabled = true`.
 ///
 /// On each cron tick the worker:
