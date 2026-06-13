@@ -14,7 +14,7 @@ pub mod http_fetcher;
 pub use http_fetcher::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
     SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
-    SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecNportDisclosureHttpFetcher, SecXbrlHttpFetcher,
 };
 
 pub use catalog::{ENDPOINTS, SecEndpoint, SecModel};

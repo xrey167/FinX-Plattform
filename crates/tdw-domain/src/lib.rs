@@ -6,12 +6,12 @@ pub mod models;
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
     CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts, CompanyFiling,
-    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfHolding, EtfSectorWeight,
-    ExecutiveCompensation, FactorReturn, FinancialStatement, FomcDocument, FuturesCurvePoint,
-    HistoricalMarketCap, KeyExecutive, KeyMetrics, MacroSeries, NewsArticle, OptionContract,
-    OwnershipRecord, PricePerformance, RateObservation, Ratios, RevenueSegment, ScreenerRow,
-    SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice,
-    YieldCurvePoint,
+    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
+    EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FinancialStatement,
+    FomcDocument, FuturesCurvePoint, HistoricalMarketCap, KeyExecutive, KeyMetrics, MacroSeries,
+    NewsArticle, OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios,
+    RevenueSegment, ScreenerRow, SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction,
+    TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

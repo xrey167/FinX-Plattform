@@ -537,6 +537,78 @@ pub struct EtfSectorWeight {
     pub weight_pct: Option<f64>,
 }
 
+/// ETF profile / reference information.
+///
+/// Standardizes `etf/info` (FMP `etf/info`, Yahoo `quoteSummary`). One row = one
+/// fund. `symbol` and `name` are the identity anchors; the descriptive and
+/// numeric attributes are [`Option`] because provider coverage of each field
+/// varies by fund and venue.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EtfInfo {
+    /// Fund ticker symbol.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Fund name as reported.
+    #[validate(length(min = 1))]
+    pub name: String,
+    /// Issuer / fund family, e.g. `"Vanguard"`.
+    pub issuer: Option<String>,
+    /// Net asset value per share.
+    pub nav: Option<f64>,
+    /// Total net assets under management (listing currency).
+    pub aum: Option<f64>,
+    /// Annual expense ratio (fraction, e.g. `0.0003` is `0.03%`).
+    pub expense_ratio: Option<f64>,
+    /// Number of constituent holdings.
+    pub holdings_count: Option<u64>,
+    /// Listing currency, e.g. `"USD"`.
+    pub currency: Option<String>,
+    /// Listing exchange, e.g. `"NYSE Arca"`.
+    pub exchange: Option<String>,
+    /// Inception date (`YYYY-MM-DD`).
+    pub inception_date: Option<String>,
+    /// Free-text investment description / objective.
+    pub description: Option<String>,
+}
+
+/// A single country / domicile weight for an ETF or fund.
+///
+/// Standardizes `etf/countries` (FMP). One row = one (fund, country) allocation.
+/// `weight_pct` is optional because some funds omit a usable per-country
+/// breakdown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EtfCountryWeight {
+    /// Fund ticker symbol.
+    #[validate(length(min = 1))]
+    pub fund_symbol: String,
+    /// Country label as reported, e.g. `"United States"`.
+    #[validate(length(min = 1))]
+    pub country: String,
+    /// Percentage weight of the country in the portfolio.
+    pub weight_pct: Option<f64>,
+}
+
+/// An ETF that holds a given underlying equity (reverse exposure).
+///
+/// Standardizes `etf/equity_exposure` (FMP `etf-stock-exposure`). One row = one
+/// fund holding the queried stock. `weight_pct` and `shares` are [`Option`]
+/// because the exposure feed reports a variable subset per fund.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EtfEquityExposure {
+    /// The underlying equity symbol the exposure was queried for.
+    #[validate(length(min = 1))]
+    pub equity_symbol: String,
+    /// The ETF ticker holding the equity.
+    #[validate(length(min = 1))]
+    pub fund_symbol: String,
+    /// Percentage weight of the equity within the fund.
+    pub weight_pct: Option<f64>,
+    /// Number of shares of the equity the fund holds.
+    pub shares: Option<f64>,
+    /// Market value of the position (listing currency).
+    pub market_value: Option<f64>,
+}
+
 /// A US Treasury security auction result.
 ///
 /// Standardizes `fixedincome/government/treasury_auctions` (US Treasury
@@ -1088,6 +1160,67 @@ mod tests {
         let bad = ScreenerRow {
             symbol: String::new(),
             ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn etf_info_round_trips_and_validates() {
+        let info = EtfInfo {
+            symbol: "SPY".to_string(),
+            name: "SPDR S&P 500 ETF Trust".to_string(),
+            issuer: Some("State Street".to_string()),
+            nav: Some(540.12),
+            aum: Some(5.2e11),
+            expense_ratio: Some(0.000_945),
+            holdings_count: Some(503),
+            currency: Some("USD".to_string()),
+            exchange: Some("NYSE Arca".to_string()),
+            inception_date: Some("1993-01-22".to_string()),
+            description: Some("Tracks the S&P 500 index.".to_string()),
+        };
+        assert!(info.validate().is_ok());
+        round_trip(&info);
+
+        let bad = EtfInfo {
+            name: String::new(),
+            ..info
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn etf_country_weight_round_trips_and_validates() {
+        let weight = EtfCountryWeight {
+            fund_symbol: "SPY".to_string(),
+            country: "United States".to_string(),
+            weight_pct: Some(98.7),
+        };
+        assert!(weight.validate().is_ok());
+        round_trip(&weight);
+
+        let bad = EtfCountryWeight {
+            country: String::new(),
+            ..weight
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn etf_equity_exposure_round_trips_and_validates() {
+        let exposure = EtfEquityExposure {
+            equity_symbol: "AAPL".to_string(),
+            fund_symbol: "SPY".to_string(),
+            weight_pct: Some(7.1),
+            shares: Some(1_234_567.0),
+            market_value: Some(2.5e8),
+        };
+        assert!(exposure.validate().is_ok());
+        round_trip(&exposure);
+
+        let bad = EtfEquityExposure {
+            fund_symbol: String::new(),
+            ..exposure
         };
         assert!(bad.validate().is_err());
     }

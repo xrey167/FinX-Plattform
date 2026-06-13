@@ -2360,6 +2360,145 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_discovery_aggressive_small_caps": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "beta",
+            "headerName": "Beta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "company_name",
+            "headerName": "Company Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange_short_name",
+            "headerName": "Exchange Short Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "industry",
+            "headerName": "Industry"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_actively_trading",
+            "headerName": "Is Actively Trading"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_etf",
+            "headerName": "Is Etf"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_annual_dividend",
+            "headerName": "Last Annual Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Aggressive small-cap discovery screen (high earnings growth), Yahoo-backed (keyless).",
+    "endpoint": "/widget-data/equity/discovery/aggressive_small_caps",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_discovery_aggressive_small_caps",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Aggressive Small Caps",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_discovery_filings": {
     "category": "equity",
     "data": {
@@ -2560,6 +2699,145 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_discovery_growth_tech": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "beta",
+            "headerName": "Beta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "company_name",
+            "headerName": "Company Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange_short_name",
+            "headerName": "Exchange Short Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "industry",
+            "headerName": "Industry"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_actively_trading",
+            "headerName": "Is Actively Trading"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_etf",
+            "headerName": "Is Etf"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_annual_dividend",
+            "headerName": "Last Annual Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Growth technology-stocks discovery screen, Yahoo-backed (keyless).",
+    "endpoint": "/widget-data/equity/discovery/growth_tech",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_discovery_growth_tech",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Growth Tech",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_discovery_latest_financial_reports": {
     "category": "equity",
     "data": {
@@ -2717,6 +2995,284 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Losers",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_discovery_undervalued_growth": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "beta",
+            "headerName": "Beta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "company_name",
+            "headerName": "Company Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange_short_name",
+            "headerName": "Exchange Short Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "industry",
+            "headerName": "Industry"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_actively_trading",
+            "headerName": "Is Actively Trading"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_etf",
+            "headerName": "Is Etf"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_annual_dividend",
+            "headerName": "Last Annual Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Undervalued growth-stocks discovery screen, Yahoo-backed (keyless).",
+    "endpoint": "/widget-data/equity/discovery/undervalued_growth",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_discovery_undervalued_growth",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Undervalued Growth",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_discovery_undervalued_large_caps": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "beta",
+            "headerName": "Beta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "company_name",
+            "headerName": "Company Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange_short_name",
+            "headerName": "Exchange Short Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "industry",
+            "headerName": "Industry"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_actively_trading",
+            "headerName": "Is Actively Trading"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_etf",
+            "headerName": "Is Etf"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_annual_dividend",
+            "headerName": "Last Annual Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Undervalued large-cap discovery screen, Yahoo-backed (keyless).",
+    "endpoint": "/widget-data/equity/discovery/undervalued_large_caps",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_discovery_undervalued_large_caps",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Undervalued Large Caps",
     "params": [
       {
         "description": "Ticker symbol to query.",
@@ -6700,6 +7256,233 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "etf_countries": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fund_symbol",
+            "headerName": "Fund Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "weight_pct",
+            "formatterFn": "percent",
+            "headerName": "Weight Pct"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Country allocation of an ETF, FMP-backed.",
+    "endpoint": "/widget-data/etf/countries",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_countries",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Countries",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_equity_exposure": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "equity_symbol",
+            "headerName": "Equity Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fund_symbol",
+            "headerName": "Fund Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_value",
+            "headerName": "Market Value"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "number",
+            "field": "weight_pct",
+            "formatterFn": "percent",
+            "headerName": "Weight Pct"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "ETFs holding a given equity (reverse exposure lookup), FMP-backed.",
+    "endpoint": "/widget-data/etf/equity_exposure",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_equity_exposure",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Equity Exposure",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_historical": {
+    "category": "etf",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Historical end-of-day OHLCV bars for an ETF symbol; Yahoo (keyless) then FMP candidate.",
+    "endpoint": "/widget-data/etf/historical",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "etf_historical",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Historical",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "etf_holdings": {
     "category": "etf",
     "data": {
@@ -6770,6 +7553,501 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Holdings",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_info": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "aum",
+            "headerName": "Aum"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "description",
+            "headerName": "Description"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "number",
+            "field": "expense_ratio",
+            "formatterFn": "percent",
+            "headerName": "Expense Ratio"
+          },
+          {
+            "cellDataType": "number",
+            "field": "holdings_count",
+            "formatterFn": "int",
+            "headerName": "Holdings Count"
+          },
+          {
+            "cellDataType": "text",
+            "field": "inception_date",
+            "headerName": "Inception Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "issuer",
+            "headerName": "Issuer"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "number",
+            "field": "nav",
+            "headerName": "Nav"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "ETF profile / reference information; Yahoo (keyless) then FMP candidate.",
+    "endpoint": "/widget-data/etf/info",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_info",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Info",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_nport_disclosure": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "accepted_date",
+            "headerName": "Accepted Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "filing_date",
+            "headerName": "Filing Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "final_link",
+            "headerName": "Final Link"
+          },
+          {
+            "cellDataType": "text",
+            "field": "form_type",
+            "headerName": "Form Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "link",
+            "headerName": "Link"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Fund N-PORT portfolio-disclosure filing index for a filer, SEC-backed (keyless).",
+    "endpoint": "/widget-data/etf/nport_disclosure",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_nport_disclosure",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Nport Disclosure",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_price_performance": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "one_day",
+            "headerName": "One Day"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_month",
+            "headerName": "One Month"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_week",
+            "headerName": "One Week"
+          },
+          {
+            "cellDataType": "number",
+            "field": "one_year",
+            "headerName": "One Year"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "three_month",
+            "headerName": "Three Month"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ytd",
+            "headerName": "Ytd"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "ETF period total returns (one-day through one-year), FMP-backed.",
+    "endpoint": "/widget-data/etf/price_performance",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_price_performance",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Price Performance",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_search": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "venue",
+            "headerName": "Venue"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Search ETFs by name or symbol fragment, FMP-backed.",
+    "endpoint": "/widget-data/etf/search",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_search",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Search",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "etf_sectors": {
+    "category": "etf",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "fund_symbol",
+            "headerName": "Fund Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "report_date",
+            "headerName": "Report Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "number",
+            "field": "weight_pct",
+            "formatterFn": "percent",
+            "headerName": "Weight Pct"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Sector allocation of an ETF, FMP-backed.",
+    "endpoint": "/widget-data/etf/sectors",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "etf_sectors",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sectors",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",

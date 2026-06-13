@@ -753,6 +753,82 @@
         "title": "Estimate",
         "type": "object"
       },
+      "EtfCountryWeight": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single country / domicile weight for an ETF or fund.\n\nStandardizes `etf/countries` (FMP). One row = one (fund, country) allocation.\n`weight_pct` is optional because some funds omit a usable per-country\nbreakdown.",
+        "properties": {
+          "country": {
+            "description": "Country label as reported, e.g. `\"United States\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "fund_symbol": {
+            "description": "Fund ticker symbol.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "weight_pct": {
+            "description": "Percentage weight of the country in the portfolio.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "fund_symbol",
+          "country"
+        ],
+        "title": "EtfCountryWeight",
+        "type": "object"
+      },
+      "EtfEquityExposure": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "An ETF that holds a given underlying equity (reverse exposure).\n\nStandardizes `etf/equity_exposure` (FMP `etf-stock-exposure`). One row = one\nfund holding the queried stock. `weight_pct` and `shares` are [`Option`]\nbecause the exposure feed reports a variable subset per fund.",
+        "properties": {
+          "equity_symbol": {
+            "description": "The underlying equity symbol the exposure was queried for.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "fund_symbol": {
+            "description": "The ETF ticker holding the equity.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "market_value": {
+            "description": "Market value of the position (listing currency).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "shares": {
+            "description": "Number of shares of the equity the fund holds.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "weight_pct": {
+            "description": "Percentage weight of the equity within the fund.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "equity_symbol",
+          "fund_symbol"
+        ],
+        "title": "EtfEquityExposure",
+        "type": "object"
+      },
       "EtfHolding": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A single ETF / fund portfolio holding.\n\nStandardizes `etf/holdings` (SEC N-PORT `NPORT-P` portfolio disclosure). One\nrow = one constituent the fund reports holding on a given report date. Most\nfields are optional because N-PORT filers populate a variable subset\n(identifiers, valuation, weight). Identity anchors are the fund handle and\nthe holding's name.",
@@ -825,6 +901,133 @@
           "holding_name"
         ],
         "title": "EtfHolding",
+        "type": "object"
+      },
+      "EtfInfo": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "ETF profile / reference information.\n\nStandardizes `etf/info` (FMP `etf/info`, Yahoo `quoteSummary`). One row = one\nfund. `symbol` and `name` are the identity anchors; the descriptive and\nnumeric attributes are [`Option`] because provider coverage of each field\nvaries by fund and venue.",
+        "properties": {
+          "aum": {
+            "description": "Total net assets under management (listing currency).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currency": {
+            "description": "Listing currency, e.g. `\"USD\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "description": "Free-text investment description / objective.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchange": {
+            "description": "Listing exchange, e.g. `\"NYSE Arca\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expense_ratio": {
+            "description": "Annual expense ratio (fraction, e.g. `0.0003` is `0.03%`).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "holdings_count": {
+            "description": "Number of constituent holdings.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "inception_date": {
+            "description": "Inception date (`YYYY-MM-DD`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issuer": {
+            "description": "Issuer / fund family, e.g. `\"Vanguard\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Fund name as reported.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "nav": {
+            "description": "Net asset value per share.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "symbol": {
+            "description": "Fund ticker symbol.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "name"
+        ],
+        "title": "EtfInfo",
+        "type": "object"
+      },
+      "EtfSectorWeight": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single sector / asset-class weight for an ETF or fund.\n\nStandardizes `etf/sectors` (derived from SEC N-PORT). One row = one\n(fund, sector) allocation. `weight_pct` is optional because some N-PORT\nfilings omit a usable per-sector breakdown.",
+        "properties": {
+          "fund_symbol": {
+            "description": "Fund handle: the ETF ticker when known, else the filer CIK.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "report_date": {
+            "description": "Portfolio report (period-of-report) date.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sector": {
+            "description": "Sector / asset-class label.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "weight_pct": {
+            "description": "Percentage weight of the sector in the portfolio.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "fund_symbol",
+          "sector"
+        ],
+        "title": "EtfSectorWeight",
         "type": "object"
       },
       "ExecutiveCompensation": {
@@ -5969,6 +6172,115 @@
         ]
       }
     },
+    "/api/v1/equity/discovery/aggressive_small_caps": {
+      "get": {
+        "operationId": "equity_discovery_aggressive_small_caps",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreenerRow"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Aggressive small-cap discovery screen (high earnings growth), Yahoo-backed (keyless).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/discovery/filings": {
       "get": {
         "operationId": "equity_discovery_filings",
@@ -6187,6 +6499,115 @@
         ]
       }
     },
+    "/api/v1/equity/discovery/growth_tech": {
+      "get": {
+        "operationId": "equity_discovery_growth_tech",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreenerRow"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Growth technology-stocks discovery screen, Yahoo-backed (keyless).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/discovery/latest_financial_reports": {
       "get": {
         "operationId": "equity_discovery_latest_financial_reports",
@@ -6400,6 +6821,224 @@
           }
         },
         "summary": "Top market losers snapshot (price, change, % change), FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/discovery/undervalued_growth": {
+      "get": {
+        "operationId": "equity_discovery_undervalued_growth",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreenerRow"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Undervalued growth-stocks discovery screen, Yahoo-backed (keyless).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/discovery/undervalued_large_caps": {
+      "get": {
+        "operationId": "equity_discovery_undervalued_large_caps",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreenerRow"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Undervalued large-cap discovery screen, Yahoo-backed (keyless).",
         "tags": [
           "equity"
         ]
@@ -10329,6 +10968,333 @@
         ]
       }
     },
+    "/api/v1/etf/countries": {
+      "get": {
+        "operationId": "etf_countries",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtfCountryWeight"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Country allocation of an ETF, FMP-backed.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/equity_exposure": {
+      "get": {
+        "operationId": "etf_equity_exposure",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtfEquityExposure"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "ETFs holding a given equity (reverse exposure lookup), FMP-backed.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/historical": {
+      "get": {
+        "operationId": "etf_historical",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EquityHistoricalData"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Historical end-of-day OHLCV bars for an ETF symbol; Yahoo (keyless) then FMP candidate.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
     "/api/v1/etf/holdings": {
       "get": {
         "operationId": "etf_holdings",
@@ -10433,6 +11399,551 @@
           }
         },
         "summary": "ETF constituent holdings from SEC N-PORT (NPORT-P) disclosures (keyless).",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/info": {
+      "get": {
+        "operationId": "etf_info",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtfInfo"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "ETF profile / reference information; Yahoo (keyless) then FMP candidate.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/nport_disclosure": {
+      "get": {
+        "operationId": "etf_nport_disclosure",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyFiling"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Fund N-PORT portfolio-disclosure filing index for a filer, SEC-backed (keyless).",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/price_performance": {
+      "get": {
+        "operationId": "etf_price_performance",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricePerformance"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "ETF period total returns (one-day through one-year), FMP-backed.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/search": {
+      "get": {
+        "operationId": "etf_search",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instrument"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Search ETFs by name or symbol fragment, FMP-backed.",
+        "tags": [
+          "etf"
+        ]
+      }
+    },
+    "/api/v1/etf/sectors": {
+      "get": {
+        "operationId": "etf_sectors",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EtfSectorWeight"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Sector allocation of an ETF, FMP-backed.",
         "tags": [
           "etf"
         ]

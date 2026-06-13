@@ -1133,6 +1133,252 @@ impl Fetcher<YahooSymbolQuery, OptionContract> for YahooHttpOptionsChainFetcher 
     }
 }
 
+// ===========================================================================
+// openbb-parity P4W3: yfinance discovery screeners + ETF info.
+//
+// Discovery screeners are served by Yahoo's keyless predefined-screener API
+// (`/v1/finance/screener/predefined/saved?scrIds=<ID>&count=N`), normalized to
+// `tdw_domain::ScreenerRow`. One shared fetcher serves every predefined screen;
+// the screen id is injected per dispatch binding (the FMP-discovery pattern).
+//
+// ETF info is served by the v10 `quoteSummary` `assetProfile`+`fundProfile`
+// +`price` modules, normalized to `tdw_domain::EtfInfo`. ETF historical reuses
+// the equity-historical fetcher (an ETF ticker resolves through the v8 chart
+// endpoint like any symbol), so no dedicated fetcher is added here.
+// ===========================================================================
+
+/// Quote row returned by the Yahoo predefined-screener API. Each predefined
+/// screen returns a `quotes` array of these (a superset of the v7 quote row).
+#[derive(Deserialize)]
+struct ScreenerQuoteRow {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "longName", default)]
+    long_name: Option<String>,
+    #[serde(rename = "shortName", default)]
+    short_name: Option<String>,
+    #[serde(rename = "regularMarketPrice", default)]
+    regular_market_price: RawNum,
+    #[serde(rename = "regularMarketVolume", default)]
+    regular_market_volume: RawNum,
+    #[serde(rename = "marketCap", default)]
+    market_cap: RawNum,
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(default)]
+    industry: Option<String>,
+    #[serde(rename = "fullExchangeName", default)]
+    full_exchange_name: Option<String>,
+    #[serde(rename = "quoteType", default)]
+    quote_type: Option<String>,
+    #[serde(rename = "beta", default)]
+    beta: RawNum,
+}
+
+#[derive(Deserialize)]
+struct ScreenerEnvelope {
+    finance: ScreenerFinance,
+}
+
+#[derive(Deserialize)]
+struct ScreenerFinance {
+    #[serde(default)]
+    result: Vec<ScreenerResult>,
+    #[serde(default)]
+    error: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ScreenerResult {
+    #[serde(default)]
+    quotes: Vec<ScreenerQuoteRow>,
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo predefined-screener fetcher (`v1 screener/predefined/saved`).
+    ///
+    /// Serves the keyless discovery screens (`aggressive_small_caps`,
+    /// `growth_technology_stocks`, `undervalued_growth_stocks`,
+    /// `undervalued_large_caps`); the screen id is carried in the query's
+    /// `scr_ids` field, injected per dispatch binding.
+    pub YahooHttpPredefinedScreenerFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<crate::YahooScreenerQuery, tdw_domain::ScreenerRow>
+    for YahooHttpPredefinedScreenerFetcher
+{
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "predefined_screener";
+
+    fn transform_query(params: Value) -> Result<crate::YahooScreenerQuery> {
+        crate::YahooScreenerQuery::from_value(&params)
+    }
+
+    async fn extract_data(
+        &self,
+        query: &crate::YahooScreenerQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/v1/finance/screener/predefined/saved?scrIds={}&count={}",
+            self.base_url().trim_end_matches('/'),
+            query.scr_ids,
+            query.count,
+        );
+        let client = yahoo_client("yahoo predefined_screener")?;
+        yahoo_get(&client, &url, "yahoo predefined_screener").await
+    }
+
+    fn transform_data(
+        &self,
+        _query: &crate::YahooScreenerQuery,
+        raw: Bytes,
+    ) -> Result<Vec<tdw_domain::ScreenerRow>> {
+        let envelope: ScreenerEnvelope = serde_json::from_slice(&raw).map_err(|error| {
+            Error::Provider(format!("yahoo predefined_screener parse_json: {error}"))
+        })?;
+        if let Some(error) = envelope.finance.error {
+            return Err(Error::Provider(format!(
+                "yahoo predefined_screener error: {error}"
+            )));
+        }
+        let Some(result) = envelope.finance.result.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+        let rows = result
+            .quotes
+            .into_iter()
+            .filter_map(|quote| {
+                let symbol = quote.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(tdw_domain::ScreenerRow {
+                    symbol,
+                    company_name: quote.long_name.or(quote.short_name),
+                    market_cap: quote.market_cap.value(),
+                    sector: quote.sector,
+                    industry: quote.industry,
+                    beta: quote.beta.value(),
+                    price: quote.regular_market_price.value(),
+                    last_annual_dividend: None,
+                    volume: quote.regular_market_volume.value(),
+                    exchange: quote.full_exchange_name,
+                    exchange_short_name: None,
+                    country: None,
+                    is_etf: Some(
+                        quote
+                            .quote_type
+                            .as_deref()
+                            .is_some_and(|t| t.eq_ignore_ascii_case("ETF")),
+                    ),
+                    is_actively_trading: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Yahoo ETF-info fetcher (`v10 quoteSummary` `price`+`fundProfile`
+    /// +`defaultKeyStatistics`).
+    pub YahooHttpEtfInfoFetcher,
+    BASE_URL
+);
+
+#[derive(Deserialize, Default)]
+struct FundProfile {
+    #[serde(rename = "family", default)]
+    family: Option<String>,
+    #[serde(rename = "legalType", default)]
+    legal_type: Option<String>,
+    #[serde(rename = "feesExpensesInvestment", default)]
+    fees_expenses_investment: Option<FundFees>,
+}
+
+#[derive(Deserialize, Default)]
+struct FundFees {
+    #[serde(rename = "annualReportExpenseRatio", default)]
+    annual_report_expense_ratio: RawNum,
+}
+
+#[async_trait]
+impl Fetcher<YahooSymbolQuery, tdw_domain::EtfInfo> for YahooHttpEtfInfoFetcher {
+    const PROVIDER: &'static str = "yahoo";
+    const ENDPOINT: &'static str = "etf_info";
+
+    fn transform_query(params: Value) -> Result<YahooSymbolQuery> {
+        YahooSymbolQuery::from_value(&params)
+    }
+
+    async fn extract_data(&self, query: &YahooSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/v10/finance/quoteSummary/{}?modules=price,fundProfile,defaultKeyStatistics",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        let client = yahoo_client("yahoo etf_info")?;
+        yahoo_get(&client, &url, "yahoo etf_info").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &YahooSymbolQuery,
+        raw: Bytes,
+    ) -> Result<Vec<tdw_domain::EtfInfo>> {
+        // `fundProfile` rides alongside the shared quoteSummary modules; decode it
+        // with a local extension of the result block.
+        #[derive(Deserialize, Default)]
+        struct EtfResult {
+            #[serde(default)]
+            price: Option<PriceModule>,
+            #[serde(rename = "fundProfile", default)]
+            fund_profile: Option<FundProfile>,
+        }
+        #[derive(Deserialize)]
+        struct EtfBody {
+            #[serde(default)]
+            result: Vec<EtfResult>,
+            #[serde(default)]
+            error: Option<Value>,
+        }
+        #[derive(Deserialize)]
+        struct EtfEnvelope {
+            #[serde(rename = "quoteSummary")]
+            quote_summary: EtfBody,
+        }
+        let envelope: EtfEnvelope = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("yahoo etf_info parse_json: {error}")))?;
+        if let Some(error) = envelope.quote_summary.error {
+            return Err(Error::Provider(format!("yahoo etf_info error: {error}")));
+        }
+        let Some(result) = envelope.quote_summary.result.into_iter().next() else {
+            return Ok(Vec::new());
+        };
+        let price = result.price.unwrap_or_default();
+        let fund = result.fund_profile.unwrap_or_default();
+        let name = price
+            .long_name
+            .or(price.short_name)
+            .unwrap_or_else(|| query.symbol.clone());
+        Ok(vec![tdw_domain::EtfInfo {
+            symbol: query.symbol.clone(),
+            name,
+            issuer: fund.family,
+            nav: None,
+            aum: None,
+            expense_ratio: fund
+                .fees_expenses_investment
+                .and_then(|f| f.annual_report_expense_ratio.value()),
+            holdings_count: None,
+            currency: price.currency,
+            exchange: price.exchange_name,
+            inception_date: None,
+            description: fund.legal_type,
+        }])
+    }
+}
+
 /// Convert a Unix timestamp (seconds since 1970-01-01 UTC) to a
 /// `YYYY-MM-DD` calendar-date string in UTC. Uses Howard Hinnant's
 /// civil_from_days algorithm; correct for all Gregorian dates.

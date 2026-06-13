@@ -1263,6 +1263,59 @@ fn insert_yahoo_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str)
         ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
         fetch_binding::<YahooHttpFuturesCurveFetcher, _, _>(),
     );
+    // ETF info (openbb-parity P4W3): keyless Yahoo quoteSummary fundProfile.
+    table.insert(
+        ("yahoo", crate::YahooHttpEtfInfoFetcher::ENDPOINT),
+        fetch_binding::<crate::YahooHttpEtfInfoFetcher, _, _>(),
+    );
+    // yfinance discovery screeners (openbb-parity P4W3): one shared predefined
+    // -screener fetcher; the screen id is injected per dispatch binding, so each
+    // route gets a distinct `discovery_<screen>` key (the FMP-discovery pattern).
+    for (key, scr_ids) in YAHOO_DISCOVERY_SCREENS {
+        table.insert(("yahoo", key), yahoo_screener_fetch_binding(scr_ids));
+    }
+}
+
+/// The yfinance predefined-screener routes (openbb-parity P4W3): the dispatch
+/// endpoint key paired with the Yahoo `scrIds` it injects. Shared by the fetch
+/// and ingest binding registrations so they cannot drift.
+#[cfg(feature = "provider-yahoo-http")]
+const YAHOO_DISCOVERY_SCREENS: &[(&str, &str)] = &[
+    ("discovery_aggressive_small_caps", "aggressive_small_caps"),
+    ("discovery_growth_tech", "growth_technology_stocks"),
+    ("discovery_undervalued_growth", "undervalued_growth_stocks"),
+    ("discovery_undervalued_large_caps", "undervalued_large_caps"),
+];
+
+/// Build a [`FetchBinding`] for the Yahoo predefined-screener fetcher that injects
+/// a fixed `scr_ids` screen id into the caller's params, so one fetcher type
+/// serves all four discovery-screen routes while the dispatch key stays
+/// per-screen. Mirrors [`fmp_discovery_fetch_binding`].
+#[cfg(feature = "provider-yahoo-http")]
+fn yahoo_screener_fetch_binding(scr_ids: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("scr_ids".to_string(), Value::String(scr_ids.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(
+                        &crate::YahooHttpPredefinedScreenerFetcher::default(),
+                        params,
+                    )
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
 }
 
 /// Build a [`FetchBinding`] for the FMP financial-statement fetcher that injects
@@ -1491,6 +1544,41 @@ fn insert_fmp_p4w2_fetch_bindings(
     table.insert(
         ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>(),
+    );
+    insert_fmp_etf_fetch_bindings(table);
+}
+
+/// Register the FMP ETF-cluster fetch bindings (openbb-parity P4W3): ETF search,
+/// info, sector / country weightings, price performance, and equity exposure.
+/// Each is its own FMP fetcher keyed by its `ENDPOINT` const. Mirrors
+/// [`insert_fmp_etf_ingest_bindings`] so the fetch and ingest paths stay in
+/// lockstep. (etf/historical reuses the already-registered `equity_historical`
+/// FMP fetcher; etf/holdings is SEC-backed.)
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_etf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSearchFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfSearchFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfInfoFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfInfoFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSectorsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfSectorsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfCountriesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfCountriesFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfPricePerformanceFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfPricePerformanceFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfEquityExposureFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfEquityExposureFetcher, _, _>(),
     );
 }
 
@@ -1733,6 +1821,11 @@ fn insert_sec_government_fetch_bindings(
     table.insert(
         ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
         fetch_binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>(),
+    );
+    // ETF cluster (openbb-parity P4W3): the keyless N-PORT disclosure index.
+    table.insert(
+        ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecNportDisclosureHttpFetcher, _, _>(),
     );
 }
 
@@ -2855,6 +2948,49 @@ fn insert_yahoo_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str
         ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
         binding::<YahooHttpFuturesCurveFetcher, _, _>("raw.futures_curve_point"),
     );
+    // ETF info (openbb-parity P4W3): keyless Yahoo quoteSummary fundProfile.
+    table.insert(
+        ("yahoo", crate::YahooHttpEtfInfoFetcher::ENDPOINT),
+        binding::<crate::YahooHttpEtfInfoFetcher, _, _>("raw.etf_info"),
+    );
+    // yfinance discovery screeners (openbb-parity P4W3): one shared fetcher; the
+    // screen id is injected per binding, keyed identically to the fetch path.
+    for (key, scr_ids) in YAHOO_DISCOVERY_SCREENS {
+        table.insert(
+            ("yahoo", key),
+            yahoo_screener_ingest_binding(scr_ids, "raw.screener_row"),
+        );
+    }
+}
+
+/// Build an [`IngestBinding`] for the Yahoo predefined-screener fetcher that
+/// injects a fixed `scr_ids` screen id before fetching one batch and persisting
+/// it into `table`. Mirrors [`yahoo_screener_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-yahoo-http")]
+fn yahoo_screener_ingest_binding(scr_ids: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("scr_ids".to_string(), Value::String(scr_ids.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(
+                            &crate::YahooHttpPredefinedScreenerFetcher::default(),
+                            params,
+                        )
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
 }
 
 /// The registry-driven ingest dispatch table for this build.
@@ -3216,6 +3352,40 @@ fn insert_fmp_p4w2_ingest_bindings(
         ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
         binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>("raw.ownership_record"),
     );
+    insert_fmp_etf_ingest_bindings(table);
+}
+
+/// Register the FMP ETF-cluster ingest bindings (openbb-parity P4W3), keyed
+/// identically to [`insert_fmp_etf_fetch_bindings`] and bound to each route's
+/// bronze landing table so the fetch and ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_etf_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSearchFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfSearchFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfInfoFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfInfoFetcher, _, _>("raw.etf_info"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSectorsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfSectorsFetcher, _, _>("raw.etf_sector_weight"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfCountriesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfCountriesFetcher, _, _>("raw.etf_country_weight"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfPricePerformanceFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfPricePerformanceFetcher, _, _>("raw.price_performance"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfEquityExposureFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfEquityExposureFetcher, _, _>("raw.etf_equity_exposure"),
+    );
 }
 
 /// Build an [`IngestBinding`] for the FMP market-movers discovery fetcher that
@@ -3331,6 +3501,11 @@ fn insert_sec_government_ingest_bindings(
     table.insert(
         ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
         binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>("raw.company_filing"),
+    );
+    // ETF cluster (openbb-parity P4W3): the keyless N-PORT disclosure index.
+    table.insert(
+        ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
+        binding::<crate::SecNportDisclosureHttpFetcher, _, _>("raw.company_filing"),
     );
 }
 

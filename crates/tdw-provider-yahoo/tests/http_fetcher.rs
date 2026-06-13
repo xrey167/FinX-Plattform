@@ -23,9 +23,10 @@ use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 use tdw_provider_yahoo::{
     YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpEquityHistoricalFetcher,
-    YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpEtfInfoFetcher, YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher,
+    YahooHttpOptionsChainFetcher, YahooHttpPredefinedScreenerFetcher,
     YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
-    YahooHttpShareStatisticsFetcher, YahooSymbolQuery,
+    YahooHttpShareStatisticsFetcher, YahooScreenerQuery, YahooSymbolQuery,
 };
 
 fn symbol_query(symbol: &str) -> YahooSymbolQuery {
@@ -476,4 +477,98 @@ async fn live_yahoo_profile_quote_options_when_env_var_set() {
     let oq = symbol_query("AAPL");
     let rows = live_fetch_nonempty!(options, oq);
     assert!(!rows.is_empty(), "live options chain must return contracts");
+}
+
+// ---------------------------------------------------------------------------
+// yfinance discovery screener + ETF info cassette tests (openbb-parity P4W3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn predefined_screener_cassette_decodes_screener_rows() {
+    let fetcher = YahooHttpPredefinedScreenerFetcher::default();
+    let query = YahooScreenerQuery::from_value(&json!({ "scr_ids": "growth_technology_stocks" }))
+        .unwrap_or_else(|error| panic!("screener query should transform: {error}"));
+    let raw = cassette_bytes!({
+        "finance": {
+            "result": [{
+                "quotes": [
+                    {
+                        "symbol": "NVDA", "longName": "NVIDIA Corporation",
+                        "regularMarketPrice": { "raw": 120.5 },
+                        "regularMarketVolume": { "raw": 300_000_000.0 },
+                        "marketCap": { "raw": 2_900_000_000_000.0 },
+                        "sector": "Technology", "industry": "Semiconductors",
+                        "fullExchangeName": "NasdaqGS", "quoteType": "EQUITY",
+                        "beta": { "raw": 1.7 }
+                    },
+                    { "symbol": "", "longName": "junk" }
+                ]
+            }],
+            "error": null
+        }
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("rows should decode: {error}"));
+    assert_eq!(rows.len(), 1, "blank symbol dropped: {rows:#?}");
+    assert_eq!(rows[0].symbol, "NVDA");
+    assert_eq!(rows[0].company_name.as_deref(), Some("NVIDIA Corporation"));
+    assert_eq!(rows[0].sector.as_deref(), Some("Technology"));
+    assert_eq!(rows[0].is_etf, Some(false));
+}
+
+#[test]
+fn predefined_screener_cassette_surfaces_error_envelope() {
+    let fetcher = YahooHttpPredefinedScreenerFetcher::default();
+    let query = YahooScreenerQuery::from_value(&json!({ "scr_ids": "aggressive_small_caps" }))
+        .unwrap_or_else(|error| panic!("screener query should transform: {error}"));
+    let raw = cassette_bytes!({ "finance": { "result": [], "error": { "code": "Bad Request" } } });
+    let result = fetcher.transform_data(&query, raw);
+    assert!(result.is_err(), "error envelope must surface as Err");
+}
+
+#[test]
+fn etf_info_cassette_decodes_fund_profile() {
+    let fetcher = YahooHttpEtfInfoFetcher::default();
+    let query = symbol_query("SPY");
+    let raw = cassette_bytes!({
+        "quoteSummary": {
+            "result": [{
+                "price": {
+                    "longName": "SPDR S&P 500 ETF Trust",
+                    "currency": "USD", "exchangeName": "PCX"
+                },
+                "fundProfile": {
+                    "family": "SPDR State Street Global Advisors",
+                    "legalType": "Exchange Traded Fund",
+                    "feesExpensesInvestment": { "annualReportExpenseRatio": { "raw": 0.000945 } }
+                }
+            }],
+            "error": null
+        }
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("rows should decode: {error}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "SPY");
+    assert_eq!(rows[0].name, "SPDR S&P 500 ETF Trust");
+    assert_eq!(
+        rows[0].issuer.as_deref(),
+        Some("SPDR State Street Global Advisors")
+    );
+    assert!((rows[0].expense_ratio.unwrap_or_default() - 0.000945).abs() < 1e-9);
+}
+
+#[test]
+fn screener_query_rejects_garbage_scr_ids() {
+    assert!(YahooScreenerQuery::from_value(&json!({ "scr_ids": "bad id!" })).is_err());
+    assert!(YahooScreenerQuery::from_value(&json!({ "scr_ids": "" })).is_err());
+    assert!(YahooScreenerQuery::from_value(&json!({})).is_err());
+    let ok = YahooScreenerQuery::from_value(
+        &json!({ "scr_ids": "growth_technology_stocks", "count": 5 }),
+    )
+    .unwrap_or_else(|error| panic!("valid screener query: {error}"));
+    assert_eq!(ok.scr_ids, "growth_technology_stocks");
+    assert_eq!(ok.count, 5);
 }
