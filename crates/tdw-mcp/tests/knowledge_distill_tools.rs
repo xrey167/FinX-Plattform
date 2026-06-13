@@ -270,10 +270,18 @@ fn distill_enqueues_proposal_and_status_surfaces_pending_count() {
         }),
     );
     let s = structured(&result);
-    assert_eq!(result["result"]["isError"], json!(false), "no tool error: {result}");
+    assert_eq!(
+        result["result"]["isError"],
+        json!(false),
+        "no tool error: {result}"
+    );
     assert_eq!(s["empty"], json!(false), "non-empty: {s}");
     assert_eq!(s["enqueued"], json!(1), "one finding enqueued: {s}");
-    assert_eq!(s["pending_eval"], json!(true), "honest pending-eval flag: {s}");
+    assert_eq!(
+        s["pending_eval"],
+        json!(true),
+        "honest pending-eval flag: {s}"
+    );
     let finding = &s["findings"][0];
     assert_eq!(finding["anchor_entity_id"], json!("instrument:AAPL"));
     assert_eq!(finding["status"], json!("proposed"));
@@ -291,7 +299,11 @@ fn distill_enqueues_proposal_and_status_surfaces_pending_count() {
     // additively as distilled_pending AND inside the proposals.validated count.
     let after = call(&mut server, "tdw.kg.status", &json!({}));
     let sa = structured(&after);
-    assert_eq!(sa["distilled_pending"], json!(1), "distilled_pending surfaced: {sa}");
+    assert_eq!(
+        sa["distilled_pending"],
+        json!(1),
+        "distilled_pending surfaced: {sa}"
+    );
     assert_eq!(
         sa["proposals"]["validated"],
         json!(1),

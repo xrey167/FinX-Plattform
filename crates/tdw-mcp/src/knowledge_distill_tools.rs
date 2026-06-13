@@ -96,46 +96,46 @@ fn distill_descriptor() -> ToolDescriptor {
 
 fn distill_input_schema() -> Value {
     json!({
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "Stable session id. Sanitized into the provenance \
-                                    agent_id=\"distill:<session_id>\" and the note envelope."
-                },
-                "as_of": {
-                    "type": "string",
-                    "description": "Leakage-safe session time (e.g. YYYY-MM-DD). The ONLY \
-                                    timestamp stamped onto the proposal history."
-                },
-                "turns": {
-                    "type": "array",
-                    "description": "The transcript window, in order. Empty → honest empty result.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "episode_id": {
-                                "type": "string",
-                                "description": "Stable evidence id for this turn (the citation a \
-                                                finding cites)."
-                            },
-                            "role": {
-                                "type": "string",
-                                "description": "Speaker role (informational; not used for anchoring)."
-                            },
-                            "text": {
-                                "type": "string",
-                                "description": "The turn text mined for known-entity mentions."
-                            }
-                        },
-                        "required": ["episode_id", "text"],
-                        "additionalProperties": false
-                    }
-                }
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "Stable session id. Sanitized into the provenance \
+                                agent_id=\"distill:<session_id>\" and the note envelope."
             },
-            "required": ["session_id", "as_of", "turns"],
-            "additionalProperties": false
-        })
+            "as_of": {
+                "type": "string",
+                "description": "Leakage-safe session time (e.g. YYYY-MM-DD). The ONLY \
+                                timestamp stamped onto the proposal history."
+            },
+            "turns": {
+                "type": "array",
+                "description": "The transcript window, in order. Empty → honest empty result.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "episode_id": {
+                            "type": "string",
+                            "description": "Stable evidence id for this turn (the citation a \
+                                            finding cites)."
+                        },
+                        "role": {
+                            "type": "string",
+                            "description": "Speaker role (informational; not used for anchoring)."
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "The turn text mined for known-entity mentions."
+                        }
+                    },
+                    "required": ["episode_id", "text"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["session_id", "as_of", "turns"],
+        "additionalProperties": false
+    })
 }
 
 // ── Execute ─────────────────────────────────────────────────────────────────
@@ -284,7 +284,9 @@ fn validate_id(value: &str, field: &str) -> Result<(), ToolFailure> {
         return Err(execution(format!("{field} must not be empty")));
     }
     if value.chars().count() > MAX_ID_CHARS {
-        return Err(execution(format!("{field} exceeds {MAX_ID_CHARS} characters")));
+        return Err(execution(format!(
+            "{field} exceeds {MAX_ID_CHARS} characters"
+        )));
     }
     Ok(())
 }

@@ -597,7 +597,10 @@ mod tests {
     #[test]
     fn build_distill_agent_id_sanitizes_and_bounds() {
         let id = build_distill_agent_id("sess/2026 06 13@x");
-        assert!(id.starts_with("distill:"), "must carry distill provenance: {id}");
+        assert!(
+            id.starts_with("distill:"),
+            "must carry distill provenance: {id}"
+        );
         assert!(!id.contains(' '), "no whitespace in agent id: {id}");
         assert!(!id.contains(';'), "no semicolons in agent id: {id}");
         assert!(!id.contains('@'), "no @ in agent id: {id}");
@@ -609,7 +612,10 @@ mod tests {
     #[test]
     fn distill_claim_strips_control_and_caps() {
         let claim = distill_claim("instrument:AAPL", "Apple\tbeat\nestimates  badly");
-        assert!(claim.contains("AAPL"), "claim cites the anchor token: {claim}");
+        assert!(
+            claim.contains("AAPL"),
+            "claim cites the anchor token: {claim}"
+        );
         assert!(!claim.contains('\t'), "control chars stripped: {claim:?}");
         assert!(!claim.contains('\n'), "newlines normalized: {claim:?}");
         assert!(claim.chars().count() <= MAX_CLAIM_CHARS);
@@ -751,12 +757,19 @@ mod tests {
         let queue_guard = queue.lock().await;
         let (_, validated, _) = queue_guard.pending_counts_by_state();
         assert_eq!(validated, 1, "exactly one pending Validated proposal");
-        assert_eq!(queue_guard.distilled_pending(), 1, "distilled-pending count");
+        assert_eq!(
+            queue_guard.distilled_pending(),
+            1,
+            "distilled-pending count"
+        );
         drop(queue_guard);
 
         // The graph edge set is unchanged — no direct write happened.
         let edges_after = edge_count(&graph).await;
-        assert_eq!(edges_before, edges_after, "distillation made no direct graph write");
+        assert_eq!(
+            edges_before, edges_after,
+            "distillation made no direct graph write"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -764,12 +777,8 @@ mod tests {
         let graph = graph_with_entity("instrument:AAPL").await;
         let tags = tag_engine();
         let queue = Arc::new(tokio::sync::Mutex::new(ProposalQueue::default()));
-        let distiller = SessionDistiller::new(
-            Arc::clone(&queue),
-            graph,
-            tags,
-            Adaptivity::Learning,
-        );
+        let distiller =
+            SessionDistiller::new(Arc::clone(&queue), graph, tags, Adaptivity::Learning);
 
         let empty = SessionTranscript {
             session_id: "sess-empty".to_string(),
@@ -827,7 +836,10 @@ mod tests {
             a.findings[0].evidence_episode_ids, b.findings[0].evidence_episode_ids,
             "evidence ids deterministic"
         );
-        assert_eq!(a.findings[0].claim, b.findings[0].claim, "claim deterministic");
+        assert_eq!(
+            a.findings[0].claim, b.findings[0].claim,
+            "claim deterministic"
+        );
         assert_eq!(
             a.findings[0].evidence_episode_ids,
             vec!["ep-0".to_string(), "ep-1".to_string()],
@@ -841,8 +853,7 @@ mod tests {
         let tags = tag_engine();
         let queue = Arc::new(tokio::sync::Mutex::new(ProposalQueue::default()));
         // Adaptivity::None is below Learning → the B9 admission gate rejects.
-        let distiller =
-            SessionDistiller::new(Arc::clone(&queue), graph, tags, Adaptivity::None);
+        let distiller = SessionDistiller::new(Arc::clone(&queue), graph, tags, Adaptivity::None);
         let t = transcript(&[("user", "AAPL update")]);
         let result = distiller.distill(&t).await.expect("distill");
         assert_eq!(result.enqueued(), 0, "below Learning enqueues nothing");

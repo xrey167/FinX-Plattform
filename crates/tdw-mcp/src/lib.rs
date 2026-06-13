@@ -1231,7 +1231,9 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
             Err(ToolFailure::Protocol(problem)) => vec![error_message(
-                problem.with_id(id.clone()).with_data(json!({ "tool": name })),
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
             )],
         };
         Some(messages)
