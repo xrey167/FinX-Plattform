@@ -31,13 +31,15 @@
 //!   the same [`crate::knowledge_tools::block_on`] helper the other read tools
 //!   use; no synchronous IO runs on an async executor thread.
 
-use serde_json::{Map, Value, json};
-use tdw_core::{GraphEngine, active_at};
+use serde_json::{json, Map, Value};
+use tdw_core::{active_at, GraphEngine};
 use tdw_knowledge::runtime::{EvalFreshness, KgStatus, KnowledgeRuntime};
 use tdw_tags::date_to_timestamp;
 use tdw_taxonomy::EntityKind;
 
-use crate::{ToolDescriptor, ToolExecution, ToolFailure, knowledge_tools::block_on, structured, tool};
+use crate::{
+    knowledge_tools::block_on, structured, tool, ToolDescriptor, ToolExecution, ToolFailure,
+};
 
 /// The single tool name this module owns.
 pub const TOOL_NAMES: &[&str] = &["tdw.kg.digest"];
@@ -298,7 +300,11 @@ fn classify_finding(
         return;
     }
     // Leakage guard: only findings ACTIVE at the reference time.
-    if !active_at(node.valid_from.as_deref(), node.valid_to.as_deref(), reference_ts) {
+    if !active_at(
+        node.valid_from.as_deref(),
+        node.valid_to.as_deref(),
+        reference_ts,
+    ) {
         return;
     }
     acc.active_total += 1;
@@ -669,7 +675,9 @@ fn build_narrative(
             ));
         }
         EvalFreshness::Green { summary, .. } => {
-            lines.push(format!("Eval drift: clear — last self-eval passed ({summary})."));
+            lines.push(format!(
+                "Eval drift: clear — last self-eval passed ({summary})."
+            ));
         }
         EvalFreshness::Regressed {
             summary,
@@ -823,7 +831,10 @@ mod tests {
             valid_from: Some(as_of_ts.clone()),
             valid_to: None,
         };
-        graph.upsert_nodes(vec![node]).await.expect("insert finding");
+        graph
+            .upsert_nodes(vec![node])
+            .await
+            .expect("insert finding");
         // A self-referential audit edge so the edge page-walk reaches the node.
         // (The scan discovers nodes via edge endpoints.)
         graph
@@ -868,12 +879,23 @@ mod tests {
     async fn digest_reflects_a_recent_ingest() {
         let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
         // A finding born 2 days before the reference time.
-        insert_finding(&graph, "finding:fresh", "Recent learning", "2026-06-10", false).await;
+        insert_finding(
+            &graph,
+            "finding:fresh",
+            "Recent learning",
+            "2026-06-10",
+            false,
+        )
+        .await;
         let runtime = runtime_with_graph(graph);
 
         let out = run(&runtime, &Map::new(), "2026-06-12");
         let new_knowledge = &out["new_knowledge"];
-        assert_eq!(new_knowledge["empty"], json!(false), "fresh finding populates window: {out}");
+        assert_eq!(
+            new_knowledge["empty"],
+            json!(false),
+            "fresh finding populates window: {out}"
+        );
         assert_eq!(new_knowledge["count"], json!(1));
         assert_eq!(new_knowledge["items"][0]["id"], json!("finding:fresh"));
         // Narrative must mention the new knowledge plainly.
@@ -910,16 +932,24 @@ mod tests {
 
         let out = run(&runtime, &Map::new(), "2026-06-12");
         let staleness = &out["staleness"];
-        assert_eq!(staleness["empty"], json!(false), "stale fixture surfaced: {out}");
+        assert_eq!(
+            staleness["empty"],
+            json!(false),
+            "stale fixture surfaced: {out}"
+        );
         assert_eq!(staleness["count"], json!(1));
         assert_eq!(staleness["items"][0]["id"], json!("finding:stale"));
         // age_days must be exactly 100 (leap-correct: Mar 4 → Jun 12, 2026).
         assert_eq!(
-            staleness["items"][0]["age_days"], json!(100),
+            staleness["items"][0]["age_days"],
+            json!(100),
             "leap-correct day span across month boundaries"
         );
         let narrative = out["narrative"].as_str().expect("narrative is a string");
-        assert!(narrative.contains("Staleness: 1 finding"), "narrative: {narrative}");
+        assert!(
+            narrative.contains("Staleness: 1 finding"),
+            "narrative: {narrative}"
+        );
     }
 
     #[tokio::test]
@@ -945,7 +975,11 @@ mod tests {
         let runtime = runtime_with_graph(graph);
 
         let out = run(&runtime, &Map::new(), "2026-06-12");
-        assert_eq!(out["counts"]["active_findings"], json!(0), "future finding not active: {out}");
+        assert_eq!(
+            out["counts"]["active_findings"],
+            json!(0),
+            "future finding not active: {out}"
+        );
         assert_eq!(out["new_knowledge"]["empty"], json!(true));
         assert_eq!(out["staleness"]["empty"], json!(true));
     }
@@ -960,8 +994,16 @@ mod tests {
         let mut a = serde_json::Map::new();
         a.insert("as_of".to_string(), json!("2026-03-10"));
         let out = run(&runtime, &args(a), "2026-06-12");
-        assert_eq!(out["staleness"]["empty"], json!(true), "fresh at as_of=2026-03-10: {out}");
-        assert_eq!(out["new_knowledge"]["empty"], json!(false), "in window at as_of");
+        assert_eq!(
+            out["staleness"]["empty"],
+            json!(true),
+            "fresh at as_of=2026-03-10: {out}"
+        );
+        assert_eq!(
+            out["new_knowledge"]["empty"],
+            json!(false),
+            "in window at as_of"
+        );
     }
 
     #[tokio::test]
@@ -978,7 +1020,9 @@ mod tests {
             "digest taxonomy count matches status"
         );
         assert_eq!(
-            out["counts"]["embedder_model"].as_str().expect("embedder_model is a string"),
+            out["counts"]["embedder_model"]
+                .as_str()
+                .expect("embedder_model is a string"),
             status.embedder_model,
             "digest embedder matches status"
         );
@@ -1007,11 +1051,13 @@ mod tests {
         let out = run(&runtime, &Map::new(), "2026-06-12");
         let staleness = &out["staleness"];
         assert_eq!(
-            staleness["count"], json!(total),
+            staleness["count"],
+            json!(total),
             "count reports the true total, not the capped display length: {out}"
         );
         assert_eq!(
-            staleness["shown"], json!(SECTION_LIST_CAP),
+            staleness["shown"],
+            json!(SECTION_LIST_CAP),
             "items are capped for display"
         );
         assert_eq!(
