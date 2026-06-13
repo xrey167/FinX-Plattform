@@ -8,11 +8,15 @@ pub mod lessons;
 pub mod proposals;
 pub mod reindex;
 pub mod runtime;
+pub mod self_tune;
 pub mod skills;
 
 pub use extraction::ExtractionFreshness;
 pub use feeds::FeedFreshness;
-pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus};
+pub use runtime::{KgGraphHealth, KgProposalCounts, KgStatus, KgThesesStatus, SelfTuneStatus};
+pub use self_tune::{
+    SelfTuneLog, TUNER_AGENT_ID, TunableParam, TuneClamp, TuneOutcome, TuneRecord,
+};
 pub use skills::{
     GoldenTask, ManagedSkill, SkillCounts, SkillLifecycle, SkillRegistry, SkillScore,
     SkillTournament, SkillsAudit, TournamentOutcome,

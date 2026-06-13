@@ -1110,6 +1110,102 @@ pub struct KnowledgeConfig {
     /// route through the B9 `ProposalQueue` and require eval-gate promotion.
     #[serde(default)]
     pub extraction: ExtractionConfig,
+
+    /// System self-tuning within gates (knowledge-system K-R3).
+    ///
+    /// When `enabled = true`, the daemon registers a cron trigger that
+    /// periodically proposes a candidate delta for a small, SAFE set of
+    /// operating parameters (currently the RRF fusion constant `k`), evals the
+    /// candidate against the golden split out-of-sample, and applies it ONLY on
+    /// a real improvement beyond `margin` — every accepted change routed through
+    /// the same gated propose → eval → promote pipeline with a full audit.
+    ///
+    /// **Default: `enabled = false`.**  Self-modification is opt-in: the
+    /// operator must flip `enabled = true` explicitly.  The tunable set excludes
+    /// every safety/correctness guard (stub-gating, temporal-leakage safety) by
+    /// construction — those knobs are not reachable by the tuner.
+    #[serde(default)]
+    pub self_tune: SelfTuneConfig,
+}
+
+/// System self-tuning configuration (knowledge-system K-R3).
+///
+/// The self-tuning worker proposes candidate parameter deltas, evals them
+/// against the golden split, and applies them only on a real out-of-sample
+/// improvement beyond `margin`.  Each knob has a hard `[min, max]` clamp the
+/// tuner can never exceed; `enabled` is the kill-switch (default off).
+///
+/// # Example
+///
+/// ```toml
+/// [knowledge.self_tune]
+/// enabled = true
+/// cadence = "0 5 * * MON"
+/// margin = 0.01
+/// rrf_k_min = 10.0
+/// rrf_k_max = 120.0
+/// rrf_k_step = 10.0
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SelfTuneConfig {
+    /// Kill-switch.  When `false` (the default) no cron trigger is registered,
+    /// the live parameters are never modified, and a loud status note says so.
+    #[serde(default)]
+    pub enabled: bool,
+    /// 5-field cron expression for the tuning cadence.
+    ///
+    /// Default: `"0 5 * * MON"` (weekly, Monday 05:00 UTC — offset from the
+    /// retrieval eval (03:00) and replay self-test (04:00) to avoid contention).
+    #[serde(default = "SelfTuneConfig::default_cadence")]
+    pub cadence: String,
+    /// Minimum out-of-sample objective improvement (mean nDCG\@k) a candidate
+    /// must beat the incumbent by to be promoted.  A positive margin prevents
+    /// churn on noise.  Default: `0.005`.
+    #[serde(default = "SelfTuneConfig::default_margin")]
+    pub margin: f64,
+    /// Hard lower clamp for the tunable RRF fusion constant `k`.  The tuner can
+    /// never propose a value below this.  Default: `10.0`.
+    #[serde(default = "SelfTuneConfig::default_rrf_k_min")]
+    pub rrf_k_min: f64,
+    /// Hard upper clamp for the tunable RRF fusion constant `k`.  The tuner can
+    /// never propose a value above this.  Default: `120.0`.
+    #[serde(default = "SelfTuneConfig::default_rrf_k_max")]
+    pub rrf_k_max: f64,
+    /// Step size by which the tuner perturbs `k` when proposing a candidate.
+    /// Default: `10.0`.
+    #[serde(default = "SelfTuneConfig::default_rrf_k_step")]
+    pub rrf_k_step: f64,
+}
+
+impl SelfTuneConfig {
+    fn default_cadence() -> String {
+        "0 5 * * MON".to_string()
+    }
+    const fn default_margin() -> f64 {
+        0.005
+    }
+    const fn default_rrf_k_min() -> f64 {
+        10.0
+    }
+    const fn default_rrf_k_max() -> f64 {
+        120.0
+    }
+    const fn default_rrf_k_step() -> f64 {
+        10.0
+    }
+}
+
+impl Default for SelfTuneConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cadence: Self::default_cadence(),
+            margin: Self::default_margin(),
+            rrf_k_min: Self::default_rrf_k_min(),
+            rrf_k_max: Self::default_rrf_k_max(),
+            rrf_k_step: Self::default_rrf_k_step(),
+        }
+    }
 }
 
 /// Knowledge watchlist change-detection configuration (knowledge-system K-X5).
@@ -1644,7 +1740,9 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     // Feed entries (K-L6): validate id grammar, cadence, and max_items.
     validate_feeds(&knowledge.feeds)?;
     // Extraction config (K-M1): cost bounds are required when enabled.
-    validate_extraction(&knowledge.extraction)
+    validate_extraction(&knowledge.extraction)?;
+    // Self-tuning config (K-R3): cadence grammar + clamp ordering + margin range.
+    validate_self_tune(&knowledge.self_tune)
 }
 
 /// Validate `[knowledge.extraction]` (K-M1).
@@ -1668,6 +1766,66 @@ fn validate_extraction(extraction: &ExtractionConfig) -> Result<()> {
             "knowledge.extraction.daily_token_budget must be > 0 when extraction is enabled"
                 .to_string(),
         ));
+    }
+    Ok(())
+}
+
+/// Validate `[knowledge.self_tune]` (K-R3).
+///
+/// Checks the cron `cadence` (5-field structural check, same as evals), the
+/// `[rrf_k_min, rrf_k_max]` clamp ordering, a positive step, and a non-negative
+/// `margin` in `[0.0, 1.0]`.  The check runs regardless of `enabled` so typos
+/// are caught before the operator flips the kill-switch.
+fn validate_self_tune(cfg: &SelfTuneConfig) -> Result<()> {
+    let fields: Vec<&str> = cfg.cadence.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.self_tune.cadence must be a 5-field cron expression \
+             (e.g. \"0 5 * * MON\"), got {:?}",
+            cfg.cadence
+        )));
+    }
+    let legal: fn(char) -> bool = |c| {
+        c.is_ascii_digit()
+            || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+    };
+    for field in &fields {
+        if field.is_empty() || !field.chars().all(legal) {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.self_tune.cadence contains an invalid cron field {field:?} \
+                 in {:?}",
+                cfg.cadence
+            )));
+        }
+    }
+    if !(0.0..=1.0).contains(&cfg.margin) {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.self_tune.margin must be in [0.0, 1.0], got {}",
+            cfg.margin
+        )));
+    }
+    if !(cfg.rrf_k_min.is_finite() && cfg.rrf_k_max.is_finite() && cfg.rrf_k_step.is_finite()) {
+        return Err(ConfigError::Validation(
+            "knowledge.self_tune rrf_k bounds and step must be finite".to_string(),
+        ));
+    }
+    if cfg.rrf_k_min <= 0.0 {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.self_tune.rrf_k_min must be positive (RRF dampening k > 0), got {}",
+            cfg.rrf_k_min
+        )));
+    }
+    if cfg.rrf_k_min >= cfg.rrf_k_max {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.self_tune.rrf_k_min ({}) must be strictly less than rrf_k_max ({})",
+            cfg.rrf_k_min, cfg.rrf_k_max
+        )));
+    }
+    if cfg.rrf_k_step <= 0.0 {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.self_tune.rrf_k_step must be positive, got {}",
+            cfg.rrf_k_step
+        )));
     }
     Ok(())
 }
@@ -2376,6 +2534,55 @@ mod tests {
         TdwConfig::default()
             .validate()
             .expect("the shipped default config must be valid");
+    }
+
+    #[test]
+    fn self_tune_defaults_are_off_and_valid() {
+        let cfg = SelfTuneConfig::default();
+        assert!(
+            !cfg.enabled,
+            "self-tuning must be OFF by default (kill-switch)"
+        );
+        assert!(cfg.rrf_k_min < cfg.rrf_k_max);
+        validate_self_tune(&cfg).expect("default self_tune must validate");
+    }
+
+    #[test]
+    fn self_tune_deserializes_from_empty_object_with_defaults() {
+        let cfg: SelfTuneConfig =
+            serde_json::from_str("{}").expect("empty object must deserialize");
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.cadence, "0 5 * * MON");
+        assert!((cfg.margin - 0.005).abs() < f64::EPSILON);
+        assert!((cfg.rrf_k_min - 10.0).abs() < f64::EPSILON);
+        assert!((cfg.rrf_k_max - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn self_tune_rejects_inverted_clamp() {
+        let cfg = SelfTuneConfig {
+            rrf_k_min: 100.0,
+            rrf_k_max: 50.0,
+            ..SelfTuneConfig::default()
+        };
+        assert!(matches!(
+            validate_self_tune(&cfg),
+            Err(ConfigError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn self_tune_rejects_out_of_range_margin_and_bad_cadence() {
+        let bad_margin = SelfTuneConfig {
+            margin: 1.5,
+            ..SelfTuneConfig::default()
+        };
+        assert!(validate_self_tune(&bad_margin).is_err());
+        let bad_cadence = SelfTuneConfig {
+            cadence: "not a cron".to_string(),
+            ..SelfTuneConfig::default()
+        };
+        assert!(validate_self_tune(&bad_cadence).is_err());
     }
 
     #[test]
