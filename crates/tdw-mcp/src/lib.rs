@@ -20,6 +20,7 @@ use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, Plan
 
 pub(crate) mod knowledge_answer_tools;
 pub(crate) mod knowledge_digest_tools;
+pub(crate) mod knowledge_distill_tools;
 pub(crate) mod knowledge_episodic_tools;
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
@@ -549,6 +550,14 @@ impl McpServer {
         if self.knowledge_findings_available() {
             descriptors.extend(knowledge_finding_tools::descriptors());
         }
+        // The knowledge DISTILL tool (knowledge-system K-X9): tdw.kg.distill
+        // mines a session transcript into candidate findings routed as B9
+        // PROPOSALS (never direct writes). It needs the full gate — proposal
+        // queue + adaptivity resolver + bound agent id — AND the graph + tag
+        // engines the gate validates against. Absent any → off.
+        if self.knowledge_distill_available() {
+            descriptors.extend(knowledge_distill_tools::descriptors());
+        }
         // The knowledge PATTERN tool (knowledge-system K-R4): tdw.kg.similar
         // is read-only and requires only the graph engine (same gate as the
         // explain tools). Absent when no knowledge runtime or no graph engine.
@@ -761,6 +770,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_finding_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_distill_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1168,6 +1181,60 @@ impl McpServer {
         self.knowledge
             .as_ref()
             .is_some_and(|runtime| runtime.graph().is_some() && runtime.bound_user_id().is_some())
+    }
+
+    /// True when the distill surface is available (knowledge-system K-X9): the
+    /// runtime has the full B9 gate (proposal queue + adaptivity resolver +
+    /// bound agent id) AND the graph + tag engines the gate validates against.
+    /// Distillation routes candidate findings as PROPOSALS, never direct writes,
+    /// so it requires exactly the write gate plus the validation engines.
+    fn knowledge_distill_available(&self) -> bool {
+        self.knowledge.as_ref().is_some_and(|runtime| {
+            runtime.proposals().is_some()
+                && runtime.adaptivity_resolver().is_some()
+                && runtime.bound_agent_id().is_some()
+                && runtime.graph().is_some()
+                && runtime.tags().is_some()
+        })
+    }
+
+    /// Dispatch the knowledge distill tool (`tdw.kg.distill`, knowledge-system
+    /// K-X9). Returns `Some(messages)` when `name` is the distill tool — a tool
+    /// error (never a protocol error) when the gate is unavailable, otherwise
+    /// the [`knowledge_distill_tools::execute`] result. Returns `None` when
+    /// `name` is not the distill tool so the caller falls through.
+    fn dispatch_knowledge_distill_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_distill_tools::owns(name) {
+            return None;
+        }
+        if !self.knowledge_distill_available() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result(
+                    "knowledge distill surface not attached (requires the B9 proposal gate \
+                     + graph + tag engines)",
+                ),
+            )]);
+        }
+        let runtime = self.knowledge.as_ref()?;
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match knowledge_distill_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem.with_id(id.clone()).with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
     }
 
     /// True when the watchlist store AND a knowledge runtime with a graph engine

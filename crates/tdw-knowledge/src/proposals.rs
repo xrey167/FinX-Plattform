@@ -628,6 +628,24 @@ impl ProposalQueue {
         }
         (draft, validated, ready)
     }
+
+    /// Count pending proposals authored by a session-distillation identity
+    /// (knowledge-system K-X9). A distilled-finding proposal carries
+    /// `agent_id = "distill:<session_id>"`; this counts every pending such
+    /// proposal regardless of session.
+    ///
+    /// Like [`pending_counts_by_state`](Self::pending_counts_by_state) this is a
+    /// single-pass scan, **not** subject to the `LIST_PAGE_*` pagination cap, so
+    /// the count is exact regardless of queue depth. "Pending" is the same
+    /// `!materialized && rejected.is_none()` predicate — a distilled finding
+    /// drops out of this count once it materializes or is rejected.
+    #[must_use]
+    pub fn distilled_pending(&self) -> usize {
+        self.proposals
+            .values()
+            .filter(|p| p.is_pending() && p.agent_id.starts_with("distill:"))
+            .count()
+    }
 }
 
 /// The automated validators (gate step 2). Every check is loud.
