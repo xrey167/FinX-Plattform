@@ -186,9 +186,14 @@ impl Fetcher<OecdCatalogQuery, MacroSeries> for OecdHttpMacroSeriesFetcher {
             .limit
             .map_or(usize::MAX, |limit| limit as usize);
         let observations = decode_observations(&raw)?;
+        // `decode_observations` returns rows in ascending (oldest-first) period
+        // order. `limit` must keep the *most recent* N observations (OpenBB
+        // semantics), so skip the older rows from the front and retain the tail,
+        // preserving the ascending output order callers expect.
+        let skip = observations.len().saturating_sub(limit);
         Ok(observations
             .into_iter()
-            .take(limit)
+            .skip(skip)
             .map(|observation| MacroSeries {
                 series_id: endpoint.dataset.to_string(),
                 title: Some(endpoint.title.to_string()),
@@ -287,6 +292,29 @@ mod tests {
         let rows = fetcher
             .transform_data(&query, fixture())
             .unwrap_or_else(|e| panic!("transform should succeed: {e}"));
+        // `limit` keeps the MOST RECENT observation, not the oldest. The fixture's
+        // ascending periods are 2023-Q1, 2023-Q2, 2023-Q3, so limit=1 must return
+        // the Q3 row (the latest), never the Q1 row.
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].date, "2023-Q3");
+    }
+
+    #[test]
+    fn transform_data_limit_keeps_latest_window_in_ascending_order() {
+        let fetcher = OecdHttpMacroSeriesFetcher::default();
+        let query = OecdCatalogQuery::from_value(&serde_json::json!({
+            "command": "economy/house_price_index",
+            "limit": 2
+        }))
+        .unwrap_or_else(|e| panic!("query should build: {e}"));
+        let rows = fetcher
+            .transform_data(&query, fixture())
+            .unwrap_or_else(|e| panic!("transform should succeed: {e}"));
+        // limit=2 keeps the two most recent periods (Q2, Q3), still ascending.
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].date, "2023-Q2");
+        assert!((rows[0].value.expect("q2 value") - 101.0).abs() < f64::EPSILON);
+        assert_eq!(rows[1].date, "2023-Q3");
+        assert_eq!(rows[1].value, None);
     }
 }

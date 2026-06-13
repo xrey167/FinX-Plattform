@@ -51,6 +51,48 @@ const GOV_TIPS_10Y: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_government_tips_yields_10y",
 )];
+const RATE_AMERIBOR: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fred", "fixedincome_rate_ameribor")];
+const RATE_EFFR_FORECAST: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_rate_effr_forecast",
+)];
+const RATE_EFFR_FORECAST_LR: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_rate_effr_forecast_long_run",
+)];
+const GOV_SVENSSON_2Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_government_svensson_yield_curve_2y",
+)];
+const GOV_SVENSSON_5Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_government_svensson_yield_curve_5y",
+)];
+const GOV_SVENSSON_10Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_government_svensson_yield_curve_10y",
+)];
+const SPREAD_TCM_EFFR_1Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_spreads_tcm_effr_1y",
+)];
+const SPREAD_TCM_EFFR_10Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_spreads_tcm_effr_10y",
+)];
+const CORP_HQM_2Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_2y",
+)];
+const CORP_HQM_5Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_5y",
+)];
+const CORP_HQM_30Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_hqm_30y",
+)];
 const SPREAD_TCM_10Y2Y: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_spreads_tcm_10y2y",
@@ -209,6 +251,36 @@ const RATE_ROWS: &[RateRow] = &[
         "10-Year TIPS constant-maturity yield, FRED-backed rate observation.",
     ),
     (
+        "fixedincome/government/svensson_yield_curve/2y",
+        GOV_SVENSSON_2Y,
+        "2-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/government/svensson_yield_curve/5y",
+        GOV_SVENSSON_5Y,
+        "5-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/government/svensson_yield_curve/10y",
+        GOV_SVENSSON_10Y,
+        "10-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/rate/ameribor",
+        RATE_AMERIBOR,
+        "Overnight Unsecured AMERIBOR benchmark rate, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/rate/effr_forecast",
+        RATE_EFFR_FORECAST,
+        "FOMC median fed-funds-rate projection, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/rate/effr_forecast/long_run",
+        RATE_EFFR_FORECAST_LR,
+        "FOMC longer-run median fed-funds-rate projection, FRED-backed rate observation.",
+    ),
+    (
         "fixedincome/spreads/tcm/10y2y",
         SPREAD_TCM_10Y2Y,
         "10-Year minus 2-Year Treasury constant-maturity spread, FRED-backed.",
@@ -224,9 +296,34 @@ const RATE_ROWS: &[RateRow] = &[
         "3-Month Treasury minus Federal Funds Rate spread, FRED-backed.",
     ),
     (
+        "fixedincome/spreads/tcm_effr/1y",
+        SPREAD_TCM_EFFR_1Y,
+        "1-Year Treasury constant-maturity minus Federal Funds Rate spread, FRED-backed.",
+    ),
+    (
+        "fixedincome/spreads/tcm_effr/10y",
+        SPREAD_TCM_EFFR_10Y,
+        "10-Year Treasury constant-maturity minus Federal Funds Rate spread, FRED-backed.",
+    ),
+    (
         "fixedincome/corporate/spot_rates/10y",
         CORP_SPOT_10Y,
         "10-Year HQM corporate bond spot rate, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/hqm/2y",
+        CORP_HQM_2Y,
+        "2-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/hqm/5y",
+        CORP_HQM_5Y,
+        "5-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/hqm/30y",
+        CORP_HQM_30Y,
+        "30-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.",
     ),
     (
         "fixedincome/corporate/commercial_paper/90d",
