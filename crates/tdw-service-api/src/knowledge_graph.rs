@@ -11,14 +11,18 @@
 //! capped hop depth — or, when the root names a taxonomy tag, the same bounded
 //! neighborhood over the tag subsumption edges. The result is rendered as
 //! Markdown the `markdown` Workspace widget displays. Strictly read-only: it
-//! calls only `GraphEngine::node` and `GraphEngine::expand`; it never writes.
+//! calls only `GraphEngine::node` and `GraphEngine::neighbors`; it never writes.
 //!
 //! # Safety properties (K-M6 acceptance)
 //!
 //! - **Bounded fan-out**: depth is clamped to [`MAX_GRAPH_DEPTH`] (well under the
-//!   engine's `MAX_HOPS` ceiling) and the rendered node/edge lists are truncated
-//!   to [`MAX_GRAPH_NODES`] / [`MAX_GRAPH_EDGES`] with an honest truncation note,
-//!   so a hub node can never produce an unbounded payload.
+//!   engine's `MAX_HOPS` ceiling) AND the traversal runs through
+//!   [`bounded_ego_graph`], a handler-local BFS with a HARD total budget — it
+//!   stops collecting at [`MAX_GRAPH_NODES`] / [`MAX_GRAPH_EDGES`] and never
+//!   enqueues a frontier node past the cap, so a hub node can never grow the
+//!   working set or the payload past the budget. (The shared, unbounded
+//!   `GraphEngine::expand` is deliberately NOT used here — it would materialize a
+//!   hub node's entire neighborhood before any truncation could apply.)
 //! - **Leakage-safe `as_of`**: an `as_of` argument is threaded verbatim into the
 //!   temporal [`TraversalFilter`]; absence means "all time" (the documented graph
 //!   contract). The handler never substitutes a future timestamp, so there is no
@@ -32,11 +36,12 @@
 
 #![cfg(feature = "workspace-route")]
 
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tdw_app_server::KnowledgeGraphHandler;
-use tdw_core::{Direction, GraphEdge, GraphNode, TraversalFilter};
+use tdw_core::{Direction, GraphEdge, GraphEngine, GraphNode, Subgraph, TraversalFilter};
 use tdw_knowledge::runtime::KnowledgeRuntime;
 
 /// Hop-budget ceiling for the ego-graph. Deliberately small (well under the
@@ -73,7 +78,7 @@ impl KnowledgeGraphAdapter {
     pub fn new(runtime: Arc<KnowledgeRuntime>) -> Self {
         Self {
             runtime,
-            clock: Arc::new(system_now_rfc3339),
+            clock: Arc::new(system_now_stamp),
         }
     }
 
@@ -130,24 +135,117 @@ impl KnowledgeGraphHandler for KnowledgeGraphAdapter {
         }
 
         let filter = request.traversal_filter();
-        let subgraph = graph
-            .expand(std::slice::from_ref(&root.to_string()), &filter)
+        // Bounded fan-out: rather than the shared, unbounded `GraphEngine::expand`
+        // (which materializes EVERY neighbor of every frontier node before
+        // returning — a hub node would explode), drive the BFS here with a hard
+        // total budget. We collect at most `MAX_GRAPH_NODES` nodes /
+        // `MAX_GRAPH_EDGES` edges and stop enqueuing the moment the budget is hit,
+        // so the retained set — and the frontier that produces it — can never grow
+        // past the cap regardless of node degree.
+        let (subgraph, fetch_truncated) = bounded_ego_graph(graph.as_ref(), root, &filter)
             .await
             .map_err(|error| format!("ego-graph expansion failed: {error}"))?;
 
-        Ok(render_payload(&request, &generated_at, &subgraph))
+        Ok(render_payload(
+            &request,
+            &generated_at,
+            &subgraph,
+            fetch_truncated,
+        ))
     }
 }
 
-/// The system-clock RFC 3339 stamp. Isolated so it is the ONLY direct
-/// wall-clock read; the serving path always goes through the injected closure.
-fn system_now_rfc3339() -> String {
+/// The system-clock informational stamp (custom `@<epoch-seconds>s` form, NOT
+/// RFC 3339). Isolated so it is the ONLY direct wall-clock read; the serving
+/// path always goes through the injected closure.
+fn system_now_stamp() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    // Minimal RFC-3339-ish stamp from epoch seconds; the graph compares
-    // timestamps lexicographically, and this field is informational only.
+    // Minimal stamp from epoch seconds; this `generated_at` field is purely
+    // informational (the graph's own temporal compares use `as_of`, not this).
     format!("@{}s", now.as_secs())
+}
+
+/// Resolve the root's ego-graph with a HARD total fan-out budget, returning the
+/// bounded [`Subgraph`] and whether the budget clipped it.
+///
+/// Bounds the traversal at the handler rather than leaning on the shared,
+/// unbounded [`GraphEngine::expand`] (which BFS-materializes every neighbor of
+/// every frontier node before returning — a hub node would explode the payload
+/// and the working set). Here the BFS stops the instant the retained node/edge
+/// totals reach [`MAX_GRAPH_NODES`] / [`MAX_GRAPH_EDGES`], and never enqueues a
+/// frontier node past the node cap, so neither the result nor the frontier can
+/// grow past the budget regardless of any node's degree. `filter.max_hops` is
+/// already clamped to [`MAX_GRAPH_DEPTH`] upstream.
+///
+/// Read-only: it calls only [`GraphEngine::neighbors`]; it never writes.
+async fn bounded_ego_graph(
+    graph: &dyn GraphEngine,
+    root: &str,
+    filter: &TraversalFilter,
+) -> tdw_core::Result<(Subgraph, bool)> {
+    let mut node_ids: BTreeSet<String> = BTreeSet::new();
+    let mut edge_keys: BTreeSet<(String, String, String, Option<String>)> = BTreeSet::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    let mut frontier: VecDeque<(String, u8)> = VecDeque::new();
+    let mut truncated = false;
+
+    node_ids.insert(root.to_string());
+    frontier.push_back((root.to_string(), 0));
+
+    while let Some((anchor, depth)) = frontier.pop_front() {
+        if depth >= filter.max_hops {
+            continue;
+        }
+        for (edge, node) in graph.neighbors(&anchor, filter).await? {
+            // Edge budget: stop collecting once full (deterministic order from
+            // the engine means the retained slice is stable, not arbitrary).
+            if edges.len() < MAX_GRAPH_EDGES {
+                let key = (
+                    edge.from.clone(),
+                    edge.to.clone(),
+                    edge.rel.clone(),
+                    edge.valid_from.clone(),
+                );
+                if edge_keys.insert(key) {
+                    edges.push(edge);
+                }
+            } else {
+                truncated = true;
+            }
+
+            // Node budget: never admit (or enqueue) a node past the cap.
+            if node_ids.contains(&node.id) {
+                continue;
+            }
+            if node_ids.len() >= MAX_GRAPH_NODES {
+                truncated = true;
+                continue;
+            }
+            node_ids.insert(node.id.clone());
+            frontier.push_back((node.id, depth + 1));
+        }
+    }
+
+    // Materialize the retained node set (root included when it resolves).
+    let mut nodes: Vec<GraphNode> = Vec::with_capacity(node_ids.len());
+    for id in &node_ids {
+        if let Some(node) = graph.node(id).await? {
+            nodes.push(node);
+        }
+    }
+    nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    edges.sort_by(|left, right| {
+        (&left.from, &left.rel, &left.to, &left.valid_from).cmp(&(
+            &right.from,
+            &right.rel,
+            &right.to,
+            &right.valid_from,
+        ))
+    });
+
+    Ok((Subgraph { nodes, edges }, truncated))
 }
 
 /// A parsed, validated graph-visualization request.
@@ -274,24 +372,26 @@ fn empty_payload(request: &GraphRequest, generated_at: &str, reason: &str) -> Va
     })
 }
 
-/// Render the resolved ego-graph as Markdown plus a structured `graph` block,
-/// applying the node/edge truncation caps with an honest note.
+/// Render the resolved ego-graph as Markdown plus a structured `graph` block.
+///
+/// `fetch_truncated` is set by [`bounded_ego_graph`] when the hard fan-out
+/// budget clipped the traversal. The `.take()` caps below are a defensive
+/// belt-and-suspenders — the incoming `subgraph` is already budget-bounded — so
+/// the rendered lists can never exceed [`MAX_GRAPH_NODES`] / [`MAX_GRAPH_EDGES`].
 fn render_payload(
     request: &GraphRequest,
     generated_at: &str,
-    subgraph: &tdw_core::Subgraph,
+    subgraph: &Subgraph,
+    fetch_truncated: bool,
 ) -> Value {
-    let total_nodes = subgraph.nodes.len();
-    let total_edges = subgraph.edges.len();
-    let truncated = total_nodes > MAX_GRAPH_NODES || total_edges > MAX_GRAPH_EDGES;
-
     let nodes: Vec<&GraphNode> = subgraph.nodes.iter().take(MAX_GRAPH_NODES).collect();
     let edges: Vec<&GraphEdge> = subgraph.edges.iter().take(MAX_GRAPH_EDGES).collect();
 
-    let note = if truncated {
+    let note = if fetch_truncated {
         Some(format!(
-            "neighborhood truncated to {MAX_GRAPH_NODES} nodes / {MAX_GRAPH_EDGES} edges \
-             (full size: {total_nodes} nodes, {total_edges} edges)"
+            "neighborhood truncated at the fan-out budget \
+             ({MAX_GRAPH_NODES} nodes / {MAX_GRAPH_EDGES} edges); \
+             narrow the root, depth, or rels to see more"
         ))
     } else {
         None
@@ -363,7 +463,7 @@ fn render_markdown(
     for node in nodes {
         out.push_str(&format!(
             "| `{}` | {:?} | {} |\n",
-            node.id,
+            escape_cell(&node.id),
             node.kind,
             escape_cell(&node.label)
         ));
@@ -373,17 +473,22 @@ fn render_markdown(
     for edge in edges {
         out.push_str(&format!(
             "| `{}` | {} | `{}` |\n",
-            edge.from,
+            escape_cell(&edge.from),
             escape_cell(&edge.rel),
-            edge.to
+            escape_cell(&edge.to)
         ));
     }
     out
 }
 
-/// Escape a Markdown table cell (pipes and newlines would break the table).
+/// Escape a Markdown table cell: pipes, carriage returns, and newlines would all
+/// break the table layout. Node/edge ids are graph-controlled but still routed
+/// through this so a stray separator in an id cannot corrupt the rendered table.
 fn escape_cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', " ")
+    value
+        .replace('|', "\\|")
+        .replace('\r', "")
+        .replace('\n', " ")
 }
 
 #[cfg(test)]
@@ -399,6 +504,79 @@ mod tests {
         assert_eq!(clamp_depth(0), 1);
         assert_eq!(clamp_depth(1), 1);
         assert_eq!(clamp_depth(99), MAX_GRAPH_DEPTH);
+    }
+
+    #[tokio::test]
+    async fn bounded_ego_graph_clips_a_hub_node_to_the_budget() {
+        use serde_json::json;
+        use tdw_core::{GraphEdge, GraphNode, Provenance};
+        use tdw_storage_graph::InMemoryGraphEngine;
+        use tdw_taxonomy::EntityKind;
+
+        // A hub with far more neighbors than the node budget: at depth 1 the
+        // unbounded `expand` would materialize all of them. The handler-local
+        // BFS must hard-cap the retained set instead.
+        let hub = "instrument:HUB";
+        let neighbor_count = MAX_GRAPH_NODES + 50;
+        let engine = InMemoryGraphEngine::default();
+        let mut nodes = vec![GraphNode {
+            id: hub.to_string(),
+            kind: EntityKind::Instrument,
+            label: "Hub".to_string(),
+            aliases: Vec::new(),
+            props: json!({}),
+            valid_from: None,
+            valid_to: None,
+        }];
+        let mut edges = Vec::new();
+        for index in 0..neighbor_count {
+            let id = format!("instrument:N{index}");
+            nodes.push(GraphNode {
+                id: id.clone(),
+                kind: EntityKind::Instrument,
+                label: format!("Node {index}"),
+                aliases: Vec::new(),
+                props: json!({}),
+                valid_from: None,
+                valid_to: None,
+            });
+            edges.push(GraphEdge {
+                from: hub.to_string(),
+                to: id,
+                rel: "related_to".to_string(),
+                props: json!({}),
+                provenance: Provenance::Ingest {
+                    source: "test:hub".to_string(),
+                },
+                valid_from: None,
+                valid_to: None,
+            });
+        }
+        engine.upsert_nodes(nodes).await.expect("seed nodes");
+        engine.upsert_edges(edges).await.expect("seed edges");
+
+        let filter = TraversalFilter {
+            rels: None,
+            kinds: None,
+            as_of: None,
+            direction: Direction::Both,
+            max_hops: 1,
+        };
+        let (subgraph, truncated) = bounded_ego_graph(&engine, hub, &filter)
+            .await
+            .expect("bounded expand");
+
+        assert!(truncated, "the budget must report the hub was clipped");
+        assert!(
+            subgraph.nodes.len() <= MAX_GRAPH_NODES,
+            "retained nodes ({}) never exceed the budget {MAX_GRAPH_NODES}",
+            subgraph.nodes.len()
+        );
+        assert!(
+            subgraph.edges.len() <= MAX_GRAPH_EDGES,
+            "retained edges ({}) never exceed the budget {MAX_GRAPH_EDGES}",
+            subgraph.edges.len()
+        );
     }
 
     #[test]
@@ -461,11 +639,12 @@ mod tests {
     }
 
     #[test]
-    fn render_truncates_oversized_neighborhood_with_note() {
-        use tdw_core::{GraphNode, Subgraph};
+    fn render_emits_an_honest_note_when_the_budget_clipped_the_fetch() {
         use tdw_taxonomy::EntityKind;
 
-        let nodes: Vec<GraphNode> = (0..(MAX_GRAPH_NODES + 5))
+        // The bounded BFS already clipped to the budget; render reflects that
+        // with an honest note (it does not re-derive truncation from the size).
+        let nodes: Vec<GraphNode> = (0..MAX_GRAPH_NODES)
             .map(|index| GraphNode {
                 id: format!("instrument:N{index}"),
                 kind: EntityKind::Instrument,
@@ -482,7 +661,7 @@ mod tests {
         };
         let request =
             GraphRequest::parse(&params(json!({ "root": "instrument:N0" }))).expect("parse");
-        let payload = render_payload(&request, "@0s", &subgraph);
+        let payload = render_payload(&request, "@0s", &subgraph, /* fetch_truncated */ true);
         assert_eq!(payload["graph"]["node_count"], MAX_GRAPH_NODES);
         assert!(
             payload["graph"]["note"]
@@ -490,6 +669,20 @@ mod tests {
                 .expect("truncation note")
                 .contains("truncated"),
             "honest truncation note present"
+        );
+    }
+
+    #[test]
+    fn render_omits_the_note_when_within_budget() {
+        let subgraph = Subgraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        let request = GraphRequest::parse(&params(json!({ "root": "x" }))).expect("parse");
+        let payload = render_payload(&request, "@0s", &subgraph, /* fetch_truncated */ false);
+        assert!(
+            payload["graph"]["note"].is_null(),
+            "no truncation note when the budget did not clip"
         );
     }
 }
