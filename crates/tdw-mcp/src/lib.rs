@@ -23,6 +23,7 @@ pub(crate) mod knowledge_digest_tools;
 pub(crate) mod knowledge_distill_tools;
 pub(crate) mod knowledge_episodic_tools;
 pub(crate) mod knowledge_explain_tools;
+pub(crate) mod knowledge_export_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
 pub(crate) mod knowledge_ingest_tools;
@@ -671,6 +672,18 @@ impl McpServer {
         if self.knowledge_episodic_available() {
             descriptors.push(knowledge_episodic_tools::descriptor());
         }
+        // The knowledge EXPORT tool (knowledge-system K-X10): tdw.kg.export is a
+        // read-only research-trail exporter (findings → thesis → evidence → cited
+        // answers → provenance, to JSON + Markdown). It requires only the graph
+        // engine — the same gate as the explain tools. Absent when no knowledge
+        // runtime or no graph engine.
+        if self
+            .knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.graph().is_some())
+        {
+            descriptors.push(knowledge_export_tools::descriptor());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -870,6 +883,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_episodic_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_export_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1597,6 +1614,52 @@ impl McpServer {
         };
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
         let messages = match knowledge_answer_tools::execute(runtime, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
+    }
+
+    /// Dispatch the knowledge export tool (`tdw.kg.export`, knowledge-system K-X10).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.kg.export` — a tool error
+    /// (never a protocol error) when the knowledge runtime or graph engine is not
+    /// attached, otherwise the [`knowledge_export_tools::execute`] result. Returns
+    /// `None` when `name` is not the export tool so the caller falls through to
+    /// the registry and built-in dispatch paths.
+    fn dispatch_knowledge_export_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_export_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        if runtime.graph().is_none() {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge export requires a graph engine"),
+            )]);
+        }
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages = match knowledge_export_tools::execute(runtime, &arguments_object, &now) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }

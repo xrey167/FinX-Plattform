@@ -2,6 +2,7 @@
 #![deny(clippy::pedantic, clippy::nursery)]
 
 mod demo;
+mod export;
 mod ingest;
 mod params;
 mod reindex;
@@ -85,6 +86,16 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "demo")
     {
         return demo::run(&args).await;
+    }
+
+    // kg export: portable research-trail export through the MCP server's
+    // tdw.kg.export tool (knowledge-system K-X10). Read-only — assembles the
+    // trail server-side and prints JSON and/or Markdown.
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "kg" && pair[1] == "export")
+    {
+        return export::run(&args);
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).
