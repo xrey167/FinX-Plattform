@@ -14,6 +14,78 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-13
+
+The **intelligent-knowledge release.** Bundles every change merged to `main`
+after the v1.3.0 tag: the knowledge-system-2 program (33 stories across the
+Ease → Autonomy → Market → Finesse → Learning/Trust phases), the close-out of
+OpenBB-parity Phase 3 (catalog at 131 routes / 98 provider candidates), plus
+reliability and dependency hygiene. MINOR release — all additions are
+backward-compatible; no protocol/persistence/operator-contract breaks. See
+[`docs/release/v1.4.0-notes.md`](docs/release/v1.4.0-notes.md).
+
+### Added
+
+- **Knowledge system — ease of use (K-E):** zero-config first run with an
+  in-memory default and actionable Bolt errors (#358); `tdw.kg.status`
+  observability across MCP/REST/CLI (#360); public ingestion through a single
+  `KnowledgeIndexer` seam (#359); offline `tdw kg demo` walkthrough (#378).
+- **Knowledge system — autonomy (K-L):** rules + inference hosted in the daemon
+  (#365); host-bound agent identity via session principals (#376); scheduled
+  retrieval evals + drift alarm (#375); consolidation tick draining feedback and
+  persisting plans (#377); gated auto-materialization sweep (#380); scheduled
+  KnowledgeFeed pipelines (#382).
+- **Knowledge system — market-grade (K-M):** LLM extraction-as-proposals,
+  cost-bounded and gate-routed (#401); episodic memory of agent transcripts as
+  searchable temporal episodes (#396); `tdw.kg.answer` cited GraphRAG synthesis
+  (#404); contradiction-driven temporal invalidation (#392); published
+  knowledge benchmark suite — recall/MRR/latency, nightly, drift-stamped (#405);
+  knowledge graph-visualization Workspace widget (#415).
+- **Knowledge system — finesses (K-X):** `tdw.kg.why` + `tdw.kg.diff`
+  provenance chains & time-travel diffs (#362); trust-dial retrieval by
+  provenance class (#394); self-narrating digest + staleness surfacing (#407);
+  open questions that self-answer + negative knowledge (#403); knowledge
+  watchlists with change-driven alerts (#398); first-class analyst findings
+  capture + linking (#366); thesis tracking with temporal health (#391);
+  session→findings distillation as proposals (#413); portable research-trail
+  export — JSON + Markdown (#412).
+- **Knowledge system — learning & trust (K-R):** lessons-as-proposals via B9 +
+  walk-forward eval (#406); skill lifecycle + eval tournaments (#408);
+  eval-gated parameter self-tuning (#409); deterministic motif mining + analogy
+  recall (#381); pattern→rule induction through the gate (#400); per-fact
+  confidence from corroboration + survived contradiction (#397); walk-forward
+  knowledge validation replay harness (#393); governed, reversible forgetting to
+  a cold plane (#411).
+- **OpenBB parity Phase 3:** `tdw-analytics-portfolio` metrics (#361);
+  `tdw-provider-imf` IMF SDMX-JSON macro series (#367); EconDB series (#369);
+  `tdw-provider-famafrench` Ken French factors (#355); estimates breadth —
+  price-target consensus + forward analyst estimates (#371); XLSX export from
+  any result envelope via pure-Rust `rust_xlsxwriter` (#372).
+
+### Changed
+
+- Live `real-engines` feature chain wired with eager graph-backend validation
+  at boot (#368).
+- CFTC reads its app token via the shared `read_optional_key` helper (#363).
+- OpenBB-parity P3 cutover: roll-up scoreboard + route-count refresh, and the
+  niche-provider deferral decision documented in the gap matrix (#373, #374).
+- Dependency bumps: candle-core/candle-transformers 0.10.2 (#385, #386),
+  prost 0.14.4 (#389), zip 7.2.0 (#390), codecov-action 7 (#384),
+  setup-qemu-action 4 (#383).
+- CI review-gate checklist codified (release/schema-drift/clock/rebase gaps) in
+  `docs/review-gate.md` (#417).
+
+### Fixed
+
+- Deterministic clock for `McpServer` — unbreaks date-brittle thesis tests
+  (#414).
+- Corrected Julian day math, scoped the contradiction edge scan, and narrowed
+  the feed-indexer lock (Gemini-flagged escapes) (#399).
+- Wired the real graph backend with eager validation, surfacing boot-time
+  misconfiguration instead of failing lazily (#368).
+- Clippy pedantic+nursery ratchet held at 0 across the release (#370, #379,
+  #395, #402, #410, #416).
+
 ## [1.3.0] - 2026-06-11
 
 The self-hosted warehouse release: Product ② (the ClickHouse/Qdrant/Meilisearch
