@@ -887,14 +887,14 @@ fn thesis_health_math_hand_computed() {
 /// `as_of` leakage regression: evidence edges created AFTER the query `as_of`
 /// must NOT be counted.
 ///
-/// Setup: thesis captured on 2026-06-12; we query health at 2026-01-01
+/// Setup: thesis captured at NOW (far-future sentinel); we query health at 2026-01-01
 /// (before the evidence was created). Hand-computed result: supports=0,
 /// contradicts=0 — even though the links exist in the graph.
 #[test]
 fn thesis_health_as_of_leakage_regression() {
     let (mut server, _graph) = server_with_findings();
 
-    // Capture thesis at NOW (2026-06-12).
+    // Capture thesis at NOW (far-future sentinel).
     let thesis_resp = call(
         &mut server,
         "tdw.kg.thesis",
@@ -909,7 +909,7 @@ fn thesis_health_as_of_leakage_regression() {
         .expect("thesis_id")
         .to_string();
 
-    // Capture and link evidence AT NOW (2026-06-12).
+    // Capture and link evidence AT NOW (far-future sentinel).
     let f = call(
         &mut server,
         "tdw.kg.finding",
@@ -929,8 +929,8 @@ fn thesis_health_as_of_leakage_regression() {
     assert_eq!(lnk["result"]["isError"], false);
 
     // Query health at a DATE BEFORE the evidence was written (2026-01-01).
-    // The edge valid_from is 2026-06-12T... which is > 2026-01-01T...
-    // active_at(valid_from="2026-06-12...", valid_to=None, as_of="2026-01-01...")
+    // The edge valid_from is the real current date (injected by dispatch), which is > 2026-01-01.
+    // active_at(valid_from=<today>, valid_to=None, as_of="2026-01-01...")
     // → false. Therefore supports_count must be 0.
     let past_date = "2026-01-01";
     let health = call(
