@@ -172,10 +172,13 @@ use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetch
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
+    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpIncomeFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
+    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
     FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpTranscriptFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -400,6 +403,25 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpDiscoveryFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpScreenerFetcher::registry_entry())?;
+    // FMP equity/fundamental breadth (openbb-parity P4W1): management / compensation /
+    // revenue segments / transcript / ESG / employee count / filings. The growth and
+    // revenue-segment routes reuse the statement and revenue-segment fetchers (the
+    // discriminator is injected per dispatch binding), so they need no extra registry
+    // entry beyond the base fetcher.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpKeyExecutivesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpExecutiveCompensationFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpRevenueSegmentFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpTranscriptFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEsgScoreFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEmployeeCountFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpFilingsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]

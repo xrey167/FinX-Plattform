@@ -6,10 +6,13 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::{
     FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
+    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpIncomeFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
+    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
     FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpTranscriptFetcher,
 };
 
 use schemars::JsonSchema;
@@ -278,6 +281,123 @@ pub struct FmpScreenerQuery {
     pub industry: Option<String>,
     pub exchange: Option<String>,
     pub limit: Option<u32>,
+}
+
+/// Query for the per-symbol fundamentals endpoints that also take a `limit`
+/// (employee-count, SEC filings).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpSymbolLimitQuery {
+    pub symbol: String,
+    pub limit: u32,
+}
+
+impl FmpSymbolLimitQuery {
+    /// Construct a validated symbol+limit query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(symbol: &str, limit: u32) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            limit,
+        })
+    }
+}
+
+/// Which revenue-segmentation breakdown a [`FmpRevenueSegmentQuery`] requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FmpSegmentKind {
+    /// Revenue broken down by business product line.
+    Product,
+    /// Revenue broken down by geographic region.
+    Geography,
+}
+
+impl FmpSegmentKind {
+    /// Return the FMP `/v4` path segment for this breakdown.
+    #[must_use]
+    pub const fn as_path_segment(self) -> &'static str {
+        match self {
+            Self::Product => "revenue-product-segmentation",
+            Self::Geography => "revenue-geographic-segmentation",
+        }
+    }
+
+    /// Return the [`tdw_domain::RevenueSegment`] `kind` discriminator.
+    #[must_use]
+    pub const fn as_kind(self) -> &'static str {
+        match self {
+            Self::Product => "product",
+            Self::Geography => "geography",
+        }
+    }
+
+    /// Parse a segment kind, defaulting unknown/missing to product.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        match value {
+            Some("geography" | "geographic") => Self::Geography,
+            _ => Self::Product,
+        }
+    }
+}
+
+/// Query for the revenue-segmentation endpoints (product / geography).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpRevenueSegmentQuery {
+    pub symbol: String,
+    pub kind: FmpSegmentKind,
+    pub period: FmpPeriod,
+}
+
+impl FmpRevenueSegmentQuery {
+    /// Construct a validated revenue-segmentation query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol.
+    pub fn new(symbol: &str, kind: FmpSegmentKind, period: FmpPeriod) -> Result<Self> {
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            kind,
+            period,
+        })
+    }
+}
+
+/// Query for the earnings-call-transcript endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpTranscriptQuery {
+    pub symbol: String,
+    pub year: u32,
+    pub quarter: u32,
+}
+
+impl FmpTranscriptQuery {
+    /// Construct a validated transcript query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidLimit`] if `year` or `quarter` is zero or
+    /// `quarter` exceeds 4.
+    pub fn new(symbol: &str, year: u32, quarter: u32) -> Result<Self> {
+        if year == 0 || quarter == 0 || quarter > 4 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            year,
+            quarter,
+        })
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
