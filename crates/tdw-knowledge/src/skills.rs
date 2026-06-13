@@ -424,7 +424,8 @@ impl SkillRegistry {
         // Destructure the verdict by value up front: `winner`/`retired`/
         // `scoreboard` become owned, so the later `&mut self` transition calls
         // don't conflict with a borrow of `outcome`. Insufficient → fail-closed.
-        let (scoreboard, winner, retired) = match tournament.evaluate(&candidates, &actives, golden) {
+        let (scoreboard, winner, retired) = match tournament.evaluate(&candidates, &actives, golden)
+        {
             TournamentOutcome::Decided {
                 scoreboard,
                 winner,

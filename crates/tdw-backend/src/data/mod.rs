@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tdw_agent::{ConsolidationAction, Memory, UsageHint, consolidation_plan_with_usage};
+use tdw_agent::{consolidation_plan_with_usage, ConsolidationAction, Memory, UsageHint};
 use tdw_agent_store::{
-    MemoryStore, RetrievalFeedbackStore, consolidate_at,
-    spawn_consolidation_scheduler_with_feedback,
+    consolidate_at, spawn_consolidation_scheduler_with_feedback, MemoryStore,
+    RetrievalFeedbackStore,
 };
 use tdw_app_server::{CancellationToken, SubmissionHandle};
 use tdw_bus::EventBus;
@@ -24,18 +24,17 @@ use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
     ProgressStream, ProviderRegistry, QueryParams, RelationalEngine, VectorEngine,
 };
-use tdw_cron::{CronSchedule, ScheduleRegistry, ScheduledTrigger, TriggerAction, due_triggers};
+use tdw_cron::{due_triggers, CronSchedule, ScheduleRegistry, ScheduledTrigger, TriggerAction};
 use tdw_domain::EquityHistoricalData;
 use tdw_embed::EmbeddingProvider;
 use tdw_embed_local::HashEmbeddingProvider;
 use tdw_eval_runner::scheduled_eval::{
-    EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig, default_fixture_path, eval_trigger_id,
-    load_golden_split, regression_alert_body, run_scheduled_eval_from_fixture,
+    default_fixture_path, eval_trigger_id, load_golden_split, regression_alert_body,
+    run_scheduled_eval_from_fixture, EvalAlertSink, ScheduledEvalConfig as EvalRunnerConfig,
 };
 use tdw_induction::InductionEngine;
 use tdw_infer::contradiction::ContradictionDetector;
 use tdw_infer::{ChangeSet, InferEngine, InferError, RetractReport, RunLimits};
-use tdw_knowledge::ExtractionFreshness;
 use tdw_knowledge::feeds::{FeedFreshness, FeedSource, FixtureFeedSource};
 use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_knowledge::runtime::QuestionsFreshness;
@@ -43,16 +42,17 @@ use tdw_knowledge::runtime::WatchlistFreshness;
 use tdw_knowledge::runtime::{
     ConsolidationFreshness, EvalFreshness, KnowledgeRuntime, SweepFreshness,
 };
+use tdw_knowledge::ExtractionFreshness;
 use tdw_knowledge::{KnowledgeDocument, KnowledgeHit, KnowledgeIndex};
 use tdw_mcp::knowledge_question_tools::{
-    OpenQuestionStore, load_store_from_env as load_question_store_from_env, tick_question_check,
+    load_store_from_env as load_question_store_from_env, tick_question_check, OpenQuestionStore,
 };
-use tdw_mcp::knowledge_watchlist_tools::{WatchlistStore, tick_watchlist_check};
+use tdw_mcp::knowledge_watchlist_tools::{tick_watchlist_check, WatchlistStore};
 use tdw_outbox::InMemoryOutbox;
 use tdw_patterns::{MiningLimits, PatternEngine, PatternIndex};
 use tdw_protocol::{EventMsg, OpEnvelope};
 use tdw_runtime::CommandRunner;
-use tdw_service_api::{AppState, fetch_equity_historical};
+use tdw_service_api::{fetch_equity_historical, AppState};
 use tdw_storage_graph::InMemoryGraphEngine;
 use tdw_tag_rules::{RuleEngine, TagRule};
 use tdw_tags::{InMemoryTagEngine, TagEngine};
@@ -5161,7 +5161,7 @@ mod tests {
     /// call. This is the baseline contract: no feedback data → no behaviour change.
     #[tokio::test]
     async fn consolidate_now_at_empty_feedback_matches_base_consolidate_at() {
-        use tdw_agent_store::{MemoryStore, consolidate_at};
+        use tdw_agent_store::{consolidate_at, MemoryStore};
 
         let now = "2026-06-10T00:00:00Z";
 
@@ -5924,9 +5924,9 @@ mod tests {
     #[tokio::test]
     async fn fixture_feed_article_ingests_and_is_idempotent() {
         use tdw_embed_local::HashEmbeddingProvider;
-        use tdw_knowledge::KnowledgeIndex;
         use tdw_knowledge::feeds::{Article, FeedSource, FixtureFeedSource};
-        use tdw_knowledge::indexer::{IndexOutcome, KnowledgeIndexer, article_to_document};
+        use tdw_knowledge::indexer::{article_to_document, IndexOutcome, KnowledgeIndexer};
+        use tdw_knowledge::KnowledgeIndex;
 
         let backend = Backend::in_memory_for_tests().await;
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(HashEmbeddingProvider::default());
