@@ -87,6 +87,10 @@ struct DaemonHandle {
     /// The K-R4 scheduled pattern-mining worker task.
     /// `None` when `knowledge.patterns.enabled = false` (default).
     pattern_mining_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R1 scheduled lesson-induction worker task.
+    /// `None` when `knowledge.lessons.enabled = false` (default) or no proposal
+    /// queue is attached.
+    lesson_induction_task: Option<tokio::task::JoinHandle<()>>,
     /// The K-L6 scheduled feed tasks, one per enabled feed entry.
     /// Empty when no feeds are configured.
     feed_handles: Vec<tokio::task::JoinHandle<()>>,
@@ -207,6 +211,10 @@ pub struct Backend {
     /// `config.knowledge.proposals` in [`Backend::from_config`]. Held here so
     /// [`Backend::serve`] can register the sweep trigger without re-parsing.
     proposals_cfg: ProposalsCfg,
+    /// K-R1 lesson-induction configuration, extracted from
+    /// `config.knowledge.lessons` in [`Backend::from_config`]. Held here so
+    /// [`Backend::serve`] can spawn the induction worker without re-parsing.
+    lessons_cfg: tdw_config::LessonsConfig,
     /// K-L6 scheduled feed configuration, extracted from
     /// `config.knowledge.feeds` in [`Backend::from_config`].  Held here so
     /// [`Backend::serve`] can spawn the per-feed cron tasks without a second
@@ -296,6 +304,8 @@ impl Backend {
         let evals_cfg = config.knowledge.evals.clone();
         // K-L4: extract proposals sweep config before config is consumed.
         let proposals_cfg = config.knowledge.proposals.clone();
+        // K-R1: extract lesson-induction config before config is consumed.
+        let lessons_cfg = config.knowledge.lessons.clone();
         // K-L6: extract feeds config before `config` is consumed.
         let feeds_cfg = config.knowledge.feeds.clone();
         // K-X5: extract watchlists config before `config` is consumed.
@@ -475,6 +485,17 @@ impl Backend {
         let extraction_freshness_cell = build_extraction_freshness_cell(&extraction_cfg);
         knowledge_runtime =
             knowledge_runtime.with_extraction_freshness(Arc::clone(&extraction_freshness_cell));
+        // B9 / K-L4 / K-R1: attach the single canonical gated ProposalQueue to
+        // the co-resident runtime. Without this the runtime's `proposals()` is
+        // `None`, which silently disables the MCP write surface (`write_context`
+        // requires it), the K-L4 auto-materialize sweep, AND the K-R1 lesson-
+        // induction worker — every gated-writeback path is dead at runtime. One
+        // shared handle keeps the write surface, the sweep, and lesson induction
+        // operating on the same queue.
+        let proposal_queue = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::proposals::ProposalQueue::default(),
+        ));
+        knowledge_runtime = knowledge_runtime.with_proposals(Arc::clone(&proposal_queue));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -498,6 +519,7 @@ impl Backend {
             evals_cfg,
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg,
+            lessons_cfg,
             feeds_cfg,
             feed_freshness_cells,
             watchlists_cfg,
@@ -569,6 +591,7 @@ impl Backend {
             evals_cfg: EvalsConfig::default(),
             consolidation_freshness: consolidation_freshness_cell,
             proposals_cfg: ProposalsCfg::default(),
+            lessons_cfg: tdw_config::LessonsConfig::default(),
             feeds_cfg: FeedsConfig::default(),
             feed_freshness_cells: Vec::new(),
             watchlists_cfg: WatchlistsConfig::default(),
@@ -780,6 +803,18 @@ impl Backend {
             cancel.clone(),
             None,
         );
+        // K-R1 — spawn the lesson-induction worker when enabled AND a proposal
+        // queue is attached. The worker reads agent episodes from the graph,
+        // induces generalized lessons, and enqueues them as PROPOSALS through
+        // the B9 gate (never a direct write). Promotion remains the agent's real
+        // eval gate (`promote_for_agent`), fail-closed on no eval data.
+        let lesson_induction_task = spawn_lesson_induction_worker(
+            &self.lessons_cfg,
+            self.runtime.proposals().cloned(),
+            Arc::clone(&self.graph),
+            Arc::clone(&self.tags_engine),
+            cancel.clone(),
+        );
         // K-L6 — spawn one feed task per enabled feed entry.
         // The freshness cells were built in from_config and attached to the
         // runtime before Arc-wrapping; here we pass them to the tasks so each
@@ -829,6 +864,7 @@ impl Backend {
             eval_worker_task,
             auto_mat_task,
             pattern_mining_task,
+            lesson_induction_task,
             feed_handles,
             watchlist_task,
             questions_task,
@@ -895,6 +931,12 @@ impl Backend {
         if let Some(pattern_task) = daemon.pattern_mining_task {
             pattern_task.abort();
             let _ = pattern_task.await;
+        }
+        // K-R1: The lesson-induction worker observes the same token; abort if it
+        // lingers so shutdown stays bounded.
+        if let Some(lesson_task) = daemon.lesson_induction_task {
+            lesson_task.abort();
+            let _ = lesson_task.await;
         }
         // K-L6 feed tasks observe the same cancellation token; abort any that
         // linger so shutdown stays bounded.
@@ -3813,6 +3855,161 @@ fn spawn_pattern_mining_worker(
         }
     });
     Some(handle)
+}
+
+// ---------------------------------------------------------------------------
+// K-R1: lesson-induction worker (lessons-as-proposals)
+// ---------------------------------------------------------------------------
+
+/// Spawn the cron-driven lesson-induction worker (K-R1).
+///
+/// On each due tick the worker runs one
+/// [`run_induction_pass`](tdw_knowledge::lessons::run_induction_pass): read
+/// agent episodes from the graph, induce generalized lessons, ensure the lesson
+/// subject node exists, and enqueue each lesson as a PROPOSAL through the B9
+/// gate. The worker never writes a lesson directly — promotion (the actual
+/// behavior change) remains the agent's real eval gate (`promote_for_agent`),
+/// fail-closed on no eval data.
+///
+/// Returns `None` when `cfg.enabled = false` (a loud notice is logged) or when
+/// no proposal queue is attached (induction would have nowhere to enqueue).
+fn spawn_lesson_induction_worker(
+    cfg: &tdw_config::LessonsConfig,
+    proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
+    graph: Arc<dyn tdw_core::GraphEngine>,
+    tags: Arc<dyn tdw_tags::TagEngine>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R1 lesson induction is disabled \
+             (knowledge.lessons.enabled = false). Set enabled = true in your \
+             daemon TOML to let agents propose behavioral lessons through the \
+             gate. Keyless/offline installs are unaffected."
+        );
+        return None;
+    }
+    // No queue attached — lessons would have nowhere to enqueue; skip the task.
+    let proposals = proposals?;
+
+    let min_confidence = cfg.min_confidence;
+    let max_scan = cfg.max_episode_scan;
+
+    let schedule = CronSchedule::parse(&cfg.cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 4 * * *").expect("fallback parse"));
+
+    // Sentinel envelope (same pattern as the other workers — never dispatched).
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-lessons-worker").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "lessons-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: "tdw-lesson-induction".to_string(),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-lessons".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let task = tokio::spawn(async move {
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            // Cron slot fired — run one induction pass. Lessons enqueue as
+            // PROPOSALS; the eval gate (promote_for_agent) decides promotion.
+            //
+            // The read-and-induce phase (episode scan + induction + idempotent
+            // subject upsert) does NOT hold the proposal-queue lock: those are
+            // graph round-trips, and holding the lock across them would block the
+            // MCP write surface and the K-L4 sweep for the whole pass (Gemini
+            // HIGH). The lock is acquired ONLY for `submit_lessons`.
+            let now_ts = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let episodes = match tdw_knowledge::lessons::read_episodes_from_graph(&graph, max_scan)
+                .await
+            {
+                Ok(episodes) => episodes,
+                Err(error) => {
+                    eprintln!("[tdw] K-R1 lesson induction error (will retry next slot): {error}");
+                    continue;
+                }
+            };
+            let lessons = tdw_knowledge::lessons::induce_lessons(&episodes, min_confidence);
+            if lessons.is_empty() {
+                continue;
+            }
+            if let Err(error) = tdw_knowledge::lessons::ensure_lesson_subject(&graph).await {
+                eprintln!("[tdw] K-R1 lesson induction error (will retry next slot): {error}");
+                continue;
+            }
+            let report = {
+                let mut queue = proposals.lock().await;
+                tdw_knowledge::lessons::submit_lessons(
+                    &mut queue,
+                    &lessons,
+                    // The worker proposes at Learning — the minimum admission
+                    // adaptivity. This grants the right to PROPOSE only; the
+                    // agent's real eval gate still governs whether any lesson is
+                    // installed.
+                    tdw_taxonomy::Adaptivity::Learning,
+                    &graph,
+                    &tags,
+                    &now_ts,
+                )
+                .await
+            };
+            if report.lessons_enqueued > 0 || report.lessons_rejected > 0 {
+                eprintln!(
+                    "[tdw] K-R1 lesson induction: episodes_read={} \
+                     induced={} enqueued={} rejected_by_gate={}",
+                    episodes.len(),
+                    report.lessons_induced,
+                    report.lessons_enqueued,
+                    report.lessons_rejected,
+                );
+            }
+        }
+    });
+    Some(task)
 }
 
 #[cfg(test)]

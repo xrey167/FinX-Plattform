@@ -486,6 +486,80 @@ impl Default for PatternConfig {
     }
 }
 
+/// Lessons-as-proposals configuration (knowledge-system-2 K-R1).
+///
+/// Controls the cron-driven lesson-induction worker: it reads agent episodes
+/// from the graph, induces generalized behavioral lessons, and enqueues them as
+/// PROPOSALS through the B9 gate. Induced lessons NEVER write directly — they
+/// promote only through the agent's eval gate (`promote_for_agent`), fail-closed
+/// on no eval data.
+///
+/// # Important: enabled defaults to `false`
+///
+/// Lesson induction changes agent behavior (once a lesson promotes), so it is
+/// opt-in. The operator must set `enabled = true` in `[knowledge.lessons]`.
+/// When disabled, a loud status note is emitted at each tick — keyless/offline
+/// installs run the daemon unchanged.
+///
+/// # Example TOML
+///
+/// ```toml
+/// [knowledge.lessons]
+/// enabled = true
+/// cadence = "0 4 * * *"     # nightly at 04:00
+/// min_confidence = 0.7
+/// max_episode_scan = 20000
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LessonsConfig {
+    /// Whether the cron-driven lesson-induction pass is enabled.
+    ///
+    /// **Default: `false`.** Must be explicitly set to `true` by the operator.
+    #[serde(default)]
+    pub enabled: bool,
+    /// 5-field cron expression for the induction cadence.
+    ///
+    /// Default: `"0 4 * * *"` (daily at 04:00 UTC).
+    #[serde(default = "LessonsConfig::default_cadence")]
+    pub cadence: String,
+    /// Minimum observed success rate for an induced lesson to be PROPOSED.
+    ///
+    /// This is the induction floor only; promotion is still governed by the
+    /// agent's real eval gate. Default: `0.7`.
+    #[serde(default = "LessonsConfig::default_min_confidence")]
+    pub min_confidence: f64,
+    /// Maximum episode edges scanned per induction pass (bounds the work).
+    ///
+    /// Default: `20 000`.
+    #[serde(default = "LessonsConfig::default_max_episode_scan")]
+    pub max_episode_scan: usize,
+}
+
+impl LessonsConfig {
+    fn default_cadence() -> String {
+        "0 4 * * *".to_string()
+    }
+
+    const fn default_min_confidence() -> f64 {
+        0.7
+    }
+
+    const fn default_max_episode_scan() -> usize {
+        20_000
+    }
+}
+
+impl Default for LessonsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cadence: Self::default_cadence(),
+            min_confidence: Self::default_min_confidence(),
+            max_episode_scan: Self::default_max_episode_scan(),
+        }
+    }
+}
+
 /// Source kind for a scheduled knowledge feed (knowledge-system K-L6).
 ///
 /// The enum is `#[non_exhaustive]` so future source kinds (e.g. `Http`,
@@ -790,6 +864,17 @@ pub struct KnowledgeConfig {
     /// intentionally visible, never silent.
     #[serde(default)]
     pub patterns: PatternConfig,
+    /// Lessons-as-proposals configuration (knowledge-system-2 K-R1).
+    ///
+    /// Controls the cron-driven lesson-induction worker. Induced lessons are
+    /// enqueued as PROPOSALS through the B9 gate and promote only via the
+    /// agent's real eval gate (fail-closed on no eval data).
+    ///
+    /// **Default: `enabled = false`.** Lesson induction changes agent behavior
+    /// once a lesson promotes, so it is opt-in; a loud status note is emitted at
+    /// each tick when disabled.
+    #[serde(default)]
+    pub lessons: LessonsConfig,
     /// Scheduled document-feed pipelines (knowledge-system K-L6).
     ///
     /// Each `[[knowledge.feeds]]` entry registers one cron-driven ingest loop
@@ -1359,6 +1444,8 @@ fn validate_knowledge(knowledge: &KnowledgeConfig) -> Result<()> {
     validate_principal_id(&knowledge.agent.id, "knowledge.agent.id")?;
     // Proposals sweep config (K-L4).
     validate_proposals(&knowledge.proposals)?;
+    // Lessons-as-proposals config (K-R1).
+    validate_lessons(&knowledge.lessons)?;
     // Contradiction config (K-M4): every extra functional rel must be a valid graph id.
     validate_contradiction(&knowledge.contradiction)?;
     // Feed entries (K-L6): validate id grammar, cadence, and max_items.
@@ -1452,6 +1539,50 @@ fn validate_proposals(proposals: &ProposalsConfig) -> Result<()> {
     if proposals.sweep_cap == 0 {
         return Err(ConfigError::Validation(
             "knowledge.proposals.sweep_cap must be at least 1".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate `[knowledge.lessons]` (K-R1).
+fn validate_lessons(lessons: &LessonsConfig) -> Result<()> {
+    // cadence must be a valid 5-field cron expression (same structural check as
+    // proposals/evals — full semantic parse avoided to keep tdw-config free of
+    // tdw-cron).
+    let fields: Vec<&str> = lessons.cadence.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.lessons.cadence must be a 5-field cron expression \
+             (e.g. \"0 4 * * *\"), got {:?}",
+            lessons.cadence
+        )));
+    }
+    let legal: fn(char) -> bool = |c| {
+        c.is_ascii_digit()
+            || matches!(c, '*' | '/' | ',' | '-' | '?' | 'L' | 'W' | 'C' | '#' | 'A'..='Z' | 'a'..='z')
+    };
+    for field in &fields {
+        if field.chars().any(|c| !legal(c)) {
+            return Err(ConfigError::Validation(format!(
+                "knowledge.lessons.cadence contains an invalid cron field {:?} in expression {:?}",
+                field, lessons.cadence
+            )));
+        }
+    }
+    // min_confidence must be a probability in [0, 1].
+    if !lessons.min_confidence.is_finite()
+        || lessons.min_confidence < 0.0
+        || lessons.min_confidence > 1.0
+    {
+        return Err(ConfigError::Validation(format!(
+            "knowledge.lessons.min_confidence must be in [0.0, 1.0], got {}",
+            lessons.min_confidence
+        )));
+    }
+    // max_episode_scan must be at least 1 — a scan of 0 reads nothing, silently.
+    if lessons.max_episode_scan == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.lessons.max_episode_scan must be at least 1".to_string(),
         ));
     }
     Ok(())

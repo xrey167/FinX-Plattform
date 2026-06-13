@@ -35,7 +35,7 @@ use tdw_storage_meilisearch::InMemoryLexicalEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_taxonomy::EntityKind;
 
-const NOW: &str = "2026-06-12";
+const NOW: &str = "2099-12-31";
 const LEXICAL_INDEX: &str = "knowledge";
 const USER_ID: &str = "user:analyst-1";
 
