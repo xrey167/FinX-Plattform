@@ -834,59 +834,7 @@ impl McpServer {
 
         let progress_token = progress_token(params);
 
-        if let Some(messages) = self.dispatch_knowledge_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_write_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_feedback_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_explain_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_digest_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_ingest_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_finding_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_distill_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_pattern_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_watchlist_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_question_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_answer_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_episodic_tool(id, name, &arguments) {
-            return messages;
-        }
-
-        if let Some(messages) = self.dispatch_knowledge_export_tool(id, name, &arguments) {
+        if let Some(messages) = self.dispatch_knowledge_tools(id, name, &arguments) {
             return messages;
         }
 
@@ -937,6 +885,35 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// Try every knowledge-tool dispatcher in order, returning the first match.
+    ///
+    /// Each `dispatch_knowledge_*_tool` owns a disjoint slice of the `tdw.kg.*` surface
+    /// and returns `Some(messages)` only when it recognizes `name`. Collecting them here
+    /// keeps [`Self::call_tool`] flat (one knowledge-dispatch call instead of one block
+    /// per family). Returns `None` when no knowledge dispatcher claims `name`, so the
+    /// caller falls through to the registry and built-in dispatch paths.
+    fn dispatch_knowledge_tools(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        self.dispatch_knowledge_tool(id, name, arguments)
+            .or_else(|| self.dispatch_knowledge_write_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_feedback_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_explain_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_digest_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_ingest_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_finding_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_distill_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_pattern_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_watchlist_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_question_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_answer_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_episodic_tool(id, name, arguments))
+            .or_else(|| self.dispatch_knowledge_export_tool(id, name, arguments))
     }
 
     /// Dispatch a knowledge read tool (`tdw.kg.*` / `tdw.tags.query`, knowledge-system B8).
