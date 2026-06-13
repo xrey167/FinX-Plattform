@@ -112,6 +112,150 @@ class FixedincomeCorporateCommercialPaperNamespace:
             params["chart"] = "true"
         return self._client.fetch("fixedincome/corporate/commercial_paper/90d", params)
 
+class FixedincomeCorporateHqmNamespace:
+    """Accessor for the ``fixedincome/corporate/hqm`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def t_2y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """2-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.
+
+        Route: ``fixedincome/corporate/hqm/2y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/corporate/hqm/2y", params)
+
+    def t_30y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """30-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.
+
+        Route: ``fixedincome/corporate/hqm/30y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/corporate/hqm/30y", params)
+
+    def t_5y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """5-Year HQM corporate bond yield-curve spot rate, FRED-backed rate observation.
+
+        Route: ``fixedincome/corporate/hqm/5y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/corporate/hqm/5y", params)
+
 class FixedincomeCorporateSpotRatesNamespace:
     """Accessor for the ``fixedincome/corporate/spot_rates`` route namespace."""
 
@@ -170,9 +314,154 @@ class FixedincomeCorporateNamespace:
     def __init__(self, client: Client) -> None:
         self._client = client
         self.commercial_paper = FixedincomeCorporateCommercialPaperNamespace(client)
+        self.hqm = FixedincomeCorporateHqmNamespace(client)
         self.spot_rates = FixedincomeCorporateSpotRatesNamespace(client)
 
     # (no terminal routes at this namespace level)
+
+class FixedincomeGovernmentSvenssonYieldCurveNamespace:
+    """Accessor for the ``fixedincome/government/svensson_yield_curve`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def t_10y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """10-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.
+
+        Route: ``fixedincome/government/svensson_yield_curve/10y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/government/svensson_yield_curve/10y", params)
+
+    def t_2y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """2-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.
+
+        Route: ``fixedincome/government/svensson_yield_curve/2y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/government/svensson_yield_curve/2y", params)
+
+    def t_5y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """5-Year Svensson (GSW) fitted zero-coupon yield, FRED-backed rate observation.
+
+        Route: ``fixedincome/government/svensson_yield_curve/5y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/government/svensson_yield_curve/5y", params)
 
 class FixedincomeGovernmentTipsYieldsNamespace:
     """Accessor for the ``fixedincome/government/tips_yields`` route namespace."""
@@ -421,6 +710,7 @@ class FixedincomeGovernmentNamespace:
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        self.svensson_yield_curve = FixedincomeGovernmentSvenssonYieldCurveNamespace(client)
         self.tips_yields = FixedincomeGovernmentTipsYieldsNamespace(client)
         self.treasury_rates = FixedincomeGovernmentTreasuryRatesNamespace(client)
 
@@ -656,11 +946,110 @@ class FixedincomeMortgageIndicesNamespace:
             params["chart"] = "true"
         return self._client.fetch("fixedincome/mortgage_indices/30y_fixed", params)
 
+class FixedincomeRateEffrForecastNamespace:
+    """Accessor for the ``fixedincome/rate/effr_forecast`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def long_run(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """FOMC longer-run median fed-funds-rate projection, FRED-backed rate observation.
+
+        Route: ``fixedincome/rate/effr_forecast/long_run``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/rate/effr_forecast/long_run", params)
+
 class FixedincomeRateNamespace:
     """Accessor for the ``fixedincome/rate`` route namespace."""
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        self.effr_forecast = FixedincomeRateEffrForecastNamespace(client)
+
+    def ameribor(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Overnight Unsecured AMERIBOR benchmark rate, FRED-backed rate observation.
+
+        Route: ``fixedincome/rate/ameribor``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/rate/ameribor", params)
 
     def dpcredit(
         self,
@@ -799,6 +1188,52 @@ class FixedincomeRateNamespace:
         if chart:
             params["chart"] = "true"
         return self._client.fetch("fixedincome/rate/effr", params)
+
+    def effr_forecast_route(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """FOMC median fed-funds-rate projection, FRED-backed rate observation.
+
+        Route: ``fixedincome/rate/effr_forecast``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/rate/effr_forecast", params)
 
     def estr(
         self,
@@ -1128,6 +1563,104 @@ class FixedincomeSpreadsTcmNamespace:
             params["chart"] = "true"
         return self._client.fetch("fixedincome/spreads/tcm/10y3m", params)
 
+class FixedincomeSpreadsTcmEffrNamespace:
+    """Accessor for the ``fixedincome/spreads/tcm_effr`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def t_10y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """10-Year Treasury constant-maturity minus Federal Funds Rate spread, FRED-backed.
+
+        Route: ``fixedincome/spreads/tcm_effr/10y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/spreads/tcm_effr/10y", params)
+
+    def t_1y(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """1-Year Treasury constant-maturity minus Federal Funds Rate spread, FRED-backed.
+
+        Route: ``fixedincome/spreads/tcm_effr/1y``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("fixedincome/spreads/tcm_effr/1y", params)
+
 class FixedincomeSpreadsTreasuryEffrNamespace:
     """Accessor for the ``fixedincome/spreads/treasury_effr`` route namespace."""
 
@@ -1186,6 +1719,7 @@ class FixedincomeSpreadsNamespace:
     def __init__(self, client: Client) -> None:
         self._client = client
         self.tcm = FixedincomeSpreadsTcmNamespace(client)
+        self.tcm_effr = FixedincomeSpreadsTcmEffrNamespace(client)
         self.treasury_effr = FixedincomeSpreadsTreasuryEffrNamespace(client)
 
     # (no terminal routes at this namespace level)
