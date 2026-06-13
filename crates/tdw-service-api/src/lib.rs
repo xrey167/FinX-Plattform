@@ -28,6 +28,8 @@ mod event_sink;
 pub mod fetch_policy;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
+#[cfg(feature = "workspace-route")]
+mod knowledge_graph;
 mod policy;
 mod portfolio_compute;
 mod provider_resolve;
@@ -45,6 +47,10 @@ pub use app_state::{AppState, OidcPolicyError};
 #[cfg(feature = "rest-api-route")]
 pub use dispatcher::{RestFetchError, rest_fetch_data};
 pub use dispatcher::{dispatch_op, ingest_dispatch_pairs};
+#[cfg(feature = "workspace-route")]
+pub use knowledge_graph::{
+    KnowledgeGraphAdapter, MAX_GRAPH_DEPTH, MAX_GRAPH_EDGES, MAX_GRAPH_NODES,
+};
 pub use policy::{
     IngressAuthContext, PolicyEnforcementConfig, PolicyEnforcementEvidence, SecureServiceRuntime,
     ServiceEndpoint, enforce_request_path_with_backend, mask_json_response,

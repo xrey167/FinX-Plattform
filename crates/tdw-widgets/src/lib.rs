@@ -33,6 +33,7 @@
 pub mod catalog;
 pub mod config;
 pub mod derive;
+pub mod graph;
 
 pub use catalog::{apps_json, catalog_widgets, default_app, widgets_json};
 pub use config::{
@@ -40,3 +41,6 @@ pub use config::{
     ParamDef, ParamOption, TableConfig, WidgetConfig, WidgetData,
 };
 pub use derive::{DATA_KEY, derive_widget};
+pub use graph::{
+    GRAPH_DATA_KEY, GRAPH_DEFAULT_DEPTH, GRAPH_WIDGET_ENDPOINT, GRAPH_WIDGET_ID, graph_widget,
+};

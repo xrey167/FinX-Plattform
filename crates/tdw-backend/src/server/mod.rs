@@ -420,6 +420,7 @@ fn workspace_bind_refused(bind: &str, has_api_key: bool) -> bool {
 #[cfg(feature = "workspace-route")]
 async fn spawn_daemon_workspace(
     state: &AppState,
+    knowledge: Option<Arc<KnowledgeRuntime>>,
     cancel: CancellationToken,
 ) -> Option<tokio::task::JoinHandle<std::io::Result<()>>> {
     let bind = std::env::var("TDW_WORKSPACE_BIND")
@@ -443,8 +444,15 @@ async fn spawn_daemon_workspace(
         "tdw-backend: workspace listener on http://{bind} (/widgets.json /apps.json /widget-data/<route>)"
     );
     let handler = tdw_service_api::RestApiState::new(state.clone()).into_handler();
+    // K-M6: wire the read-only knowledge graph-visualization handler when a
+    // co-resident KnowledgeRuntime is available so
+    // GET /widget-data/knowledge/graph serves the live ego-graph. Absent → the
+    // route falls through and 400s (the standalone daemon has no graph).
+    let graph = knowledge
+        .map(|runtime| tdw_service_api::KnowledgeGraphAdapter::new(runtime).into_handler());
     Some(tokio::spawn(async move {
-        tdw_app_server::serve_workspace_http(listener, handler, config, cancel).await
+        tdw_app_server::serve_workspace_http_with_graph(listener, handler, graph, config, cancel)
+            .await
     }))
 }
 
@@ -629,8 +637,10 @@ pub async fn run_daemon(config: &TdwConfig) -> Result<(), ServerError> {
     // /widget-data/<route>), env-gated on TDW_WORKSPACE_BIND and off by default.
     // Fail-closed on a non-loopback bind without TDW_WORKSPACE_API_KEY. Shares
     // the cancellation token so a graceful drain stops accepting requests too.
+    // Standalone daemon (run_daemon) has no co-resident Backend, so the K-M6
+    // knowledge graph widget data route is unavailable (None → falls through).
     #[cfg(feature = "workspace-route")]
-    let workspace_task = spawn_daemon_workspace(&state, cancel.clone()).await;
+    let workspace_task = spawn_daemon_workspace(&state, None, cancel.clone()).await;
 
     // Optional OpenBB Workspace agent-protocol bridge (GET /agents.json,
     // POST /v1/query SSE), env-gated on TDW_AGENT_BIND and off by default.
@@ -843,6 +853,15 @@ async fn run_both(cfg: BackendConfig) -> BackendResult<()> {
     let _rest_task = {
         let cancel = tdw_app_server::CancellationToken::new();
         spawn_daemon_rest(backend.app_state(), knowledge.clone(), cancel).await
+    };
+
+    // Optional OpenBB Workspace bridge surface, env-gated on TDW_WORKSPACE_BIND.
+    // In Both mode the co-resident knowledge runtime is wired so the K-M6
+    // GET /widget-data/knowledge/graph route serves the live ego-graph.
+    #[cfg(feature = "workspace-route")]
+    let _workspace_task = {
+        let cancel = tdw_app_server::CancellationToken::new();
+        spawn_daemon_workspace(backend.app_state(), knowledge.clone(), cancel).await
     };
 
     let transport = cfg.mcp_transport.clone();

@@ -19,6 +19,8 @@
 //! 5. [`reasoning_citations`] — reasoning steps + a citation to a widget.
 //! 6. [`widget_data`] — the stateless two-request `get_widget_data` round trip.
 //! 7. [`charts_tables`] — table + chart SSE artifacts from widget data.
+//! 8. [`graph`] — the read-only knowledge graph-visualization widget (K-M6):
+//!    a bounded ego-graph served from a seeded in-memory `KnowledgeRuntime`.
 //!
 //! The pure helpers (document builders, the in-process copilot driver) return
 //! plain `serde_json` values so a test can assert golden outputs without going
@@ -30,6 +32,7 @@ pub mod app;
 pub mod charts_tables;
 pub mod client;
 pub mod derived;
+pub mod graph;
 pub mod minimal;
 pub mod reasoning_citations;
 pub mod server;

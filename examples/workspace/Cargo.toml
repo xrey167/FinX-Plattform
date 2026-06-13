@@ -44,6 +44,15 @@ tdw-eval-runner = { path = "../../crates/tdw-eval-runner" }
 # Plotly figure-spec builders reused by the charts example.
 tdw-charting = { workspace = true }
 tdw-domain = { workspace = true }
+# K-M6: the read-only knowledge graph-visualization example seeds an in-memory
+# graph-backed KnowledgeRuntime and serves a bounded ego-graph through the same
+# KnowledgeGraphAdapter the live daemon uses.
+tdw-core = { workspace = true }
+tdw-knowledge = { workspace = true }
+tdw-taxonomy = { workspace = true }
+tdw-storage-graph = { path = "../../crates/tdw-storage-graph" }
+tdw-storage-qdrant = { path = "../../crates/tdw-storage-qdrant" }
+tdw-embed-local = { path = "../../crates/tdw-embed-local" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "io-util", "net"] }

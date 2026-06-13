@@ -375,6 +375,11 @@ tracing = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 tdw-provider-testkit = { path = "../tdw-provider-testkit" }
+# K-M6: seed an in-memory graph-backed KnowledgeRuntime to exercise the
+# read-only graph-visualization handler and its honest-empty path.
+# (tdw-storage-qdrant + tdw-embed-local are already normal dependencies.)
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-taxonomy = { path = "../tdw-taxonomy" }
 
 [[example]]
 name = "tdw_service_api_basic"

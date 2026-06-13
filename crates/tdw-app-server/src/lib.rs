@@ -44,7 +44,9 @@ pub use rest_route::{KnowledgeStatusHandler, RestApiHandler, RestError, serve_re
 #[cfg(all(feature = "workspace-route", not(loom)))]
 pub mod workspace_route;
 #[cfg(all(feature = "workspace-route", not(loom)))]
-pub use workspace_route::{WorkspaceConfig, serve_workspace_http};
+pub use workspace_route::{
+    KnowledgeGraphHandler, WorkspaceConfig, serve_workspace_http, serve_workspace_http_with_graph,
+};
 
 #[cfg(all(feature = "agent-route", not(loom)))]
 pub mod agent_route;
