@@ -697,6 +697,190 @@ pub struct FuturesCurvePoint {
     pub expiration: Option<String>,
 }
 
+/// A company key executive / management-team member.
+///
+/// Standardizes `equity/fundamental/management` (FMP `key-executives`). One row =
+/// one named executive. `name` and `symbol` are the identity anchors; the
+/// descriptive and numeric attributes are [`Option`] because the source reports a
+/// variable subset per officer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct KeyExecutive {
+    /// Ticker symbol the executive is associated with.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Executive name.
+    #[validate(length(min = 1))]
+    pub name: String,
+    /// Title / role, e.g. `"Chief Executive Officer"`.
+    pub title: Option<String>,
+    /// Reported total pay for the most-recent year, in the issuer's currency.
+    pub pay: Option<f64>,
+    /// Reporting currency (ISO 4217) for `pay` where reported.
+    pub currency: Option<String>,
+    /// Gender as reported by the source.
+    pub gender: Option<String>,
+    /// Year of birth where reported.
+    pub year_born: Option<i32>,
+    /// Title-since year where reported.
+    pub title_since: Option<i32>,
+}
+
+/// An executive-compensation record for a single officer and fiscal year.
+///
+/// Standardizes `equity/fundamental/management_compensation` (FMP
+/// `governance/executive_compensation`). One row = one (officer, fiscal year)
+/// compensation disclosure. The pay components are [`Option`] because filers
+/// disclose a different subset per officer/year.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ExecutiveCompensation {
+    /// Ticker symbol the compensation record belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Officer name.
+    #[validate(length(min = 1))]
+    pub name_and_position: String,
+    /// Fiscal year the compensation covers.
+    pub fiscal_year: Option<i32>,
+    /// Filing / acceptance date where reported.
+    pub filing_date: Option<String>,
+    /// Base salary.
+    pub salary: Option<f64>,
+    /// Cash bonus.
+    pub bonus: Option<f64>,
+    /// Value of stock awards.
+    pub stock_award: Option<f64>,
+    /// Value of option awards.
+    pub option_award: Option<f64>,
+    /// Non-equity incentive-plan compensation.
+    pub incentive_plan_compensation: Option<f64>,
+    /// All other compensation.
+    pub all_other_compensation: Option<f64>,
+    /// Total compensation across all components.
+    pub total: Option<f64>,
+    /// Reporting currency (ISO 4217) where reported.
+    pub currency: Option<String>,
+}
+
+/// One revenue segment (business product line or geographic region) for a period.
+///
+/// Standardizes `equity/fundamental/revenue_per_segment` and
+/// `equity/fundamental/revenue_per_geography` (FMP `revenue-product-segmentation`
+/// / `revenue-geographic-segmentation`). One row = one (period, segment)
+/// breakdown. `kind` discriminates product vs geographic; `revenue` is [`Option`]
+/// because some periods report a segment with no value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct RevenueSegment {
+    /// Ticker symbol the segment belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Segment variant: `"product"` or `"geography"`.
+    #[validate(length(min = 1))]
+    pub kind: String,
+    /// Period end date the breakdown covers (`YYYY-MM-DD`).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Segment / region name, e.g. `"iPhone"`, `"Americas"`.
+    #[validate(length(min = 1))]
+    pub segment: String,
+    /// Revenue attributed to the segment for the period.
+    pub revenue: Option<f64>,
+}
+
+/// An earnings-call transcript for a single fiscal quarter.
+///
+/// Standardizes `equity/fundamental/transcript` (FMP `earning_call_transcript`).
+/// One row = one (symbol, year, quarter) call transcript. `content` carries the
+/// full transcript text; `date` and the period fields are [`Option`] because the
+/// source occasionally omits them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EarningsTranscript {
+    /// Ticker symbol the transcript belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Fiscal year of the call.
+    pub year: Option<i32>,
+    /// Fiscal quarter of the call (1-4).
+    pub quarter: Option<i32>,
+    /// Call date / timestamp where reported.
+    pub date: Option<String>,
+    /// Full transcript text.
+    #[validate(length(min = 1))]
+    pub content: String,
+}
+
+/// An environmental-social-governance (ESG) score observation.
+///
+/// Standardizes `equity/fundamental/esg_score` (FMP
+/// `esg-environmental-social-governance-data`). One row = one (symbol, date) ESG
+/// disclosure. The component and overall scores are [`Option`] because coverage
+/// varies by issuer and period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EsgScore {
+    /// Ticker symbol the score belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Observation / acceptance date (`YYYY-MM-DD`).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Company name where reported.
+    pub company_name: Option<String>,
+    /// Environmental pillar score.
+    pub environmental_score: Option<f64>,
+    /// Social pillar score.
+    pub social_score: Option<f64>,
+    /// Governance pillar score.
+    pub governance_score: Option<f64>,
+    /// Overall ESG score.
+    pub esg_score: Option<f64>,
+}
+
+/// A historical employee-headcount observation.
+///
+/// Standardizes `equity/fundamental/employee_count` (FMP
+/// `historical/employee_count`). One row = one (symbol, period) headcount filing.
+/// `employee_count` is [`Option`] because a filing may report only the filing
+/// metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct EmployeeCount {
+    /// Ticker symbol the headcount belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Period-of-report date (`YYYY-MM-DD`).
+    #[validate(length(min = 1))]
+    pub period_of_report: String,
+    /// Filing date where reported.
+    pub filing_date: Option<String>,
+    /// Reported full-time employee count.
+    pub employee_count: Option<i64>,
+    /// Source filing URL where reported.
+    pub source: Option<String>,
+}
+
+/// A single company SEC-filing index entry.
+///
+/// Standardizes `equity/fundamental/filings` (FMP `sec_filings`). One row = one
+/// filing in the company's index. `accepted_date`/`filing_date`/`link` are
+/// [`Option`] because the index reports a variable subset per filing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CompanyFiling {
+    /// Ticker symbol the filing belongs to.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// SEC form type, e.g. `"10-K"`, `"8-K"`.
+    #[validate(length(min = 1))]
+    pub form_type: String,
+    /// Filing date (`YYYY-MM-DD`).
+    pub filing_date: Option<String>,
+    /// Acceptance date/time where reported.
+    pub accepted_date: Option<String>,
+    /// Central Index Key (CIK) where reported.
+    pub cik: Option<String>,
+    /// Direct link to the filing document/index.
+    pub link: Option<String>,
+    /// Final filing-document link where reported.
+    pub final_link: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,5 +1309,152 @@ mod tests {
     fn statement_kind_serializes_snake_case() {
         let json = serde_json::to_string(&StatementKind::Cash).expect("serialize kind");
         assert_eq!(json, "\"cash\"");
+    }
+
+    #[test]
+    fn key_executive_round_trips_and_validates() {
+        let exec = KeyExecutive {
+            symbol: "AAPL".to_string(),
+            name: "Tim Cook".to_string(),
+            title: Some("Chief Executive Officer".to_string()),
+            pay: Some(16_000_000.0),
+            currency: Some("USD".to_string()),
+            gender: Some("male".to_string()),
+            year_born: Some(1960),
+            title_since: Some(2011),
+        };
+        assert!(exec.validate().is_ok());
+        round_trip(&exec);
+
+        let bad = KeyExecutive {
+            name: String::new(),
+            ..exec
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn executive_compensation_round_trips_and_validates() {
+        let comp = ExecutiveCompensation {
+            symbol: "AAPL".to_string(),
+            name_and_position: "Tim Cook CEO".to_string(),
+            fiscal_year: Some(2024),
+            filing_date: Some("2025-01-05".to_string()),
+            salary: Some(3_000_000.0),
+            bonus: Some(0.0),
+            stock_award: Some(50_000_000.0),
+            option_award: Some(0.0),
+            incentive_plan_compensation: Some(12_000_000.0),
+            all_other_compensation: Some(1_500_000.0),
+            total: Some(66_500_000.0),
+            currency: Some("USD".to_string()),
+        };
+        assert!(comp.validate().is_ok());
+        round_trip(&comp);
+
+        let bad = ExecutiveCompensation {
+            name_and_position: String::new(),
+            ..comp
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn revenue_segment_round_trips_and_validates() {
+        let seg = RevenueSegment {
+            symbol: "AAPL".to_string(),
+            kind: "product".to_string(),
+            date: "2024-09-28".to_string(),
+            segment: "iPhone".to_string(),
+            revenue: Some(201_183_000_000.0),
+        };
+        assert!(seg.validate().is_ok());
+        round_trip(&seg);
+
+        let bad = RevenueSegment {
+            segment: String::new(),
+            ..seg
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn earnings_transcript_round_trips_and_validates() {
+        let transcript = EarningsTranscript {
+            symbol: "AAPL".to_string(),
+            year: Some(2024),
+            quarter: Some(4),
+            date: Some("2024-10-31 17:00:00".to_string()),
+            content: "Operator: Good afternoon...".to_string(),
+        };
+        assert!(transcript.validate().is_ok());
+        round_trip(&transcript);
+
+        let bad = EarningsTranscript {
+            content: String::new(),
+            ..transcript
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn esg_score_round_trips_and_validates() {
+        let score = EsgScore {
+            symbol: "AAPL".to_string(),
+            date: "2024-09-28".to_string(),
+            company_name: Some("Apple Inc.".to_string()),
+            environmental_score: Some(72.5),
+            social_score: Some(55.0),
+            governance_score: Some(61.0),
+            esg_score: Some(62.8),
+        };
+        assert!(score.validate().is_ok());
+        round_trip(&score);
+
+        let bad = EsgScore {
+            date: String::new(),
+            ..score
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn employee_count_round_trips_and_validates() {
+        let count = EmployeeCount {
+            symbol: "AAPL".to_string(),
+            period_of_report: "2024-09-28".to_string(),
+            filing_date: Some("2024-11-01".to_string()),
+            employee_count: Some(164_000),
+            source: Some("https://www.sec.gov/...".to_string()),
+        };
+        assert!(count.validate().is_ok());
+        round_trip(&count);
+
+        let bad = EmployeeCount {
+            period_of_report: String::new(),
+            ..count
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn company_filing_round_trips_and_validates() {
+        let filing = CompanyFiling {
+            symbol: "AAPL".to_string(),
+            form_type: "10-K".to_string(),
+            filing_date: Some("2024-11-01".to_string()),
+            accepted_date: Some("2024-11-01 18:00:00".to_string()),
+            cik: Some("0000320193".to_string()),
+            link: Some("https://www.sec.gov/...".to_string()),
+            final_link: Some("https://www.sec.gov/....htm".to_string()),
+        };
+        assert!(filing.validate().is_ok());
+        round_trip(&filing);
+
+        let bad = CompanyFiling {
+            form_type: String::new(),
+            ..filing
+        };
+        assert!(bad.validate().is_err());
     }
 }

@@ -1296,6 +1296,66 @@ fn fmp_statement_fetch_binding(statement: &'static str) -> FetchBinding {
     }
 }
 
+/// Build a [`FetchBinding`] for the FMP financial-statement fetcher that injects
+/// a fixed `statement` discriminator AND `growth=true` into the caller's params,
+/// so the shared statement fetcher serves the `*_growth` routes while the
+/// dispatch key stays per-statement. Mirrors [`fmp_statement_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_growth_fetch_binding(statement: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert(
+                    "statement".to_string(),
+                    Value::String(statement.to_string()),
+                );
+                map.insert("growth".to_string(), Value::Bool(true));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpStatementFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for the FMP revenue-segmentation fetcher that injects
+/// a fixed `structure` discriminator (product / geography) into the caller's
+/// params, so one fetcher type serves both segmentation routes while the dispatch
+/// key stays per-kind. Mirrors [`fmp_discovery_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_revenue_segment_fetch_binding(kind: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("structure".to_string(), Value::String(kind.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpRevenueSegmentFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
 /// Register the FMP fundamentals breadth fetch bindings (G011), keyed by each
 /// route's catalog candidate endpoint. The three statement routes share one
 /// fetcher (the `statement` discriminator is injected per binding); ratios,
@@ -1331,6 +1391,68 @@ fn insert_fmp_fundamentals_fetch_bindings(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpProfileFetcher, _, _>(),
     );
+    insert_fmp_p4w1_fetch_bindings(table);
+}
+
+/// Register the FMP equity/fundamental breadth fetch bindings (openbb-parity
+/// P4W1), keyed by each route's catalog candidate endpoint. The three
+/// statement-growth routes reuse the statement fetcher (`growth=true` injected);
+/// the two revenue-segment routes reuse one fetcher (the `structure`
+/// discriminator injected); the rest are their own fetchers keyed by their
+/// `ENDPOINT` const. Historical EPS reuses the existing FMP earnings fetcher.
+/// Mirrors [`insert_fmp_p4w1_ingest_bindings`] so the fetch and ingest paths stay
+/// in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w1_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_balance_growth"),
+        fmp_statement_growth_fetch_binding("balance"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_income_growth"),
+        fmp_statement_growth_fetch_binding("income"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash_growth"),
+        fmp_statement_growth_fetch_binding("cashflow"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_product"),
+        fmp_revenue_segment_fetch_binding("product"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_geography"),
+        fmp_revenue_segment_fetch_binding("geography"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyExecutivesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpKeyExecutivesFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpExecutiveCompensationFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpExecutiveCompensationFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpTranscriptFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpTranscriptFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEsgScoreFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEsgScoreFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEmployeeCountFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEmployeeCountFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpFilingsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpFilingsFetcher, _, _>(),
+    );
+    // equity/fundamental/historical_eps reuses the existing FMP earnings fetcher,
+    // already registered by insert_fmp_completion_fetch_bindings under the same
+    // ("fmp", "historical_eps") key — no extra binding needed here.
 }
 
 /// Build a [`FetchBinding`] for the FMP market-movers discovery fetcher that
@@ -2884,6 +3006,127 @@ fn insert_fmp_fundamentals_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         binding::<crate::FmpHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
+    insert_fmp_p4w1_ingest_bindings(table);
+}
+
+/// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
+/// injects a fixed `statement` discriminator AND `growth=true` before fetching
+/// one batch and persisting it. Mirrors [`fmp_statement_growth_fetch_binding`] on
+/// the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_growth_ingest_binding(
+    statement: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert(
+                        "statement".to_string(),
+                        Value::String(statement.to_string()),
+                    );
+                    map.insert("growth".to_string(), Value::Bool(true));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpStatementFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Build an [`IngestBinding`] for the FMP revenue-segmentation fetcher that
+/// injects a fixed `structure` discriminator (product / geography) before
+/// fetching one batch and persisting it. Mirrors
+/// [`fmp_revenue_segment_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_revenue_segment_ingest_binding(kind: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("structure".to_string(), Value::String(kind.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpRevenueSegmentFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the FMP equity/fundamental breadth ingest bindings (openbb-parity
+/// P4W1), keyed by each route's catalog candidate endpoint and bound to its
+/// bronze landing table. Mirrors [`insert_fmp_p4w1_fetch_bindings`] so the fetch
+/// and ingest paths stay in lockstep. The bronze tables are provisioned by the
+/// later warehouse story; registering the binding now keeps every catalog
+/// candidate dispatchable. Historical EPS reuses the existing FMP earnings
+/// binding under the shared `("fmp", "historical_eps")` key.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w1_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_balance_growth"),
+        fmp_statement_growth_ingest_binding("balance", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_income_growth"),
+        fmp_statement_growth_ingest_binding("income", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash_growth"),
+        fmp_statement_growth_ingest_binding("cashflow", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_product"),
+        fmp_revenue_segment_ingest_binding("product", "raw.revenue_segment"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_geography"),
+        fmp_revenue_segment_ingest_binding("geography", "raw.revenue_segment"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyExecutivesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpKeyExecutivesFetcher, _, _>("raw.key_executive"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpExecutiveCompensationFetcher::ENDPOINT),
+        binding::<crate::FmpHttpExecutiveCompensationFetcher, _, _>("raw.executive_compensation"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpTranscriptFetcher::ENDPOINT),
+        binding::<crate::FmpHttpTranscriptFetcher, _, _>("raw.earnings_transcript"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEsgScoreFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEsgScoreFetcher, _, _>("raw.esg_score"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEmployeeCountFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEmployeeCountFetcher, _, _>("raw.employee_count"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpFilingsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpFilingsFetcher, _, _>("raw.company_filing"),
     );
 }
 
@@ -4979,6 +5222,67 @@ mod tests {
             assert!(
                 covered.contains(key),
                 "G011 FMP endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
+            );
+        }
+    }
+
+    /// Catalog <-> FMP equity/fundamental breadth sync (openbb-parity P4W1): every
+    /// P4W1 FMP candidate has both a fetch and an ingest binding, and each is
+    /// referenced by a catalog route. The growth routes reuse the statement
+    /// fetcher and the segment routes reuse one fetcher (the discriminator is
+    /// injected per binding), each under a distinct dispatch key.
+    #[cfg(feature = "provider-fmp")]
+    #[test]
+    fn fmp_p4w1_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        const EXPECTED: &[(&str, &str)] = &[
+            ("fmp", "financial_statement_balance_growth"),
+            ("fmp", "financial_statement_income_growth"),
+            ("fmp", "financial_statement_cash_growth"),
+            ("fmp", "historical_eps"),
+            ("fmp", "employee_count"),
+            ("fmp", "esg_score"),
+            ("fmp", "filings"),
+            ("fmp", "key_executives"),
+            ("fmp", "executive_compensation"),
+            ("fmp", "revenue_segment_product"),
+            ("fmp", "revenue_segment_geography"),
+            ("fmp", "transcript"),
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                let key = (candidate.provider, candidate.endpoint);
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no fetch binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no ingest binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "P4W1 FMP endpoint {}/{} is not referenced by any catalog route",
                 key.0,
                 key.1
             );

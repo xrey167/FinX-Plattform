@@ -3,9 +3,10 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CalendarEvent, CompanyProfile, CorporateAction, EquityHistoricalData, Estimate,
-    FinancialStatement, Instrument, KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot,
-    Ratios, ScreenerRow,
+    CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, EarningsTranscript,
+    EmployeeCount, EquityHistoricalData, EsgScore, Estimate, ExecutiveCompensation,
+    FinancialStatement, Instrument, KeyExecutive, KeyMetrics, OwnershipRecord, PricePerformance,
+    QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -62,6 +63,45 @@ const EQUITY_FUNDAMENTAL_CASH: &[ProviderCandidate] =
 const EQUITY_FUNDAMENTAL_RATIOS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "ratios")];
 const EQUITY_FUNDAMENTAL_METRICS: &[ProviderCandidate] =
     &[ProviderCandidate::new("fmp", "key_metrics")];
+
+// FMP equity/fundamental breadth (openbb-parity P4W1). The three statement-growth
+// routes reuse the shared FMP `financial_statement` fetcher with `growth=true`
+// injected per dispatch binding, so each gets a distinct dispatch endpoint key —
+// `financial_statement_<kind>_growth` — to avoid a dispatch-key collision (the
+// NASDAQ-calendar / statement pattern). The remaining routes are each their own
+// FMP fetcher keyed by its `ENDPOINT` const, except the two revenue-segmentation
+// routes which share one fetcher (the `structure` discriminator is injected per
+// binding) and so get distinct `revenue_segment_<kind>` keys. All keyed (FMP only).
+const EQUITY_FUNDAMENTAL_BALANCE_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_balance_growth",
+)];
+const EQUITY_FUNDAMENTAL_INCOME_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_income_growth",
+)];
+const EQUITY_FUNDAMENTAL_CASH_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_cash_growth",
+)];
+const EQUITY_FUNDAMENTAL_HISTORICAL_EPS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "historical_eps")];
+const EQUITY_FUNDAMENTAL_EMPLOYEE_COUNT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "employee_count")];
+const EQUITY_FUNDAMENTAL_ESG_SCORE: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "esg_score")];
+const EQUITY_FUNDAMENTAL_FILINGS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "filings")];
+const EQUITY_FUNDAMENTAL_MANAGEMENT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "key_executives")];
+const EQUITY_FUNDAMENTAL_MANAGEMENT_COMPENSATION: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "executive_compensation")];
+const EQUITY_FUNDAMENTAL_REVENUE_PER_SEGMENT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "revenue_segment_product")];
+const EQUITY_FUNDAMENTAL_REVENUE_PER_GEOGRAPHY: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "revenue_segment_geography")];
+const EQUITY_FUNDAMENTAL_TRANSCRIPT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "transcript")];
 const EQUITY_PRICE_QUOTE: &[ProviderCandidate] = &[ProviderCandidate::new("yahoo", "equity_quote")];
 const EQUITY_PRICE_PERFORMANCE: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "price_performance")];
@@ -170,6 +210,34 @@ fn instrument() -> Schema {
 
 fn screener_row() -> Schema {
     schema_for!(ScreenerRow)
+}
+
+fn key_executive() -> Schema {
+    schema_for!(KeyExecutive)
+}
+
+fn executive_compensation() -> Schema {
+    schema_for!(ExecutiveCompensation)
+}
+
+fn revenue_segment() -> Schema {
+    schema_for!(RevenueSegment)
+}
+
+fn earnings_transcript() -> Schema {
+    schema_for!(EarningsTranscript)
+}
+
+fn esg_score() -> Schema {
+    schema_for!(EsgScore)
+}
+
+fn employee_count() -> Schema {
+    schema_for!(EmployeeCount)
+}
+
+fn company_filing() -> Schema {
+    schema_for!(CompanyFiling)
 }
 
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
@@ -330,7 +398,102 @@ pub fn entries() -> Vec<CatalogEntry> {
     ];
     entries.extend(fundamental_entries());
     entries.extend(completion_entries());
+    entries.extend(p4w1_entries());
     entries
+}
+
+/// FMP equity/fundamental breadth entries (openbb-parity P4W1): statement-growth
+/// siblings, historical EPS, employee count, ESG score, SEC filings index,
+/// management team and compensation, revenue per segment/geography, and the
+/// earnings-call transcript. Split out of [`entries`] to keep each function
+/// compact; appended in declaration order. All keyed (FMP only).
+fn p4w1_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/balance_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_BALANCE_GROWTH,
+            "raw.financial_statement",
+            "Balance-sheet growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/income_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_INCOME_GROWTH,
+            "raw.financial_statement",
+            "Income-statement growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/cash_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_CASH_GROWTH,
+            "raw.financial_statement",
+            "Cash-flow growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/historical_eps",
+            estimate,
+            EQUITY_FUNDAMENTAL_HISTORICAL_EPS,
+            "raw.estimate",
+            "Historical reported vs estimated EPS per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/employee_count",
+            employee_count,
+            EQUITY_FUNDAMENTAL_EMPLOYEE_COUNT,
+            "raw.employee_count",
+            "Historical employee headcount per filing for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/esg_score",
+            esg_score,
+            EQUITY_FUNDAMENTAL_ESG_SCORE,
+            "raw.esg_score",
+            "Environmental/social/governance pillar and overall scores, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/filings",
+            company_filing,
+            EQUITY_FUNDAMENTAL_FILINGS,
+            "raw.company_filing",
+            "Company SEC-filings index (form type, dates, links), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/management",
+            key_executive,
+            EQUITY_FUNDAMENTAL_MANAGEMENT,
+            "raw.key_executive",
+            "Executive/management team (name, title, pay) for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/management_compensation",
+            executive_compensation,
+            EQUITY_FUNDAMENTAL_MANAGEMENT_COMPENSATION,
+            "raw.executive_compensation",
+            "Executive compensation per officer and fiscal year, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/revenue_per_segment",
+            revenue_segment,
+            EQUITY_FUNDAMENTAL_REVENUE_PER_SEGMENT,
+            "raw.revenue_segment",
+            "Revenue broken down by business product segment per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/revenue_per_geography",
+            revenue_segment,
+            EQUITY_FUNDAMENTAL_REVENUE_PER_GEOGRAPHY,
+            "raw.revenue_segment",
+            "Revenue broken down by geographic region per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/transcript",
+            earnings_transcript,
+            EQUITY_FUNDAMENTAL_TRANSCRIPT,
+            "raw.earnings_transcript",
+            "Earnings-call transcript for a fiscal quarter, FMP-backed.",
+        ),
+    ]
 }
 
 /// FMP fundamentals-completion entries (openbb-parity P2W2): corporate-action

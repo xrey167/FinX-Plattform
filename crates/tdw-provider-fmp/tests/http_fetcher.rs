@@ -13,14 +13,24 @@ use serde_json::json;
 use tdw_core::{Credentials, Fetcher};
 use tdw_domain::StatementKind;
 use tdw_provider_fmp::{
-    FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpAnalystEstimatesFetcher,
+    BASE_URL, FmpFundamentalsQuery, FmpHistoricalQuery, FmpHttpAnalystEstimatesFetcher,
     FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher, FmpHttpEarningsFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
+    FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher, FmpHttpExecutiveCompensationFetcher,
+    FmpHttpFilingsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher,
     FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
-    FmpHttpRatiosFetcher, FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
-    FmpStatement,
+    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher, FmpStatement,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
+
+#[test]
+fn base_url_uses_tls() {
+    assert!(
+        BASE_URL.starts_with("https://"),
+        "FMP base URL must use TLS, got {BASE_URL}"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Cassette helpers
@@ -836,6 +846,235 @@ fn fundamentals_malformed_json_produces_provider_error() {
 }
 
 // ---------------------------------------------------------------------------
+// P4W1 cassette tests — equity/fundamental breadth (no network)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cassette_parse_fmp_key_executives_response() {
+    let fetcher = FmpHttpKeyExecutivesFetcher::default();
+    let query = FmpHttpKeyExecutivesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "title": "Chief Executive Officer",
+            "name": "Mr. Timothy D. Cook",
+            "pay": 16_239_562.0,
+            "currencyPay": "USD",
+            "gender": "male",
+            "yearBorn": 1960,
+            "titleSince": 2011,
+            "symbol": "AAPL"
+        },
+        {
+            "title": "Chief Financial Officer",
+            "name": "Mr. Luca Maestri",
+            "symbol": "AAPL"
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].name, "Mr. Timothy D. Cook");
+    assert_eq!(rows[0].title.as_deref(), Some("Chief Executive Officer"));
+    assert_eq!(rows[0].currency.as_deref(), Some("USD"));
+    assert_eq!(rows[0].year_born, Some(1960));
+}
+
+#[test]
+fn cassette_parse_fmp_executive_compensation_response() {
+    let fetcher = FmpHttpExecutiveCompensationFetcher::default();
+    let query = FmpHttpExecutiveCompensationFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "nameAndPosition": "Timothy D. Cook Chief Executive Officer",
+            "year": 2023,
+            "acceptedDate": "2024-01-11",
+            "salary": 3_000_000.0,
+            "bonus": 0.0,
+            "stock_award": 46_970_283.0,
+            "option_award": 0.0,
+            "incentive_plan_compensation": 10_713_360.0,
+            "all_other_compensation": 2_466_545.0,
+            "total": 63_209_845.0
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].fiscal_year, Some(2023));
+    assert_eq!(rows[0].total, Some(63_209_845.0));
+    assert_eq!(rows[0].stock_award, Some(46_970_283.0));
+}
+
+#[test]
+fn cassette_parse_fmp_revenue_segment_response() {
+    let fetcher = FmpHttpRevenueSegmentFetcher::default();
+    let query = FmpHttpRevenueSegmentFetcher::transform_query(
+        json!({"symbol": "AAPL", "structure": "product"}),
+    )
+    .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        { "2023-09-30": { "iPhone": 200_583_000_000.0, "Mac": 29_357_000_000.0 } },
+        { "2022-09-24": { "iPhone": 205_489_000_000.0 } }
+    ]);
+    let mut rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    rows.sort_by(|a, b| {
+        (a.date.clone(), a.segment.clone()).cmp(&(b.date.clone(), b.segment.clone()))
+    });
+    assert_eq!(rows.len(), 3);
+    assert!(
+        rows.iter()
+            .all(|r| r.symbol == "AAPL" && r.kind == "product")
+    );
+    let iphone_2023 = rows
+        .iter()
+        .find(|r| r.date == "2023-09-30" && r.segment == "iPhone")
+        .expect("iPhone 2023 row present");
+    assert_eq!(iphone_2023.revenue, Some(200_583_000_000.0));
+}
+
+#[test]
+fn cassette_parse_fmp_transcript_response() {
+    let fetcher = FmpHttpTranscriptFetcher::default();
+    let query = FmpHttpTranscriptFetcher::transform_query(
+        json!({"symbol": "AAPL", "year": 2024, "quarter": 1}),
+    )
+    .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "quarter": 1,
+            "year": 2024,
+            "date": "2024-02-01 17:00:00",
+            "content": "Operator: Good day, and welcome to the Apple Q1 call."
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].year, Some(2024));
+    assert_eq!(rows[0].quarter, Some(1));
+    assert!(rows[0].content.starts_with("Operator:"));
+}
+
+#[test]
+fn cassette_parse_fmp_esg_score_response() {
+    let fetcher = FmpHttpEsgScoreFetcher::default();
+    let query = FmpHttpEsgScoreFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "cik": "0000320193",
+            "date": "2023-09-30",
+            "companyName": "Apple Inc.",
+            "environmentalScore": 50.0,
+            "socialScore": 67.0,
+            "governanceScore": 63.0,
+            "ESGScore": 60.0
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].date, "2023-09-30");
+    assert_eq!(rows[0].esg_score, Some(60.0));
+    assert_eq!(rows[0].social_score, Some(67.0));
+}
+
+#[test]
+fn cassette_parse_fmp_employee_count_response() {
+    let fetcher = FmpHttpEmployeeCountFetcher::default();
+    let query = FmpHttpEmployeeCountFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "cik": "0000320193",
+            "acceptanceTime": "2023-11-02 18:08:27",
+            "periodOfReport": "2023-09-30",
+            "filingDate": "2023-11-03",
+            "employeeCount": 161_000,
+            "source": "https://www.sec.gov/..."
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].period_of_report, "2023-09-30");
+    assert_eq!(rows[0].employee_count, Some(161_000));
+}
+
+#[test]
+fn cassette_parse_fmp_filings_response() {
+    let fetcher = FmpHttpFilingsFetcher::default();
+    let query = FmpHttpFilingsFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "symbol": "AAPL",
+            "fillingDate": "2023-11-03 00:00:00",
+            "acceptedDate": "2023-11-02 18:08:27",
+            "cik": "0000320193",
+            "type": "10-K",
+            "link": "https://www.sec.gov/cgi-bin/browse-edgar?...",
+            "finalLink": "https://www.sec.gov/Archives/....htm"
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].form_type, "10-K");
+    assert_eq!(rows[0].filing_date.as_deref(), Some("2023-11-03 00:00:00"));
+    assert_eq!(rows[0].cik.as_deref(), Some("0000320193"));
+}
+
+#[test]
+fn cassette_parse_fmp_statement_growth_response() {
+    let fetcher = FmpHttpStatementFetcher::default();
+    let query = FmpHttpStatementFetcher::transform_query(
+        json!({"symbol": "AAPL", "statement": "balance", "growth": true}),
+    )
+    .unwrap_or_else(|e| panic!("query: {e}"));
+    let raw = cassette_bytes!([
+        {
+            "date": "2023-09-30",
+            "symbol": "AAPL",
+            "calendarYear": 2023,
+            "period": "FY",
+            "growthTotalAssets": 0.0123,
+            "growthTotalLiabilities": -0.0456
+        }
+    ]);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|e| panic!("transform_data: {e}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].statement, StatementKind::Balance);
+    assert_eq!(
+        rows[0].line_items.get("growth_total_assets").copied(),
+        Some(0.0123)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Live test (gated by TDW_FMP_LIVE=1 and TDW_FMP_API_KEY)
 // ---------------------------------------------------------------------------
 
@@ -1025,4 +1264,108 @@ async fn live_fmp_analyst_estimates_returns_data_when_env_var_set() {
         rows.iter().all(|r| r.kind.starts_with("forward_")),
         "every analyst-estimate row must carry a forward_* kind"
     );
+}
+
+#[tokio::test]
+async fn live_fmp_key_executives_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP key-executives integration test");
+        return;
+    }
+    let fetcher = FmpHttpKeyExecutivesFetcher::default();
+    let query = FmpHttpKeyExecutivesFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live key-executives must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_executive_compensation_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP executive-compensation integration test");
+        return;
+    }
+    let fetcher = FmpHttpExecutiveCompensationFetcher::default();
+    let query = FmpHttpExecutiveCompensationFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(
+        !rows.is_empty(),
+        "live executive-compensation must include a row"
+    );
+}
+
+#[tokio::test]
+async fn live_fmp_revenue_segment_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP revenue-segment integration test");
+        return;
+    }
+    let fetcher = FmpHttpRevenueSegmentFetcher::default();
+    let query = FmpHttpRevenueSegmentFetcher::transform_query(
+        json!({"symbol": "AAPL", "structure": "geography"}),
+    )
+    .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live revenue-segment must include a row");
+    assert!(rows.iter().all(|r| r.kind == "geography"));
+}
+
+#[tokio::test]
+async fn live_fmp_transcript_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP transcript integration test");
+        return;
+    }
+    let fetcher = FmpHttpTranscriptFetcher::default();
+    let query = FmpHttpTranscriptFetcher::transform_query(
+        json!({"symbol": "AAPL", "year": 2024, "quarter": 1}),
+    )
+    .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live transcript must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_esg_score_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP esg-score integration test");
+        return;
+    }
+    let fetcher = FmpHttpEsgScoreFetcher::default();
+    let query = FmpHttpEsgScoreFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live esg-score must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_employee_count_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP employee-count integration test");
+        return;
+    }
+    let fetcher = FmpHttpEmployeeCountFetcher::default();
+    let query = FmpHttpEmployeeCountFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live employee-count must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
+}
+
+#[tokio::test]
+async fn live_fmp_filings_returns_data_when_env_var_set() {
+    if std::env::var("TDW_FMP_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_FMP_LIVE != 1; skipping live FMP filings integration test");
+        return;
+    }
+    let fetcher = FmpHttpFilingsFetcher::default();
+    let query = FmpHttpFilingsFetcher::transform_query(json!({"symbol": "AAPL"}))
+        .unwrap_or_else(|e| panic!("transform_query must succeed: {e}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live filings must include a row");
+    assert_eq!(rows[0].symbol, "AAPL");
 }
