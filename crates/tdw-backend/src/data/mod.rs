@@ -18,6 +18,7 @@ use tdw_bus::EventBus;
 use tdw_config::ProposalsConfig as ProposalsCfg;
 use tdw_config::QuestionsConfig;
 use tdw_config::ScheduledEvalConfig as EvalsConfig;
+use tdw_config::SkillsConfig as SkillsCfg;
 use tdw_config::{ExtractionConfig, FeedsConfig, TdwConfig, WatchlistsConfig};
 use tdw_core::{
     BlobEngine, DataModel, Fetcher, GraphEngine, LexicalEngine, OBBject, OlapEngine,
@@ -104,6 +105,10 @@ struct DaemonHandle {
     /// The K-X8 open-question matching-engine cron task.
     /// `None` when `knowledge.questions.enabled = false`.
     questions_task: Option<tokio::task::JoinHandle<()>>,
+    /// The K-R2 gated skill-lifecycle tournament worker task.
+    /// `None` when `knowledge.skills.enabled = false` (default) or no proposal
+    /// queue is attached.
+    skill_tournament_task: Option<tokio::task::JoinHandle<()>>,
     /// The spawned transport (TCP/UDS/HTTP) server task.
     transport_task: tokio::task::JoinHandle<std::io::Result<()>>,
     /// The address the transport actually bound (post-OS-assignment), e.g. the
@@ -276,6 +281,16 @@ pub struct Backend {
     /// REAL extraction state rather than a stale default. Always present after
     /// construction.
     extraction_freshness: Arc<std::sync::Mutex<ExtractionFreshness>>,
+    /// K-R2 skill lifecycle + eval-tournament configuration, extracted from
+    /// `config.knowledge.skills` in [`Backend::from_config`]. Held here so
+    /// [`Backend::serve`] can register the tournament trigger without re-parsing.
+    /// `enabled = false` by default — offline/keyless installs are unaffected.
+    skills_cfg: SkillsCfg,
+    /// Live skill-counts cell (K-R2). Shared between the [`KnowledgeRuntime`]
+    /// (read side: `tdw.kg.status`) and the skill-lifecycle/tournament worker
+    /// spawned in [`Backend::serve`] (write side: updated after each tick).
+    /// Always present after construction; starts at the zeroed default.
+    skill_counts: Arc<std::sync::Mutex<tdw_knowledge::skills::SkillCounts>>,
     /// The running daemon's live handles, populated by [`Backend::serve`] and
     /// cleared by [`Backend::shutdown`]. `None` until/after serving.
     daemon: Option<DaemonHandle>,
@@ -325,6 +340,9 @@ impl Backend {
         // K-M1: extract extraction config before `config` is consumed so the
         // freshness cell can be seeded with the config-derived initial state.
         let extraction_cfg = config.knowledge.extraction.clone();
+        // K-R2: extract skills (lifecycle + tournament) config before `config`
+        // is consumed. Off by default — offline/keyless installs are unaffected.
+        let skills_cfg = config.knowledge.skills.clone();
         let state = AppState::from_config(config)
             .await
             .map_err(|error| BackendError::Init(error.to_string()))?;
@@ -506,6 +524,15 @@ impl Backend {
             tdw_knowledge::proposals::ProposalQueue::default(),
         ));
         knowledge_runtime = knowledge_runtime.with_proposals(Arc::clone(&proposal_queue));
+        // K-R2: build the skill-counts cell and attach it BEFORE Arc-wrapping so
+        // the tournament worker (write side) and `tdw.kg.status` (read side)
+        // share one live cell. Attached unconditionally so status reflects an
+        // (empty) registry even before the first tournament tick; the worker is
+        // spawned only when `knowledge.skills.enabled = true`.
+        let skill_counts_cell = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::skills::SkillCounts::default(),
+        ));
+        knowledge_runtime = knowledge_runtime.with_skill_counts(Arc::clone(&skill_counts_cell));
         let runtime = Arc::new(knowledge_runtime);
         // K-M4: build the contradiction detector from the configured functional
         // predicate set (taxonomy defaults + operator extra_functional_rels).
@@ -540,6 +567,8 @@ impl Backend {
             question_store,
             question_freshness: question_freshness_cell,
             extraction_freshness: extraction_freshness_cell,
+            skills_cfg,
+            skill_counts: skill_counts_cell,
             daemon: None,
         })
     }
@@ -575,6 +604,9 @@ impl Backend {
         // to the runtime so tdw.kg.status reports honestly here too.
         let extraction_freshness_cell =
             build_extraction_freshness_cell(&ExtractionConfig::default());
+        let skill_counts_cell = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::skills::SkillCounts::default(),
+        ));
         let runtime = Arc::new(
             KnowledgeRuntime::new(Arc::clone(&embedder), Arc::clone(&state.vector))
                 .with_lexical(Arc::clone(&state.lexical), collection)
@@ -583,7 +615,8 @@ impl Backend {
                 .with_user_id("test-user")
                 .with_finding_indexer(Arc::clone(&finding_indexer))
                 .with_consolidation_freshness(Arc::clone(&consolidation_freshness_cell))
-                .with_extraction_freshness(Arc::clone(&extraction_freshness_cell)),
+                .with_extraction_freshness(Arc::clone(&extraction_freshness_cell))
+                .with_skill_counts(Arc::clone(&skill_counts_cell)),
         );
         Self {
             state,
@@ -613,6 +646,8 @@ impl Backend {
             question_store: Arc::new(std::sync::Mutex::new(OpenQuestionStore::new())),
             question_freshness: Arc::new(std::sync::Mutex::new(QuestionsFreshness::default())),
             extraction_freshness: extraction_freshness_cell,
+            skills_cfg: SkillsCfg::default(),
+            skill_counts: skill_counts_cell,
             daemon: None,
         }
     }
@@ -879,6 +914,24 @@ impl Backend {
             cancel.clone(),
         );
 
+        // K-R2 — spawn the gated skill-lifecycle tournament worker when
+        // `knowledge.skills.enabled = true` (off by default). Each cron tick
+        // runs a deterministic, fail-closed tournament over the registered
+        // candidate skills and enqueues every promote/retire transition as a B9
+        // proposal (provenance Agent{gated:true}) — never a direct write. After
+        // each tick it writes the live skill counts into the shared cell that
+        // backs `tdw.kg.status`. Shares the SAME proposal queue as the MCP write
+        // tools and auto-materialize sweep.
+        let skill_tournament_task = spawn_skill_tournament_worker(
+            &self.skills_cfg,
+            Arc::clone(&self.skill_counts),
+            self.runtime.proposals().cloned(),
+            Arc::clone(&self.graph),
+            Arc::clone(&self.tags_engine),
+            self.runtime.bound_agent_id().map(ToString::to_string),
+            cancel.clone(),
+        );
+
         self.daemon = Some(DaemonHandle {
             cancel,
             submission: handle,
@@ -893,6 +946,7 @@ impl Backend {
             feed_handles,
             watchlist_task,
             questions_task,
+            skill_tournament_task,
             transport_task: transport.join,
             bound_addr: transport.bound_addr,
         });
@@ -985,6 +1039,12 @@ impl Backend {
         if let Some(questions_task) = daemon.questions_task {
             questions_task.abort();
             let _ = questions_task.await;
+        }
+        // K-R2: The skill-lifecycle tournament worker observes the same token;
+        // abort if it lingers so shutdown stays bounded.
+        if let Some(skill_task) = daemon.skill_tournament_task {
+            skill_task.abort();
+            let _ = skill_task.await;
         }
         // The transport observes the same token; abort if it lingers so
         // shutdown is bounded and never hangs the caller.
@@ -4458,6 +4518,182 @@ fn spawn_induction_worker(
     Some(handle)
 }
 
+/// The graph node id a skill's lifecycle annotations attach to (K-R2).
+///
+/// The gated B9 annotation proposal targets this entity; the node must exist
+/// for the annotation validator to admit the proposal. Kept as a free function
+/// so the worker and any future MCP skill tools agree on one mapping.
+#[must_use]
+pub fn skill_node_id(skill_id: &str) -> String {
+    format!("skill:{skill_id}")
+}
+
+/// Spawn the gated skill-lifecycle tournament worker (knowledge-system-2 K-R2).
+///
+/// This is the PRODUCTION wiring site for skill lifecycle management: a real,
+/// injected-now, config-cadenced worker — never test-only. On each due cron slot
+/// it:
+///
+/// 1. Runs a deterministic, FAIL-CLOSED [`SkillTournament`] over the registry's
+///    candidate (and active) skills. An empty/insufficient golden task set
+///    promotes and retires NOTHING — there is no vacuous gate.
+/// 2. Enqueues every promote/retire transition as a B9
+///    [`Proposal`](tdw_knowledge::proposals::Proposal) through the SAME proposal
+///    queue the MCP write tools and the auto-materialize sweep use — provenance
+///    `Agent { gated: true }`. Nothing is written directly; the materialization
+///    sweep lands it under the usual TOCTOU re-validation.
+/// 3. Writes the live [`SkillCounts`](tdw_knowledge::skills::SkillCounts) into the
+///    shared cell that backs `tdw.kg.status` so operators see candidate / active
+///    / retired counts additively.
+///
+/// The registry starts empty: until skills are registered (a later wave wires
+/// learned-skill registration), the worker correctly proposes nothing and
+/// reports zeroed counts — but the gated path is LIVE and exercised every tick.
+///
+/// Returns `None` when `cfg.enabled = false` (the default — offline/keyless
+/// installs are unaffected), when no proposal queue is attached, or when no
+/// bound agent id is available to attribute the gated proposals to.
+/// Public only for integration tests; production callers use [`Backend::serve`].
+#[doc(hidden)]
+pub fn spawn_skill_tournament_worker(
+    cfg: &SkillsCfg,
+    counts_cell: Arc<std::sync::Mutex<tdw_knowledge::skills::SkillCounts>>,
+    proposals: Option<Arc<tokio::sync::Mutex<tdw_knowledge::proposals::ProposalQueue>>>,
+    graph: Arc<dyn GraphEngine>,
+    tags: Arc<dyn TagEngine>,
+    agent_id: Option<String>,
+    cancel: CancellationToken,
+) -> Option<tokio::task::JoinHandle<()>> {
+    if !cfg.enabled {
+        eprintln!(
+            "[tdw] NOTICE: K-R2 skill lifecycle is disabled \
+             (knowledge.skills.enabled = false). Set enabled = true in your daemon \
+             TOML to activate gated skill tournaments."
+        );
+        return None;
+    }
+    // No proposal queue → every transition would have nowhere to go; skip the
+    // task rather than spawn a worker that can only fail at enqueue time.
+    let proposals = proposals?;
+    // No bound agent id → the gate cannot attribute provenance; skip.
+    let agent_id = agent_id?;
+
+    let tournament = tdw_knowledge::skills::SkillTournament::new(
+        cfg.promote_threshold,
+        cfg.retire_threshold,
+        tdw_knowledge::skills::MIN_TOURNAMENT_TASKS,
+    );
+
+    let schedule = CronSchedule::parse(&cfg.cadence)
+        .unwrap_or_else(|_| CronSchedule::parse("0 3 * * *").expect("fallback parse"));
+
+    let sentinel_envelope = {
+        use tdw_protocol::{ActorKind, ActorRef, Op, OpEnvelope, SessionId};
+        OpEnvelope::new(
+            SessionId::new("tdw-skill-tournament").expect("session id"),
+            1,
+            ActorRef {
+                actor_id: "skill-tournament-actor".to_string(),
+                kind: ActorKind::Worker,
+                tenant_id: None,
+            },
+            Op::Shutdown,
+        )
+    };
+
+    let mut registry = ScheduleRegistry::new();
+    registry.add(ScheduledTrigger {
+        id: "tdw-skill-tournament".to_string(),
+        schedule,
+        action: TriggerAction::Enqueue {
+            envelope: sentinel_envelope,
+            queue: "tdw-skill-tournament".to_string(),
+            max_attempts: 1,
+            priority: 0,
+        },
+    });
+
+    let tick = tdw_cron::cron_tick();
+    let handle = tokio::spawn(async move {
+        // The managed-skill registry. Starts empty; a later wave wires
+        // learned-skill registration. The worker still ticks the gated path.
+        let mut skills = tdw_knowledge::skills::SkillRegistry::new();
+        // The golden task set. Empty here (no curated tasks wired yet), which is
+        // exactly why the tournament is fail-closed: an insufficient set promotes
+        // nothing. A later wave loads a real golden set; the worker code is
+        // unchanged.
+        let golden: Vec<tdw_knowledge::skills::GoldenTask> = Vec::new();
+
+        let mut last_tick_ms = {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        };
+
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(tick) => {}
+            }
+
+            let now_ms = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            };
+
+            let due = due_triggers(&registry, last_tick_ms, now_ms);
+            last_tick_ms = now_ms;
+
+            if due.is_empty() {
+                continue;
+            }
+
+            // Cron slot fired — run one gated tournament. `now` is injected from
+            // the wall clock here (production cadence); the tournament SCORING is
+            // deterministic regardless (a pure function of skills + golden set).
+            let now_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+            match skills
+                .run_tournament_gated(
+                    &tournament,
+                    &golden,
+                    skill_node_id,
+                    &agent_id,
+                    tdw_taxonomy::Adaptivity::Learning,
+                    &proposals,
+                    &graph,
+                    &tags,
+                    &now_date,
+                )
+                .await
+            {
+                Ok(outcome) => {
+                    eprintln!("[tdw] K-R2 skill tournament tick: {outcome:?} at={now_date}");
+                }
+                Err(error) => {
+                    // A gate rejection (e.g. a transient validator failure) is
+                    // non-fatal; the worker retries on the next slot.
+                    eprintln!(
+                        "[tdw] K-R2 skill tournament gate error (will retry next slot): {error}"
+                    );
+                }
+            }
+
+            // Always refresh the live counts so status reflects the registry,
+            // even on a no-transition tick. `try_lock` keeps the status reader
+            // non-blocking; a contended cell is simply skipped this tick.
+            if let Ok(mut guard) = counts_cell.try_lock() {
+                *guard = skills.counts();
+            }
+        }
+    });
+    Some(handle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5344,6 +5580,147 @@ mod tests {
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
             }
         });
+    }
+
+    // ── K-R2: spawn_skill_tournament_worker production-wiring tests ──────────
+
+    /// Disabled (the default) → no task spawned. Offline/keyless installs are
+    /// unaffected.
+    #[test]
+    fn skill_tournament_worker_disabled_returns_none() {
+        use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let tags: Arc<dyn TagEngine> =
+            Arc::new(GraphTagEngine::new(InMemoryGraphEngine::default()));
+        let queue = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::proposals::ProposalQueue::default(),
+        ));
+        let counts = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::skills::SkillCounts::default(),
+        ));
+        let cancel = CancellationToken::new();
+        let cfg = SkillsCfg::default(); // enabled = false
+
+        let handle = rt.block_on(async {
+            spawn_skill_tournament_worker(
+                &cfg,
+                counts,
+                Some(queue),
+                graph,
+                tags,
+                Some("curator".to_string()),
+                cancel,
+            )
+        });
+        assert!(
+            handle.is_none(),
+            "disabled skill worker must return None (offline/keyless unaffected)"
+        );
+    }
+
+    /// Enabled with a queue + bound agent id → a real task is spawned. This is
+    /// the production-wiring proof: the worker is NOT dead-at-runtime.
+    #[test]
+    fn skill_tournament_worker_enabled_returns_some_handle() {
+        use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let tags: Arc<dyn TagEngine> =
+            Arc::new(GraphTagEngine::new(InMemoryGraphEngine::default()));
+        let queue = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::proposals::ProposalQueue::default(),
+        ));
+        let counts = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::skills::SkillCounts::default(),
+        ));
+        let cancel = CancellationToken::new();
+        let cfg = SkillsCfg {
+            enabled: true,
+            ..SkillsCfg::default()
+        };
+
+        let handle = rt.block_on(async {
+            spawn_skill_tournament_worker(
+                &cfg,
+                counts,
+                Some(queue),
+                graph,
+                tags,
+                Some("curator".to_string()),
+                cancel.clone(),
+            )
+        });
+        assert!(handle.is_some(), "enabled skill worker must spawn a task");
+        cancel.cancel();
+        rt.block_on(async {
+            if let Some(task) = handle {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(1), task).await;
+            }
+        });
+    }
+
+    /// Enabled but with NO bound agent id → None (the gate cannot attribute
+    /// provenance, so the worker would only fail at enqueue time). Fail-closed
+    /// wiring, not a silent half-on worker.
+    #[test]
+    fn skill_tournament_worker_without_agent_id_returns_none() {
+        use tdw_storage_graph::{GraphTagEngine, InMemoryGraphEngine};
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let tags: Arc<dyn TagEngine> =
+            Arc::new(GraphTagEngine::new(InMemoryGraphEngine::default()));
+        let queue = Arc::new(tokio::sync::Mutex::new(
+            tdw_knowledge::proposals::ProposalQueue::default(),
+        ));
+        let counts = Arc::new(std::sync::Mutex::new(
+            tdw_knowledge::skills::SkillCounts::default(),
+        ));
+        let cancel = CancellationToken::new();
+        let cfg = SkillsCfg {
+            enabled: true,
+            ..SkillsCfg::default()
+        };
+
+        let handle = rt.block_on(async {
+            spawn_skill_tournament_worker(&cfg, counts, Some(queue), graph, tags, None, cancel)
+        });
+        assert!(
+            handle.is_none(),
+            "no bound agent id → no worker (gate cannot attribute provenance)"
+        );
+    }
+
+    /// The production runtime exposes the skill-counts cell so `tdw.kg.status`
+    /// reports candidate/active/retired additively. Proves the read-side wiring.
+    #[tokio::test]
+    async fn production_runtime_surfaces_skill_counts_in_status() {
+        let backend = Backend::in_memory_for_tests().await;
+        let runtime = backend.knowledge_runtime_handle();
+        assert!(
+            runtime.skill_counts_cell().is_some(),
+            "production runtime must attach the skill-counts cell for tdw.kg.status"
+        );
+        let status = runtime.status().await;
+        let counts = status.skills.expect("skills counts present in status");
+        assert_eq!(counts.candidate, 0);
+        assert_eq!(counts.active, 0);
+        assert_eq!(counts.retired, 0);
     }
 
     /// With a real `index_path`, the worker task persists the index to disk

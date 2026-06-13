@@ -134,6 +134,11 @@ pub struct KnowledgeRuntime {
     /// each extraction batch. `None` when the extraction stage is not wired
     /// (`[knowledge.extraction] enabled = false` or no production-grade model).
     extraction_freshness: Option<Arc<std::sync::Mutex<crate::ExtractionFreshness>>>,
+    /// Live skill-counts cell (K-R2). Shared with the skill-lifecycle/tournament
+    /// worker, which writes [`crate::skills::SkillCounts`] after each tournament
+    /// tick. `None` when skill lifecycle is not wired (status field omitted from
+    /// JSON so the absence is explicit — loud by design).
+    skill_counts: Option<Arc<std::sync::Mutex<crate::skills::SkillCounts>>>,
 }
 
 impl KnowledgeRuntime {
@@ -165,6 +170,7 @@ impl KnowledgeRuntime {
             watchlist_freshness: None,
             questions_freshness: None,
             extraction_freshness: None,
+            skill_counts: None,
         }
     }
 
@@ -535,6 +541,33 @@ impl KnowledgeRuntime {
     ) -> Option<&Arc<std::sync::Mutex<crate::ExtractionFreshness>>> {
         self.extraction_freshness.as_ref()
     }
+
+    /// Attach the skill-counts cell (K-R2).
+    ///
+    /// Pass the `Arc<std::sync::Mutex<SkillCounts>>` constructed by the
+    /// composition root (`tdw-backend`) so the skill-lifecycle/tournament worker
+    /// and `tdw.kg.status` share the same live cell. Consumes and returns `self`
+    /// for builder use. When absent, `KgStatus::skills` is `None` (omitted from
+    /// JSON) — skill lifecycle is not wired.
+    #[must_use]
+    pub fn with_skill_counts(
+        mut self,
+        cell: Arc<std::sync::Mutex<crate::skills::SkillCounts>>,
+    ) -> Self {
+        self.skill_counts = Some(cell);
+        self
+    }
+
+    /// The skill-counts cell, when attached.
+    ///
+    /// The skill-lifecycle/tournament worker in `tdw-backend` writes
+    /// [`crate::skills::SkillCounts`] after every tournament tick via this handle.
+    #[must_use]
+    pub const fn skill_counts_cell(
+        &self,
+    ) -> Option<&Arc<std::sync::Mutex<crate::skills::SkillCounts>>> {
+        self.skill_counts.as_ref()
+    }
 }
 
 impl std::fmt::Debug for KnowledgeRuntime {
@@ -562,6 +595,7 @@ impl std::fmt::Debug for KnowledgeRuntime {
             )
             .field("feed_freshness_cells", &self.feed_freshness_cells.len())
             .field("extraction_freshness", &self.extraction_freshness.is_some())
+            .field("skill_counts", &self.skill_counts.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -1041,6 +1075,16 @@ pub struct KgStatus {
     /// operators see the gap without reading silence as "healthy".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extraction_freshness: Option<crate::ExtractionFreshness>,
+
+    // --- Skill lifecycle counts (K-R2) ---
+    /// Live skill counts by lifecycle state (candidate / active / retired), K-R2.
+    ///
+    /// `None` when skill lifecycle is not wired (field omitted from JSON so the
+    /// absence is explicit — loud by design). When present, reflects the last
+    /// tournament tick's view of the [`SkillRegistry`](crate::skills::SkillRegistry).
+    /// Surfaced ADDITIVELY: existing `tdw.kg.status` fields are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<crate::skills::SkillCounts>,
 }
 
 impl KnowledgeRuntime {
@@ -1234,6 +1278,19 @@ impl KnowledgeRuntime {
                     Err(std::sync::TryLockError::WouldBlock) => crate::ExtractionFreshness::Pending,
                 });
 
+        // Skill counts (K-R2): read the shared cell if wired, else None.
+        // `try_lock` avoids blocking when the tournament worker is mid-write —
+        // a poisoned lock yields the inner snapshot, a contended one the default
+        // (zeroed) counts rather than deadlocking the status handler.
+        let skills = self
+            .skill_counts
+            .as_ref()
+            .map(|cell| match cell.try_lock() {
+                Ok(guard) => *guard,
+                Err(std::sync::TryLockError::Poisoned(p)) => *p.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => crate::skills::SkillCounts::default(),
+            });
+
         KgStatus {
             vector_collection,
             embedder_model: versions_snapshot.embedder_model.clone(),
@@ -1257,6 +1314,7 @@ impl KnowledgeRuntime {
             watchlist_status,
             questions_status,
             extraction_freshness,
+            skills,
         }
     }
 }
