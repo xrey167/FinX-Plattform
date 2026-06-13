@@ -579,6 +579,14 @@ pub async fn identify_candidates(
 ) -> Result<HygieneReport> {
     let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
     let mut report = HygieneReport::default();
+    // Cache the corroboration pool per `(from, rel)` so multiple candidate
+    // edges sharing a subject+rel do NOT each re-fetch the same neighborhood
+    // (the N+1 query problem, Gemini K-R8 MEDIUM). The pool for a given
+    // `(from, rel)` is identical across the sweep — `now` is injected and the
+    // graph is not mutated mid-sweep — so caching is behavior-preserving and
+    // keeps candidate identification deterministic.
+    let mut pool_cache: std::collections::HashMap<(String, String), Vec<GraphEdge>> =
+        std::collections::HashMap::new();
 
     let mut offset = 0_usize;
     loop {
@@ -596,12 +604,16 @@ pub async fn identify_candidates(
                 continue;
             }
             // Compute K-R6 confidence + corroboration over the same-(from,rel)
-            // pool so the guards see real numbers.  The pool is the page plus a
-            // bounded same-rel fetch — but to stay bounded we corroborate
-            // within a scoped scan of this subject+rel.
-            let pool = scan_subject_rel(graph, &edge.from, &edge.rel)
-                .await
-                .unwrap_or_default();
+            // pool so the guards see real numbers.  The pool is a bounded
+            // same-subject+rel fetch, cached to avoid redundant roundtrips.
+            let cache_key = (edge.from.clone(), edge.rel.clone());
+            if !pool_cache.contains_key(&cache_key) {
+                let fetched = scan_subject_rel(graph, &edge.from, &edge.rel)
+                    .await
+                    .unwrap_or_default();
+                pool_cache.insert(cache_key.clone(), fetched);
+            }
+            let pool = &pool_cache[&cache_key];
             let pool_refs: Vec<&GraphEdge> = pool.iter().take(MAX_CORROBORATION_CAP).collect();
             let input = EdgeConfidenceInput::from_edge(edge);
             let score = compute_confidence(&input, &pool_refs, None);

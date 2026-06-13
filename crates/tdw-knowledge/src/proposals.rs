@@ -800,6 +800,8 @@ async fn validate_forget(
     to: &str,
     reason: &str,
 ) -> Result<()> {
+    use tdw_core::{Direction, TraversalFilter};
+
     let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
     if reason.trim().is_empty() || reason.chars().count() > MAX_NOTE_CHARS {
         return Err(KnowledgeError::Storage(format!(
@@ -814,23 +816,24 @@ async fn validate_forget(
             "forget reason must not contain control characters".to_string(),
         ));
     }
-    // Scan the relation for a matching `(from, rel, to)` that is open-ended
-    // (`valid_to == None`) and not already tagged `forgotten`.
-    let mut offset = 0;
-    loop {
-        let page = graph.edges(Some(rel), offset, 256).await.map_err(storage)?;
-        if page.is_empty() {
-            break;
-        }
-        offset += page.len();
-        if page.iter().any(|edge| {
-            edge.from == from
-                && edge.to == to
-                && edge.valid_to.is_none()
-                && crate::forgetting::edge_forgotten_block(&edge.props).is_none()
-        }) {
-            return Ok(());
-        }
+    // Query only the `(from, rel, *)` neighborhood for a matching active edge
+    // (`valid_to == None`, not already tagged `forgotten`). This is bounded by
+    // the subject's out-degree, NOT the global size of `rel` — a global
+    // `edges(Some(rel), ..)` scan would be a severe bottleneck on common
+    // relations (Gemini K-R8 HIGH). Mirrors `retire_edge_to_cold`'s scan so
+    // validation and materialization look at the same neighborhood.
+    let filter = TraversalFilter {
+        rels: Some(vec![rel.to_owned()]),
+        direction: Direction::Out,
+        ..TraversalFilter::default()
+    };
+    let neighbors = graph.neighbors(from, &filter).await.map_err(storage)?;
+    if neighbors.into_iter().any(|(edge, _node)| {
+        edge.to == to
+            && edge.valid_to.is_none()
+            && crate::forgetting::edge_forgotten_block(&edge.props).is_none()
+    }) {
+        return Ok(());
     }
     Err(KnowledgeError::Storage(format!(
         "forget target {from} -{rel}-> {to} has no active (open, non-cold) edge to retire"

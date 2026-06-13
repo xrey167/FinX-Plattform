@@ -1161,6 +1161,7 @@ impl Backend {
         if let Some(induction_task) = daemon.induction_task {
             induction_task.abort();
             let _ = induction_task.await;
+        }
         // K-R8: The governed-forgetting (hygiene) worker observes the same
         // token; abort if it lingers so shutdown stays bounded.
         if let Some(hygiene_task) = daemon.hygiene_task {
@@ -2637,25 +2638,34 @@ pub fn spawn_hygiene_worker(
             {
                 use tdw_knowledge::proposals::ProposalKind;
                 use tdw_taxonomy::Adaptivity;
-                let mut queue = proposals.lock().await;
+                // Lock the queue PER candidate, not across the whole batch:
+                // `submit` awaits async graph/tag validation, and holding the
+                // mutex across every candidate would block concurrent MCP
+                // submissions/listings for the full sweep (Gemini K-R8 MEDIUM,
+                // lock-across-async-IO). Releasing between candidates lets other
+                // tasks interleave; the sweep is best-effort so a candidate
+                // racing in mid-loop is fine (it re-validates at materialize).
                 for candidate in report.candidates {
                     let reason = candidate.assessment.audit_reason();
-                    match queue
-                        .submit(
-                            &agent_id,
-                            Adaptivity::Learning,
-                            ProposalKind::Forget {
-                                from: candidate.from.clone(),
-                                rel: candidate.rel.clone(),
-                                to: candidate.to.clone(),
-                                reason,
-                            },
-                            &graph,
-                            &tags,
-                            &now_date,
-                        )
-                        .await
-                    {
+                    let result = {
+                        let mut queue = proposals.lock().await;
+                        queue
+                            .submit(
+                                &agent_id,
+                                Adaptivity::Learning,
+                                ProposalKind::Forget {
+                                    from: candidate.from.clone(),
+                                    rel: candidate.rel.clone(),
+                                    to: candidate.to.clone(),
+                                    reason,
+                                },
+                                &graph,
+                                &tags,
+                                &now_date,
+                            )
+                            .await
+                    };
+                    match result {
                         Ok(_) => proposed += 1,
                         Err(error) => {
                             let msg = error.to_string();
@@ -2670,7 +2680,6 @@ pub fn spawn_hygiene_worker(
                         }
                     }
                 }
-                drop(queue);
             }
 
             eprintln!(

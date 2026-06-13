@@ -2135,6 +2135,17 @@ fn validate_hygiene(hygiene: &HygieneConfig) -> Result<()> {
             "knowledge.hygiene.staleness_days must be at least 1".to_string(),
         ));
     }
+    // protect_corroboration_at_or_above must be at least 1 — a value of 0 makes
+    // the corroboration guard fire for EVERY fact (`sources >= 0` is always
+    // true), silently protecting the entire graph so the worker proposes
+    // nothing. A 0 here is a foot-gun, not a valid "protect-none" setting.
+    if hygiene.protect_corroboration_at_or_above == 0 {
+        return Err(ConfigError::Validation(
+            "knowledge.hygiene.protect_corroboration_at_or_above must be at least 1 \
+             (0 would protect every fact and make forgetting inert)"
+                .to_string(),
+        ));
+    }
     // forget_score_threshold and protect_confidence_at_or_above are
     // probabilities — must be in [0.0, 1.0] and finite.
     for (name, value) in [
