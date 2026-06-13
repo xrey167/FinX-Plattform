@@ -488,6 +488,7 @@ async fn measure_latency<C: BenchClock>(
                 entity_kinds: None,
                 plane: None,
                 as_of: case.as_of.clone(),
+                provenance_classes: None,
             },
             None,
         )?;
