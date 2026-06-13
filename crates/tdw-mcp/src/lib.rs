@@ -19,6 +19,7 @@ use tdw_knowledge::indexer::KnowledgeIndexer;
 use tdw_protocol::{ActorKind, ActorRef, CostHint, EventMsg, Op, OpEnvelope, PlanId, SessionId};
 
 pub(crate) mod knowledge_answer_tools;
+pub(crate) mod knowledge_digest_tools;
 pub(crate) mod knowledge_explain_tools;
 pub(crate) mod knowledge_feedback_tools;
 pub(crate) mod knowledge_finding_tools;
@@ -522,6 +523,18 @@ impl McpServer {
         {
             descriptors.extend(knowledge_explain_tools::descriptors());
         }
+        // The knowledge DIGEST tool (knowledge-system-2 K-X4): tdw.kg.digest is
+        // read-only and requires only the graph engine (same gate as the explain
+        // tools). It narrates the knowledge base — new knowledge, top activity,
+        // staleness, pending proposals, and eval drift — reusing status() and a
+        // bounded finding scan. Absent when no knowledge runtime or no graph engine.
+        if self
+            .knowledge
+            .as_ref()
+            .is_some_and(|rt| rt.graph().is_some())
+        {
+            descriptors.push(knowledge_digest_tools::descriptor());
+        }
         // The knowledge INGEST tool (knowledge-system K-E3) is appended ONLY when a
         // knowledge runtime is present AND a hosted indexer handle is attached. The
         // indexer is the public write surface: content-hash-idempotent batch ingest
@@ -729,6 +742,10 @@ impl McpServer {
         }
 
         if let Some(messages) = self.dispatch_knowledge_explain_tool(id, name, &arguments) {
+            return messages;
+        }
+
+        if let Some(messages) = self.dispatch_knowledge_digest_tool(id, name, &arguments) {
             return messages;
         }
 
@@ -1074,6 +1091,51 @@ impl McpServer {
         };
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
         let messages = match knowledge_explain_tools::execute(runtime, name, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
+    }
+
+    /// Dispatch the knowledge digest tool (`tdw.kg.digest`, knowledge-system-2
+    /// K-X4).
+    ///
+    /// Returns `Some(messages)` when `name` is the digest tool — a tool error
+    /// (never a protocol error) when the graph engine is unavailable, otherwise
+    /// the [`knowledge_digest_tools::execute`] result. The reference time (`now`)
+    /// is injected here at the dispatch boundary so the library never reads the
+    /// wall clock. Returns `None` when `name` is not the digest tool so the
+    /// caller falls through to the next dispatch path.
+    fn dispatch_knowledge_digest_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !knowledge_digest_tools::owns(name) {
+            return None;
+        }
+        let Some(runtime) = self.knowledge.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("knowledge runtime not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        // Injected-now: the reference time is computed here, never inside the
+        // digest library, so staleness is reproducible and as_of-correct.
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let messages = match knowledge_digest_tools::execute(runtime, name, &arguments_object, &now)
+        {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }
