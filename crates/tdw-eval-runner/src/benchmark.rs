@@ -289,12 +289,7 @@ pub fn benchmark_corpus() -> Vec<KnowledgeDocument> {
 }
 
 /// One benchmark task.
-fn task(
-    case_id: &str,
-    query: &str,
-    expected: &[&str],
-    as_of: Option<&str>,
-) -> RetrievalEvalCase {
+fn task(case_id: &str, query: &str, expected: &[&str], as_of: Option<&str>) -> RetrievalEvalCase {
     RetrievalEvalCase {
         case_id: case_id.to_string(),
         query: query.to_string(),
@@ -512,8 +507,7 @@ mod tests {
         assert!(!corpus.is_empty(), "corpus must be non-empty");
         assert!(!tasks.is_empty(), "task set must be non-empty");
 
-        let ids: std::collections::BTreeSet<&str> =
-            corpus.iter().map(|d| d.id.as_str()).collect();
+        let ids: std::collections::BTreeSet<&str> = corpus.iter().map(|d| d.id.as_str()).collect();
         // Every gold doc id referenced by a task must exist in the corpus.
         for task in &tasks {
             for gold in &task.expected_doc_ids {
