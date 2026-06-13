@@ -11,6 +11,7 @@ fn main() {
     let command = args.next().unwrap_or_else(|| "help".to_string());
     let result = match command.as_str() {
         "bench" => bench(),
+        "bench-knowledge" => bench_knowledge(),
         "bench-compare" => bench_compare(args.next()),
         "quality-gate" => quality_gate(args.next().as_deref()),
         "ddl-export" => ddl_export(args.next().as_deref()),
@@ -59,7 +60,7 @@ fn main() {
 #[allow(clippy::unnecessary_wraps)] // sibling arm of the unified `match` in main(); must share Result<(), String> with arms (quality_gate/ddl_export/schema_sync) that genuinely return Err
 fn help() -> Result<(), String> {
     println!(
-        "xtask commands: bench | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | catalog-check | openapi-sync | openapi-check | pysdk-sync | pysdk-check | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
+        "xtask commands: bench | bench-knowledge | bench-compare <baseline> | quality-gate <write|check> | ddl-export <postgres|clickhouse> | migrate <up|down|status> | schema-sync | events schema-check | protocol schema-check | config schema-check | mutation <changed [--run]|report [out-dir]> | catalog-check | openapi-sync | openapi-check | pysdk-sync | pysdk-check | clean-room-audit | crate-readiness-check | prerelease-check | improve-scan"
     );
     Ok(())
 }
@@ -129,6 +130,250 @@ fn bench() -> Result<(), String> {
     fs::write(PERF_HISTORY_PATH, content).map_err(|error| error.to_string())?;
     println!("bench wrote {PERF_HISTORY_PATH}");
     Ok(())
+}
+
+// ── Knowledge benchmark (K-M5) ───────────────────────────────────────────────
+
+/// Machine-readable knowledge-benchmark report path.
+const BENCH_KNOWLEDGE_JSON_PATH: &str = "docs/benchmarks-knowledge.json";
+
+/// Human-readable knowledge-benchmark report path.
+const BENCH_KNOWLEDGE_MD_PATH: &str = "docs/benchmarks.md";
+
+/// A real, `Instant`-backed monotonic micro-second clock for the knowledge
+/// benchmark's latency block. The deterministic quality block does not depend
+/// on it.
+struct InstantClock {
+    origin: std::time::Instant,
+}
+
+impl InstantClock {
+    fn new() -> Self {
+        Self {
+            origin: std::time::Instant::now(),
+        }
+    }
+}
+
+impl tdw_eval_runner::benchmark::BenchClock for InstantClock {
+    fn tick_micros(&self) -> u64 {
+        u64::try_from(self.origin.elapsed().as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+/// Run the published knowledge-retrieval benchmark suite (K-M5) over the
+/// existing B11 retrieval-eval harness, assert the deterministic quality block
+/// is reproducible across two runs, and write both the machine-readable JSON
+/// report and the human-readable `docs/benchmarks.md`.
+///
+/// The quality block (recall\@k / MRR / nDCG\@k) is fully deterministic — this
+/// command runs the suite twice and fails if the quality or drift-key blocks
+/// differ, proving reproducibility. The latency block is informational and is
+/// not compared.
+fn bench_knowledge() -> Result<(), String> {
+    use tdw_embed::EmbeddingProvider;
+    use tdw_embed_local::HashEmbeddingProvider;
+    use tdw_eval_runner::benchmark::{BenchmarkReport, run_benchmark};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to build tokio runtime: {error}"))?;
+
+    let run = || -> Result<BenchmarkReport, String> {
+        let embedder: std::sync::Arc<dyn EmbeddingProvider> =
+            std::sync::Arc::new(HashEmbeddingProvider::default());
+        let clock = InstantClock::new();
+        runtime
+            .block_on(run_benchmark(embedder, &clock))
+            .map_err(|error| format!("benchmark run failed: {error}"))
+    };
+
+    // Two runs: prove the deterministic quality + drift-key blocks are stable.
+    let first = run()?;
+    let second = run()?;
+    // The reproducibility claim is *byte-identical* numbers, so compare the
+    // float fields bit-exactly via `to_bits` (no `float_cmp` lint, and stricter
+    // than `==`: NaN-vs-NaN and -0.0-vs-0.0 are treated as differences). An
+    // epsilon tolerance would silently weaken the determinism guarantee.
+    let q1 = &first.quality;
+    let q2 = &second.quality;
+    let quality_equal = q1.k == q2.k
+        && q1.tasks == q2.tasks
+        && q1.mean_recall_at_k.to_bits() == q2.mean_recall_at_k.to_bits()
+        && q1.mrr.to_bits() == q2.mrr.to_bits()
+        && q1.mean_ndcg_at_k.to_bits() == q2.mean_ndcg_at_k.to_bits();
+    if !quality_equal || first.drift_key != second.drift_key {
+        return Err(format!(
+            "bench-knowledge: NON-REPRODUCIBLE — quality/drift differ across runs:\n  run1 quality={:?} drift={:?}\n  run2 quality={:?} drift={:?}",
+            first.quality, first.drift_key, second.quality, second.drift_key
+        ));
+    }
+
+    // Publish the first run (quality identical to second; latency informational).
+    let report = first;
+
+    println!("bench-knowledge: split={}", report.split_id);
+    println!(
+        "  recall@{k}={:.4}  MRR={:.4}  nDCG@{k}={:.4}  (tasks={})",
+        report.quality.mean_recall_at_k,
+        report.quality.mrr,
+        report.quality.mean_ndcg_at_k,
+        report.quality.tasks,
+        k = report.quality.k,
+    );
+    println!(
+        "  latency p50={}us p90={}us p99={}us max={}us (informational)",
+        report.latency.p50_micros,
+        report.latency.p90_micros,
+        report.latency.p99_micros,
+        report.latency.max_micros,
+    );
+    println!("bench-knowledge: quality block reproducible across two runs ✓");
+
+    let json = serde_json::to_string_pretty(&report)
+        .map(|content| content + "\n")
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all("docs").map_err(|error| error.to_string())?;
+    fs::write(BENCH_KNOWLEDGE_JSON_PATH, json).map_err(|error| error.to_string())?;
+    println!("bench-knowledge wrote {BENCH_KNOWLEDGE_JSON_PATH}");
+
+    fs::write(BENCH_KNOWLEDGE_MD_PATH, render_benchmarks_md(&report))
+        .map_err(|error| error.to_string())?;
+    println!("bench-knowledge wrote {BENCH_KNOWLEDGE_MD_PATH}");
+
+    Ok(())
+}
+
+/// Render the human-readable `docs/benchmarks.md` from a benchmark report.
+///
+/// The methodology section is brutally honest about scope (what is and is not
+/// measured) and makes no fabricated competitor claims.
+fn render_benchmarks_md(report: &tdw_eval_runner::benchmark::BenchmarkReport) -> String {
+    let q = &report.quality;
+    let l = &report.latency;
+    let infer = report
+        .drift_key
+        .infer_version
+        .map_or_else(|| "none".to_string(), |v| v.to_string());
+    let rules = report
+        .drift_key
+        .rules_version
+        .map_or_else(|| "none".to_string(), |v| v.to_string());
+
+    format!(
+        r#"<!-- GENERATED by `cargo run -p xtask -- bench-knowledge`. DO NOT EDIT BY HAND. -->
+# Knowledge Retrieval Benchmark
+
+Published benchmark suite for FinX-Plattform's knowledge-retrieval layer
+(knowledge-system **K-M5**). It runs a fixed, checked-in LongMemEval-style task
+set through the **same B11 retrieval-eval harness** (`tdw-eval-runner`,
+`retrieval_eval`) the platform uses for its nightly golden-split regression
+gate — there is no parallel eval engine.
+
+Regenerate with:
+
+```bash
+cargo run -p xtask -- bench-knowledge --target-dir target
+```
+
+## Results
+
+Task set: `{split}` — {tasks} tasks, retrieval cutoff **k = {k}**.
+
+| Metric | Value |
+|--------|-------|
+| Recall@{k} (mean) | **{recall:.4}** |
+| MRR | **{mrr:.4}** |
+| nDCG@{k} (mean) | **{ndcg:.4}** |
+| Retrieval latency p50 | {p50} µs |
+| Retrieval latency p90 | {p90} µs |
+| Retrieval latency p99 | {p99} µs |
+| Retrieval latency max | {max} µs |
+
+Drift key (reproducibility stamp): embedder = `{embedder}`, rules version =
+`{rules}`, infer version = `{infer}`.
+
+## Methodology — what is and is NOT measured
+
+This section is deliberately blunt. The point of a published benchmark is to be
+trusted, not to look good.
+
+### What IS measured
+
+- **Retrieval quality** — recall@k, MRR, and nDCG@k of the hybrid
+  (vector KNN + lexical full-text, fused with Reciprocal Rank Fusion) retriever
+  over a fixed, checked-in corpus and task set. These numbers are **fully
+  deterministic and reproducible**: the suite is run twice in CI and the
+  quality block must be byte-identical, or the job fails.
+- **Point-in-time correctness** — several tasks carry an `as_of` date; the
+  retriever's temporal filter structurally hides any document dated after that
+  point, so a future fact can never leak into a historical query. This is
+  asserted directly in the suite's tests.
+- **Retrieval latency** — p50/p90/p99/max wall-clock latency of each task's
+  retrieval call, in microseconds. This is **informational only** (see below).
+
+### What is NOT measured
+
+- **No production embedding model in the reproducible numbers.** The deterministic
+  quality numbers above use a *content-blind hash embedder* (`{embedder}`), chosen
+  so the suite is hermetic and reproducible offline with no model download and no
+  network. It is a deliberately weak stand-in: it does not represent the quality
+  of the real local-BERT embedder. Treat the deterministic recall/MRR/nDCG above
+  as a **reproducibility floor and regression tripwire**, not as the platform's
+  peak retrieval quality. The real embedding model is exercised by the env-gated
+  `local_model` leg (`cargo test -p tdw-eval-runner --features local-model`,
+  requires `TDW_LOCAL_MODEL_DIR`); its numbers depend on the chosen model and are
+  not published here because they are not hermetically reproducible in CI.
+- **Latency is environment-dependent.** The latency block reflects the CI/host
+  machine at run time and is *not* asserted stable across runs. Do not compare
+  latency figures across different machines or runs as if they were a controlled
+  measurement.
+- **No end-to-end answer quality.** This measures the *retrieval* layer that
+  feeds the agent, not LLM generation quality.
+- **No head-to-head competitor numbers.** We do not publish competitor figures
+  because we have not run competitors under identical conditions, and fabricating
+  them would defeat the purpose of an honest benchmark. See below for how such a
+  comparison *would* be run.
+
+### How a competitor comparison WOULD be run (not yet performed)
+
+A fair head-to-head would require, for each competitor system:
+
+1. Ingest the **same** checked-in corpus (`benchmark_corpus()`).
+2. Issue the **same** task set (`benchmark_tasks()`), including the `as_of`
+   point-in-time constraints.
+3. Score the returned rankings with the **same** metric functions
+   (`recall_at_k`, `reciprocal_rank`, `ndcg_at_k` in `tdw-eval-runner`).
+4. Hold the embedding model fixed across systems (or report each system with its
+   own model clearly labelled), so the comparison isolates the retrieval/fusion
+   layer rather than the embedder.
+
+Until those controlled runs exist, only FinX's own numbers are published here.
+
+## Reproducibility & drift
+
+The report is stamped with a **drift key** (`embedder` / `rules_version` /
+`infer_version`). Two runs with the same code and embedder produce an identical
+`split_id`, `quality`, and `drift_key`; only the `latency` block may vary. The
+nightly CI job runs the suite and re-asserts the quality block is reproducible.
+The machine-readable report lives at `{json_path}`.
+"#,
+        split = report.split_id,
+        tasks = q.tasks,
+        k = q.k,
+        recall = q.mean_recall_at_k,
+        mrr = q.mrr,
+        ndcg = q.mean_ndcg_at_k,
+        p50 = l.p50_micros,
+        p90 = l.p90_micros,
+        p99 = l.p99_micros,
+        max = l.max_micros,
+        embedder = report.drift_key.embedder_model,
+        rules = rules,
+        infer = infer,
+        json_path = BENCH_KNOWLEDGE_JSON_PATH,
+    )
 }
 
 /// A fixed `OhlcvBar` used as the deterministic input across encode/decode/

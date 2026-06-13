@@ -1,0 +1,22 @@
+{
+  "split_id": "knowledge-bench-v1",
+  "quality": {
+    "k": 5,
+    "tasks": 10,
+    "mean_recall_at_k": 0.5,
+    "mrr": 0.2783333333333333,
+    "mean_ndcg_at_k": 0.33175293653079346
+  },
+  "latency": {
+    "samples": 10,
+    "p50_micros": 60,
+    "p90_micros": 67,
+    "p99_micros": 71,
+    "max_micros": 71
+  },
+  "drift_key": {
+    "embedder_model": "local-hash-8",
+    "rules_version": null,
+    "infer_version": null
+  }
+}

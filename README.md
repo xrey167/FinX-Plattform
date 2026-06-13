@@ -62,6 +62,27 @@ Work is organized into tranches (`G0NN-<topic>`) that map to active worktrees on
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+## Benchmarks
+
+Published knowledge-retrieval benchmark (knowledge-system **K-M5**), a
+LongMemEval-style task set run through the same B11 retrieval-eval harness as the
+nightly regression gate. Numbers are **deterministic and reproducible** (offline
+hash embedder, fixed corpus + task set); the latency block is informational.
+
+| Metric | Value |
+|--------|-------|
+| Recall@5 (mean) | 0.5000 |
+| MRR | 0.2783 |
+| nDCG@5 (mean) | 0.3318 |
+| Tasks | 10 |
+
+> The deterministic numbers use a content-blind hash embedder chosen for
+> hermetic reproducibility — a regression tripwire, **not** the platform's peak
+> retrieval quality. Full scope, the honest methodology, and how a competitor
+> comparison *would* be run (no fabricated competitor numbers) are in
+> [`docs/benchmarks.md`](docs/benchmarks.md). Regenerate with
+> `cargo run -p xtask -- bench-knowledge --target-dir target`.
+
 ## Security / production auth
 
 The `tdw-service` daemon is fail-closed by default; a `prod`/`production` profile

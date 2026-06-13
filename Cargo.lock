@@ -8499,12 +8499,16 @@ dependencies = [
  "serde_json",
  "tdw-agent",
  "tdw-config",
+ "tdw-embed",
+ "tdw-embed-local",
  "tdw-endpoint-catalog",
+ "tdw-eval-runner",
  "tdw-event",
  "tdw-migration",
  "tdw-proto",
  "tdw-protocol",
  "tdw-sql-codegen",
+ "tokio",
 ]
 
 [[package]]

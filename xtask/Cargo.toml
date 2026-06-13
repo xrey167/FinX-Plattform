@@ -11,12 +11,16 @@ schemars = { workspace = true }
 serde_json = { workspace = true }
 tdw-agent = { path = "../crates/tdw-agent" }
 tdw-config = { workspace = true }
+tdw-embed = { path = "../crates/tdw-embed" }
+tdw-embed-local = { path = "../crates/tdw-embed-local" }
 tdw-endpoint-catalog = { workspace = true }
+tdw-eval-runner = { path = "../crates/tdw-eval-runner" }
 tdw-event = { path = "../crates/tdw-event" }
 tdw-migration = { path = "../crates/tdw-migration" }
 tdw-proto = { path = "../crates/tdw-proto" }
 tdw-protocol = { workspace = true }
 tdw-sql-codegen = { path = "../crates/tdw-sql-codegen" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

@@ -354,6 +354,59 @@ jobs:
           path: crates/tdw-eval-runner/baselines/golden-split-v1.json
           if-no-files-found: warn
 
+  # K-M5: published knowledge-retrieval benchmark suite.
+  #
+  # Runs the LongMemEval-style task set through the B11 retrieval-eval harness
+  # via `xtask bench-knowledge`, which itself runs the suite twice and fails if
+  # the deterministic quality block (recall/MRR/nDCG) or drift key differs. This
+  # job additionally re-runs the command and asserts the committed
+  # docs/benchmarks-knowledge.json quality block is byte-stable across an
+  # independent invocation, proving CI reproducibility. The numbers are honest
+  # (offline hash embedder; see docs/benchmarks.md methodology), and the latency
+  # block is informational only and not compared.
+  knowledge-benchmark:
+    name: Knowledge retrieval benchmark (K-M5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Run benchmark (writes JSON + benchmarks.md)
+        run: cargo run -p xtask -- bench-knowledge --target-dir target
+      - name: Assert quality block is reproducible across an independent run
+        run: |
+          set -euo pipefail
+          first=$(jq -S '.quality, .drift_key, .split_id' docs/benchmarks-knowledge.json)
+          cargo run -p xtask -- bench-knowledge --target-dir target
+          second=$(jq -S '.quality, .drift_key, .split_id' docs/benchmarks-knowledge.json)
+          if [ "$first" != "$second" ]; then
+            echo "FAIL: knowledge benchmark quality block is not reproducible across runs"
+            diff <(echo "$first") <(echo "$second") || true
+            exit 1
+          fi
+          echo "PASS: quality/drift/split block reproducible across two independent runs"
+          {
+            echo "## K-M5 Knowledge Retrieval Benchmark"
+            echo ""
+            echo '```json'
+            jq '.quality' docs/benchmarks-knowledge.json
+            echo '```'
+            echo ""
+            echo "Latency (informational, environment-dependent):"
+            echo '```json'
+            jq '.latency' docs/benchmarks-knowledge.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: knowledge-benchmark-${{ github.run_id }}
+          path: |
+            docs/benchmarks-knowledge.json
+            docs/benchmarks.md
+          if-no-files-found: warn
+
   # P1.5: prove the live data path nightly — env-gated provider live tests plus
   # a real MCP stdio session fetching live bars. These hit external public APIs,
   # so they run here (not in PR CI) and fail loudly on live regressions.

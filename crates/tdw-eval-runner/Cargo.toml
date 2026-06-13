@@ -24,6 +24,7 @@ tdw-agent-store = { path = "../tdw-agent-store" }
 tdw-core = { workspace = true }
 tdw-embed = { path = "../tdw-embed" }
 tdw-infer = { path = "../tdw-infer" }
+tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
 tdw-retrieve = { path = "../tdw-retrieve" }
@@ -41,7 +42,6 @@ local-model = ["tdw-embed-local/model"]
 chrono = { workspace = true }
 tdw-cron = { path = "../tdw-cron" }
 tdw-embed-local = { path = "../tdw-embed-local" }
-tdw-kg = { path = "../tdw-kg" }
 tdw-llm-anthropic = { workspace = true }
 tdw-protocol = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
