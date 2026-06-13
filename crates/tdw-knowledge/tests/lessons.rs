@@ -7,7 +7,7 @@
 //!     annotation exists in the substrate.
 //! (b) With NO eval data the lesson is NOT promoted (fail-closed): a vacuous /
 //!     under-floor eval never grants promotion (the K-R5 CRITICAL).
-//! (c) With passing eval data (>= MIN_EVAL_CASES at/above the threshold) the
+//! (c) With passing eval data (>= `MIN_EVAL_CASES` at/above the threshold) the
 //!     lesson promotes, materializes, and `tdw.kg.why`-style audit reports it
 //!     truthfully as `Active` — only after it actually landed.
 
@@ -87,7 +87,7 @@ impl GraphEngine for SharedGraph {
     }
 }
 
-/// One episode node: id + props {agent_id, task_class, approach, succeeded}.
+/// One episode node: id + props {`agent_id`, `task_class`, approach, succeeded}.
 fn episode_node(id: &str, agent: &str, class: &str, approach: &str, ok: bool) -> GraphNode {
     GraphNode {
         id: id.to_string(),
@@ -105,7 +105,7 @@ fn episode_node(id: &str, agent: &str, class: &str, approach: &str, ok: bool) ->
     }
 }
 
-/// A bare subject node (so the EPISODE_REL edges have an existing endpoint).
+/// A bare subject node (so the `EPISODE_REL` edges have an existing endpoint).
 fn subject_stub() -> GraphNode {
     GraphNode {
         id: LESSON_SUBJECT_ENTITY.to_string(),
