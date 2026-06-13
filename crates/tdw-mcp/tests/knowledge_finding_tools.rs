@@ -35,7 +35,16 @@ use tdw_storage_meilisearch::InMemoryLexicalEngine;
 use tdw_storage_qdrant::InMemoryVectorEngine;
 use tdw_taxonomy::EntityKind;
 
-const NOW: &str = "2099-12-31";
+/// Deterministic reference instant for the whole suite.
+///
+/// The server's clock is pinned to this value via [`McpServer::with_now`] in
+/// [`server_with_findings`], so `tdw.kg.link` stamps each evidence edge's
+/// `valid_from` at `NOW` and the `tdw.kg.thesis_health` queries (also at `NOW`)
+/// agree — counts are correct deterministically, regardless of the wall-clock
+/// date the suite runs on. Previously this was a far-future sentinel
+/// (`2099-12-31`) chosen only to keep the wall clock "in the past"; the pinned
+/// clock makes a realistic date work every day.
+const NOW: &str = "2026-06-12";
 const LEXICAL_INDEX: &str = "knowledge";
 const USER_ID: &str = "user:analyst-1";
 
@@ -204,7 +213,10 @@ async fn build_runtime_with_graph() -> (Arc<KnowledgeRuntime>, Arc<InMemoryGraph
 
 fn server_with_findings() -> (McpServer, Arc<InMemoryGraphEngine>) {
     let (runtime, graph) = block(build_runtime_with_graph());
-    let mut server = McpServer::new().with_knowledge(runtime);
+    // Pin the server's clock to NOW so `tdw.kg.link` stamps evidence edges'
+    // `valid_from` at NOW and the thesis_health queries (also at NOW) agree —
+    // deterministic counts regardless of the wall-clock date.
+    let mut server = McpServer::new().with_knowledge(runtime).with_now(NOW);
     initialize(&mut server);
     (server, graph)
 }
@@ -888,14 +900,14 @@ fn thesis_health_math_hand_computed() {
 /// `as_of` leakage regression: evidence edges created AFTER the query `as_of`
 /// must NOT be counted.
 ///
-/// Setup: thesis captured at NOW (far-future sentinel); we query health at 2026-01-01
-/// (before the evidence was created). Hand-computed result: supports=0,
-/// contradicts=0 — even though the links exist in the graph.
+/// Setup: thesis captured at NOW (the pinned clock); we query health at
+/// 2026-01-01 (before the evidence was created). Hand-computed result:
+/// supports=0, contradicts=0 — even though the links exist in the graph.
 #[test]
 fn thesis_health_as_of_leakage_regression() {
     let (mut server, _graph) = server_with_findings();
 
-    // Capture thesis at NOW (far-future sentinel).
+    // Capture thesis at NOW (the pinned clock).
     let thesis_resp = call(
         &mut server,
         "tdw.kg.thesis",
@@ -910,7 +922,7 @@ fn thesis_health_as_of_leakage_regression() {
         .expect("thesis_id")
         .to_string();
 
-    // Capture and link evidence AT NOW (far-future sentinel).
+    // Capture and link evidence AT NOW (the pinned clock).
     let f = call(
         &mut server,
         "tdw.kg.finding",
@@ -930,8 +942,9 @@ fn thesis_health_as_of_leakage_regression() {
     assert_eq!(lnk["result"]["isError"], false);
 
     // Query health at a DATE BEFORE the evidence was written (2026-01-01).
-    // The edge valid_from is the real current date (injected by dispatch), which is > 2026-01-01.
-    // active_at(valid_from=<today>, valid_to=None, as_of="2026-01-01...")
+    // The edge valid_from is the pinned clock (NOW, injected by dispatch),
+    // which is > 2026-01-01.
+    // active_at(valid_from=NOW, valid_to=None, as_of="2026-01-01...")
     // → false. Therefore supports_count must be 0.
     let past_date = "2026-01-01";
     let health = call(

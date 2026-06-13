@@ -229,6 +229,20 @@ pub struct McpServer {
     /// `tdw.kg.questions` tools are exposed via `tools/list` and dispatched in
     /// `tools/call`. `None` keeps the question surface off entirely.
     question_store: Option<Arc<std::sync::Mutex<knowledge_question_tools::OpenQuestionStore>>>,
+    /// Optional deterministic "now" override (test seam).
+    ///
+    /// When `Some`, every tool-dispatch reference time is taken from this value
+    /// instead of [`chrono::Utc::now`], so date-stamped writes (e.g. evidence
+    /// edge `valid_from` in `tdw.kg.link`) and date-filtered reads agree on a
+    /// fixed instant — making the knowledge thesis/finding tests deterministic
+    /// regardless of the wall clock. `None` keeps the real-clock behaviour, so
+    /// production deployments are unaffected.
+    ///
+    /// The stored string is the canonical RFC 3339 form (`Self::now_rfc3339`);
+    /// each call site reformats it to that site's required shape (`%Y-%m-%d`
+    /// dates reuse the leading date component) so the format at every site is
+    /// identical whether or not the override is set.
+    now_override: Option<String>,
 }
 
 impl Default for McpServer {
@@ -251,6 +265,7 @@ impl Default for McpServer {
             contradiction_totals: None,
             watchlist_store: None,
             question_store: None,
+            now_override: None,
         }
     }
 }
@@ -281,6 +296,7 @@ impl McpServer {
             contradiction_totals: None,
             watchlist_store: None,
             question_store: None,
+            now_override: None,
         }
     }
 
@@ -298,6 +314,66 @@ impl McpServer {
     #[must_use]
     pub fn metrics(&self) -> McpMetrics {
         self.metrics.clone()
+    }
+
+    /// Pin the server's "now" to a fixed instant (test seam).
+    ///
+    /// All tool-dispatch reference times then derive from `now` instead of the
+    /// wall clock, so date-stamped writes and date-filtered reads agree on a
+    /// single instant. This makes the knowledge thesis/finding suites
+    /// deterministic regardless of the calendar date the tests run on.
+    ///
+    /// `now` may be any form accepted by [`chrono::DateTime::parse_from_rfc3339`]
+    /// (e.g. `2026-06-12T00:00:00Z`) or a bare `YYYY-MM-DD` date, which is
+    /// treated as midnight UTC. An unparseable value is stored verbatim and the
+    /// `%Y-%m-%d` sites use its leading 10 characters — adequate for tests that
+    /// pass a plain date.
+    ///
+    /// Consumes and returns `self` for builder use. The default (no override)
+    /// keeps the real-clock behaviour, so production is unaffected.
+    #[must_use]
+    pub fn with_now(mut self, now: impl Into<String>) -> Self {
+        self.now_override = Some(Self::canonicalize_now(&now.into()));
+        self
+    }
+
+    /// Normalize an override value to canonical RFC 3339 (`...T..:..:..+00:00`).
+    ///
+    /// Accepts a full RFC 3339 timestamp or a bare `YYYY-MM-DD` date (promoted
+    /// to midnight UTC). Anything unparseable is returned unchanged so the
+    /// caller still gets deterministic-but-verbatim behaviour.
+    fn canonicalize_now(now: &str) -> String {
+        use chrono::{DateTime, NaiveDate, Utc};
+        if let Ok(dt) = DateTime::parse_from_rfc3339(now) {
+            return dt.with_timezone(&Utc).to_rfc3339();
+        }
+        if let Ok(date) = NaiveDate::parse_from_str(now, "%Y-%m-%d") {
+            return date
+                .and_hms_opt(0, 0, 0)
+                .map_or_else(|| now.to_string(), |dt| dt.and_utc().to_rfc3339());
+        }
+        now.to_string()
+    }
+
+    /// The dispatch reference time as RFC 3339 — the override when pinned via
+    /// [`Self::with_now`], else the real [`chrono::Utc::now`]. Used at the
+    /// `to_rfc3339()` call sites so the format is identical with or without an
+    /// override.
+    fn now_rfc3339(&self) -> String {
+        self.now_override
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+    }
+
+    /// The dispatch reference time as a `YYYY-MM-DD` date — the override's date
+    /// component when pinned via [`Self::with_now`], else today's real UTC date.
+    /// Used at the `format("%Y-%m-%d")` call sites so the format is identical
+    /// with or without an override.
+    fn now_date(&self) -> String {
+        self.now_override.as_ref().map_or_else(
+            || chrono::Utc::now().format("%Y-%m-%d").to_string(),
+            |now| now.chars().take(10).collect(),
+        )
     }
 
     /// Attach a `tdw-agent` [`Registry`]; its `tool` resources are exposed via `tools/list`
@@ -1072,7 +1148,7 @@ impl McpServer {
             )]);
         };
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = self.now_rfc3339();
         let messages =
             match knowledge_feedback_tools::execute(runtime, store, &arguments_object, &now) {
                 Ok(crate::ToolExecution { structured, .. }) => {
@@ -1157,7 +1233,7 @@ impl McpServer {
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
         // Injected-now: the reference time is computed here, never inside the
         // digest library, so staleness is reproducible and as_of-correct.
-        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let now = self.now_date();
         let messages = match knowledge_digest_tools::execute(runtime, name, &arguments_object, &now)
         {
             Ok(ToolExecution { structured, .. }) => {
@@ -1276,7 +1352,7 @@ impl McpServer {
         }
         let runtime = self.knowledge.as_ref()?;
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let now = self.now_date();
         let messages =
             match knowledge_finding_tools::execute(runtime, name, &arguments_object, &now) {
                 Ok(ToolExecution { structured, .. }) => {
@@ -1330,7 +1406,7 @@ impl McpServer {
         }
         let runtime = self.knowledge.as_ref()?;
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let now = self.now_date();
         let messages = match knowledge_episodic_tools::execute(runtime, &arguments_object, &now) {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
@@ -1425,7 +1501,7 @@ impl McpServer {
         let runtime = self.knowledge.as_ref()?;
         let store = self.question_store.as_ref()?;
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let now = self.now_date();
         let messages = match knowledge_question_tools::execute(
             runtime,
             store,
@@ -1478,7 +1554,7 @@ impl McpServer {
         let runtime = self.knowledge.as_ref()?;
         let store = self.watchlist_store.as_ref()?;
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let now = self.now_date();
         let messages =
             match knowledge_watchlist_tools::execute(runtime, store, name, &arguments_object, &now)
             {
