@@ -45,6 +45,8 @@ tdw-knowledge = { path = "../tdw-knowledge" }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-infer = { path = "../tdw-infer" }
+# K-R5 rule-induction pipeline: pattern→candidate→gate→hot_reload.
+tdw-induction = { workspace = true }
 tdw-patterns = { workspace = true }
 tdw-tag-rules = { path = "../tdw-tag-rules" }
 # K-M4: contradiction detector construction reads FunctionalPredicateSet from

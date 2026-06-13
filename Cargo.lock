@@ -5207,6 +5207,7 @@ dependencies = [
  "tdw-event",
  "tdw-feature-store",
  "tdw-hooks",
+ "tdw-induction",
  "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
@@ -5594,6 +5595,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-induction"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-eval-runner",
+ "tdw-infer",
+ "tdw-patterns",
+ "tdw-storage-graph",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-infer"
 version = "0.1.0"
 dependencies = [
@@ -5701,6 +5717,7 @@ dependencies = [
  "tdw-core",
  "tdw-embed-local",
  "tdw-endpoint-catalog",
+ "tdw-induction",
  "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
