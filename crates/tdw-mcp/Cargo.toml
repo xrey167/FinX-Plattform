@@ -44,6 +44,9 @@ tdw-infer = { path = "../tdw-infer" }
 tdw-induction = { workspace = true }
 tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
+# W2.6 — the tdw.partner.ask tool maps an MCP request to PartnerCore::turn and
+# streams PartnerEvent. This crate adds no core logic; it is a thin adapter.
+tdw-partner = { path = "../tdw-partner" }
 tdw-protocol = { workspace = true }
 tdw-retrieve = { path = "../tdw-retrieve" }
 tdw-service-api = { path = "../tdw-service-api" }
@@ -63,6 +66,9 @@ tokio = { workspace = true, features = ["rt", "signal"] }
 [dev-dependencies]
 async-trait = { workspace = true }
 tdw-app-server = { workspace = true, features = ["transport-http"] }
+# W2.6 — the offline deterministic StubLanguageModel drives the tdw.partner.ask
+# e2e (ask → streamed answer + citation) with no network or credentials.
+tdw-eval-runner = { path = "../tdw-eval-runner" }
 # Knowledge-tool tests build a KnowledgeRuntime over in-memory engines (hash
 # embedder + in-process graph/tags/vector/lexical) and index a few documents.
 tdw-embed = { path = "../tdw-embed" }

@@ -1,0 +1,30 @@
+[package]
+name = "tdw-partner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-core = { workspace = true }
+tdw-domain = { workspace = true }
+tdw-endpoint-catalog = { workspace = true }
+tdw-knowledge = { workspace = true }
+tdw-llm = { workspace = true }
+tdw-openbb-agent = { workspace = true }
+tdw-tags = { path = "../tdw-tags" }
+tdw-taxonomy = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tdw-embed-local = { path = "../tdw-embed-local" }
+tdw-eval-runner = { path = "../tdw-eval-runner" }
+tdw-storage-graph = { path = "../tdw-storage-graph" }
+tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+
+[lints]
+workspace = true

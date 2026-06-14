@@ -6,6 +6,7 @@ publish = false
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+async-trait = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
@@ -18,6 +19,11 @@ tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-embed-openai = { path = "../tdw-embed-openai", optional = true }
 tdw-infer = { path = "../tdw-infer" }
 tdw-knowledge = { path = "../tdw-knowledge" }
+# W2.8 — `tdw partner ask` renders PartnerEvent to the TTY through PartnerCore.
+tdw-partner = { path = "../tdw-partner" }
+# The offline deterministic StubLanguageModel drives the CLI `partner ask` smoke
+# with no network or credentials.
+tdw-eval-runner = { path = "../tdw-eval-runner" }
 tdw-tag-rules = { path = "../tdw-tag-rules" }
 tdw-tags = { path = "../tdw-tags" }
 tdw-protocol = { workspace = true }

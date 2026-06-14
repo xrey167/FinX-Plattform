@@ -1,40 +1,74 @@
-//! `AgentBridgeHandler` implementation wiring the daemon's language model to the
-//! `tdw-app-server` `OpenBB` copilot route family (feature = "agent-route").
+//! `AgentBridgeHandler` implementation routing the daemon's `OpenBB` Workspace
+//! copilot turn through **Partner Core** (feature = "agent-route").
 //!
 //! This is the *caller-side* of the agent-protocol transport seam:
 //! `tdw-app-server` defines the [`AgentBridgeHandler`] trait but does not depend
 //! on this crate; here we implement it on a thin [`AgentBridgeState`] that holds
-//! a [`StreamingLanguageModel`] and delegates the whole copilot turn to the pure
-//! [`tdw_openbb_agent::answer`] sequencer. No `OpenBB` JSON shape and no agent
-//! loop logic lives here — only the model wiring.
+//! a [`PartnerCore`] (the ONE shared front door, the partner design §1) and delegates
+//! the whole copilot turn to [`PartnerCore::answer_workspace`].
+//!
+//! This is the partner-system **W2.7** swap — the highest-leverage move in W2.
+//! Previously this bridge called the bare `tdw_openbb_agent::answer()` sequencer
+//! directly; routing it through `PartnerCore` instead lights up the Workspace
+//! surface as a *thin adapter over the shared core*, validating the
+//! "shared core, thin adapter" thesis. The two-request widget-data leg is
+//! preserved exactly (Partner Core reuses the same pure `tdw_openbb_agent`
+//! sequencer for the Workspace path), so the existing `agent_route_e2e.rs`
+//! golden SSE transcript is unchanged. No `OpenBB` JSON shape and no routing /
+//! retrieval / autonomy logic lives here — only the core wiring.
 //!
 //! # Offline-first
 //!
-//! The default model is the deterministic offline
-//! [`StubLanguageModel`](tdw_eval_runner::StubLanguageModel), so the bridge runs
-//! end-to-end with no network or credentials. Inject a live streaming client via
-//! [`AgentBridgeState::with_language_model`] (behind the daemon's existing
-//! credential/env gates) to answer against a real model.
+//! The default Partner Core drives the deterministic offline
+//! [`StubLanguageModel`](tdw_eval_runner::StubLanguageModel) over a no-op data
+//! plane, so the bridge runs end-to-end with no network or credentials. Inject a
+//! live streaming client via [`AgentBridgeState::with_language_model`] (behind
+//! the daemon's existing credential/env gates) to answer against a real model.
 
 #![cfg(feature = "agent-route")]
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use serde_json::Value;
 use tdw_app_server::AgentBridgeHandler;
 use tdw_eval_runner::StubLanguageModel;
 use tdw_llm::StreamingLanguageModel;
-use tdw_openbb_agent::{Answer, QueryRequest, answer};
+use tdw_openbb_agent::{Answer, QueryRequest};
+use tdw_partner::{DataPlane, DataPlaneError, PartnerCore};
 
-/// Adapter that implements [`AgentBridgeHandler`] over a configured streaming
-/// language model.
+/// A no-op data plane for the offline Workspace bridge default.
 ///
-/// Cheap to clone (`Arc`-shared model); construct one via
+/// The Workspace two-request widget-data leg (the only data path the copilot
+/// surface uses) fetches through the *frontend* via `get_widget_data`, not
+/// through the dispatcher, so the bridge's Partner Core needs no server-side
+/// fetch to preserve the existing contract. A daemon that wants the partner to
+/// fetch catalog routes server-side injects a real [`DataPlane`] over
+/// `dispatcher::rest_fetch_data` here.
+struct NoopDataPlane;
+
+#[async_trait]
+impl DataPlane for NoopDataPlane {
+    async fn fetch(&self, route: &str, _params: Value) -> Result<Value, DataPlaneError> {
+        Err(DataPlaneError::Fetch {
+            route: route.to_string(),
+            message: "server-side data plane not wired for the Workspace bridge \
+                      (widget data flows through the frontend get_widget_data leg)"
+                .to_string(),
+        })
+    }
+}
+
+/// Adapter that implements [`AgentBridgeHandler`] by routing the turn through a
+/// [`PartnerCore`] (the shared front door).
+///
+/// Cheap to clone (`Arc`-shared core); construct one via
 /// [`AgentBridgeState::new`] (the offline stub) or
 /// [`AgentBridgeState::with_language_model`] (a live client), then wrap it in an
 /// `Arc` for `tdw_app_server::serve_agent_http`.
 #[derive(Clone)]
 pub struct AgentBridgeState {
-    model: Arc<dyn StreamingLanguageModel>,
+    partner: PartnerCore,
 }
 
 impl Default for AgentBridgeState {
@@ -44,20 +78,29 @@ impl Default for AgentBridgeState {
 }
 
 impl AgentBridgeState {
-    /// Build a bridge state driven by the offline deterministic
+    /// Build a bridge state whose Partner Core drives the offline deterministic
     /// [`StubLanguageModel`] (no network, no credentials).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_language_model(Arc::new(StubLanguageModel))
+    }
+
+    /// Build a bridge state whose Partner Core drives `model` (inject a live
+    /// streaming client here to answer against a real model). The data plane
+    /// defaults to the no-op (widget data flows through the frontend leg).
+    #[must_use]
+    pub fn with_language_model(model: Arc<dyn StreamingLanguageModel>) -> Self {
         Self {
-            model: Arc::new(StubLanguageModel),
+            partner: PartnerCore::new(model, Arc::new(NoopDataPlane)),
         }
     }
 
-    /// Replace the streaming model (default: the offline [`StubLanguageModel`]).
-    /// Inject a live client here to answer against a real model.
+    /// Build a bridge state from an already-composed [`PartnerCore`] — the seam
+    /// a daemon uses to share one core (with a real data plane + trust context)
+    /// across every surface.
     #[must_use]
-    pub fn with_language_model(model: Arc<dyn StreamingLanguageModel>) -> Self {
-        Self { model }
+    pub const fn from_partner(partner: PartnerCore) -> Self {
+        Self { partner }
     }
 
     /// Build an `Arc<dyn AgentBridgeHandler>` ready to hand to
@@ -71,10 +114,10 @@ impl AgentBridgeState {
 #[async_trait::async_trait]
 impl AgentBridgeHandler for AgentBridgeState {
     async fn answer(&self, request: QueryRequest) -> Answer {
-        // The pure sequencer drives `complete_streaming` synchronously; the
-        // offline stub is non-blocking. A live client is injected behind the
-        // daemon's credential gates and is the operator's choice.
-        answer(&request, self.model.as_ref())
+        // The shared core's Workspace seam reuses the pure two-leg sequencer, so
+        // the wire contract is identical to the pre-W2.7 bare `answer()` call —
+        // the turn now simply flows through Partner Core.
+        self.partner.answer_workspace(&request)
     }
 }
 
@@ -98,7 +141,7 @@ mod tests {
                 .events
                 .iter()
                 .any(|event| matches!(event, SseEvent::MessageChunk { .. })),
-            "the stub streams an answer"
+            "the shared core streams an answer"
         );
     }
 
@@ -117,7 +160,7 @@ mod tests {
                 .events
                 .iter()
                 .any(|event| matches!(event, SseEvent::GetWidgetData { .. })),
-            "the first leg emits get_widget_data"
+            "the first leg emits get_widget_data through the shared core"
         );
     }
 }

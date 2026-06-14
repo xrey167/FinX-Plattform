@@ -5,6 +5,7 @@ mod demo;
 mod export;
 mod ingest;
 mod params;
+mod partner;
 mod reindex;
 mod render;
 mod routine;
@@ -96,6 +97,16 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "export")
     {
         return export::run(&args);
+    }
+
+    // partner ask: the Partner Core front door on the CLI (partner-system W2.8).
+    // Offline by default (the deterministic stub model), so it needs no daemon
+    // connection — render one turn's PartnerEvent stream to the TTY.
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "partner" && pair[1] == "ask")
+    {
+        return partner::run(&args).await;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).

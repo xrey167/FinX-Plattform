@@ -33,6 +33,7 @@ pub(crate) mod knowledge_tools;
 pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
+pub(crate) mod partner_tools;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const DEFAULT_STREAMABLE_HTTP_BIND: &str = "127.0.0.1:8788";
@@ -244,6 +245,11 @@ pub struct McpServer {
     /// dates reuse the leading date component) so the format at every site is
     /// identical whether or not the override is set.
     now_override: Option<String>,
+    /// Optional Partner Core (partner-system W2.6). When attached, the single
+    /// `tdw.partner.ask` front-door tool is appended to `tools/list` and
+    /// dispatched in `tools/call`. `None` keeps the partner surface off — the
+    /// 49 lower-level `tdw.*` tools are unaffected either way.
+    partner: Option<std::sync::Arc<tdw_partner::PartnerCore>>,
 }
 
 impl Default for McpServer {
@@ -267,6 +273,7 @@ impl Default for McpServer {
             watchlist_store: None,
             question_store: None,
             now_override: None,
+            partner: None,
         }
     }
 }
@@ -298,6 +305,7 @@ impl McpServer {
             watchlist_store: None,
             question_store: None,
             now_override: None,
+            partner: None,
         }
     }
 
@@ -516,6 +524,19 @@ impl McpServer {
         self
     }
 
+    /// Attach a [`tdw_partner::PartnerCore`] (partner-system W2.6).
+    ///
+    /// When attached, the single `tdw.partner.ask` front-door tool is exposed via
+    /// `tools/list` and dispatched in `tools/call`. The adapter is thin: it maps
+    /// the request to [`tdw_partner::PartnerCore::turn`] and streams the
+    /// `PartnerEvent`s into the response. `None` keeps the partner surface off.
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_partner(mut self, partner: Arc<tdw_partner::PartnerCore>) -> Self {
+        self.partner = Some(partner);
+        self
+    }
+
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
     /// exposed via `tools/list`.
     ///
@@ -684,6 +705,12 @@ impl McpServer {
         {
             descriptors.push(knowledge_export_tools::descriptor());
         }
+        // The PARTNER front-door tool (partner-system W2.6): tdw.partner.ask is
+        // appended ONLY when a PartnerCore is attached. It is the one verb the
+        // onboarding surface leads with; the lower-level tdw.* tools stay listed.
+        if self.partner.is_some() {
+            descriptors.push(partner_tools::descriptor());
+        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
@@ -834,6 +861,10 @@ impl McpServer {
 
         let progress_token = progress_token(params);
 
+        if let Some(messages) = self.dispatch_partner_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_knowledge_tools(id, name, &arguments) {
             return messages;
         }
@@ -885,6 +916,46 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// Dispatch the partner front-door tool (`tdw.partner.ask`, partner-system
+    /// W2.6).
+    ///
+    /// Returns `Some(messages)` when `name` is `tdw.partner.ask` — a tool error
+    /// (never a protocol error) when no [`tdw_partner::PartnerCore`] is attached,
+    /// otherwise the [`partner_tools::execute`] result. Returns `None` when
+    /// `name` is not the partner tool so the caller falls through to the
+    /// knowledge / registry / built-in dispatch paths.
+    fn dispatch_partner_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !partner_tools::owns(name) {
+            return None;
+        }
+        let Some(partner) = self.partner.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("partner surface not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        let messages = match partner_tools::execute(partner, &arguments_object) {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
     }
 
     /// Try every knowledge-tool dispatcher in order, returning the first match.
