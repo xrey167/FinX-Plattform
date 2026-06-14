@@ -643,6 +643,196 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "derivatives_futures_info": {
+    "category": "derivatives",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "number",
+            "field": "expiration_timestamp",
+            "formatterFn": "percent",
+            "headerName": "Expiration Timestamp"
+          },
+          {
+            "cellDataType": "text",
+            "field": "instrument_name",
+            "headerName": "Instrument Name"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_active",
+            "headerName": "Is Active"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "option_type",
+            "headerName": "Option Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "strike",
+            "headerName": "Strike"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Futures instrument metadata for one instrument, Deribit-backed (keyless).",
+    "endpoint": "/widget-data/derivatives/futures/info",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "derivatives_futures_info",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Info",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "derivatives_futures_instruments": {
+    "category": "derivatives",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "number",
+            "field": "expiration_timestamp",
+            "formatterFn": "percent",
+            "headerName": "Expiration Timestamp"
+          },
+          {
+            "cellDataType": "text",
+            "field": "instrument_name",
+            "headerName": "Instrument Name"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_active",
+            "headerName": "Is Active"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "option_type",
+            "headerName": "Option Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "strike",
+            "headerName": "Strike"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "List tradable futures instruments for a currency, Deribit-backed (keyless).",
+    "endpoint": "/widget-data/derivatives/futures/instruments",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "derivatives_futures_instruments",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Instruments",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "derivatives_options_chains": {
     "category": "derivatives",
     "data": {
@@ -12060,6 +12250,491 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Cik Map",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_filing_headers": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "accession_number",
+            "headerName": "Accession Number"
+          },
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "description",
+            "headerName": "Description"
+          },
+          {
+            "cellDataType": "text",
+            "field": "filing_date",
+            "headerName": "Filing Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "form_type",
+            "headerName": "Form Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "period_of_report",
+            "headerName": "Period Of Report"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Filing header metadata for an accession from the EDGAR index (keyless).",
+    "endpoint": "/widget-data/regulators/sec/filing_headers",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_filing_headers",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Filing Headers",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_institutions_search": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Search SEC-regulated institutions by name in company_tickers.json (keyless).",
+    "endpoint": "/widget-data/regulators/sec/institutions_search",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_institutions_search",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Institutions Search",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_rss_litigation": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "link",
+            "headerName": "Link"
+          },
+          {
+            "cellDataType": "text",
+            "field": "published",
+            "headerName": "Published"
+          },
+          {
+            "cellDataType": "text",
+            "field": "summary",
+            "headerName": "Summary"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "SEC litigation releases from the public litigation RSS feed (keyless).",
+    "endpoint": "/widget-data/regulators/sec/rss_litigation",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_rss_litigation",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Rss Litigation",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_schema_files": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "file_type",
+            "headerName": "File Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "last_modified",
+            "headerName": "Last Modified"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "number",
+            "field": "size",
+            "headerName": "Size"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "List the schema/data files in a filing from the EDGAR index (keyless).",
+    "endpoint": "/widget-data/regulators/sec/schema_files",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_schema_files",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Schema Files",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_sic_search": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "code",
+            "headerName": "Code"
+          },
+          {
+            "cellDataType": "text",
+            "field": "description",
+            "headerName": "Description"
+          },
+          {
+            "cellDataType": "text",
+            "field": "office",
+            "headerName": "Office"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Search the SEC Standard Industrial Classification (SIC) code list (keyless).",
+    "endpoint": "/widget-data/regulators/sec/sic_search",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_sic_search",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sic Search",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_symbol_map": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "cik",
+            "headerName": "Cik"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Map SEC CIKs to ticker symbols via company_tickers.json (keyless).",
+    "endpoint": "/widget-data/regulators/sec/symbol_map",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_symbol_map",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Symbol Map",
     "params": [
       {
         "description": "Ticker symbol to query.",

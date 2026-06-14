@@ -34,6 +34,18 @@ pub enum SecModel {
     LatestFinancialReports,
     /// Standardizes to the filings-index row (N-PORT portfolio disclosures).
     NportDisclosure,
+    /// Standardizes to [`tdw_domain::SymbolMapping`] (CIK → ticker map).
+    SymbolMap,
+    /// Standardizes to [`tdw_domain::SecInstitution`] (institution name search).
+    InstitutionsSearch,
+    /// Standardizes to [`tdw_domain::SicCode`] (SIC industry-code search).
+    SicSearch,
+    /// Standardizes to [`tdw_domain::FilingHeader`] (filing-index header block).
+    FilingHeaders,
+    /// Standardizes to [`tdw_domain::FilingFile`] (filing-index file list).
+    SchemaFiles,
+    /// Standardizes to [`tdw_domain::LitigationRelease`] (litigation RSS feed).
+    RssLitigation,
 }
 
 /// One standardized SEC-backed endpoint.
@@ -91,6 +103,37 @@ pub const ENDPOINTS: &[SecEndpoint] = &[
         model: SecModel::NportDisclosure,
         description: "Fund N-PORT portfolio-disclosure filing index from submissions.",
     },
+    // Keyless SEC regulator utilities (openbb-parity P4W8).
+    SecEndpoint {
+        command: "regulators/sec/symbol_map",
+        model: SecModel::SymbolMap,
+        description: "Map SEC CIKs to ticker symbols via company_tickers.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/institutions_search",
+        model: SecModel::InstitutionsSearch,
+        description: "Search SEC-regulated institutions by name in company_tickers.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/sic_search",
+        model: SecModel::SicSearch,
+        description: "Search the SEC Standard Industrial Classification (SIC) code list.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/filing_headers",
+        model: SecModel::FilingHeaders,
+        description: "Filing header metadata for an accession from the EDGAR index.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/schema_files",
+        model: SecModel::SchemaFiles,
+        description: "List the schema/data files in a filing from the EDGAR index.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/rss_litigation",
+        model: SecModel::RssLitigation,
+        description: "SEC litigation releases from the public litigation RSS feed.",
+    },
 ];
 
 /// Resolve a catalog entry by its `OpenBB` `command` path.
@@ -140,6 +183,12 @@ mod tests {
             SecModel::CompanyFacts,
             SecModel::LatestFinancialReports,
             SecModel::NportDisclosure,
+            SecModel::SymbolMap,
+            SecModel::InstitutionsSearch,
+            SecModel::SicSearch,
+            SecModel::FilingHeaders,
+            SecModel::SchemaFiles,
+            SecModel::RssLitigation,
         ] {
             assert!(
                 ENDPOINTS.iter().any(|e| e.model == model),

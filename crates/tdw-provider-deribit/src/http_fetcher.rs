@@ -7,11 +7,13 @@
 
 use serde::Deserialize;
 use tdw_core::http_support::prelude::*;
+use tdw_domain::FuturesInstrument;
 
 use crate::{
-    BASE_URL, DeribitFundingQuery, DeribitFundingRecord, DeribitGreeks, DeribitInstrument,
-    DeribitInstrumentsQuery, DeribitKind, DeribitOrderBook, DeribitOrderBookQuery,
-    DeribitProviderError, funding_request_path, instruments_request_path, order_book_request_path,
+    BASE_URL, DeribitFundingQuery, DeribitFundingRecord, DeribitFuturesInfoQuery, DeribitGreeks,
+    DeribitInstrument, DeribitInstrumentsQuery, DeribitKind, DeribitOrderBook,
+    DeribitOrderBookQuery, DeribitProviderError, funding_request_path, instruments_request_path,
+    order_book_request_path,
 };
 
 const USER_AGENT: &str = "tdw-provider-deribit/0.1";
@@ -150,6 +152,187 @@ impl Fetcher<DeribitInstrumentsQuery, DeribitInstrument> for DeribitHttpInstrume
 
         Ok(instruments)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing futures-instrument fetchers (standardized FuturesInstrument)
+// ---------------------------------------------------------------------------
+
+/// Raw `/public/get_instruments` row including the base currency, used by the
+/// catalog-facing futures fetchers that standardize to
+/// [`tdw_domain::FuturesInstrument`].
+#[derive(Deserialize)]
+struct RawFuturesInstrument {
+    instrument_name: String,
+    kind: String,
+    #[serde(default)]
+    base_currency: Option<String>,
+    #[serde(default)]
+    strike: Option<f64>,
+    #[serde(default)]
+    expiration_timestamp: Option<u64>,
+    #[serde(default)]
+    option_type: Option<String>,
+    #[serde(default)]
+    is_active: Option<bool>,
+}
+
+impl From<RawFuturesInstrument> for FuturesInstrument {
+    fn from(r: RawFuturesInstrument) -> Self {
+        Self {
+            instrument_name: r.instrument_name,
+            kind: r.kind,
+            currency: r.base_currency,
+            strike: r.strike,
+            expiration_timestamp: r.expiration_timestamp,
+            option_type: r.option_type,
+            is_active: r.is_active,
+        }
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Deribit futures-instruments fetcher, standardized to
+    /// [`tdw_domain::FuturesInstrument`].
+    ///
+    /// Calls `/public/get_instruments?currency=<cur>&kind=future&expired=false`
+    /// and lists the tradable futures contracts. Standardizes
+    /// `derivatives/futures/instruments`.
+    pub DeribitHttpFuturesInstrumentsFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<DeribitInstrumentsQuery, FuturesInstrument> for DeribitHttpFuturesInstrumentsFetcher {
+    const PROVIDER: &'static str = "deribit";
+    const ENDPOINT: &'static str = "futures_instruments";
+
+    fn transform_query(params: Value) -> Result<DeribitInstrumentsQuery> {
+        let currency = params
+            .get("currency")
+            .or_else(|| params.get("symbol"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("deribit currency must be a string".to_string()))?;
+        // Futures-instruments is fixed to the `future` kind; callers asking for a
+        // different kind would not be a futures listing.
+        DeribitInstrumentsQuery::new(currency, DeribitKind::Future)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &DeribitInstrumentsQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        fetch_instruments_bytes(self.base_url(), &query.currency, &query.kind).await
+    }
+
+    fn transform_data(
+        &self,
+        _query: &DeribitInstrumentsQuery,
+        raw: Bytes,
+    ) -> Result<Vec<FuturesInstrument>> {
+        let envelope: DeribitEnvelope<Vec<RawFuturesInstrument>> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("deribit futures_instruments parse_json: {e}")))?;
+        Ok(envelope
+            .result
+            .into_iter()
+            .map(FuturesInstrument::from)
+            .collect())
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Deribit futures-info fetcher, standardized to
+    /// [`tdw_domain::FuturesInstrument`].
+    ///
+    /// Calls `/public/get_instruments?currency=<cur>&kind=future&expired=false`
+    /// and returns the metadata row for one named instrument. Standardizes
+    /// `derivatives/futures/info`.
+    pub DeribitHttpFuturesInfoFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<DeribitFuturesInfoQuery, FuturesInstrument> for DeribitHttpFuturesInfoFetcher {
+    const PROVIDER: &'static str = "deribit";
+    const ENDPOINT: &'static str = "futures_info";
+
+    fn transform_query(params: Value) -> Result<DeribitFuturesInfoQuery> {
+        let instrument_name = params
+            .get("instrument_name")
+            .or_else(|| params.get("symbol"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("deribit instrument_name must be a string".to_string())
+            })?;
+        DeribitFuturesInfoQuery::new(instrument_name)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &DeribitFuturesInfoQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        fetch_instruments_bytes(self.base_url(), &query.currency, &DeribitKind::Future).await
+    }
+
+    fn transform_data(
+        &self,
+        query: &DeribitFuturesInfoQuery,
+        raw: Bytes,
+    ) -> Result<Vec<FuturesInstrument>> {
+        let envelope: DeribitEnvelope<Vec<RawFuturesInstrument>> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("deribit futures_info parse_json: {e}")))?;
+        Ok(envelope
+            .result
+            .into_iter()
+            .filter(|r| {
+                r.instrument_name
+                    .eq_ignore_ascii_case(&query.instrument_name)
+            })
+            .map(FuturesInstrument::from)
+            .collect())
+    }
+}
+
+/// Shared GET for `/public/get_instruments`, used by the catalog-facing futures
+/// fetchers so they do not duplicate the client/error-handling boilerplate.
+async fn fetch_instruments_bytes(
+    base_url: &str,
+    currency: &str,
+    kind: &DeribitKind,
+) -> Result<Bytes> {
+    let path =
+        instruments_request_path(currency, kind).map_err(|e| Error::Provider(e.to_string()))?;
+    let url = format!("{}{path}", base_url.trim_end_matches('/'));
+
+    let client = Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()
+        .map_err(|e| Error::Provider(format!("deribit instruments client build: {e}")))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| Error::Provider(format!("deribit instruments request: {e}")))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "deribit instruments returned {status}: {body}"
+        )));
+    }
+
+    response
+        .bytes()
+        .await
+        .map_err(|e| Error::Provider(format!("deribit instruments read body: {e}")))
 }
 
 // ---------------------------------------------------------------------------

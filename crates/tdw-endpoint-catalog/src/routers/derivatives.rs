@@ -10,7 +10,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{EquityHistoricalData, FuturesCurvePoint, OptionContract};
+use tdw_domain::{EquityHistoricalData, FuturesCurvePoint, FuturesInstrument, OptionContract};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -28,6 +28,13 @@ const DERIVATIVES_FUTURES_HISTORICAL: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "futures_historical")];
 const DERIVATIVES_FUTURES_CURVE: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "futures_curve")];
+// Keyless Deribit futures-instrument routes (openbb-parity P4W7). Both reuse
+// Deribit's public `/public/get_instruments` endpoint; the endpoint keys match
+// each catalog-facing fetcher's `ENDPOINT` const and runtime dispatch key.
+const DERIVATIVES_FUTURES_INSTRUMENTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("deribit", "futures_instruments")];
+const DERIVATIVES_FUTURES_INFO: &[ProviderCandidate] =
+    &[ProviderCandidate::new("deribit", "futures_info")];
 
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
@@ -43,6 +50,10 @@ fn equity_historical() -> Schema {
 
 fn futures_curve_point() -> Schema {
     schema_for!(FuturesCurvePoint)
+}
+
+fn futures_instrument() -> Schema {
+    schema_for!(FuturesInstrument)
 }
 
 /// The `derivatives` namespace's catalog entries, in declaration order.
@@ -77,6 +88,26 @@ pub fn entries() -> Vec<CatalogEntry> {
             bronze_table: Some("raw.futures_curve_point"),
             doc: "Futures forward curve (per-expiry contract last prices), Yahoo-backed.",
             chartable: true,
+        },
+        CatalogEntry {
+            route: "derivatives/futures/instruments",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: futures_instrument,
+            candidates: DERIVATIVES_FUTURES_INSTRUMENTS,
+            bronze_table: Some("raw.futures_instrument"),
+            doc: "List tradable futures instruments for a currency, Deribit-backed (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "derivatives/futures/info",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: futures_instrument,
+            candidates: DERIVATIVES_FUTURES_INFO,
+            bronze_table: Some("raw.futures_instrument"),
+            doc: "Futures instrument metadata for one instrument, Deribit-backed (keyless).",
+            chartable: false,
         },
     ]
 }

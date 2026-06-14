@@ -1004,6 +1004,132 @@ pub struct CompanyFacts {
     pub value: Option<f64>,
 }
 
+/// A single tradable derivatives instrument.
+///
+/// Standardizes `derivatives/futures/instruments` (the list of tradable
+/// contracts) and `derivatives/futures/info` (metadata for one contract), both
+/// Deribit-backed. One row = one instrument. The optional fields cover the
+/// option-specific attributes (`strike`, `option_type`) that futures rows omit,
+/// and the expiry timestamp that perpetuals omit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FuturesInstrument {
+    /// Exchange instrument name, e.g. `"BTC-PERPETUAL"`, `"BTC-27DEC24"`.
+    #[validate(length(min = 1))]
+    pub instrument_name: String,
+    /// Instrument kind as reported by the venue, e.g. `"future"`, `"option"`,
+    /// `"future_combo"`.
+    #[validate(length(min = 1))]
+    pub kind: String,
+    /// Base currency / settlement asset, e.g. `"BTC"`, `"ETH"`.
+    pub currency: Option<String>,
+    /// Strike price for option instruments (absent for futures/perpetuals).
+    pub strike: Option<f64>,
+    /// Expiry as a Unix timestamp in milliseconds, when the contract expires.
+    pub expiration_timestamp: Option<u64>,
+    /// Option type (`"call"` / `"put"`) for option instruments.
+    pub option_type: Option<String>,
+    /// Whether the instrument is currently active / tradable.
+    pub is_active: Option<bool>,
+}
+
+/// A SEC-regulated institution discovery row.
+///
+/// Standardizes `regulators/sec/institutions_search` (filtering SEC's public
+/// `company_tickers.json` directory by name). One row = one institution / issuer
+/// matched by the query. The CIK and reported name are the identity anchors; the
+/// ticker is [`Option`] because not every filer in the directory lists one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SecInstitution {
+    /// Central Index Key (CIK) as reported by SEC, unpadded.
+    #[validate(length(min = 1))]
+    pub cik: String,
+    /// Institution / issuer name as reported in the directory.
+    #[validate(length(min = 1))]
+    pub name: String,
+    /// Exchange ticker symbol where the directory supplies one.
+    pub symbol: Option<String>,
+}
+
+/// A Standard Industrial Classification (SIC) industry-code row.
+///
+/// Standardizes `regulators/sec/sic_search` (filtering the SEC-published SIC
+/// code list by query). One row = one (code, description) pair. The office is the
+/// SEC Division of Corporation Finance industry-review office, present for most
+/// codes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SicCode {
+    /// Four-digit SIC code, e.g. `"3571"`.
+    #[validate(length(min = 1))]
+    pub code: String,
+    /// Industry-title description for the code.
+    #[validate(length(min = 1))]
+    pub description: String,
+    /// SEC industry-review office responsible for the code, where known.
+    pub office: Option<String>,
+}
+
+/// Filing header metadata for a single EDGAR accession.
+///
+/// Standardizes `regulators/sec/filing_headers` (the EDGAR
+/// `{accession}-index.json` header block). One row = one filing. The CIK and
+/// accession number are the identity anchors; the remaining descriptive fields
+/// are [`Option`] because the index header populates a variable subset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FilingHeader {
+    /// Filer Central Index Key (CIK), unpadded.
+    #[validate(length(min = 1))]
+    pub cik: String,
+    /// Accession number, e.g. `"0000320193-24-000123"`.
+    #[validate(length(min = 1))]
+    pub accession_number: String,
+    /// Form type, e.g. `"10-K"`, `"8-K"`, where reported.
+    pub form_type: Option<String>,
+    /// Filing / acceptance date (`YYYY-MM-DD`) where reported.
+    pub filing_date: Option<String>,
+    /// Period of report (`YYYY-MM-DD`) where reported.
+    pub period_of_report: Option<String>,
+    /// Human-readable filing description where reported.
+    pub description: Option<String>,
+}
+
+/// A single file listed within an EDGAR filing's document index.
+///
+/// Standardizes `regulators/sec/schema_files` (the `directory.item[]` array of
+/// the EDGAR `{accession}-index.json`). One row = one document/schema file in the
+/// filing. The file name is the identity anchor; size, type, and last-modified
+/// are [`Option`] since the index reports a variable subset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct FilingFile {
+    /// File name within the filing directory, e.g. `"aapl-20240928.htm"`.
+    #[validate(length(min = 1))]
+    pub name: String,
+    /// Document type label where reported, e.g. `"10-K"`, `"EX-101.SCH"`.
+    pub file_type: Option<String>,
+    /// File size in bytes where reported.
+    pub size: Option<u64>,
+    /// Last-modified timestamp where reported.
+    pub last_modified: Option<String>,
+}
+
+/// A single SEC litigation-release item from the litigation RSS feed.
+///
+/// Standardizes `regulators/sec/rss_litigation` (the SEC litigation-releases RSS
+/// feed). One row = one release. The title and link are the identity anchors; the
+/// publication date and summary are [`Option`] because feed items vary.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct LitigationRelease {
+    /// Release title.
+    #[validate(length(min = 1))]
+    pub title: String,
+    /// Link to the litigation-release document.
+    #[validate(length(min = 1))]
+    pub link: String,
+    /// Publication date as reported in the feed.
+    pub published: Option<String>,
+    /// Short summary / description of the release.
+    pub summary: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1679,6 +1805,117 @@ mod tests {
         let bad = CompanyFacts {
             concept: String::new(),
             ..fact
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn futures_instrument_round_trips_and_validates() {
+        let inst = FuturesInstrument {
+            instrument_name: "BTC-PERPETUAL".to_string(),
+            kind: "future".to_string(),
+            currency: Some("BTC".to_string()),
+            strike: None,
+            expiration_timestamp: None,
+            option_type: None,
+            is_active: Some(true),
+        };
+        assert!(inst.validate().is_ok());
+        round_trip(&inst);
+
+        let bad = FuturesInstrument {
+            instrument_name: String::new(),
+            ..inst
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn sec_institution_round_trips_and_validates() {
+        let row = SecInstitution {
+            cik: "320193".to_string(),
+            name: "Apple Inc.".to_string(),
+            symbol: Some("AAPL".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = SecInstitution {
+            name: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn sic_code_round_trips_and_validates() {
+        let row = SicCode {
+            code: "3571".to_string(),
+            description: "Electronic Computers".to_string(),
+            office: Some("Office of Technology".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = SicCode {
+            code: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn filing_header_round_trips_and_validates() {
+        let row = FilingHeader {
+            cik: "320193".to_string(),
+            accession_number: "0000320193-24-000123".to_string(),
+            form_type: Some("10-K".to_string()),
+            filing_date: Some("2024-10-01".to_string()),
+            period_of_report: Some("2024-09-28".to_string()),
+            description: Some("Annual report".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = FilingHeader {
+            accession_number: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn filing_file_round_trips_and_validates() {
+        let row = FilingFile {
+            name: "aapl-20240928.htm".to_string(),
+            file_type: Some("10-K".to_string()),
+            size: Some(1_234_567),
+            last_modified: Some("2024-10-01 18:01:14".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = FilingFile {
+            name: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn litigation_release_round_trips_and_validates() {
+        let row = LitigationRelease {
+            title: "SEC Charges Example Corp".to_string(),
+            link: "https://www.sec.gov/litigation/litreleases/lr-12345".to_string(),
+            published: Some("Mon, 03 Jun 2024 12:00:00 EST".to_string()),
+            summary: Some("The SEC announced charges...".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = LitigationRelease {
+            link: String::new(),
+            ..row
         };
         assert!(bad.validate().is_err());
     }
