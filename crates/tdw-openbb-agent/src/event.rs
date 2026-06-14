@@ -18,8 +18,10 @@
 //! | `reasoning_step`   | `{ "event_type":"INFO\|SUCCESS\|WARNING\|ERROR", "message", "details"? }` |
 //! | `table`            | `{ "name", "description"?, "data":[{row}] }`               |
 //! | `chart`            | `{ "name"?, "type", "data":[…], "x_key", "y_keys":[…] }`   |
-//! | `citations`        | `{ "citations":[{ "source_widget_id", "input_arguments"? }] }` |
+//! | `citations`        | `{ "citations":[{ "source_widget_id", "input_arguments"?, "extra_citations"?, "source_info"? }] }` |
 //! | `get_widget_data`  | `{ "data_sources":[{ "widget_id"/"uuid", "input_arguments"? }] }` |
+//! | `html`             | `{ "name"?, "html":"<…>" }` — a custom rendered HTML artifact |
+//! | `prompt_suggestions`| `{ "suggestions":["<prompt>", …] }` — follow-up prompts at stream end |
 //!
 //! # Documented ambiguities (defensible readings)
 //!
@@ -104,8 +106,48 @@ impl ChartType {
     }
 }
 
+/// Page-anchored source detail for a [`Citation`] backed by a document (e.g. a
+/// PDF the user attached as context, examples 35/36).
+///
+/// Mirrors the `openbb-ai` PDF-citation `source_info` shape: a free-form
+/// document name/uri plus an optional 1-based page number the cited passage was
+/// drawn from. Both fields serialize only when present so a widget-only citation
+/// stays the lean `{ source_widget_id, … }` shape.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SourceInfo {
+    /// The document this citation is drawn from (a file name, title, or uri).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The source kind (e.g. `"document"`, `"pdf"`, `"web"`), when known.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    /// The 1-based page number the cited passage was drawn from, for paginated
+    /// documents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+}
+
+impl SourceInfo {
+    /// A document `source_info` of `type: "document"` for `name`, page-anchored
+    /// at the 1-based `page`.
+    #[must_use]
+    pub fn document_page(name: impl Into<String>, page: u32) -> Self {
+        Self {
+            name: Some(name.into()),
+            source_type: Some("document".to_string()),
+            page: Some(page),
+        }
+    }
+}
+
 /// One source attribution in a [`SseEvent::Citations`] event: which widget (and
 /// with which input arguments) backed part of the answer.
+///
+/// Beyond the widget binding the citation can carry the richer `openbb-ai`
+/// fields (gap #7): `extra_citations` (additional widget ids that also backed
+/// the same claim) and `source_info` (page-anchored document detail for a
+/// PDF/file-backed citation, examples 35/36). All extra fields serialize only
+/// when set, so a plain widget citation keeps its original wire shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Citation {
     /// The id of the widget this citation attributes to.
@@ -113,6 +155,14 @@ pub struct Citation {
     /// The input arguments used when reading the widget, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_arguments: Option<Value>,
+    /// Additional widget ids that also backed this same claim (so one citation
+    /// can attribute to several sources without emitting a citation each).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_citations: Vec<String>,
+    /// Page-anchored document detail when this citation is backed by a file/PDF
+    /// context item rather than (or in addition to) a dashboard widget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_info: Option<SourceInfo>,
 }
 
 impl Citation {
@@ -122,6 +172,8 @@ impl Citation {
         Self {
             source_widget_id: widget_id.into(),
             input_arguments: None,
+            extra_citations: Vec::new(),
+            source_info: None,
         }
     }
 
@@ -131,6 +183,36 @@ impl Citation {
         Self {
             source_widget_id: widget_id.into(),
             input_arguments: Some(input_arguments),
+            extra_citations: Vec::new(),
+            source_info: None,
+        }
+    }
+
+    /// Attach additional widget ids that also backed this same claim.
+    #[must_use]
+    pub fn with_extra_citations(mut self, extra: Vec<String>) -> Self {
+        self.extra_citations = extra;
+        self
+    }
+
+    /// Attach page-anchored document `source_info` (a file/PDF-backed citation).
+    #[must_use]
+    pub fn with_source_info(mut self, source_info: SourceInfo) -> Self {
+        self.source_info = Some(source_info);
+        self
+    }
+
+    /// Build a document-backed citation: `source_widget_id` is the document
+    /// name (so widget-keyed renderers still show a source), and the
+    /// page-anchored detail is carried in `source_info`.
+    #[must_use]
+    pub fn document(name: impl Into<String>, page: u32) -> Self {
+        let name = name.into();
+        Self {
+            source_widget_id: name.clone(),
+            input_arguments: None,
+            extra_citations: Vec::new(),
+            source_info: Some(SourceInfo::document_page(name, page)),
         }
     }
 }
@@ -222,6 +304,52 @@ pub enum SseEvent {
         /// The widgets whose data the frontend should fetch.
         data_sources: Vec<WidgetDataRequest>,
     },
+    /// A custom rendered HTML artifact (the `openbb-ai` HTML-artifact output,
+    /// example 39): an arbitrary HTML fragment Workspace renders inline.
+    HtmlArtifact {
+        /// Optional artifact name shown above the rendered HTML.
+        name: Option<String>,
+        /// The raw HTML to render.
+        html: String,
+    },
+    /// A list of follow-up prompts to suggest after the answer (the `openbb-ai`
+    /// `prompt_suggestions` output, example UX parity): emitted once at stream
+    /// end so the UI can offer the user next questions.
+    PromptSuggestions {
+        /// The suggested follow-up prompts, in display order.
+        suggestions: Vec<String>,
+    },
+}
+
+/// Render the `data:` JSON for a [`SseEvent::Chart`] frame (extracted so
+/// [`SseEvent::data_json`] stays within the line budget).
+fn chart_json(
+    name: Option<&str>,
+    chart_type: ChartType,
+    data: &[Value],
+    x_key: &str,
+    y_keys: &[String],
+) -> Value {
+    let mut map = Map::new();
+    if let Some(name) = name {
+        map.insert("name".to_string(), Value::String(name.to_string()));
+    }
+    map.insert(
+        "type".to_string(),
+        Value::String(chart_type.as_wire().to_string()),
+    );
+    map.insert("data".to_string(), Value::Array(data.to_vec()));
+    map.insert("x_key".to_string(), Value::String(x_key.to_string()));
+    map.insert(
+        "y_keys".to_string(),
+        Value::Array(
+            y_keys
+                .iter()
+                .map(|key| Value::String(key.clone()))
+                .collect(),
+        ),
+    );
+    Value::Object(map)
 }
 
 impl SseEvent {
@@ -235,6 +363,8 @@ impl SseEvent {
             Self::Chart { .. } => "chart",
             Self::Citations { .. } => "citations",
             Self::GetWidgetData { .. } => "get_widget_data",
+            Self::HtmlArtifact { .. } => "html",
+            Self::PromptSuggestions { .. } => "prompt_suggestions",
         }
     }
 
@@ -285,28 +415,7 @@ impl SseEvent {
                 data,
                 x_key,
                 y_keys,
-            } => {
-                let mut map = Map::new();
-                if let Some(name) = name {
-                    map.insert("name".to_string(), Value::String(name.clone()));
-                }
-                map.insert(
-                    "type".to_string(),
-                    Value::String(chart_type.as_wire().to_string()),
-                );
-                map.insert("data".to_string(), Value::Array(data.clone()));
-                map.insert("x_key".to_string(), Value::String(x_key.clone()));
-                map.insert(
-                    "y_keys".to_string(),
-                    Value::Array(
-                        y_keys
-                            .iter()
-                            .map(|key| Value::String(key.clone()))
-                            .collect(),
-                    ),
-                );
-                Value::Object(map)
-            }
+            } => chart_json(name.as_deref(), *chart_type, data, x_key, y_keys),
             Self::Citations { citations } => {
                 let mut map = Map::new();
                 map.insert(
@@ -320,6 +429,27 @@ impl SseEvent {
                 map.insert(
                     "data_sources".to_string(),
                     serde_json::to_value(data_sources).unwrap_or(Value::Null),
+                );
+                Value::Object(map)
+            }
+            Self::HtmlArtifact { name, html } => {
+                let mut map = Map::new();
+                if let Some(name) = name {
+                    map.insert("name".to_string(), Value::String(name.clone()));
+                }
+                map.insert("html".to_string(), Value::String(html.clone()));
+                Value::Object(map)
+            }
+            Self::PromptSuggestions { suggestions } => {
+                let mut map = Map::new();
+                map.insert(
+                    "suggestions".to_string(),
+                    Value::Array(
+                        suggestions
+                            .iter()
+                            .map(|prompt| Value::String(prompt.clone()))
+                            .collect(),
+                    ),
                 );
                 Value::Object(map)
             }
@@ -367,6 +497,28 @@ impl SseEvent {
     #[must_use]
     pub const fn get_widget_data(data_sources: Vec<WidgetDataRequest>) -> Self {
         Self::GetWidgetData { data_sources }
+    }
+
+    /// Convenience constructor for a named [`SseEvent::HtmlArtifact`].
+    #[must_use]
+    pub fn html_artifact(name: impl Into<String>, html: impl Into<String>) -> Self {
+        Self::HtmlArtifact {
+            name: Some(name.into()),
+            html: html.into(),
+        }
+    }
+
+    /// Convenience constructor for a [`SseEvent::PromptSuggestions`] event from
+    /// any iterable of prompt strings.
+    #[must_use]
+    pub fn prompt_suggestions<I, S>(suggestions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::PromptSuggestions {
+            suggestions: suggestions.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -462,10 +614,76 @@ mod tests {
     }
 
     #[test]
+    fn prompt_suggestions_frame_is_golden() {
+        let event = SseEvent::prompt_suggestions(["What about MSFT?", "Show me the chart"]);
+        let frame = event.to_sse_frame();
+        assert_eq!(
+            frame,
+            "event: prompt_suggestions\ndata: {\"suggestions\":[\"What about MSFT?\",\"Show me the chart\"]}\n\n"
+        );
+    }
+
+    #[test]
+    fn html_artifact_frame_carries_name_and_html() {
+        let event = SseEvent::html_artifact("Summary", "<b>hi</b>");
+        let frame = event.to_sse_frame();
+        // serde_json serializes object keys in sorted order (html before name).
+        assert_eq!(
+            frame,
+            "event: html\ndata: {\"html\":\"<b>hi</b>\",\"name\":\"Summary\"}\n\n"
+        );
+    }
+
+    #[test]
+    fn html_artifact_omits_name_when_absent() {
+        let event = SseEvent::HtmlArtifact {
+            name: None,
+            html: "<p>x</p>".to_string(),
+        };
+        let frame = event.to_sse_frame();
+        assert_eq!(frame, "event: html\ndata: {\"html\":\"<p>x</p>\"}\n\n");
+    }
+
+    #[test]
+    fn citation_with_extra_and_source_info_serializes_the_rich_fields() {
+        let citation = Citation::with_arguments("w-1", json!({"symbol": "AAPL"}))
+            .with_extra_citations(vec!["w-2".to_string()])
+            .with_source_info(SourceInfo::document_page("10-K.pdf", 42));
+        let event = SseEvent::citations(vec![citation]);
+        let data = event.data_json();
+        let entry = &data["citations"][0];
+        assert_eq!(entry["source_widget_id"], "w-1");
+        assert_eq!(entry["extra_citations"][0], "w-2");
+        assert_eq!(entry["source_info"]["name"], "10-K.pdf");
+        assert_eq!(entry["source_info"]["type"], "document");
+        assert_eq!(entry["source_info"]["page"], 42);
+    }
+
+    #[test]
+    fn plain_citation_omits_the_rich_fields() {
+        let event = SseEvent::citations(vec![Citation::new("w-9")]);
+        let frame = event.to_sse_frame();
+        // No empty extra_citations array, no null source_info.
+        assert!(!frame.contains("extra_citations"));
+        assert!(!frame.contains("source_info"));
+    }
+
+    #[test]
+    fn document_citation_is_page_anchored() {
+        let event = SseEvent::citations(vec![Citation::document("filing.pdf", 7)]);
+        let data = event.data_json();
+        let entry = &data["citations"][0];
+        assert_eq!(entry["source_widget_id"], "filing.pdf");
+        assert_eq!(entry["source_info"]["page"], 7);
+    }
+
+    #[test]
     fn frame_always_ends_with_blank_line() {
         for event in [
             SseEvent::message_chunk("x"),
             SseEvent::reasoning_step(ReasoningStatus::Success, "ok"),
+            SseEvent::html_artifact("a", "<i>b</i>"),
+            SseEvent::prompt_suggestions(["next?"]),
         ] {
             assert!(event.to_sse_frame().ends_with("\n\n"));
         }

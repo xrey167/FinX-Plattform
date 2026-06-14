@@ -10,22 +10,52 @@
 //! # Flow
 //!
 //! 1. Emit an opening `reasoning_step` (INFO) so the user sees activity.
-//! 2. If [`needs_widget_data`] returns a request (first leg of the two-request
-//!    pattern — primary widgets present, no folded tool result yet), emit a
-//!    `reasoning_step` (INFO) then a `get_widget_data` event and **stop**
-//!    ([`Answer::closed_for_widget_data`] is `true`). The transport closes the
-//!    stream; the frontend re-POSTs with the folded `tool` result.
+//! 2. If [`widget_data_requests`] returns a non-empty batch (a leg of the
+//!    two-request pattern — fetchable widgets whose data is not yet folded in),
+//!    emit a `reasoning_step` (INFO) then a single `get_widget_data` event
+//!    naming the whole batch and **stop** ([`Answer::closed_for_widget_data`] is
+//!    `true`). The transport closes the stream; the frontend re-POSTs with the
+//!    folded `tool` result(s). Because the batch skips already-fetched widgets,
+//!    this naturally chains across multiple rounds.
 //! 3. Otherwise assemble the prompt, drive `complete_streaming`, and emit one
 //!    `message_chunk` per fragment. If the conversation carried widget data,
 //!    emit a closing `citations` event attributing the answer to the primary
-//!    widget(s), preceded by a `SUCCESS` reasoning step.
+//!    widget(s), preceded by a `SUCCESS` reasoning step. Finally emit a
+//!    `prompt_suggestions` event with follow-up prompts.
 
 use tdw_llm::StreamingLanguageModel;
 
-use crate::decision::needs_widget_data;
+use crate::decision::widget_data_requests;
 use crate::event::{Citation, ReasoningStatus, SseEvent};
 use crate::prompt::{DEFAULT_MAX_OUTPUT_TOKENS, assemble_chat_request};
 use crate::request::QueryRequest;
+
+/// Whether the agent fetches secondary (dashboard-context) widgets in addition
+/// to primary ones — the `widget-dashboard-search` capability. Enabled by
+/// default so the agent reads the whole dashboard context; a turn can still
+/// disable it via the `widget-dashboard-search: false` workspace option.
+fn secondary_search_enabled(request: &QueryRequest) -> bool {
+    request
+        .workspace_options
+        .get("widget-dashboard-search")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// The follow-up prompts the agent suggests after every answered turn.
+///
+/// Kept deterministic (no model round-trip) so the offline golden transcript is
+/// stable; a richer agent can replace these with model-generated suggestions.
+fn follow_up_suggestions(request: &QueryRequest) -> Vec<String> {
+    let mut suggestions = vec![
+        "Can you summarize the key takeaways?".to_string(),
+        "What are the risks I should watch?".to_string(),
+    ];
+    if request.widgets.primary.iter().any(|w| w.id().is_some()) {
+        suggestions.push("Chart this data over time.".to_string());
+    }
+    suggestions
+}
 
 /// The ordered events for one copilot turn, plus whether the turn closed early
 /// to await widget data.
@@ -59,12 +89,21 @@ pub fn answer_with_budget(
         "Reviewing your question and dashboard widgets",
     )];
 
-    if let Some(data_request) = needs_widget_data(request) {
+    let data_requests = widget_data_requests(request, secondary_search_enabled(request));
+    if !data_requests.is_empty() {
+        let ids: Vec<&str> = data_requests
+            .iter()
+            .map(|request| request.widget_id.as_str())
+            .collect();
         events.push(SseEvent::reasoning_step(
             ReasoningStatus::Info,
-            format!("Fetching data for widget {}", data_request.widget_id),
+            format!(
+                "Fetching data for {} widget(s): {}",
+                ids.len(),
+                ids.join(", ")
+            ),
         ));
-        events.push(SseEvent::get_widget_data(vec![data_request]));
+        events.push(SseEvent::get_widget_data(data_requests));
         return Answer {
             events,
             closed_for_widget_data: true,
@@ -82,16 +121,20 @@ pub fn answer_with_budget(
             for chunk in chunks {
                 events.push(SseEvent::message_chunk(chunk));
             }
-            if request.has_tool_result() {
+            let grounded = request.has_tool_result() || request.grounded_context().next().is_some();
+            if grounded {
                 events.push(SseEvent::reasoning_step(
                     ReasoningStatus::Success,
-                    "Answered using fetched widget data",
+                    "Answered using fetched widget data and attached context",
                 ));
                 let citations = citations_for(request);
                 if !citations.is_empty() {
                     events.push(SseEvent::citations(citations));
                 }
             }
+            // Close every answered turn with follow-up prompt suggestions (the
+            // `prompt_suggestions` UX-parity event).
+            events.push(SseEvent::prompt_suggestions(follow_up_suggestions(request)));
         }
         Err(error) => {
             events.push(SseEvent::reasoning_step(
@@ -114,23 +157,26 @@ pub fn answer(request: &QueryRequest, model: &dyn StreamingLanguageModel) -> Ans
 }
 
 /// Build citations attributing the answer to the primary widgets (each carrying
-/// its current params as the input arguments).
+/// its current params as the input arguments) and to any grounded document
+/// context (page-anchored, gap #7/#12).
 fn citations_for(request: &QueryRequest) -> Vec<Citation> {
-    request
-        .widgets
-        .primary
-        .iter()
-        .filter_map(|widget| {
-            let id = widget.id()?.to_string();
-            let citation = match &widget.params {
-                serde_json::Value::Object(map) if !map.is_empty() => {
-                    Citation::with_arguments(id, serde_json::Value::Object(map.clone()))
-                }
-                _ => Citation::new(id),
-            };
-            Some(citation)
-        })
-        .collect()
+    let widget_citations = request.widgets.primary.iter().filter_map(|widget| {
+        let id = widget.id()?.to_string();
+        let citation = match &widget.params {
+            serde_json::Value::Object(map) if !map.is_empty() => {
+                Citation::with_arguments(id, serde_json::Value::Object(map.clone()))
+            }
+            _ => Citation::new(id),
+        };
+        Some(citation)
+    });
+    let document_citations = request.grounded_context().map(|file| {
+        file.page.map_or_else(
+            || Citation::new(file.label().to_string()),
+            |page| Citation::document(file.label().to_string(), page),
+        )
+    });
+    widget_citations.chain(document_citations).collect()
 }
 
 #[cfg(test)]
@@ -251,9 +297,18 @@ mod tests {
         let names: Vec<&str> = result.events.iter().map(SseEvent::event_name).collect();
         assert_eq!(names.first(), Some(&"reasoning_step"));
         assert!(names.contains(&"message_chunk"), "streams the answer");
-        assert_eq!(names.last(), Some(&"citations"), "closes with citations");
+        assert!(names.contains(&"citations"), "emits citations");
+        assert_eq!(
+            names.last(),
+            Some(&"prompt_suggestions"),
+            "closes with follow-up suggestions"
+        );
         // The citation attributes to the primary widget with its params.
-        let citation_event = result.events.last().expect("citations event");
+        let citation_event = result
+            .events
+            .iter()
+            .find(|event| event.event_name() == "citations")
+            .expect("citations event");
         let data = citation_event.data_json();
         assert_eq!(data["citations"][0]["source_widget_id"], "w-1");
         assert_eq!(data["citations"][0]["input_arguments"]["symbol"], "AAPL");
@@ -274,6 +329,141 @@ mod tests {
             "no widget data, no citations"
         );
         assert!(!names.contains(&"get_widget_data"));
+    }
+
+    #[test]
+    fn every_answered_turn_ends_with_prompt_suggestions() {
+        let request = QueryRequest {
+            messages: vec![human("What is a P/E ratio?")],
+            ..QueryRequest::default()
+        };
+        let result = answer(&request, &EchoStub);
+        let last = result.events.last().expect("at least one event");
+        assert_eq!(last.event_name(), "prompt_suggestions");
+        let data = last.data_json();
+        assert!(
+            data["suggestions"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty()),
+            "non-empty follow-up prompts"
+        );
+    }
+
+    #[test]
+    fn first_leg_requests_all_primary_widgets_in_one_batch() {
+        let request = QueryRequest {
+            messages: vec![human("compare AAPL and MSFT")],
+            widgets: Widgets {
+                primary: vec![
+                    Widget {
+                        uuid: Some("w-1".to_string()),
+                        params: json!({"symbol": "AAPL"}),
+                        ..Widget::default()
+                    },
+                    Widget {
+                        uuid: Some("w-2".to_string()),
+                        params: json!({"symbol": "MSFT"}),
+                        ..Widget::default()
+                    },
+                ],
+                secondary: vec![],
+            },
+            ..QueryRequest::default()
+        };
+        let result = answer(&request, &EchoStub);
+        assert!(result.closed_for_widget_data);
+        let get = result
+            .events
+            .iter()
+            .find(|event| event.event_name() == "get_widget_data")
+            .expect("get_widget_data event");
+        let data = get.data_json();
+        let sources = data["data_sources"].as_array().expect("array");
+        assert_eq!(sources.len(), 2, "both primary widgets requested at once");
+    }
+
+    #[test]
+    fn secondary_widgets_fetched_when_search_enabled_by_default() {
+        let request = QueryRequest {
+            messages: vec![human("q")],
+            widgets: Widgets {
+                primary: vec![Widget {
+                    uuid: Some("w-1".to_string()),
+                    ..Widget::default()
+                }],
+                secondary: vec![Widget {
+                    uuid: Some("w-ctx".to_string()),
+                    ..Widget::default()
+                }],
+            },
+            ..QueryRequest::default()
+        };
+        let result = answer(&request, &EchoStub);
+        let get = result
+            .events
+            .iter()
+            .find(|event| event.event_name() == "get_widget_data")
+            .expect("get_widget_data");
+        let sources = get.data_json()["data_sources"]
+            .as_array()
+            .expect("array")
+            .len();
+        assert_eq!(sources, 2, "primary + secondary fetched");
+    }
+
+    #[test]
+    fn secondary_search_can_be_disabled_via_workspace_option() {
+        let request = QueryRequest {
+            messages: vec![human("q")],
+            widgets: Widgets {
+                primary: vec![Widget {
+                    uuid: Some("w-1".to_string()),
+                    ..Widget::default()
+                }],
+                secondary: vec![Widget {
+                    uuid: Some("w-ctx".to_string()),
+                    ..Widget::default()
+                }],
+            },
+            workspace_options: json!({"widget-dashboard-search": false}),
+            ..QueryRequest::default()
+        };
+        let result = answer(&request, &EchoStub);
+        let get = result
+            .events
+            .iter()
+            .find(|event| event.event_name() == "get_widget_data")
+            .expect("get_widget_data");
+        let sources = get.data_json()["data_sources"]
+            .as_array()
+            .expect("array")
+            .len();
+        assert_eq!(sources, 1, "secondary skipped when search disabled");
+    }
+
+    #[test]
+    fn document_context_answer_cites_by_page() {
+        use crate::request::ContextFile;
+        let request = QueryRequest {
+            messages: vec![human("what did revenue do?")],
+            context: vec![ContextFile {
+                name: Some("10-K.pdf".to_string()),
+                content: Some("Revenue grew 12%.".to_string()),
+                page: Some(5),
+                ..ContextFile::default()
+            }],
+            ..QueryRequest::default()
+        };
+        let result = answer(&request, &EchoStub);
+        assert!(!result.closed_for_widget_data);
+        let citation = result
+            .events
+            .iter()
+            .find(|event| event.event_name() == "citations")
+            .expect("document answer cites its source");
+        let data = citation.data_json();
+        assert_eq!(data["citations"][0]["source_widget_id"], "10-K.pdf");
+        assert_eq!(data["citations"][0]["source_info"]["page"], 5);
     }
 
     #[test]

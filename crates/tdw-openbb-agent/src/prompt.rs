@@ -72,6 +72,30 @@ fn system_text(request: &QueryRequest) -> String {
             let _ = writeln!(text, "- {url}");
         }
     }
+    // File/PDF context (gap #12): fold the pre-extracted text of each attached
+    // document in as grounded context the model may quote and cite by page.
+    let grounded: Vec<&crate::request::ContextFile> = request.grounded_context().collect();
+    if !grounded.is_empty() {
+        text.push_str("\nAttached documents (cite by name and page when used):\n");
+        for file in grounded {
+            let page = file.page.map_or(String::new(), |p| format!(", page {p}"));
+            let body = file.grounded_text().unwrap_or_default();
+            let _ = writeln!(text, "- {}{page}:\n{body}", file.label());
+        }
+    }
+    // Configurable features (gap #14): reflect the workspace_options the user set
+    // in the UI so the model honors them (web search / deep research / a custom
+    // agent name). Values are advisory context, not tool grants.
+    if let Some(agent_name) = request.option_str("agent-name") {
+        let _ = write!(text, "\n\nYou are operating as \"{agent_name}\".");
+    }
+    if request.option_flag("deep-research") {
+        text.push_str(
+            " Deep-research mode is on: be thorough and decompose the question into steps.",
+        );
+    } else if request.option_flag("web-search") {
+        text.push_str(" Web search is enabled for this turn.");
+    }
     text
 }
 
@@ -212,6 +236,29 @@ mod tests {
         // System + one non-empty user turn.
         assert_eq!(chat.messages.len(), 2);
         assert_eq!(chat.messages[1].content, "real question");
+    }
+
+    #[test]
+    fn folds_document_context_and_workspace_options_into_system_text() {
+        use crate::request::ContextFile;
+        let request = QueryRequest {
+            messages: vec![human("summarize")],
+            context: vec![ContextFile {
+                name: Some("10-K.pdf".to_string()),
+                content: Some("Revenue grew 12%.".to_string()),
+                page: Some(5),
+                ..ContextFile::default()
+            }],
+            workspace_options: json!({"agent-name": "Scout", "deep-research": true}),
+            ..QueryRequest::default()
+        };
+        let chat = assemble_default(&request);
+        let system = &chat.messages[0].content;
+        assert!(system.contains("10-K.pdf"));
+        assert!(system.contains("page 5"));
+        assert!(system.contains("Revenue grew 12%."));
+        assert!(system.contains("operating as \"Scout\""));
+        assert!(system.contains("Deep-research mode is on"));
     }
 
     #[test]

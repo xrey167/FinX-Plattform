@@ -142,7 +142,12 @@ fn example_50_grounded_turn_emits_reasoning_chunks_and_citations() {
         .collect();
     assert_eq!(names.first(), Some(&"reasoning_step"));
     assert!(names.contains(&"message_chunk"), "streams the answer");
-    assert_eq!(names.last(), Some(&"citations"), "closes with citations");
+    assert!(names.contains(&"citations"), "attributes its sources");
+    assert_eq!(
+        names.last(),
+        Some(&"prompt_suggestions"),
+        "closes with follow-up suggestions"
+    );
 
     // The golden SSE transcript ends with a citation to the example's widget.
     let transcript = reasoning_citations::sse_transcript();
@@ -178,10 +183,14 @@ async fn example_60_two_request_round_trip() {
         names2.iter().any(|name| name == "message_chunk"),
         "leg 2 answers; events: {names2:?}"
     );
+    assert!(
+        names2.iter().any(|name| name == "citations"),
+        "leg 2 attributes its sources; events: {names2:?}"
+    );
     assert_eq!(
         names2.last().map(String::as_str),
-        Some("citations"),
-        "leg 2 closes with citations; events: {names2:?}"
+        Some("prompt_suggestions"),
+        "leg 2 closes with follow-up suggestions; events: {names2:?}"
     );
     assert!(
         round_trip.leg2.sse_data().contains("185.6"),
