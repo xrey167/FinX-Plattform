@@ -184,6 +184,8 @@ pub enum NasdaqCalendarKind {
     Earnings,
     /// IPO calendar (`equity/calendar/ipo`).
     Ipo,
+    /// Corporate-events calendar (`equity/calendar/events`).
+    Events,
 }
 
 impl NasdaqCalendarKind {
@@ -193,6 +195,7 @@ impl NasdaqCalendarKind {
             Self::Dividends => "dividend",
             Self::Earnings => "earnings",
             Self::Ipo => "ipo",
+            Self::Events => "event",
         }
     }
 
@@ -204,6 +207,7 @@ impl NasdaqCalendarKind {
             Self::Dividends => "dividends",
             Self::Earnings => "earnings",
             Self::Ipo => "ipo",
+            Self::Events => "events",
         }
     }
 }
@@ -277,6 +281,7 @@ impl Fetcher<NasdaqCalendarQuery, CalendarEvent> for NasdaqHttpCalendarFetcher {
             NasdaqCalendarKind::Dividends => "calendar/dividends",
             NasdaqCalendarKind::Earnings => "calendar/earnings",
             NasdaqCalendarKind::Ipo => "ipo/calendar",
+            NasdaqCalendarKind::Events => "calendar/events",
         };
         let endpoint = format!("{}/{path}", self.base_url().trim_end_matches('/'));
         let mut query_params: Vec<(&str, String)> = Vec::new();
@@ -372,6 +377,13 @@ fn decode_calendar_row(kind: NasdaqCalendarKind, row: &Value) -> Option<Calendar
             event.price = num_field(row, &["proposedSharePrice", "price"]);
             event.shares = num_field(row, &["sharesOffered", "shares"]);
             event.exchange = str_field(row, &["proposedExchange", "exchange", "market"]);
+        }
+        NasdaqCalendarKind::Events => {
+            // Corporate-events rows carry a free-text event title; surface it via
+            // `name` when the row has no separate company name.
+            if event.name.is_none() {
+                event.name = str_field(row, &["eventName", "event", "title"]);
+            }
         }
     }
     Some(event)
@@ -556,4 +568,116 @@ fn value_as_f64(value: &Value) -> Option<f64> {
         Value::String(text) => text.trim().parse::<f64>().ok(),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing top-retail discovery fetcher -> tdw_domain::ScreenerRow
+//
+// The public, keyless NASDAQ market-activity API publishes a top-retail-traded
+// list (`/api/market-activity/quotes/...`). This fetcher normalizes each entry
+// onto the standardized `tdw_domain::ScreenerRow` (the same model the discovery
+// screeners emit). It targets the public NASDAQ host (no key) and reuses the
+// crate's browser-like `User-Agent`. Standardizes `equity/discovery/top_retail`.
+// ---------------------------------------------------------------------------
+
+use tdw_domain::ScreenerRow;
+
+/// Parameter-free query for the keyless NASDAQ top-retail discovery route.
+///
+/// The feed lists the current top retail-traded symbols and takes no filter, so
+/// the query carries no fields; it exists so the fetcher satisfies the
+/// `Fetcher<Q, D>` contract with a `JsonSchema`-bearing query.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+pub struct NasdaqTopRetailQuery {}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production NASDAQ top-retail discovery fetcher (catalog-facing).
+    ///
+    /// Standardizes `equity/discovery/top_retail`, normalized to
+    /// [`tdw_domain::ScreenerRow`]. Talks to the public, keyless NASDAQ
+    /// market-activity API.
+    pub NasdaqHttpTopRetailFetcher,
+    CALENDAR_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<NasdaqTopRetailQuery, ScreenerRow> for NasdaqHttpTopRetailFetcher {
+    const PROVIDER: &'static str = "nasdaq";
+    const ENDPOINT: &'static str = "top_retail";
+
+    fn transform_query(_params: Value) -> Result<NasdaqTopRetailQuery> {
+        Ok(NasdaqTopRetailQuery {})
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &NasdaqTopRetailQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let endpoint = format!(
+            "{}/market-activity/quotes/top-retail",
+            self.base_url().trim_end_matches('/'),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "nasdaq client")?;
+        let response = client
+            .get(&endpoint)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail request: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "nasdaq top_retail returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        _query: &NasdaqTopRetailQuery,
+        raw: Bytes,
+    ) -> Result<Vec<ScreenerRow>> {
+        let value: Value = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail parse_json: {e}")))?;
+        let rows = calendar_rows(&value);
+        Ok(rows.iter().filter_map(decode_top_retail_row).collect())
+    }
+}
+
+/// Decode one top-retail row into a [`ScreenerRow`], or `None` when it carries
+/// no usable symbol. Field names follow the public NASDAQ market-activity
+/// payloads (which reuse the `symbol`/`companyName`/`lastSalePrice` shape).
+fn decode_top_retail_row(row: &Value) -> Option<ScreenerRow> {
+    let symbol = str_field(row, &["symbol", "ticker"])?;
+    Some(ScreenerRow {
+        symbol,
+        company_name: str_field(row, &["companyName", "name", "company"]),
+        market_cap: num_field(row, &["marketCap", "marketcap"]),
+        sector: str_field(row, &["sector"]),
+        industry: str_field(row, &["industry"]),
+        beta: None,
+        price: num_field(row, &["lastSalePrice", "lastsale", "price"]),
+        last_annual_dividend: None,
+        volume: num_field(row, &["volume"]),
+        exchange: str_field(row, &["exchange", "market"]),
+        exchange_short_name: None,
+        country: None,
+        is_etf: None,
+        is_actively_trading: None,
+    })
 }

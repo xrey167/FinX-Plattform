@@ -2,7 +2,9 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{IndexConstituent, Instrument, MarketDataBar, QuoteSnapshot, Sp500Multiple};
+use tdw_domain::{
+    IndexConstituent, IndexSector, Instrument, MarketDataBar, QuoteSnapshot, Sp500Multiple,
+};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -47,8 +49,19 @@ const INDEX_CONSTITUENTS: &[ProviderCandidate] =
 const INDEX_SP500_MULTIPLES: &[ProviderCandidate] =
     &[ProviderCandidate::new("nasdaq", "sp500_multiples")];
 
+/// TMX-backed candidate for `index/sectors` (OpenBB-parity total G003c).
+///
+/// The public TMX market-data index document publishes a per-index sector
+/// breakdown; the `symbol` param selects the index (default `^TSX`). The
+/// endpoint key matches `TmxHttpIndexSectorsFetcher::ENDPOINT`.
+const INDEX_SECTORS: &[ProviderCandidate] = &[ProviderCandidate::new("tmx", "index_sectors")];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
+}
+
+fn index_sector() -> Schema {
+    schema_for!(IndexSector)
 }
 
 fn model_schema() -> Schema {
@@ -133,6 +146,16 @@ pub fn entries() -> Vec<CatalogEntry> {
             bronze_table: Some("raw.sp500_multiple"),
             doc: "S&P 500 valuation multiples incl. Shiller CAPE (NASDAQ Data Link MULTPL).",
             chartable: true,
+        },
+        CatalogEntry {
+            route: "index/sectors",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: index_sector,
+            candidates: INDEX_SECTORS,
+            bronze_table: Some("raw.index_sector"),
+            doc: "Sector-weight breakdown of a market index (default S&P/TSX), TMX-backed (keyless).",
+            chartable: false,
         },
     ]
 }

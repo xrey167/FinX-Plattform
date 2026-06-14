@@ -15,13 +15,14 @@ use std::time::Duration;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
     CompanyFacts, CompanyFiling, EtfHolding, FilingFile, FilingHeader, LitigationRelease,
-    MarketDataBar, OwnershipRecord, SecInstitution, SicCode, SymbolMapping, TimeGranularity,
+    MarketDataBar, OwnershipRecord, SecFilingHtml, SecInstitution, SicCode, SymbolMapping,
+    TimeGranularity,
 };
 use tokio::time::sleep;
 
 use crate::{
     BASE_URL, SecAccessionQuery, SecCikMapQuery, SecFilingsQuery, SecHistoricalQuery,
-    SecSearchQuery,
+    SecHtmlUrlQuery, SecSearchQuery,
 };
 
 /// Public host for the keyless `company_tickers.json` ticker↔CIK directory.
@@ -1690,6 +1691,273 @@ fn parse_company_tickers(raw: &Bytes) -> Result<Vec<SymbolMapping>> {
         });
     }
     Ok(rows)
+}
+
+// ── Filing-HTML retrieval fetcher (regulators/sec/htm_file) ───────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC filing-HTML retrieval fetcher.
+    ///
+    /// Retrieves an HTML document from the EDGAR archive by its absolute
+    /// `https://*.sec.gov/...` URL and wraps it in a single
+    /// [`tdw_domain::SecFilingHtml`] row (the raw HTML body plus its byte
+    /// length and reported content type). Standardizes
+    /// `regulators/sec/htm_file`. The URL host is validated to a `sec.gov`
+    /// domain in [`SecHtmlUrlQuery::new`].
+    pub SecHtmFileHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecHtmlUrlQuery, SecFilingHtml> for SecHtmFileHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "htm_file";
+
+    fn transform_query(params: Value) -> Result<SecHtmlUrlQuery> {
+        let url = params
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec url must be a string".to_string()))?;
+        SecHtmlUrlQuery::new(url).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecHtmlUrlQuery, _creds: &Credentials) -> Result<Bytes> {
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&query.url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec htm_file extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec htm_file returned {status}: {body}"
+            )));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec htm_file read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        // Stash the content type in a sentinel header line so transform_data can
+        // recover it without a second wire type; transform_data strips it.
+        Ok(prepend_content_type(content_type.as_deref(), bytes))
+    }
+
+    fn transform_data(&self, query: &SecHtmlUrlQuery, raw: Bytes) -> Result<Vec<SecFilingHtml>> {
+        let (content_type, body) = split_content_type(&raw);
+        let content = String::from_utf8_lossy(body).into_owned();
+        Ok(vec![SecFilingHtml {
+            url: query.url.clone(),
+            content_length: content.len() as u64,
+            content,
+            content_type,
+        }])
+    }
+}
+
+/// Sentinel prefix used to carry the response `Content-Type` from `extract_data`
+/// into `transform_data` (the `Fetcher` contract only passes raw bytes between
+/// the two). Chosen so it cannot collide with an HTML document body.
+const CONTENT_TYPE_SENTINEL: &[u8] = b"\x00tdw-content-type:";
+
+/// Prefix `body` with the sentinel content-type line, when known.
+fn prepend_content_type(content_type: Option<&str>, body: Bytes) -> Bytes {
+    let Some(content_type) = content_type else {
+        return body;
+    };
+    let mut out =
+        Vec::with_capacity(CONTENT_TYPE_SENTINEL.len() + content_type.len() + 1 + body.len());
+    out.extend_from_slice(CONTENT_TYPE_SENTINEL);
+    out.extend_from_slice(content_type.as_bytes());
+    out.push(b'\n');
+    out.extend_from_slice(&body);
+    Bytes::from(out)
+}
+
+/// Split a sentinel-prefixed buffer back into `(content_type, body)`. Buffers
+/// without the sentinel are returned verbatim with no content type.
+fn split_content_type(raw: &[u8]) -> (Option<String>, &[u8]) {
+    let Some(rest) = raw.strip_prefix(CONTENT_TYPE_SENTINEL) else {
+        return (None, raw);
+    };
+    match rest.iter().position(|&b| b == b'\n') {
+        Some(idx) => {
+            let content_type = String::from_utf8_lossy(&rest[..idx]).into_owned();
+            (Some(content_type), &rest[idx + 1..])
+        }
+        None => (None, raw),
+    }
+}
+
+// ── MD&A section fetcher (equity/fundamental/management_discussion_analysis) ──
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC Management-Discussion-&-Analysis fetcher.
+    ///
+    /// Locates the most recent `10-K` filing for a CIK from the submissions
+    /// index, fetches that filing's primary-document HTML, and wraps it in a
+    /// single [`tdw_domain::SecFilingHtml`] row carrying the document that
+    /// contains the MD&A section. Standardizes
+    /// `equity/fundamental/management_discussion_analysis`. Returning the filing
+    /// document (rather than attempting a fragile in-document section split) is
+    /// the keyless, deterministic contract; downstream consumers extract the
+    /// MD&A item from the returned HTML.
+    pub SecManagementDiscussionAnalysisHttpFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, SecFilingHtml> for SecManagementDiscussionAnalysisHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "management_discussion_analysis";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let submissions_url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client.get(&submissions_url).send().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis submissions: {e}"
+            ))
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis submissions returned {status}: {body}"
+            )));
+        }
+        let submissions = response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read submissions: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+
+        let envelope: SecSubmissionsEnvelope =
+            serde_json::from_slice(&submissions).map_err(|e| {
+                Error::Provider(format!(
+                    "sec management_discussion_analysis parse submissions: {e}"
+                ))
+            })?;
+        let recent = envelope.filings.and_then(|f| f.recent).ok_or_else(|| {
+            Error::Provider("sec management_discussion_analysis: no recent filings".to_string())
+        })?;
+        let ten_k_index = recent
+            .form
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case("10-K"))
+            .ok_or_else(|| {
+                Error::Provider(
+                    "sec management_discussion_analysis: no 10-K filing found".to_string(),
+                )
+            })?;
+        let accession = recent.accession_number.get(ten_k_index).ok_or_else(|| {
+            Error::Provider(
+                "sec management_discussion_analysis: 10-K accession missing".to_string(),
+            )
+        })?;
+        let accession_nodash = accession.replace('-', "");
+        let cik_unpadded = query.cik.trim_start_matches('0');
+        let cik_unpadded = if cik_unpadded.is_empty() {
+            "0"
+        } else {
+            cik_unpadded
+        };
+        // Fetch the filing index to locate the primary HTML document.
+        let index_url = format!(
+            "{WWW_BASE_URL}/Archives/edgar/data/{cik_unpadded}/{accession_nodash}/index.json",
+        );
+        let index_response = client.get(&index_url).send().await.map_err(|e| {
+            Error::Provider(format!("sec management_discussion_analysis index: {e}"))
+        })?;
+        if !index_response.status().is_success() {
+            let status = index_response.status();
+            let body = index_response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis index returned {status}: {body}"
+            )));
+        }
+        let index_bytes = index_response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read index: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+        let index: SecFilingIndexEnvelope = serde_json::from_slice(&index_bytes).map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis parse index: {e}"
+            ))
+        })?;
+        let primary = index
+            .directory
+            .map(|d| d.item)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| item.name)
+            .find(|name| {
+                let lower = name.to_ascii_lowercase();
+                (lower.ends_with(".htm") || lower.ends_with(".html")) && !lower.contains("index")
+            })
+            .ok_or_else(|| {
+                Error::Provider(
+                    "sec management_discussion_analysis: no primary HTML document in filing"
+                        .to_string(),
+                )
+            })?;
+        let doc_url = format!(
+            "{WWW_BASE_URL}/Archives/edgar/data/{cik_unpadded}/{accession_nodash}/{primary}",
+        );
+        let doc_response = client.get(&doc_url).send().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis primary_doc: {e}"
+            ))
+        })?;
+        if !doc_response.status().is_success() {
+            let status = doc_response.status();
+            let body = doc_response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis primary_doc returned {status}: {body}"
+            )));
+        }
+        let html = doc_response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read primary_doc: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(prepend_content_type(Some(&doc_url), html))
+    }
+
+    fn transform_data(&self, _query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<SecFilingHtml>> {
+        // `extract_data` stashes the resolved document URL in the sentinel line.
+        let (url, body) = split_content_type(&raw);
+        let content = String::from_utf8_lossy(body).into_owned();
+        Ok(vec![SecFilingHtml {
+            url: url.unwrap_or_default(),
+            content_length: content.len() as u64,
+            content,
+            content_type: Some("text/html".to_string()),
+        }])
+    }
 }
 
 // ── Inline unit tests for transform_data (no network) ────────────────────────

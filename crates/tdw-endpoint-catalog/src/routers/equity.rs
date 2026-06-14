@@ -7,7 +7,7 @@ use tdw_domain::{
     EarningsTranscript, EmployeeCount, EquityHistoricalData, EsgScore, Estimate,
     ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument, KeyExecutive,
     KeyMetrics, OtcMarketVolume, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
-    RevenueSegment, ScreenerRow, ShortInterest,
+    RevenueSegment, ScreenerRow, SecFilingHtml, ShortInterest,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -207,8 +207,34 @@ const EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS: &[ProviderCandidate] = &[Provider
     "discovery_undervalued_large_caps",
 )];
 
+// OpenBB-parity total G003c: the free-closeable equity remainder. Each route is
+// its own provider fetcher keyed by its `ENDPOINT` const, except `calendar/events`
+// which reuses the shared keyless NASDAQ calendar fetcher (the `events` calendar
+// discriminator is injected per dispatch binding, so the route gets the
+// `'/'→'_'` dispatch key, mirroring the dividends/earnings/ipo calendars). FMP
+// free-tier (major_holders, market_snapshots, forward_ebitda), keyless NASDAQ
+// (calendar/events, discovery/top_retail), and keyless SEC (MD&A).
+const EQUITY_OWNERSHIP_MAJOR_HOLDERS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "major_holders")];
+const EQUITY_MARKET_SNAPSHOTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "market_snapshots")];
+const EQUITY_ESTIMATES_FORWARD_EBITDA: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "forward_ebitda")];
+const EQUITY_CALENDAR_EVENTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "equity_calendar_events")];
+const EQUITY_DISCOVERY_TOP_RETAIL: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "top_retail")];
+const EQUITY_FUNDAMENTAL_MD_AND_A: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "sec",
+    "management_discussion_analysis",
+)];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
+}
+
+fn sec_filing_html() -> Schema {
+    schema_for!(SecFilingHtml)
 }
 
 fn model_schema() -> Schema {
@@ -469,7 +495,60 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries.extend(p4w2_entries());
     entries.extend(p4w3_entries());
     entries.extend(p4w10_entries());
+    entries.extend(g003c_entries());
     entries
+}
+
+/// OpenBB-parity total G003c free-closeable equity remainder: FMP major
+/// holders, the full-exchange market snapshot, the forward-EBITDA estimate, the
+/// keyless NASDAQ corporate-events calendar and top-retail discovery feed, and
+/// the keyless SEC Management-Discussion-&-Analysis document. Split out of
+/// [`entries`] to keep each function compact; appended in declaration order.
+fn g003c_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/ownership/major_holders",
+            ownership_record,
+            EQUITY_OWNERSHIP_MAJOR_HOLDERS,
+            "raw.ownership_record",
+            "Major institutional holders of a company, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/market_snapshots",
+            price_quote,
+            EQUITY_MARKET_SNAPSHOTS,
+            "raw.price_quote",
+            "Full-exchange market snapshot (per-symbol last-price quotes), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/forward_ebitda",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_EBITDA,
+            "raw.estimate",
+            "Forward EBITDA analyst estimates per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/events",
+            calendar_event,
+            EQUITY_CALENDAR_EVENTS,
+            "raw.calendar_event",
+            "Upcoming corporate-events calendar, NASDAQ-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/top_retail",
+            screener_row,
+            EQUITY_DISCOVERY_TOP_RETAIL,
+            "raw.screener_row",
+            "Top retail-traded equities discovery feed, NASDAQ-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/fundamental/management_discussion_analysis",
+            sec_filing_html,
+            EQUITY_FUNDAMENTAL_MD_AND_A,
+            "raw.sec_filing_html",
+            "Management Discussion & Analysis document from the latest 10-K, SEC-backed (keyless).",
+        ),
+    ]
 }
 
 /// Keyless FINRA shorts / dark-pool entries (openbb-parity **P4W10**): reported

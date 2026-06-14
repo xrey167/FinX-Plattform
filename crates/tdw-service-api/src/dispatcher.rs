@@ -1241,10 +1241,34 @@ fn insert_nasdaq_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str
         ("nasdaq", "equity_calendar_ipo"),
         nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Ipo.as_query_str()),
     );
+    // OpenBB-parity total G003c: equity/calendar/events reuses the shared
+    // calendar fetcher with the `events` discriminator injected per binding.
+    table.insert(
+        ("nasdaq", "equity_calendar_events"),
+        nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Events.as_query_str()),
+    );
     // OpenBB-parity P4W11: index/sp500_multiples (Shiller CAPE & friends).
     table.insert(
         ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
         fetch_binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>(),
+    );
+    // OpenBB-parity total G003c: equity/discovery/top_retail (keyless feed).
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpTopRetailFetcher::ENDPOINT),
+        fetch_binding::<crate::NasdaqHttpTopRetailFetcher, _, _>(),
+    );
+}
+
+/// Register the TMX catalog fetch bindings (OpenBB-parity total G003c): the
+/// public index sector-weight breakdown, keyed by the fetcher's `ENDPOINT`
+/// const — the same key its catalog candidate declares. Mirrors
+/// [`insert_tmx_ingest_bindings`]; a conformance test keeps these keys and the
+/// catalog candidates in sync.
+#[cfg(feature = "provider-tmx")]
+fn insert_tmx_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("tmx", crate::TmxHttpIndexSectorsFetcher::ENDPOINT),
+        fetch_binding::<crate::TmxHttpIndexSectorsFetcher, _, _>(),
     );
 }
 
@@ -1707,6 +1731,19 @@ fn insert_fmp_completion_fetch_bindings(
         ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>(),
     );
+    // OpenBB-parity total G003c: major holders, market snapshots, forward EBITDA.
+    table.insert(
+        ("fmp", crate::FmpHttpMajorHoldersFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpMajorHoldersFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpMarketSnapshotsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpMarketSnapshotsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpForwardEbitdaFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpForwardEbitdaFetcher, _, _>(),
+    );
 }
 
 /// The no-persist fetch dispatch table for this build.
@@ -1808,6 +1845,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_eia_fetch_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
     insert_nasdaq_fetch_bindings(&mut table);
+    // OpenBB-parity total G003c: TMX index/sectors.
+    #[cfg(feature = "provider-tmx")]
+    insert_tmx_fetch_bindings(&mut table);
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_fetch_bindings(&mut table);
@@ -1928,6 +1968,18 @@ fn insert_sec_government_fetch_bindings(
     table.insert(
         ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
         fetch_binding::<crate::SecRssLitigationHttpFetcher, _, _>(),
+    );
+    // OpenBB-parity total G003c: keyless filing-HTML retrieval + MD&A document.
+    table.insert(
+        ("sec", crate::SecHtmFileHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecHtmFileHttpFetcher, _, _>(),
+    );
+    table.insert(
+        (
+            "sec",
+            crate::SecManagementDiscussionAnalysisHttpFetcher::ENDPOINT,
+        ),
+        fetch_binding::<crate::SecManagementDiscussionAnalysisHttpFetcher, _, _>(),
     );
 }
 
@@ -3327,10 +3379,34 @@ fn insert_nasdaq_ingest_bindings(
             "raw.calendar_event",
         ),
     );
+    // OpenBB-parity total G003c: equity/calendar/events lands CalendarEvent rows.
+    table.insert(
+        ("nasdaq", "equity_calendar_events"),
+        nasdaq_calendar_ingest_binding(
+            NasdaqCalendarKind::Events.as_query_str(),
+            "raw.calendar_event",
+        ),
+    );
     // OpenBB-parity P4W11: index/sp500_multiples lands as Sp500Multiple rows.
     table.insert(
         ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
         binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>("raw.sp500_multiple"),
+    );
+    // OpenBB-parity total G003c: equity/discovery/top_retail lands ScreenerRow rows.
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpTopRetailFetcher::ENDPOINT),
+        binding::<crate::NasdaqHttpTopRetailFetcher, _, _>("raw.screener_row"),
+    );
+}
+
+/// Register the TMX catalog ingest bindings (OpenBB-parity total G003c), keyed
+/// identically to [`insert_tmx_fetch_bindings`] and bound to the
+/// `raw.index_sector` bronze table.
+#[cfg(feature = "provider-tmx")]
+fn insert_tmx_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    table.insert(
+        ("tmx", crate::TmxHttpIndexSectorsFetcher::ENDPOINT),
+        binding::<crate::TmxHttpIndexSectorsFetcher, _, _>("raw.index_sector"),
     );
 }
 
@@ -3451,8 +3527,93 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     #[cfg(feature = "provider-yahoo-http")]
     insert_yahoo_ingest_bindings(&mut table);
     // Feature-enabled `MarketDataBar` (canonical OHLC bar) fetchers land in the
-    // shared bronze bar table. Each arm mirrors a `provider-*` feature wired into
-    // `default_registry`.
+    // shared bronze bar table. Extracted into a helper so this function stays
+    // within the `too_many_lines` budget. Only called when at least one bar
+    // provider is enabled, so the helper never has an empty/const-eligible body.
+    #[cfg(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    ))]
+    insert_market_data_bar_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-fred")]
+    insert_fred_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-sec")]
+    insert_sec_government_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-government-us")]
+    insert_government_us_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-famafrench")]
+    insert_famafrench_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-finra")]
+    insert_finra_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cftc")]
+    insert_cftc_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-congress-gov")]
+    insert_congress_gov_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-econdb")]
+    insert_econdb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-oecd")]
+    insert_oecd_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-federal-reserve")]
+    insert_federal_reserve_ingest_bindings(&mut table);
+    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
+    #[cfg(feature = "provider-ecb")]
+    insert_ecb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cboe")]
+    insert_cboe_ingest_bindings(&mut table);
+    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
+    #[cfg(feature = "provider-deribit")]
+    insert_deribit_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-eia")]
+    insert_eia_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-nasdaq")]
+    insert_nasdaq_ingest_bindings(&mut table);
+    // OpenBB-parity total G003c: TMX index/sectors.
+    #[cfg(feature = "provider-tmx")]
+    insert_tmx_ingest_bindings(&mut table);
+    // G011: FMP keyed-provider fundamentals breadth.
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_fundamentals_ingest_bindings(&mut table);
+    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
+    // discovery, screener).
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_ingest_bindings(&mut table);
+    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
+    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+    insert_news_ingest_bindings(&mut table);
+    table
+}
+
+/// Register the feature-enabled canonical-OHLC-bar (`MarketDataBar`) ingest
+/// bindings into `table`, each bound to the shared `raw.market_data_bar` bronze
+/// table. Each arm mirrors a `provider-*` feature wired into
+/// [`crate::default_registry`]. Extracted from [`ingest_dispatch_table`] so that
+/// function stays within the `too_many_lines` budget. Compiled (and called) only
+/// when at least one bar provider is enabled, so the body is never empty.
+#[cfg(any(
+    feature = "provider-akshare",
+    feature = "provider-alpaca",
+    feature = "provider-alpha-vantage",
+    feature = "provider-ccdata",
+    feature = "provider-coingecko",
+    feature = "provider-databento",
+    feature = "provider-fmp",
+    feature = "provider-polygon",
+    feature = "provider-sec",
+    feature = "provider-tiingo",
+))]
+fn insert_market_data_bar_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
     #[cfg(feature = "provider-akshare")]
     table.insert(
         ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
@@ -3503,51 +3664,6 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
         ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
         binding::<crate::TiingoHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
     );
-    #[cfg(feature = "provider-fred")]
-    insert_fred_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-sec")]
-    insert_sec_government_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-government-us")]
-    insert_government_us_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-famafrench")]
-    insert_famafrench_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-finra")]
-    insert_finra_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-cftc")]
-    insert_cftc_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-congress-gov")]
-    insert_congress_gov_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-imf")]
-    insert_imf_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-econdb")]
-    insert_econdb_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-oecd")]
-    insert_oecd_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-federal-reserve")]
-    insert_federal_reserve_ingest_bindings(&mut table);
-    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
-    #[cfg(feature = "provider-ecb")]
-    insert_ecb_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-cboe")]
-    insert_cboe_ingest_bindings(&mut table);
-    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
-    #[cfg(feature = "provider-deribit")]
-    insert_deribit_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-eia")]
-    insert_eia_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-nasdaq")]
-    insert_nasdaq_ingest_bindings(&mut table);
-    // G011: FMP keyed-provider fundamentals breadth.
-    #[cfg(feature = "provider-fmp")]
-    insert_fmp_fundamentals_ingest_bindings(&mut table);
-    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
-    // discovery, screener).
-    #[cfg(feature = "provider-fmp")]
-    insert_fmp_completion_ingest_bindings(&mut table);
-    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
-    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
-    insert_news_ingest_bindings(&mut table);
-    table
 }
 
 /// Register the normalized news-cluster ingest bindings, keyed by each fetcher's
@@ -4089,6 +4205,19 @@ fn insert_fmp_completion_ingest_bindings(
         ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
         binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>("raw.currency_snapshot"),
     );
+    // OpenBB-parity total G003c: major holders, market snapshots, forward EBITDA.
+    table.insert(
+        ("fmp", crate::FmpHttpMajorHoldersFetcher::ENDPOINT),
+        binding::<crate::FmpHttpMajorHoldersFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpMarketSnapshotsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpMarketSnapshotsFetcher, _, _>("raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpForwardEbitdaFetcher::ENDPOINT),
+        binding::<crate::FmpHttpForwardEbitdaFetcher, _, _>("raw.estimate"),
+    );
 }
 
 /// Register the keyless-government-wave SEC catalog ingest bindings, mirroring
@@ -4154,6 +4283,19 @@ fn insert_sec_government_ingest_bindings(
     table.insert(
         ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
         binding::<crate::SecRssLitigationHttpFetcher, _, _>("raw.litigation_release"),
+    );
+    // OpenBB-parity total G003c: filing-HTML retrieval + MD&A document both land
+    // the standardized SecFilingHtml row in the shared bronze table.
+    table.insert(
+        ("sec", crate::SecHtmFileHttpFetcher::ENDPOINT),
+        binding::<crate::SecHtmFileHttpFetcher, _, _>("raw.sec_filing_html"),
+    );
+    table.insert(
+        (
+            "sec",
+            crate::SecManagementDiscussionAnalysisHttpFetcher::ENDPOINT,
+        ),
+        binding::<crate::SecManagementDiscussionAnalysisHttpFetcher, _, _>("raw.sec_filing_html"),
     );
 }
 

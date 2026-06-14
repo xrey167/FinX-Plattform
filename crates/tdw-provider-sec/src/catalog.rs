@@ -46,6 +46,10 @@ pub enum SecModel {
     SchemaFiles,
     /// Standardizes to [`tdw_domain::LitigationRelease`] (litigation RSS feed).
     RssLitigation,
+    /// Standardizes to [`tdw_domain::SecFilingHtml`] (a fetched filing HTML file).
+    HtmFile,
+    /// Standardizes to [`tdw_domain::SecFilingHtml`] (the MD&A section document).
+    ManagementDiscussionAnalysis,
 }
 
 /// One standardized SEC-backed endpoint.
@@ -134,6 +138,17 @@ pub const ENDPOINTS: &[SecEndpoint] = &[
         model: SecModel::RssLitigation,
         description: "SEC litigation releases from the public litigation RSS feed.",
     },
+    // OpenBB-parity total G003c: keyless filing-HTML retrieval + MD&A section.
+    SecEndpoint {
+        command: "regulators/sec/htm_file",
+        model: SecModel::HtmFile,
+        description: "Retrieve an HTML file from a filing by its EDGAR archive URL.",
+    },
+    SecEndpoint {
+        command: "equity/fundamental/management_discussion_analysis",
+        model: SecModel::ManagementDiscussionAnalysis,
+        description: "Management Discussion & Analysis section document from the latest 10-K.",
+    },
 ];
 
 /// Resolve a catalog entry by its `OpenBB` `command` path.
@@ -189,6 +204,8 @@ mod tests {
             SecModel::FilingHeaders,
             SecModel::SchemaFiles,
             SecModel::RssLitigation,
+            SecModel::HtmFile,
+            SecModel::ManagementDiscussionAnalysis,
         ] {
             assert!(
                 ENDPOINTS.iter().any(|e| e.model == model),

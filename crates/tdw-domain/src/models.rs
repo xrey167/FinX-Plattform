@@ -1394,6 +1394,44 @@ pub struct CurrencySnapshot {
     pub ts_ms: Option<i64>,
 }
 
+/// A retrieved HTML document from a SEC EDGAR filing.
+///
+/// Standardizes `regulators/sec/htm_file` (a typed wrapper around the keyless
+/// EDGAR archive HTML fetch). One row = one fetched document. `url` is the
+/// identity anchor; `content` carries the raw HTML body and `content_length`
+/// its byte size. `content_type` and `filing_date` are [`Option`] because the
+/// archive does not always report them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct SecFilingHtml {
+    /// Absolute URL of the retrieved filing document.
+    #[validate(length(min = 1))]
+    pub url: String,
+    /// Raw HTML body of the document as served by EDGAR.
+    pub content: String,
+    /// Byte length of `content`.
+    pub content_length: u64,
+    /// MIME type reported by the archive (e.g. `"text/html"`), where present.
+    pub content_type: Option<String>,
+}
+
+/// A single sector-allocation entry for a market index.
+///
+/// Standardizes `index/sectors` (TMX public market data sector breakdown). One
+/// row = one (index, sector) pair. `index` and `sector` are the identity
+/// anchors; `weight_pct` is [`Option`] because a source may omit a sector's
+/// weight.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct IndexSector {
+    /// Index handle the breakdown belongs to, e.g. `"^TSX"`.
+    #[validate(length(min = 1))]
+    pub index: String,
+    /// Sector / industry classification label, e.g. `"Financials"`.
+    #[validate(length(min = 1))]
+    pub sector: String,
+    /// Percentage weight of the sector within the index.
+    pub weight_pct: Option<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2346,6 +2384,56 @@ mod tests {
 
         let bad = CurrencySnapshot {
             symbol: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn sec_filing_html_round_trips_and_validates() {
+        let row = SecFilingHtml {
+            url: "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl.htm"
+                .to_string(),
+            content: "<html><body>10-K</body></html>".to_string(),
+            content_length: 30,
+            content_type: Some("text/html".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let sparse = SecFilingHtml {
+            content_type: None,
+            ..row.clone()
+        };
+        assert!(sparse.validate().is_ok());
+        round_trip(&sparse);
+
+        let bad = SecFilingHtml {
+            url: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn index_sector_round_trips_and_validates() {
+        let row = IndexSector {
+            index: "^TSX".to_string(),
+            sector: "Financials".to_string(),
+            weight_pct: Some(31.2),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let sparse = IndexSector {
+            weight_pct: None,
+            ..row.clone()
+        };
+        assert!(sparse.validate().is_ok());
+        round_trip(&sparse);
+
+        let bad = IndexSector {
+            sector: String::new(),
             ..row
         };
         assert!(bad.validate().is_err());

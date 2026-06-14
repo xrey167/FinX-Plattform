@@ -111,11 +111,16 @@ fn map_bill(item: &serde_json::Map<String, Value>) -> Option<CongressBill> {
         .get("type")
         .and_then(Value::as_str)
         .map(str::to_ascii_lowercase)?;
+    // `number` arrives as either a JSON string or a JSON number; match those two
+    // variants explicitly rather than `to_string()`-ing an arbitrary `Value`
+    // (which would turn `null`/objects into the non-empty literals `"null"` etc.
+    // and slip past the empty-string guard).
     let bill_number = item
         .get("number")
-        .map(|value| match value {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
+        .and_then(|value| match value {
+            Value::String(text) => Some(text.trim().to_string()),
+            Value::Number(num) => Some(num.to_string()),
+            _ => None,
         })
         .filter(|number| !number.is_empty())?;
 
