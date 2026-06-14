@@ -9,7 +9,7 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{Instrument, MacroSeries, MarketDataBar};
+use tdw_domain::{CurrencySnapshot, Instrument, MacroSeries, MarketDataBar};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -36,8 +36,20 @@ const CURRENCY_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "s
 const CURRENCY_PRICE_HISTORICAL: &[ProviderCandidate] =
     &[ProviderCandidate::new("polygon", "aggregates")];
 
+/// FMP-backed candidate for `currency/snapshots`.
+///
+/// FMP's `/fx` forex-snapshot endpoint returns the full set of FX-pair quotes
+/// (bid/ask/open); an optional `symbol` narrows to one pair client-side. Single
+/// keyed candidate, so the route resolves once `provider-fmp` is enabled.
+const CURRENCY_SNAPSHOTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "currency_snapshots")];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
+}
+
+fn currency_snapshot() -> Schema {
+    schema_for!(CurrencySnapshot)
 }
 
 fn macro_series() -> Schema {
@@ -83,6 +95,16 @@ pub fn entries() -> Vec<CatalogEntry> {
             candidates: CURRENCY_SEARCH,
             bronze_table: Some("raw.instrument"),
             doc: "Search available currency (FX) pairs by name or fragment, FMP-backed.",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "currency/snapshots",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: currency_snapshot,
+            candidates: CURRENCY_SNAPSHOTS,
+            bronze_table: Some("raw.currency_snapshot"),
+            doc: "Forex-pair snapshot quotes (price/bid/ask) across all pairs, FMP-backed.",
             chartable: false,
         },
     ]

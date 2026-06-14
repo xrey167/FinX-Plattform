@@ -32,19 +32,20 @@ use serde::Deserialize;
 use serde_json::Map;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
-    CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, EarningsTranscript,
-    EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure, EtfInfo,
-    EtfSectorWeight, ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument,
-    KeyExecutive, KeyMetrics, MarketDataBar, Ohlcv, OwnershipRecord, PricePerformance,
-    QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow, StatementKind, TimeGranularity,
+    CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, CurrencySnapshot,
+    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
+    EtfInfo, EtfSectorWeight, ExecutiveCompensation, FinancialStatement, HistoricalMarketCap,
+    IndexConstituent, Instrument, KeyExecutive, KeyMetrics, MarketDataBar, Ohlcv, OwnershipRecord,
+    PricePerformance, QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow, StatementKind,
+    TimeGranularity,
 };
 
 use crate::{
     API_KEY_ENV, BASE_URL, FmpCalendarRangeQuery, FmpDiscoveryDirection, FmpDiscoveryQuery,
-    FmpError, FmpFundamentalQuery, FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow,
-    FmpLimitQuery, FmpQuoteQuery, FmpRevenueSegmentQuery, FmpScreenerQuery, FmpSearchQuery,
-    FmpSegmentKind, FmpStatement, FmpStatementQuery, FmpSymbolLimitQuery, FmpSymbolQuery,
-    FmpTranscriptQuery,
+    FmpError, FmpFundamentalQuery, FmpFundamentalsQuery, FmpFxSnapshotQuery, FmpHistoricalQuery,
+    FmpIncomeRow, FmpIndexConstituentQuery, FmpLimitQuery, FmpQuoteQuery, FmpRevenueSegmentQuery,
+    FmpScreenerQuery, FmpSearchQuery, FmpSegmentKind, FmpStatement, FmpStatementQuery,
+    FmpSymbolLimitQuery, FmpSymbolQuery, FmpTranscriptQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -3069,6 +3070,202 @@ impl Fetcher<FmpSymbolQuery, EtfEquityExposure> for FmpHttpEtfEquityExposureFetc
             .collect();
         Ok(rows)
     }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpIndexConstituentsFetcher — /{index}_constituent → IndexConstituent
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP index-constituents fetcher, normalized to
+    /// [`IndexConstituent`].
+    ///
+    /// Calls `/{index}_constituent` (e.g. `/sp500_constituent`,
+    /// `/nasdaq_constituent`, `/dowjones_constituent`) and maps each member row
+    /// to one [`IndexConstituent`]. Standardizes `index/constituents`; the
+    /// `index` param selects the index handle (default `sp500`).
+    pub FmpHttpIndexConstituentsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/{index}_constituent` entry.
+#[derive(Deserialize)]
+struct FmpIndexConstituentRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(rename = "subSector", default)]
+    sub_sector: Option<String>,
+    #[serde(rename = "headQuarter", default)]
+    head_quarter: Option<String>,
+    #[serde(rename = "dateFirstAdded", default)]
+    date_first_added: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpIndexConstituentQuery, IndexConstituent> for FmpHttpIndexConstituentsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "index_constituents";
+
+    fn transform_query(params: Value) -> Result<FmpIndexConstituentQuery> {
+        Ok(FmpIndexConstituentQuery::from_param(
+            params.get("index").and_then(Value::as_str),
+        ))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpIndexConstituentQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/{}_constituent",
+            self.base_url().trim_end_matches('/'),
+            query.index,
+        );
+        fmp_get(&url, &[], "fmp index_constituents").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpIndexConstituentQuery,
+        raw: Bytes,
+    ) -> Result<Vec<IndexConstituent>> {
+        let entries: Vec<FmpIndexConstituentRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp index_constituents parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(IndexConstituent {
+                    index: query.index.clone(),
+                    symbol,
+                    name: entry.name.filter(|s| !s.trim().is_empty()),
+                    sector: entry.sector.filter(|s| !s.trim().is_empty()),
+                    sub_industry: entry.sub_sector.filter(|s| !s.trim().is_empty()),
+                    headquarters: entry.head_quarter.filter(|s| !s.trim().is_empty()),
+                    date_added: entry.date_first_added.filter(|s| !s.trim().is_empty()),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpCurrencySnapshotsFetcher — /fx → CurrencySnapshot
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP forex-snapshot fetcher, normalized to [`CurrencySnapshot`].
+    ///
+    /// Calls `/fx` (the full forex snapshot — every pair, no path parameter) and
+    /// maps each pair to one [`CurrencySnapshot`]. Standardizes
+    /// `currency/snapshots`; an optional `symbol` param keeps only the matching
+    /// pair client-side.
+    pub FmpHttpCurrencySnapshotsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/fx` entry.
+#[derive(Deserialize)]
+struct FmpFxRaw {
+    #[serde(default)]
+    ticker: Option<String>,
+    #[serde(default)]
+    bid: Option<String>,
+    #[serde(default)]
+    ask: Option<String>,
+    #[serde(default)]
+    open: Option<String>,
+    #[serde(default)]
+    changes: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpFxSnapshotQuery, CurrencySnapshot> for FmpHttpCurrencySnapshotsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "currency_snapshots";
+
+    fn transform_query(params: Value) -> Result<FmpFxSnapshotQuery> {
+        Ok(FmpFxSnapshotQuery::from_param(
+            params.get("symbol").and_then(Value::as_str),
+        ))
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &FmpFxSnapshotQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!("{}/fx", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[], "fmp currency_snapshots").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpFxSnapshotQuery,
+        raw: Bytes,
+    ) -> Result<Vec<CurrencySnapshot>> {
+        let entries: Vec<FmpFxRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp currency_snapshots parse_json: {e}")))?;
+        // The optional filter compares against both the raw `EUR/USD` form and the
+        // delimiter-stripped `EURUSD` form so either caller spelling matches.
+        let needle = query.symbol.replace('/', "");
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let ticker = entry.ticker.filter(|s| !s.trim().is_empty())?;
+                if !needle.is_empty() && ticker.to_ascii_uppercase().replace('/', "") != needle {
+                    return None;
+                }
+                let (base_currency, quote_currency) = split_fx_pair(&ticker);
+                let bid = entry.bid.and_then(|s| s.trim().parse::<f64>().ok());
+                let ask = entry.ask.and_then(|s| s.trim().parse::<f64>().ok());
+                // The `/fx` snapshot carries no explicit last price; derive a mid
+                // from bid/ask when both are present, else fall back to the open.
+                let price = match (bid, ask) {
+                    (Some(b), Some(a)) => Some((b + a) / 2.0),
+                    _ => entry.open.and_then(|s| s.trim().parse::<f64>().ok()),
+                };
+                let change_percent = match (price, entry.changes) {
+                    (Some(p), Some(c)) if (p - c).abs() > f64::EPSILON => Some(c / (p - c) * 100.0),
+                    _ => None,
+                };
+                Some(CurrencySnapshot {
+                    symbol: ticker,
+                    base_currency,
+                    quote_currency,
+                    price,
+                    bid,
+                    ask,
+                    change: entry.changes,
+                    change_percent,
+                    // The `/fx` snapshot carries a wall-clock string, not an epoch;
+                    // the dependency-free fetcher leaves the optional millis unset
+                    // rather than pulling in a date-parsing dependency.
+                    ts_ms: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+/// Split an FX-pair ticker (`"EUR/USD"` or `"EURUSD"`) into its base / quote
+/// currency codes. Returns `(None, None)` when the shape is unrecognized.
+fn split_fx_pair(ticker: &str) -> (Option<String>, Option<String>) {
+    let upper = ticker.trim().to_ascii_uppercase();
+    if let Some((base, quote)) = upper.split_once('/') {
+        return (Some(base.to_string()), Some(quote.to_string()));
+    }
+    if upper.len() == 6 && upper.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return (Some(upper[0..3].to_string()), Some(upper[3..6].to_string()));
+    }
+    (None, None)
 }
 
 /// Parse an FMP weight-percentage field (`"7.10%"` / `"7.10"` / `""`) into a

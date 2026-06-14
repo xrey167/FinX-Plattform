@@ -6,6 +6,7 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::{
     NasdaqCalendarKind, NasdaqCalendarQuery, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+    NasdaqHttpSp500MultiplesFetcher, NasdaqSp500MultiplesQuery,
 };
 
 use schemars::JsonSchema;

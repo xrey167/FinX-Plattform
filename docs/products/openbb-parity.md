@@ -7,24 +7,35 @@
 > against the `tdw_core::Fetcher` / `tdw-service-api` machinery.
 
 This is the single entry point that ties together the OpenBB-parity surface
-delivered across phases 1 and 2 (P1 + P2). Everything here is **derived from one
+delivered across phases 1–4 (P1–P4). Everything here is **derived from one
 artifact** — the endpoint catalog (`tdw-endpoint-catalog`) — so the REST routes,
-the OpenAPI document, the Workspace widgets, the MCP tools, and the warehouse
-ingest paths all stay in lock-step with a single typed source of truth.
+the OpenAPI document, the Workspace widgets, the MCP tools, the Python SDK, and
+the warehouse ingest paths all stay in lock-step with a single typed source of
+truth.
 
-As of **2026-06-12** (after P3's deferred-backlog burn-down), the catalog
-exposes **131 routes / 98 provider candidates** (`xtask catalog-check` green):
-**84 `Fetch` routes** + **47 `technical/`, `quantitative/`, `econometrics/`,
+As of **2026-06-14** (after P4's data-breadth closeout), the catalog exposes
+**216 routes / 185 provider candidates** (`xtask catalog-check` green): **169
+`Fetch` routes** + **47 `technical/`, `quantitative/`, `econometrics/`,
 `portfolio/` `Compute` routes**. The generated OpenAPI 3.1 document carries
-**84 paths / 29 schemas** (`xtask openapi-check` green). On top of P2 (FMP
-completion, CFTC Commitments of Traders, a benzinga news cluster, the technical
-long-tail, dynamic per-route MCP tools, warehouse landing tables), P3 added
-portfolio analytics (returns/drawdown/allocation/contribution), the IMF SDMX-JSON
-and EconDB macro providers, FMP analyst-estimate breadth (price_target + forward),
-and XLSX export — while deferring, with documented decisions, Parquet export and
-the niche providers (stockgrid/wsj/finviz/biztoc/intrinio) that lack a verifiable
-public API. The per-wave detail and the deferred backlog live in the
+**169 paths / 56 schemas** (`xtask openapi-check` green). On top of P1–P3, P4
+filled the standardized-data surface across all 17 routers: FMP equity
+fundamentals/discovery/estimates/ownership breadth (P4W1/W2), Yahoo discovery +
+the ETF cluster (P4W3), economy breadth via OECD SDMX + FRED/Fed/BLS/EconDB
+(P4W4), the fixedincome FRED fill incl. Svensson & HQM (P4W5),
+index/currency/crypto/commodity breadth (P4W6), derivatives futures + SEC
+regulator utilities (P4W7/W8), Ken French portfolio-formation + IMF SDMX
+discovery (P4W9), FINRA shorts/darkpool (P4W10), and the index/currency
+remainder — `index/constituents`, `index/sp500_multiples`, `currency/snapshots`
+(P4W11). The per-wave detail, the per-router before/after, and the deferred
+backlog (each with a documented decision) live in the
 [gap matrix](../roadmap/openbb-gap-matrix.md).
+
+**Honest parity statement.** FinX has **full parity on the keyless / free-key
+surface** (Yahoo, FRED, SEC, US-Treasury, Federal-Reserve, ECB, CBOE, EIA, IMF,
+EconDB, OECD, NASDAQ, FINRA, CFTC, Ken-French, plus FMP on a free key). The
+remaining gap is **paid-key** (intrinio options, trading-economics calendar,
+benzinga/tiingo premium) or **no-public-API** (stockgrid / wsj / finviz / biztoc
+/ TMX index-sectors) providers — a **business decision, not an engineering gap**.
 
 ---
 
@@ -32,14 +43,14 @@ public API. The per-wave detail and the deferred backlog live in the
 
 | Capability | OpenBB | FinX equivalent | Pointer |
 |---|---|---|---|
-| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 131 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
+| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 216 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
 | REST API | auto-generated FastAPI, `/docs` | catalog-derived `GET /api/v1/{route...}` → policy-guarded `Op::FetchData` → `ResultEnvelope` | [rest-api.md](./rest-api.md) |
 | OpenAPI spec | FastAPI-generated | programmatic OpenAPI 3.1 at `GET /openapi.json`, checked in + drift-gated (`openapi-sync`/`openapi-check`) | [rest-api.md](./rest-api.md), [`docs/schemas/openapi.json`](../schemas/openapi.json) |
 | Provider interchange | `provider=` selects a source | ordered candidates per route; no `provider=` → declaration-order fallback with a `provider_fallback` warning; explicit `provider=` never falls back | [rest-api.md](./rest-api.md) |
 | MCP server | `openbb-mcp-server` | `tdw-mcp` Streamable-HTTP, incl. `technical.*` analytics tools + read-only widget-catalog tools (`tdw.widgets.list/describe`, `tdw.apps.list`) | [mcp-quickstart.md](./mcp-quickstart.md) |
 | Workspace data backend | `widgets.json` / `apps.json` | `tdw-widgets` serves `GET /widgets.json` (one widget per Fetch route), `GET /apps.json`, `GET /widget-data/{route...}` | [openbb-workspace-backend.md](./openbb-workspace-backend.md) |
 | Workspace copilot | `agents.json` + `POST /query` SSE | `tdw-openbb-agent` serves `GET /agents.json` + `POST /v1/query` SSE (openbb-ai vocabulary), stateless two-request widget-data pattern | [openbb-workspace-agent.md](./openbb-workspace-agent.md) |
-| Analytics | technical / quant / econometrics routers | 20 `technical/*` `Compute` routes today (quant + econometrics are P2) | [gap matrix](../roadmap/openbb-gap-matrix.md) |
+| Analytics | technical / quant / econometrics routers | 47 `Compute` routes: `technical/*` (25) + `quantitative/*` (12) + `econometrics/*` (5) + `portfolio/*` (5), each also an MCP tool | [gap matrix](../roadmap/openbb-gap-matrix.md) |
 | Warehouse | none | **every catalog route is also warehouse-ingestible** — `Op::FetchData` (fetch-without-persist) and `IngestBatch` (persist) are two modes of the *same* catalog entry | [warehouse-install.md](./warehouse-install.md) |
 
 The key divergences from OpenBB are deliberate and documented in the parity
