@@ -174,18 +174,19 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
-    FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher, FmpHttpEtfInfoFetcher,
-    FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher, FmpHttpEtfSectorsFetcher,
-    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
-    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
-    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
-    FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
-    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher,
-    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpCurrencySnapshotsFetcher, FmpHttpDiscoveryFetcher,
+    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher,
+    FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
+    FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
+    FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
+    FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher,
+    FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher, FmpHttpInsiderTradingFetcher,
+    FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpLatestFilingsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
+    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher, FmpHttpSearchFetcher,
+    FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpTranscriptFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -207,6 +208,7 @@ use tdw_provider_imf::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+    NasdaqHttpSp500MultiplesFetcher,
 };
 #[cfg(feature = "provider-oecd")]
 use tdw_provider_oecd::{OecdHttpDataFetcher, OecdHttpMacroSeriesFetcher};
@@ -478,6 +480,12 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpEtfPricePerformanceFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpEtfEquityExposureFetcher::registry_entry())?;
+    // FMP index/currency remainder (openbb-parity P4W11): index constituents +
+    // forex snapshot.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpIndexConstituentsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpCurrencySnapshotsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
@@ -557,6 +565,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     // Catalog-facing NASDAQ calendar fetcher (G004 part 2).
     #[cfg(feature = "provider-nasdaq")]
     registry.register(NasdaqHttpCalendarFetcher::registry_entry())?;
+    // Catalog-facing NASDAQ S&P 500 multiples fetcher (openbb-parity P4W11).
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpSp500MultiplesFetcher::registry_entry())?;
     #[cfg(feature = "provider-oecd")]
     registry.register(OecdHttpDataFetcher::registry_entry())?;
     // Catalog-facing OECD SDMX-JSON macro fetcher (OpenBB-parity P4W4).

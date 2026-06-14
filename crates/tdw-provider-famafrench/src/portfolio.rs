@@ -163,6 +163,13 @@ fn normalize_date(cell: &str) -> String {
     }
 }
 
+/// Ken French Data Library missing-value sentinel for percent-scaled return
+/// cells (the library writes `-99.99` where an observation is absent).
+const KEN_FRENCH_MISSING_RETURN: f64 = -99.99;
+/// Ken French Data Library missing-value sentinel for count / breakpoint cells
+/// (the library writes `-999`).
+const KEN_FRENCH_MISSING_COUNT: f64 = -999.0;
+
 /// Parse a numeric cell, treating the library's missing-value sentinels
 /// (`-99.99` / `-999`) and blanks as absent. When `as_fraction` is set the value
 /// is divided by 100 (the Data Library publishes returns in percent).
@@ -172,7 +179,9 @@ fn parse_cell(cell: &str, as_fraction: bool) -> Option<f64> {
         return None;
     }
     let value = trimmed.parse::<f64>().ok()?;
-    if (value - -99.99).abs() < 1e-9 || (value - -999.0).abs() < 1e-9 {
+    let is_missing = (value - KEN_FRENCH_MISSING_RETURN).abs() < 1e-9
+        || (value - KEN_FRENCH_MISSING_COUNT).abs() < 1e-9;
+    if is_missing {
         return None;
     }
     Some(if as_fraction { value / 100.0 } else { value })

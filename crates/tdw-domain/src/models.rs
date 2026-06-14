@@ -1263,6 +1263,79 @@ pub struct OtcMarketVolume {
     pub total_trade_count: Option<i64>,
 }
 
+/// A single constituent (member security) of a market index.
+///
+/// Standardizes `index/constituents` (FMP `/{index}_constituent`). One row =
+/// one (index, member) pair. The index handle and the member symbol are the
+/// identity anchors; the descriptive fields are [`Option`] because the
+/// constituent feed reports a variable subset per index.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct IndexConstituent {
+    /// Index handle the membership was queried for, e.g. `"sp500"`.
+    #[validate(length(min = 1))]
+    pub index: String,
+    /// Constituent ticker symbol.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Constituent company / security name as reported.
+    pub name: Option<String>,
+    /// GICS / index sector label, where reported.
+    pub sector: Option<String>,
+    /// GICS / index sub-industry label, where reported.
+    pub sub_industry: Option<String>,
+    /// Headquarters location, where reported.
+    pub headquarters: Option<String>,
+    /// Date the security was added to the index (`YYYY-MM-DD`), where reported.
+    pub date_added: Option<String>,
+}
+
+/// A single Shiller / S&P 500 valuation-multiple observation.
+///
+/// Standardizes `index/sp500_multiples` (Nasdaq Data Link `MULTPL/*`, e.g. the
+/// Shiller CAPE PE ratio). One row = one (metric, date) observation. The metric
+/// label and the date are the identity anchors; `value` is [`Option`] because a
+/// source cell may be blank for a given period.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Sp500Multiple {
+    /// Multiple name, e.g. `"shiller_pe_ratio_month"`.
+    #[validate(length(min = 1))]
+    pub metric: String,
+    /// Observation date in `YYYY-MM-DD` form.
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Observed value of the multiple for the date.
+    pub value: Option<f64>,
+}
+
+/// A foreign-exchange (FX) pair last-price snapshot.
+///
+/// Standardizes `currency/snapshots` (FMP `/fx` forex snapshot). One row = one
+/// pair. The `symbol` (a `BASE/QUOTE` ticker) is the identity anchor; the
+/// price/bid/ask fields are [`Option`] because the forex snapshot reports a
+/// variable subset per pair.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CurrencySnapshot {
+    /// FX-pair ticker, e.g. `"EUR/USD"`.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// Base currency code (left side of the pair), where reported.
+    pub base_currency: Option<String>,
+    /// Quote currency code (right side of the pair), where reported.
+    pub quote_currency: Option<String>,
+    /// Most-recent mid / last price.
+    pub price: Option<f64>,
+    /// Best bid price.
+    pub bid: Option<f64>,
+    /// Best ask price.
+    pub ask: Option<f64>,
+    /// Absolute price change over the session.
+    pub change: Option<f64>,
+    /// Relative price change as a percentage.
+    pub change_percent: Option<f64>,
+    /// Snapshot timestamp as Unix epoch milliseconds (UTC), where reported.
+    pub ts_ms: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2122,6 +2195,99 @@ mod tests {
 
         let bad = LitigationRelease {
             link: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn index_constituent_round_trips_and_validates() {
+        let row = IndexConstituent {
+            index: "sp500".to_string(),
+            symbol: "AAPL".to_string(),
+            name: Some("Apple Inc.".to_string()),
+            sector: Some("Information Technology".to_string()),
+            sub_industry: Some("Technology Hardware, Storage & Peripherals".to_string()),
+            headquarters: Some("Cupertino, California".to_string()),
+            date_added: Some("1982-11-30".to_string()),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let sparse = IndexConstituent {
+            name: None,
+            sector: None,
+            sub_industry: None,
+            headquarters: None,
+            date_added: None,
+            ..row.clone()
+        };
+        assert!(sparse.validate().is_ok());
+        round_trip(&sparse);
+
+        let bad = IndexConstituent {
+            symbol: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn sp500_multiple_round_trips_and_validates() {
+        let row = Sp500Multiple {
+            metric: "shiller_pe_ratio_month".to_string(),
+            date: "2024-06-01".to_string(),
+            value: Some(34.21),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let absent = Sp500Multiple {
+            value: None,
+            ..row.clone()
+        };
+        assert!(absent.validate().is_ok());
+        round_trip(&absent);
+
+        let bad = Sp500Multiple {
+            metric: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn currency_snapshot_round_trips_and_validates() {
+        let row = CurrencySnapshot {
+            symbol: "EUR/USD".to_string(),
+            base_currency: Some("EUR".to_string()),
+            quote_currency: Some("USD".to_string()),
+            price: Some(1.0825),
+            bid: Some(1.0824),
+            ask: Some(1.0826),
+            change: Some(0.0012),
+            change_percent: Some(0.111),
+            ts_ms: Some(1_717_200_000_000),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let sparse = CurrencySnapshot {
+            base_currency: None,
+            quote_currency: None,
+            price: None,
+            bid: None,
+            ask: None,
+            change: None,
+            change_percent: None,
+            ts_ms: None,
+            ..row.clone()
+        };
+        assert!(sparse.validate().is_ok());
+        round_trip(&sparse);
+
+        let bad = CurrencySnapshot {
+            symbol: String::new(),
             ..row
         };
         assert!(bad.validate().is_err());

@@ -1241,6 +1241,11 @@ fn insert_nasdaq_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str
         ("nasdaq", "equity_calendar_ipo"),
         nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Ipo.as_query_str()),
     );
+    // OpenBB-parity P4W11: index/sp500_multiples (Shiller CAPE & friends).
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
+        fetch_binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>(),
+    );
 }
 
 /// Register the keyless Yahoo expansion fetch bindings (gap-matrix item L2.4),
@@ -1692,6 +1697,15 @@ fn insert_fmp_completion_fetch_bindings(
     table.insert(
         ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpScreenerFetcher, _, _>(),
+    );
+    // OpenBB-parity P4W11: index/constituents + currency/snapshots.
+    table.insert(
+        ("fmp", crate::FmpHttpIndexConstituentsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpIndexConstituentsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>(),
     );
 }
 
@@ -3240,6 +3254,11 @@ fn insert_nasdaq_ingest_bindings(
             "raw.calendar_event",
         ),
     );
+    // OpenBB-parity P4W11: index/sp500_multiples lands as Sp500Multiple rows.
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
+        binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>("raw.sp500_multiple"),
+    );
 }
 
 /// Register the keyless Yahoo expansion ingest bindings (gap-matrix item L2.4),
@@ -3977,6 +3996,15 @@ fn insert_fmp_completion_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
         binding::<crate::FmpHttpScreenerFetcher, _, _>("raw.screener_row"),
+    );
+    // OpenBB-parity P4W11: index/constituents + currency/snapshots.
+    table.insert(
+        ("fmp", crate::FmpHttpIndexConstituentsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpIndexConstituentsFetcher, _, _>("raw.index_constituent"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>("raw.currency_snapshot"),
     );
 }
 
@@ -6092,6 +6120,8 @@ mod tests {
             ("nasdaq", "equity_calendar_dividends"),
             ("nasdaq", "equity_calendar_earnings"),
             ("nasdaq", "equity_calendar_ipo"),
+            // OpenBB-parity P4W11: index/sp500_multiples (Data Link MULTPL).
+            ("nasdaq", "sp500_multiples"),
         ];
         const PROVIDERS: &[&str] = &["ecb", "cboe", "eia", "nasdaq"];
 

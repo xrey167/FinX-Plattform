@@ -488,6 +488,84 @@
         "title": "CorporateAction",
         "type": "object"
       },
+      "CurrencySnapshot": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A foreign-exchange (FX) pair last-price snapshot.\n\nStandardizes `currency/snapshots` (FMP `/fx` forex snapshot). One row = one\npair. The `symbol` (a `BASE/QUOTE` ticker) is the identity anchor; the\nprice/bid/ask fields are [`Option`] because the forex snapshot reports a\nvariable subset per pair.",
+        "properties": {
+          "ask": {
+            "description": "Best ask price.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "base_currency": {
+            "description": "Base currency code (left side of the pair), where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bid": {
+            "description": "Best bid price.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "change": {
+            "description": "Absolute price change over the session.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "change_percent": {
+            "description": "Relative price change as a percentage.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "price": {
+            "description": "Most-recent mid / last price.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quote_currency": {
+            "description": "Quote currency code (right side of the pair), where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "description": "FX-pair ticker, e.g. `\"EUR/USD\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "ts_ms": {
+            "description": "Snapshot timestamp as Unix epoch milliseconds (UTC), where reported.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "CurrencySnapshot",
+        "type": "object"
+      },
       "EarningsTranscript": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "An earnings-call transcript for a single fiscal quarter.\n\nStandardizes `equity/fundamental/transcript` (FMP `earning_call_transcript`).\nOne row = one (symbol, year, quarter) call transcript. `content` carries the\nfull transcript text; `date` and the period fields are [`Option`] because the\nsource occasionally omits them.",
@@ -1635,6 +1713,63 @@
           "id"
         ],
         "title": "ImfDiscoveryRecord",
+        "type": "object"
+      },
+      "IndexConstituent": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single constituent (member security) of a market index.\n\nStandardizes `index/constituents` (FMP `/{index}_constituent`). One row =\none (index, member) pair. The index handle and the member symbol are the\nidentity anchors; the descriptive fields are [`Option`] because the\nconstituent feed reports a variable subset per index.",
+        "properties": {
+          "date_added": {
+            "description": "Date the security was added to the index (`YYYY-MM-DD`), where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headquarters": {
+            "description": "Headquarters location, where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "Index handle the membership was queried for, e.g. `\"sp500\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "description": "Constituent company / security name as reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sector": {
+            "description": "GICS / index sector label, where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sub_industry": {
+            "description": "GICS / index sub-industry label, where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "description": "Constituent ticker symbol.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "symbol"
+        ],
+        "title": "IndexConstituent",
         "type": "object"
       },
       "Instrument": {
@@ -2945,6 +3080,36 @@
         "title": "SicCode",
         "type": "object"
       },
+      "Sp500Multiple": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single Shiller / S&P 500 valuation-multiple observation.\n\nStandardizes `index/sp500_multiples` (Nasdaq Data Link `MULTPL/*`, e.g. the\nShiller CAPE PE ratio). One row = one (metric, date) observation. The metric\nlabel and the date are the identity anchors; `value` is [`Option`] because a\nsource cell may be blank for a given period.",
+        "properties": {
+          "date": {
+            "description": "Observation date in `YYYY-MM-DD` form.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "metric": {
+            "description": "Multiple name, e.g. `\"shiller_pe_ratio_month\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {
+            "description": "Observed value of the multiple for the date.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "metric",
+          "date"
+        ],
+        "title": "Sp500Multiple",
+        "type": "object"
+      },
       "SymbolMapping": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A ticker-symbol ↔ CIK mapping row.\n\nStandardizes `regulators/sec/cik_map` / `regulators/sec/symbol_map` (SEC\n`company_tickers.json`). One row = one (ticker, CIK) pair, optionally with\nthe issuer's reported company name. The CIK is carried as a string so leading\nzeros and the canonical zero-padded form survive a round trip.",
@@ -4027,6 +4192,115 @@
           }
         },
         "summary": "Search available currency (FX) pairs by name or fragment, FMP-backed.",
+        "tags": [
+          "currency"
+        ]
+      }
+    },
+    "/api/v1/currency/snapshots": {
+      "get": {
+        "operationId": "currency_snapshots",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrencySnapshot"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Forex-pair snapshot quotes (price/bid/ask) across all pairs, FMP-backed.",
         "tags": [
           "currency"
         ]
@@ -19619,6 +19893,115 @@
         ]
       }
     },
+    "/api/v1/index/constituents": {
+      "get": {
+        "operationId": "index_constituents",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexConstituent"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Constituent members of a market index (sp500/nasdaq/dowjones), FMP-backed.",
+        "tags": [
+          "index"
+        ]
+      }
+    },
     "/api/v1/index/price/historical": {
       "get": {
         "operationId": "index_price_historical",
@@ -19941,6 +20324,115 @@
           }
         },
         "summary": "Delayed US-index quote snapshot (price, change), CBOE-backed.",
+        "tags": [
+          "index"
+        ]
+      }
+    },
+    "/api/v1/index/sp500_multiples": {
+      "get": {
+        "operationId": "index_sp500_multiples",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Sp500Multiple"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "S&P 500 valuation multiples incl. Shiller CAPE (NASDAQ Data Link MULTPL).",
         "tags": [
           "index"
         ]

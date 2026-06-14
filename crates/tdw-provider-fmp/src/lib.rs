@@ -5,18 +5,19 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher, FmpHttpEsgScoreFetcher,
-    FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher, FmpHttpEtfInfoFetcher,
-    FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher, FmpHttpEtfSectorsFetcher,
-    FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher, FmpHttpGovernmentTradesFetcher,
-    FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher,
-    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
-    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
-    FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher,
-    FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher,
-    FmpHttpSplitsFetcher, FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpCurrencySnapshotsFetcher, FmpHttpDiscoveryFetcher,
+    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher,
+    FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
+    FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
+    FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
+    FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher,
+    FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher, FmpHttpInsiderTradingFetcher,
+    FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
+    FmpHttpLatestFilingsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
+    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
+    FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher, FmpHttpSearchFetcher,
+    FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpTranscriptFetcher,
 };
 
 use schemars::JsonSchema;
@@ -222,6 +223,56 @@ impl FmpSymbolQuery {
         Ok(Self {
             symbol: normalize_symbol(symbol)?,
         })
+    }
+}
+
+/// Query for the FMP index-constituents endpoint (`/{index}_constituent`).
+///
+/// FMP publishes a constituent list per major index under a fixed path segment:
+/// `sp500_constituent`, `nasdaq_constituent`, `dowjones_constituent`. The query
+/// carries the validated index handle (the leading `{index}` path segment); an
+/// unknown / missing handle defaults to `sp500`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpIndexConstituentQuery {
+    /// Index handle / path segment, e.g. `"sp500"`, `"nasdaq"`, `"dowjones"`.
+    pub index: String,
+}
+
+impl FmpIndexConstituentQuery {
+    /// Construct a query from an optional index handle, defaulting to `sp500`
+    /// and normalizing the three supported aliases.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        let index = match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("nasdaq" | "nasdaq100" | "ndx") => "nasdaq",
+            Some("dowjones" | "dow" | "djia" | "dji") => "dowjones",
+            _ => "sp500",
+        };
+        Self {
+            index: index.to_string(),
+        }
+    }
+}
+
+/// Query for the FMP forex snapshot endpoint (`/fx`).
+///
+/// The `/fx` endpoint returns the full set of FX-pair quotes and takes no path
+/// or filter parameter; an optional `symbol` keeps only matching pairs
+/// client-side so callers can narrow to one pair without a second request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpFxSnapshotQuery {
+    /// Optional `BASE/QUOTE` (or `BASEQUOTE`) filter; empty = every pair.
+    #[serde(default)]
+    pub symbol: String,
+}
+
+impl FmpFxSnapshotQuery {
+    /// Construct a snapshot query from an optional pair filter.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        Self {
+            symbol: value.unwrap_or_default().trim().to_ascii_uppercase(),
+        }
     }
 }
 
@@ -817,6 +868,37 @@ mod tests {
         assert_eq!(FmpPeriod::from_param(Some("annual")), FmpPeriod::Annual);
         assert_eq!(FmpPeriod::from_param(None), FmpPeriod::Annual);
         assert_eq!(FmpPeriod::from_param(Some("bogus")), FmpPeriod::Annual);
+    }
+
+    #[test]
+    fn index_constituent_query_parses_aliases_with_sp500_default() {
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("sp500")).index,
+            "sp500"
+        );
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("NASDAQ")).index,
+            "nasdaq"
+        );
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("dow")).index,
+            "dowjones"
+        );
+        assert_eq!(FmpIndexConstituentQuery::from_param(None).index, "sp500");
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("bogus")).index,
+            "sp500"
+        );
+    }
+
+    #[test]
+    fn fx_snapshot_query_normalizes_optional_filter() {
+        assert_eq!(FmpFxSnapshotQuery::from_param(None).symbol, "");
+        assert_eq!(
+            FmpFxSnapshotQuery::from_param(Some(" eur/usd ")).symbol,
+            "EUR/USD"
+        );
+        assert_eq!(FmpFxSnapshotQuery::default().symbol, "");
     }
 
     #[test]
