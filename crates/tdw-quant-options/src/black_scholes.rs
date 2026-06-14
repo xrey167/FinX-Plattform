@@ -74,6 +74,33 @@ pub fn price(params: BlackScholesParams) -> Result<f64> {
     Ok(value)
 }
 
+/// The Black-Scholes-Merton vega (price sensitivity to volatility) of a European
+/// call or put.
+///
+/// Vega is exercise-symmetric (identical for calls and puts) and depends only on
+/// the standard-normal *pdf* of `d1`: `vega = S * e^{-qT} * phi(d1) * sqrt(T)`.
+/// This is the same value as [`greeks`]'s `vega` field but skips the four other
+/// greeks (and their extra cdf evaluations) — useful for the implied-vol Newton
+/// step, which needs only the derivative.
+///
+/// `vega` is per unit volatility (`+1.0` = a `+100` vol-point move).
+///
+/// # Errors
+///
+/// Returns [`OptionError::NonPositive`] when `spot`, `strike`, `volatility`, or
+/// `time_to_expiry` is not strictly positive.
+pub fn vega(params: BlackScholesParams) -> Result<f64> {
+    require_positive("spot", params.spot)?;
+    require_positive("strike", params.strike)?;
+    require_positive("volatility", params.volatility)?;
+    require_positive("time_to_expiry", params.time_to_expiry)?;
+
+    let (d1, _d2) = d1_d2(&params);
+    let sqrt_t = params.time_to_expiry.sqrt();
+    let disc_q = (-params.dividend_yield * params.time_to_expiry).exp();
+    Ok(params.spot * disc_q * pdf(d1) * sqrt_t)
+}
+
 /// The full analytic greeks (delta, gamma, theta, vega, rho) of a European call
 /// or put under Black-Scholes-Merton.
 ///
@@ -216,6 +243,28 @@ mod tests {
         );
         assert!((cg.vega - 37.524_035).abs() < 1e-3, "vega {}", cg.vega);
         assert!(cg.gamma > 0.0 && cg.vega > 0.0);
+    }
+
+    #[test]
+    fn vega_helper_matches_full_greeks_vega() {
+        // The cheap pdf-only `vega` helper must equal the `vega` field of the
+        // full greek set, for both calls and puts (vega is exercise-symmetric).
+        for option_type in [OptionType::Call, OptionType::Put] {
+            let v = super::vega(base(option_type)).expect("vega");
+            let g = greeks(base(option_type)).expect("greeks");
+            assert!(
+                (v - g.vega).abs() < 1e-12,
+                "vega {v} vs greeks.vega {}",
+                g.vega
+            );
+        }
+    }
+
+    #[test]
+    fn vega_rejects_non_positive_inputs() {
+        let mut bad = base(OptionType::Call);
+        bad.volatility = 0.0;
+        assert!(super::vega(bad).is_err());
     }
 
     #[test]

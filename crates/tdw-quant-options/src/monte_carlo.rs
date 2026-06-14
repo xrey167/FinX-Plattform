@@ -150,29 +150,38 @@ pub fn price(params: MonteCarloParams) -> Result<MonteCarloPrice> {
         |spot_t: f64| discount * payoff(params.option_type, spot_t, params.strike);
 
     let mut normals = NormalStream::new(params.seed);
-    // Discounted-payoff running sums for a mean and a standard error.
+    // Running sums of the per-draw *observations*. Each Box-Muller draw produces
+    // one independent observation; under antithetic sampling the observation is
+    // the AVERAGE of the `Z` and `-Z` discounted payoffs, since `Y` and `Y'` are
+    // correlated and must not be treated as two independent samples. `samples`
+    // counts payoff evaluations (for reporting), while `observations` counts the
+    // statistically-independent draws the standard error is computed over.
     let mut sum = 0.0_f64;
     let mut sum_sq = 0.0_f64;
     let mut samples = 0usize;
+    let mut observations = 0usize;
 
     for _ in 0..params.paths {
         let z = normals.next_normal();
-        let mut tally = |spot_t: f64| {
-            let discounted = discounted_payoff(spot_t);
-            sum += discounted;
-            sum_sq += discounted * discounted;
+        let observation = if params.antithetic {
+            samples += 2;
+            // The antithetic pair's average is one observation.
+            0.5 * (discounted_payoff(terminal(z)) + discounted_payoff(terminal(-z)))
+        } else {
             samples += 1;
+            discounted_payoff(terminal(z))
         };
-        tally(terminal(z));
-        if params.antithetic {
-            tally(terminal(-z));
-        }
+        sum += observation;
+        sum_sq += observation * observation;
+        observations += 1;
     }
 
     #[allow(clippy::cast_precision_loss)]
-    let n = samples as f64;
+    let n = observations as f64;
     let mean = sum / n;
-    // Population variance of the discounted payoffs; standard error = sd / sqrt(n).
+    // Population variance of the per-draw observations; standard error =
+    // sd / sqrt(n) over the `observations` independent draws (the antithetic
+    // pair-averages), NOT over the doubled payoff count.
     let variance = mean.mul_add(-mean, sum_sq / n).max(0.0);
     let std_error = (variance / n).sqrt();
 
@@ -185,7 +194,7 @@ pub fn price(params: MonteCarloParams) -> Result<MonteCarloPrice> {
 
 #[cfg(test)]
 mod tests {
-    use super::price;
+    use super::{NormalStream, payoff, price};
     use crate::black_scholes;
     use crate::params::{BlackScholesParams, MonteCarloParams, OptionType};
 
@@ -242,6 +251,45 @@ mod tests {
         plain.antithetic = false;
         let mc_plain = price(plain).expect("plain");
         assert_eq!(mc_plain.samples, 1_000);
+    }
+
+    #[test]
+    fn antithetic_std_error_is_over_pairs_not_doubled_samples() {
+        // The standard error must be computed over the M pair-averages (one
+        // observation per antithetic pair), NOT over the 2M correlated payoffs.
+        // Reconstruct the correct std_error independently from the `price` and a
+        // direct simulation, and confirm `samples` still reports the 2M payoff
+        // count while the error reflects the M observations.
+        let paths = 4_000usize;
+        let params = base(OptionType::Call, paths, 2024);
+        let mc = price(params).expect("mc");
+        assert_eq!(mc.samples, 2 * paths, "samples counts payoff evaluations");
+
+        // Independently recompute the pair-average observations.
+        let log_drift = (0.5 * params.volatility)
+            .mul_add(-params.volatility, params.rate - params.dividend_yield)
+            * params.time_to_expiry;
+        let diffusion = params.volatility * params.time_to_expiry.sqrt();
+        let discount = (-params.rate * params.time_to_expiry).exp();
+        let terminal = |z: f64| params.spot * diffusion.mul_add(z, log_drift).exp();
+        let dp = |s: f64| discount * payoff(params.option_type, s, params.strike);
+
+        let mut normals = NormalStream::new(params.seed);
+        let mut obs = Vec::with_capacity(paths);
+        for _ in 0..paths {
+            let z = normals.next_normal();
+            obs.push(0.5 * (dp(terminal(z)) + dp(terminal(-z))));
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let n = obs.len() as f64;
+        let mean = obs.iter().sum::<f64>() / n;
+        let var = obs.iter().map(|o| (o - mean) * (o - mean)).sum::<f64>() / n;
+        let expected_se = (var / n).sqrt();
+        assert!(
+            (mc.std_error - expected_se).abs() < 1e-9,
+            "std_error {} should match the over-M-pairs standard error {expected_se}",
+            mc.std_error
+        );
     }
 
     #[test]

@@ -74,43 +74,53 @@ pub fn price(params: BinomialParams) -> Result<f64> {
     let dt = params.time_to_expiry / n_f;
     let up = (params.volatility * dt.sqrt()).exp();
     let down = 1.0 / up;
-    // Per-up-move price ratio `u / d`: a node with `j` ups (and the rest downs)
-    // at a layer of `m` total steps has price `S * d^m * ratio^j`, computed
-    // multiplicatively to avoid integer-exponent casts.
+    // Per-up-move price ratio `u / d`: moving from node `j` to node `j + 1` in
+    // the same layer multiplies the spot by this ratio (one fewer down, one more
+    // up).
     let ratio = up / down;
     let growth = ((params.rate - params.dividend_yield) * dt).exp();
     let p_up = (growth - down) / (up - down);
     let p_down = 1.0 - p_up;
     let discount = (-params.rate * dt).exp();
 
-    // Spot price at node `j` of a `layers`-step layer: S * d^layers * ratio^j.
-    let node_spot = |layers: usize, j: usize| {
-        let mut spot = params.spot;
-        for _ in 0..layers {
-            spot *= down;
-        }
-        for _ in 0..j {
-            spot *= ratio;
-        }
-        spot
-    };
+    // Terminal layer spots: node `j` (j = 0..=n) has had `j` ups and `n - j`
+    // downs, so its spot is `S * d^n * ratio^j`. Build the vector once in O(N) by
+    // starting from the all-down node (`S * d^n`) and multiplying by `ratio` as
+    // `j` increases — no per-node O(N) exponentiation.
+    let mut spots: Vec<f64> = Vec::with_capacity(n + 1);
+    let mut spot = params.spot;
+    for _ in 0..n {
+        spot *= down;
+    }
+    for _ in 0..=n {
+        spots.push(spot);
+        spot *= ratio;
+    }
 
-    // Terminal layer: node j (j = 0..=n) has had j up-moves and (n - j) downs.
-    let mut values: Vec<f64> = (0..=n)
-        .map(|j| intrinsic(params.option_type, node_spot(n, j), params.strike))
+    // Terminal payoffs from the precomputed spot vector.
+    let mut values: Vec<f64> = spots
+        .iter()
+        .map(|&spot| intrinsic(params.option_type, spot, params.strike))
         .collect();
 
-    // Backward induction from step n-1 down to 0.
+    // Backward induction from step n-1 down to 0. Each step shrinks the active
+    // layer by one node; the spot at node `j` of the next-coarser layer is the
+    // current node-`j` spot scaled up by `up` (it has one fewer down-move than
+    // the terminal-aligned `spots[j]`), so we rescale `spots` in place by `up`
+    // per step. This keeps every node O(1): the whole pricing is O(N^2).
     for step in (0..n).rev() {
+        if matches!(params.exercise, ExerciseStyle::American) {
+            for spot in spots.iter_mut().take(step + 1) {
+                *spot *= up;
+            }
+        }
         for j in 0..=step {
             let continuation = discount * p_up.mul_add(values[j + 1], p_down * values[j]);
             values[j] = match params.exercise {
                 ExerciseStyle::European => continuation,
-                ExerciseStyle::American => continuation.max(intrinsic(
-                    params.option_type,
-                    node_spot(step, j),
-                    params.strike,
-                )),
+                ExerciseStyle::American => {
+                    continuation.max(intrinsic(params.option_type, spots[j], params.strike))
+                }
             };
         }
     }
