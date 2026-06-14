@@ -112,6 +112,18 @@ fn parse_f64(value: Option<&Value>) -> Option<f64> {
     }
 }
 
+/// Read a signed 32-bit integer field, accepting a JSON number or numeric
+/// string (used for `fiscal_year`).
+fn parse_i32(value: Option<&Value>) -> Option<i32> {
+    parse_f64(value).and_then(|number| {
+        if number.is_finite() {
+            i32::try_from(number as i64).ok()
+        } else {
+            None
+        }
+    })
+}
+
 /// Read an unsigned integer field, accepting a JSON number or numeric string.
 fn parse_u64(value: Option<&Value>) -> Option<u64> {
     parse_f64(value).and_then(|number| {
@@ -428,22 +440,32 @@ impl Fetcher<IntrinioQuery, FinancialStatement> for IntrinioHttpReportedFinancia
                 line_items.insert(tag, value);
             }
         }
-        // The fundamental id is the only stable identity the route carries; the
-        // statement kind/period are not in this raw shape, so the standardized
-        // row records the id as the symbol anchor and leaves typed period headers
-        // absent (callers join on the fundamental id).
-        let symbol = query.identifier.clone().unwrap_or_default();
         if line_items.is_empty() {
             return Ok(Vec::new());
         }
+        // The response carries a sibling `fundamental` object describing the
+        // statement's company and period. Prefer its ticker for the `symbol`
+        // anchor and lift the typed period headers from it, falling back to the
+        // fundamental id from the query when the block is absent.
+        let fundamental = map.get("fundamental").and_then(Value::as_object);
+        let symbol = fundamental
+            .and_then(|fund| fund.get("company"))
+            .and_then(Value::as_object)
+            .and_then(|company| parse_string(company.get("ticker")))
+            .or_else(|| query.identifier.clone())
+            .unwrap_or_default();
+        let fiscal_year = fundamental.and_then(|fund| parse_i32(fund.get("fiscal_year")));
+        let fiscal_period = fundamental.and_then(|fund| parse_string(fund.get("fiscal_period")));
+        let date = fundamental.and_then(|fund| parse_date(fund.get("end_date")));
+        let filing_date = fundamental.and_then(|fund| parse_date(fund.get("filing_date")));
         Ok(vec![FinancialStatement {
             symbol,
             statement: StatementKind::Income,
             period: "reported".to_string(),
-            fiscal_year: None,
-            fiscal_period: None,
-            date: None,
-            filing_date: None,
+            fiscal_year,
+            fiscal_period,
+            date,
+            filing_date,
             currency: None,
             line_items,
         }])

@@ -279,6 +279,26 @@ on the **keyless / free-key** surface; the only standing gaps are **paid-key**
 business decision, not an engineering gap. **congress.gov (uscongress) and
 biztoc (news/world) are now BUILT (P4W12).**
 
+### Total-parity residual — 2026-06-14 (G004, final pre-cutover floor)
+
+> Before the cutover, the four remaining no-API providers were re-assessed
+> against each **vendor's own** site for a documented, stable, keyless-or-free
+> public API (web-verified). All four were confirmed unimplementable clean-room
+> and **built NONE** — the honest floor of OpenBB parity is exactly these four
+> scrape/internal-only commands:
+>
+> | OpenBB command(s) | Vendor | Reason un-built clean-room | Parity already served by |
+> |---|---|---|---|
+> | `index/sp500_multiples` (Shiller PE / SP500 multiples) | **multpl** | multpl.com publishes **no API** — data is HTML-table scrape only (third-party access only via Quandl). | **NASDAQ** (`index/sp500_multiples`) — already covered |
+> | `equity/screener`, `equity/compare/groups` | **finviz** | **No official API** — only unofficial HTML scrapers exist; scraping is **ToS-sensitive** and brittle. | FMP screener + Yahoo price/performance |
+> | `equity/shorts/short_volume` (dark-pool / short volume) | **stockgrid** | **No documented public API**; OpenBB hits an **undocumented internal endpoint** (confirmed by OpenBB issue #503). Building it means inventing an endpoint contract. | FINRA short-interest + SEC `equity/shorts/fails_to_deliver` |
+> | `etf`/`equity/discovery` active/gainers/losers | **wsj** | **No documented public JSON API** — only an undocumented internal market-data endpoint backs the site. | FMP `equity/discovery/{active,gainers,losers}` + Yahoo price/performance |
+>
+> Each would require inventing/guessing an undocumented endpoint shape or
+> ToS-sensitive scraping, violating the clean-room "vendor's own public API docs
+> only" rule. This is a **business/source decision, not an engineering gap** —
+> revisit only if a vendor publishes official, stable API docs.
+
 ---
 
 ## Part 2 — Implementation Layers (dependency-ordered, leaves first)
