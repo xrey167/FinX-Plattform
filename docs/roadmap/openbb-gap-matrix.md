@@ -1,5 +1,16 @@
 # OpenBB → FinX Gap-Closure Plan (clean-room "adapt the missing, don't copy")
 
+> **Scope of this document.** This is the **command/data-parity** scoreboard —
+> the OpenBB Platform API surface (routers, commands, providers). The **ecosystem**
+> half of OpenBB parity — the capability *surfaces* the OpenBB org ships beyond the
+> Platform's data surface (computed option-pricing & forecasting, a provider
+> scaffolder, a desktop chart-host, a Workspace control-plane MCP, a chat-bot, and
+> an Excel/Office add-in; campaign `openbb-ecosystem-p1` / G001–G010) — is tracked
+> in [`openbb-ecosystem-gap.md`](openbb-ecosystem-gap.md), now **complete**. As of
+> the ecosystem cutover (2026-06-14) the catalog exposes **284 routes** (the
+> ecosystem campaign's option-pricing + `forecast/*` `Compute` routes are included
+> in that count).
+
 ## OpenBB-parity TOTAL roll-up — 2026-06-14 (total-parity cutover, G005)
 
 > **Total parity reached.** With the OpenBB-parity-total program (G001–G005)
