@@ -224,6 +224,17 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         maturity: "",
         currency: "USD",
     },
+    // -- commodity: spot prices (MacroSeries) -------------------------------
+    FredEndpoint {
+        command: "commodity/price/spot",
+        series_id: "DCOILWTICO",
+        model: FredModel::Macro,
+        title: "Crude Oil Prices: West Texas Intermediate (WTI), Cushing, Oklahoma",
+        frequency: "daily",
+        unit: "usd_per_barrel",
+        maturity: "",
+        currency: "USD",
+    },
     // -- fixedincome: policy / reference rates (RateObservation) -------------
     FredEndpoint {
         command: "fixedincome/rate/sofr",

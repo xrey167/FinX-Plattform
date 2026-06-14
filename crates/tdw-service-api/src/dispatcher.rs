@@ -1113,7 +1113,9 @@ fn insert_ecb_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
 /// `ENDPOINT` const.
 #[cfg(feature = "provider-cboe")]
 fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
-    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    use crate::{
+        CboeHttpIndexDirectoryFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    };
     table.insert(
         ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
         fetch_binding::<CboeHttpIndexSnapshotFetcher, _, _>(),
@@ -1121,6 +1123,13 @@ fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     table.insert(
         ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
         fetch_binding::<CboeHttpOptionsChainFetcher, _, _>(),
+    );
+    // OpenBB-parity P4W6: one index-directory fetcher serves both
+    // `index/available` and `index/search` (shared candidate, like
+    // `polygon/aggregates`).
+    table.insert(
+        ("cboe", CboeHttpIndexDirectoryFetcher::ENDPOINT),
+        fetch_binding::<CboeHttpIndexDirectoryFetcher, _, _>(),
     );
 }
 
@@ -2865,7 +2874,9 @@ fn insert_ecb_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str),
 /// and the options chain in `raw.option_contract`.
 #[cfg(feature = "provider-cboe")]
 fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
-    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    use crate::{
+        CboeHttpIndexDirectoryFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    };
     table.insert(
         ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
         binding::<CboeHttpIndexSnapshotFetcher, _, _>("raw.price_quote"),
@@ -2873,6 +2884,12 @@ fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     table.insert(
         ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
         binding::<CboeHttpOptionsChainFetcher, _, _>("raw.option_contract"),
+    );
+    // OpenBB-parity P4W6: the index directory lands as `Instrument` rows in the
+    // shared `raw.instrument` bronze table (the same table `equity/search` uses).
+    table.insert(
+        ("cboe", CboeHttpIndexDirectoryFetcher::ENDPOINT),
+        binding::<CboeHttpIndexDirectoryFetcher, _, _>("raw.instrument"),
     );
 }
 
@@ -5587,6 +5604,8 @@ mod tests {
             ("ecb", "reference_rates"),
             ("cboe", "index_snapshots"),
             ("cboe", "options_chains"),
+            // OpenBB-parity P4W6: index/available + index/search share this key.
+            ("cboe", "index_directory"),
             ("eia", "commodity_petroleum_status_report"),
             ("eia", "commodity_short_term_energy_outlook"),
             ("nasdaq", "equity_calendar_dividends"),

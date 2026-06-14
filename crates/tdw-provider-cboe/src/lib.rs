@@ -5,8 +5,8 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
-    CboeHttpOptionsFetcher,
+    CboeHttpIndexDirectoryFetcher, CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher,
+    CboeHttpOptionsChainFetcher, CboeHttpOptionsFetcher,
 };
 
 use schemars::JsonSchema;
@@ -62,6 +62,29 @@ impl CboeIndexQuery {
         Ok(Self {
             index: normalize_index(index)?,
         })
+    }
+}
+
+/// Query parameters for the CBOE index-directory endpoint.
+///
+/// Backs both `index/available` (full directory listing) and `index/search`
+/// (case-insensitive substring filter over the symbol and name). An empty
+/// `query` lists every index; a non-empty `query` keeps only matching rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CboeIndexDirectoryQuery {
+    /// Optional case-insensitive substring filter over symbol/name. Empty =
+    /// list all indices.
+    #[serde(default)]
+    pub query: String,
+}
+
+impl CboeIndexDirectoryQuery {
+    /// Construct a directory query from an optional free-text filter.
+    #[must_use]
+    pub fn new(query: &str) -> Self {
+        Self {
+            query: query.trim().to_string(),
+        }
     }
 }
 
@@ -131,6 +154,16 @@ pub fn options_request_path(symbol: &str) -> Result<String> {
 pub fn index_request_path(index: &str) -> Result<String> {
     let index = normalize_index(index)?;
     Ok(format!("/us_indices/quotes/{index}"))
+}
+
+/// Build the path for the CBOE index-directory (definitions) request.
+///
+/// The directory is a static keyless CDN document listing every CBOE index
+/// (name, symbol, description); the same document backs both `index/available`
+/// and `index/search`, so the path takes no parameter.
+#[must_use]
+pub const fn index_directory_path() -> &'static str {
+    "/us_indices/definitions/all_us_indices.json"
 }
 
 // ---------------------------------------------------------------------------

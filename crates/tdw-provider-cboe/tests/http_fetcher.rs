@@ -12,8 +12,9 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_cboe::{
-    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
-    CboeHttpOptionsFetcher, CboeIndexQuery, CboeOptionsQuery,
+    CboeHttpIndexDirectoryFetcher, CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher,
+    CboeHttpOptionsChainFetcher, CboeHttpOptionsFetcher, CboeIndexDirectoryQuery, CboeIndexQuery,
+    CboeOptionsQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -225,6 +226,56 @@ fn options_chain_maps_to_option_contract_and_decodes_occ_symbol() {
     assert_eq!(contracts[1].option_type, "put");
 }
 
+fn index_directory_cassette_bytes() -> Bytes {
+    cassette_bytes!([
+        { "index": "VIX", "name": "Cboe Volatility Index", "description": "VIX" },
+        { "index": "SPX", "name": "S&P 500 Index", "description": "SPX" },
+        { "index": "RUT", "name": "Russell 2000 Index", "description": "RUT" }
+    ])
+}
+
+#[test]
+fn index_directory_lists_all_indices_when_query_empty() {
+    let fetcher = CboeHttpIndexDirectoryFetcher::default();
+    let query = CboeHttpIndexDirectoryFetcher::transform_query(json!({}))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    let rows = fetcher
+        .transform_data(&query, index_directory_cassette_bytes())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "VIX");
+    assert_eq!(rows[0].name, "Cboe Volatility Index");
+    assert_eq!(rows[0].venue, "cboe");
+}
+
+#[test]
+fn index_directory_filters_by_case_insensitive_query() {
+    let fetcher = CboeHttpIndexDirectoryFetcher::default();
+    let query = CboeHttpIndexDirectoryFetcher::transform_query(json!({ "query": "russell" }))
+        .unwrap_or_else(|e| panic!("query should transform: {e}"));
+    assert_eq!(query, CboeIndexDirectoryQuery::new("russell"));
+    let rows = fetcher
+        .transform_data(&query, index_directory_cassette_bytes())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].symbol, "RUT");
+}
+
+#[test]
+fn index_directory_malformed_json_returns_error() {
+    let fetcher = CboeHttpIndexDirectoryFetcher::default();
+    let query = CboeIndexDirectoryQuery::default();
+    let err = fetcher
+        .transform_data(&query, Bytes::from(b"not json".as_slice()))
+        .expect_err("malformed JSON must return an error");
+    assert!(
+        err.to_string().contains("cboe directory parse_json"),
+        "error={err}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Live tests — gated by TDW_CBOE_LIVE=1
 // ---------------------------------------------------------------------------
@@ -263,4 +314,21 @@ async fn live_cboe_index_returns_quote_when_env_var_set() {
         "live response must include one index quote"
     );
     assert_eq!(quotes[0].symbol, "VIX");
+}
+
+#[tokio::test]
+async fn live_cboe_index_directory_returns_indices_when_env_var_set() {
+    if std::env::var("TDW_CBOE_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_CBOE_LIVE != 1; skipping live CBOE index-directory integration test");
+        return;
+    }
+
+    let fetcher = CboeHttpIndexDirectoryFetcher::default();
+    let query = CboeIndexDirectoryQuery::default();
+    let rows = live_fetch_nonempty!(fetcher, query);
+
+    assert!(
+        !rows.is_empty(),
+        "live response must include at least one index"
+    );
 }

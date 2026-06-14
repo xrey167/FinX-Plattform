@@ -137,8 +137,8 @@ use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
 use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
 #[cfg(feature = "provider-cboe")]
 use tdw_provider_cboe::{
-    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
-    CboeHttpOptionsFetcher,
+    CboeHttpIndexDirectoryFetcher, CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher,
+    CboeHttpOptionsChainFetcher, CboeHttpOptionsFetcher,
 };
 #[cfg(feature = "provider-ccdata")]
 use tdw_provider_ccdata::CCDataHttpFetcher;
@@ -342,6 +342,10 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CboeHttpIndexSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
     registry.register(CboeHttpOptionsChainFetcher::registry_entry())?;
+    // Catalog-facing CBOE index-directory fetcher (OpenBB-parity P4W6:
+    // index/available + index/search).
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpIndexDirectoryFetcher::registry_entry())?;
     // Catalog-facing CFTC Commitments-of-Traders fetchers (OpenBB-parity P2W5).
     #[cfg(feature = "provider-cftc")]
     registry.register(CftcHttpCotFetcher::registry_entry())?;

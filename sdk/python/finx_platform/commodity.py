@@ -8,11 +8,64 @@ from __future__ import annotations
 from ._client import Client, FinXObject
 
 
+class CommodityPriceNamespace:
+    """Accessor for the ``commodity/price`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def spot(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        chart: bool = False,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Spot commodity price series (WTI crude default), FRED-backed.
+
+        Route: ``commodity/price/spot``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            chart: When ``True``, request a server-rendered chart in ``extra``.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        if chart:
+            params["chart"] = "true"
+        return self._client.fetch("commodity/price/spot", params)
+
 class CommodityNamespace:
     """Accessor for the ``commodity`` route namespace."""
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        self.price = CommodityPriceNamespace(client)
 
     def petroleum_status_report(
         self,

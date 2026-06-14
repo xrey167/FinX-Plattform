@@ -13,8 +13,8 @@ use tdw_core::{Error, Result};
 use tdw_provider_http::{HttpFetcher, ProviderSpec};
 
 use crate::{
-    BASE_URL, CboeIndexQuery, CboeOptionsQuery, CboeProviderError, index_request_path,
-    options_request_path,
+    BASE_URL, CboeIndexDirectoryQuery, CboeIndexQuery, CboeOptionsQuery, CboeProviderError,
+    index_directory_path, index_request_path, options_request_path,
 };
 
 const USER_AGENT: &str = "tdw-provider-cboe/0.1";
@@ -208,7 +208,7 @@ pub type CboeHttpIndexFetcher = HttpFetcher<CboeIndexSpec>;
 
 use async_trait::async_trait;
 use tdw_core::{Credentials, Fetcher};
-use tdw_domain::{OptionContract, QuoteSnapshot};
+use tdw_domain::{Instrument, OptionContract, QuoteSnapshot};
 
 /// Send a request built by `P` and return the response bytes, reusing the
 /// shared bounded client. Mirrors the blanket `HttpFetcher` extract path so the
@@ -372,6 +372,118 @@ fn decode_occ_symbol(symbol: &str) -> (String, String, f64) {
         .parse::<f64>()
         .map_or(0.0, |thousandths| thousandths / 1000.0);
     (expiration, option_type, strike)
+}
+
+// ---------------------------------------------------------------------------
+// CBOE index directory -> tdw_domain::Instrument
+//
+// The keyless CDN document
+// <https://cdn.cboe.com/api/global/us_indices/definitions/all_us_indices.json>
+// lists every CBOE index (name, symbol, description). One fetcher serves both
+// `index/available` (full listing) and `index/search` (case-insensitive
+// substring filter over symbol/name), normalized to `tdw_domain::Instrument`.
+// ---------------------------------------------------------------------------
+
+/// Wire shape for one entry in the CBOE index-definitions document.
+#[derive(Deserialize)]
+struct RawIndexDefinition {
+    #[serde(default)]
+    index: String,
+    #[serde(default)]
+    name: String,
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production CBOE index-directory fetcher (catalog-facing).
+    ///
+    /// Standardizes `index/available` and `index/search`: the CBOE index
+    /// definitions document, normalized to [`tdw_domain::Instrument`]
+    /// (`symbol`/`name`/`venue = "cboe"`). The optional `query` param applies a
+    /// case-insensitive substring filter over the symbol and name; an empty
+    /// query lists every index.
+    pub CboeHttpIndexDirectoryFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<CboeIndexDirectoryQuery, Instrument> for CboeHttpIndexDirectoryFetcher {
+    const PROVIDER: &'static str = "cboe";
+    const ENDPOINT: &'static str = "index_directory";
+
+    fn transform_query(params: Value) -> Result<CboeIndexDirectoryQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        Ok(CboeIndexDirectoryQuery::new(query))
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &CboeIndexDirectoryQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let client =
+            tdw_core::http_support::build_client(USER_AGENT, "cboe directory client build")?;
+        let url = format!(
+            "{}{}",
+            self.base_url().trim_end_matches('/'),
+            index_directory_path()
+        );
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("cboe directory request: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "cboe directory returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("cboe directory read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        query: &CboeIndexDirectoryQuery,
+        raw: Bytes,
+    ) -> Result<Vec<Instrument>> {
+        let entries: Vec<RawIndexDefinition> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("cboe directory parse_json: {e}")))?;
+        let needle = query.query.to_ascii_lowercase();
+        let instruments = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.index.trim().to_string();
+                if symbol.is_empty() {
+                    return None;
+                }
+                let name = if entry.name.trim().is_empty() {
+                    symbol.clone()
+                } else {
+                    entry.name.trim().to_string()
+                };
+                if !needle.is_empty()
+                    && !symbol.to_ascii_lowercase().contains(&needle)
+                    && !name.to_ascii_lowercase().contains(&needle)
+                {
+                    return None;
+                }
+                Some(Instrument {
+                    symbol,
+                    name,
+                    venue: "cboe".to_string(),
+                })
+            })
+            .collect();
+        Ok(instruments)
+    }
 }
 
 // ---------------------------------------------------------------------------
