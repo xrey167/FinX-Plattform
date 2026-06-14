@@ -1,0 +1,34 @@
+# tdw-analytics-forecast: pure-Rust, offline, deterministic classical forecasting.
+#
+# Lib-only, no async, no I/O, no global RNG, zero heavy deps. Hand-rolled
+# implementations of the standard textbook statistical-forecasting models over a
+# caller-supplied time series: the seasonal-naive and random-walk-with-drift
+# baselines, Holt-Winters exponential smoothing (level + trend + optional
+# additive seasonal), an additive ETS model-selection wrapper, the Theta method,
+# an additive moving-average seasonal-trend decomposition (a simple, honest
+# STL/MSTL variant), and a lag-feature linear-regression forecaster that reuses
+# the OLS core from tdw-analytics-econometrics. Pairs the forecasters with a
+# backtesting harness (expanding-window historical forecasts) and the standard
+# precision metrics (RMSE, MAE, MAPE, SMAPE), plus a quantile-band anomaly
+# detector. Every formula is public textbook math cited in each module's docs
+# (Holt 1957; Winters 1960; Assimakopoulos & Nikolopoulos 2000 for Theta;
+# Cleveland et al. 1990 for the STL decomposition idea; Hyndman & Athanasopoulos
+# "Forecasting: Principles and Practice" for the accuracy measures); no reference
+# implementation was consulted.
+[package]
+name = "tdw-analytics-forecast"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-domain = { workspace = true }
+tdw-analytics-econometrics = { workspace = true }
+
+[lints]
+workspace = true

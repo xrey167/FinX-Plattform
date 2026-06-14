@@ -26,6 +26,7 @@ mod dispatcher;
 mod econometrics_compute;
 mod event_sink;
 pub mod fetch_policy;
+mod forecast_compute;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
 #[cfg(feature = "workspace-route")]

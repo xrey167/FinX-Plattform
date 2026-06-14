@@ -113,6 +113,7 @@ tdw-acp = { path = "crates/tdw-acp" }
 tdw-analytics-technical = { path = "crates/tdw-analytics-technical" }
 tdw-analytics-quant = { path = "crates/tdw-analytics-quant" }
 tdw-analytics-econometrics = { path = "crates/tdw-analytics-econometrics" }
+tdw-analytics-forecast = { path = "crates/tdw-analytics-forecast" }
 tdw-analytics-portfolio = { path = "crates/tdw-analytics-portfolio" }
 tdw-quant-options = { path = "crates/tdw-quant-options" }
 tdw-charting = { path = "crates/tdw-charting" }

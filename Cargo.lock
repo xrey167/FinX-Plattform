@@ -5102,6 +5102,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-analytics-forecast"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-analytics-econometrics",
+ "tdw-domain",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-analytics-portfolio"
 version = "0.1.0"
 dependencies = [
@@ -5455,6 +5467,7 @@ dependencies = [
  "schemars",
  "serde",
  "tdw-analytics-econometrics",
+ "tdw-analytics-forecast",
  "tdw-analytics-portfolio",
  "tdw-analytics-quant",
  "tdw-analytics-technical",
@@ -6735,6 +6748,7 @@ dependencies = [
  "tdw-agent-store",
  "tdw-alerts",
  "tdw-analytics-econometrics",
+ "tdw-analytics-forecast",
  "tdw-analytics-portfolio",
  "tdw-analytics-quant",
  "tdw-analytics-technical",
