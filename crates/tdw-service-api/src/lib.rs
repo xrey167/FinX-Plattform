@@ -162,7 +162,9 @@ use tdw_provider_eia::{
     EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
 };
 #[cfg(feature = "provider-famafrench")]
-use tdw_provider_famafrench::FamaFrenchHttpFetcher;
+use tdw_provider_famafrench::{
+    FamaFrenchBreakpointsHttpFetcher, FamaFrenchHttpFetcher, FamaFrenchPortfolioHttpFetcher,
+};
 #[cfg(feature = "provider-federal-reserve")]
 use tdw_provider_federal_reserve::{FedFomcDocumentsHttpFetcher, FedMacroSeriesHttpFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
@@ -201,7 +203,7 @@ use tdw_provider_government_us::{
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-imf")]
-use tdw_provider_imf::ImfHttpMacroSeriesFetcher;
+use tdw_provider_imf::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
@@ -496,9 +498,18 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(GovUsTreasuryPricesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-famafrench")]
     registry.register(FamaFrenchHttpFetcher::registry_entry())?;
+    // Catalog-facing Ken French portfolio-formation / breakpoint fetchers
+    // (OpenBB-parity P4W9).
+    #[cfg(feature = "provider-famafrench")]
+    registry.register(FamaFrenchPortfolioHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-famafrench")]
+    registry.register(FamaFrenchBreakpointsHttpFetcher::registry_entry())?;
     // Catalog-facing IMF SDMX-JSON macro fetcher (OpenBB-parity P3W3).
     #[cfg(feature = "provider-imf")]
     registry.register(ImfHttpMacroSeriesFetcher::registry_entry())?;
+    // Catalog-facing IMF SDMX discovery fetcher (imf_utils/*, OpenBB-parity P4W9).
+    #[cfg(feature = "provider-imf")]
+    registry.register(ImfUtilsHttpDiscoveryFetcher::registry_entry())?;
     // Catalog-facing EconDB macro fetcher (OpenBB-parity P3W4).
     #[cfg(feature = "provider-econdb")]
     registry.register(EcondbHttpMacroSeriesFetcher::registry_entry())?;
@@ -855,6 +866,37 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         #[cfg(feature = "provider-famafrench")]
         ("famafrench", "economy_factors_famafrench") => {
             dispatch!(FamaFrenchHttpFetcher::default())
+        }
+        // FamaFrenchPortfolioHttpFetcher — one fetcher per portfolio-return
+        // route (P4W9); the catalog `command` rides in `params` (injected by the
+        // dispatcher FetchBinding) so all four keys share one concrete fetcher.
+        #[cfg(feature = "provider-famafrench")]
+        (
+            "famafrench",
+            "economy_factors_famafrench_us_portfolio_returns"
+            | "economy_factors_famafrench_regional_portfolio_returns"
+            | "economy_factors_famafrench_country_portfolio_returns"
+            | "economy_factors_famafrench_international_index_returns",
+        ) => {
+            dispatch!(FamaFrenchPortfolioHttpFetcher::default())
+        }
+        // FamaFrenchBreakpointsHttpFetcher — the single breakpoints route (P4W9).
+        #[cfg(feature = "provider-famafrench")]
+        ("famafrench", "economy_factors_famafrench_breakpoints") => {
+            dispatch!(FamaFrenchBreakpointsHttpFetcher::default())
+        }
+        // ImfUtilsHttpDiscoveryFetcher — one fetcher per imf_utils/* discovery
+        // route (P4W9); the catalog `command` rides in `params` (injected by the
+        // dispatcher FetchBinding) so all four keys share one concrete fetcher.
+        #[cfg(feature = "provider-imf")]
+        (
+            "imf",
+            "imf_utils_list_dataflows"
+            | "imf_utils_list_tables"
+            | "imf_utils_get_dataflow_dimensions"
+            | "imf_utils_presentation_table",
+        ) => {
+            dispatch!(ImfUtilsHttpDiscoveryFetcher::default())
         }
         // ImfHttpMacroSeriesFetcher — one fetcher per IMF SDMX database route;
         // the catalog `command` rides in `params` (injected by the dispatcher
