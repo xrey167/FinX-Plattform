@@ -57,7 +57,8 @@ use crate::{
     mask_json_response,
 };
 use crate::{
-    econometrics_compute, options_compute, portfolio_compute, quant_compute, technical_compute,
+    econometrics_compute, forecast_compute, options_compute, portfolio_compute, quant_compute,
+    technical_compute,
 };
 
 #[async_trait]
@@ -580,6 +581,11 @@ async fn dispatch_compute(
     if options_compute::owns_route(route) {
         return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
             options_compute::run_compute(route, params)
+        });
+    }
+    if forecast_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            forecast_compute::run_compute(route, params)
         });
     }
 
@@ -5023,8 +5029,9 @@ fn service_tool_registry() -> ToolRegistry {
 
 /// Map a Compute-tool name to its catalog route by swapping `.` separators back
 /// to `/`, but only for the compute namespaces (`technical`, `quantitative`,
-/// `econometrics`, `portfolio`, and the `derivatives/pricing/*` option-pricing
-/// routes under `derivatives`). Returns `None` for any other tool name (e.g.
+/// `econometrics`, `forecast`, `portfolio`, and the `derivatives/pricing/*`
+/// option-pricing routes under `derivatives`). Returns `None` for any other tool
+/// name (e.g.
 /// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`,
 /// `derivatives/pricing/black_scholes`) round-trip: the tool name
 /// `quantitative.stats.mean` maps back by restoring every inner separator after
@@ -5035,7 +5042,7 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
     if matches!(
         namespace,
-        "technical" | "quantitative" | "econometrics" | "portfolio" | "derivatives"
+        "technical" | "quantitative" | "econometrics" | "forecast" | "portfolio" | "derivatives"
     ) {
         Some(format!("{namespace}/{}", member.replace('.', "/")))
     } else {
@@ -5994,6 +6001,11 @@ mod tests {
                 assert!(
                     options_compute::compute_registry().contains_key(route.as_str()),
                     "option-pricing compute route {route} has no registered implementation"
+                );
+            } else if forecast_compute::owns_route(route) {
+                assert!(
+                    forecast_compute::compute_registry().contains_key(route.as_str()),
+                    "forecast compute route {route} has no registered implementation"
                 );
             } else {
                 let result = technical_compute::run_compute(route, &bars, &json!({}));

@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 schemars = { workspace = true }
 serde = { workspace = true }
 tdw-analytics-econometrics = { workspace = true }
+tdw-analytics-forecast = { workspace = true }
 tdw-analytics-portfolio = { workspace = true }
 tdw-analytics-quant = { workspace = true }
 tdw-analytics-technical = { workspace = true }
