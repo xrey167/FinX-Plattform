@@ -21,17 +21,28 @@ pub struct RestDataSource {
 impl RestDataSource {
     /// Build a client against a warehouse base URL (e.g. `http://127.0.0.1:7878`).
     ///
+    /// The `base_url` is validated as an absolute URL (it must carry a scheme and
+    /// host) and the underlying HTTP client is given a 10-second request timeout
+    /// so a stalled warehouse cannot hang a chat reply indefinitely.
+    ///
     /// # Errors
     ///
-    /// Returns a [`DataError`] if the underlying HTTP client cannot be built.
+    /// Returns a [`DataError`] if `base_url` is not a valid absolute URL, or if
+    /// the underlying HTTP client cannot be built.
     pub fn new(base_url: impl Into<String>) -> Result<Self, DataError> {
+        let base_url = base_url.into();
+        let parsed = reqwest::Url::parse(&base_url)
+            .map_err(|error| DataError::new(format!("invalid base URL `{base_url}`: {error}")))?;
+        if parsed.cannot_be_a_base() || !parsed.has_host() {
+            return Err(DataError::new(format!(
+                "invalid base URL `{base_url}`: a scheme and host are required"
+            )));
+        }
         let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|error| DataError::new(format!("http client: {error}")))?;
-        Ok(Self {
-            base_url: base_url.into(),
-            client,
-        })
+        Ok(Self { base_url, client })
     }
 
     /// Fetch a catalog route with a single `symbol` query param and return the
@@ -127,5 +138,33 @@ impl DataSource for RestDataSource {
                 })
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RestDataSource;
+
+    #[test]
+    fn new_rejects_a_schemeless_url() {
+        // A bare host with no scheme is not an absolute URL and must be rejected
+        // rather than silently producing a client that can never fetch.
+        let Err(err) = RestDataSource::new("127.0.0.1:7878") else {
+            panic!("schemeless URL must be rejected");
+        };
+        assert!(err.message.contains("invalid base URL"), "{}", err.message);
+    }
+
+    #[test]
+    fn new_rejects_garbage() {
+        let Err(err) = RestDataSource::new("not a url") else {
+            panic!("garbage must be rejected");
+        };
+        assert!(err.message.contains("invalid base URL"), "{}", err.message);
+    }
+
+    #[test]
+    fn new_accepts_a_valid_http_url() {
+        assert!(RestDataSource::new("http://127.0.0.1:7878").is_ok());
     }
 }
