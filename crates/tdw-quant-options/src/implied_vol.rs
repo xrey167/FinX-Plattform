@@ -15,7 +15,7 @@
 //! Black-Scholes price function; public textbook math.
 
 use crate::Result;
-use crate::black_scholes::{greeks, price};
+use crate::black_scholes::{price, vega};
 use crate::error::OptionError;
 use crate::params::{BlackScholesParams, ImpliedVolParams};
 
@@ -127,10 +127,13 @@ pub fn implied_volatility(params: ImpliedVolParams) -> Result<f64> {
         } else {
             lo = vol;
         }
-        // Newton step: vega is the derivative of price w.r.t. vol.
-        let vega = greeks(bs_at(&params, vol))?.vega;
-        let next = if vega.abs() > 1e-12 {
-            vol - diff / vega
+        // Newton step: vega is the derivative of price w.r.t. vol. Use the
+        // pdf-only `vega` helper rather than computing the full greek set —
+        // the other four greeks (and their extra cdf evaluations) are unused
+        // here.
+        let dprice_dvol = vega(bs_at(&params, vol))?;
+        let next = if dprice_dvol.abs() > 1e-12 {
+            vol - diff / dprice_dvol
         } else {
             f64::INFINITY
         };
