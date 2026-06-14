@@ -32,29 +32,41 @@
 //! - [`scheduler`] — the W3 schedule seam: the pure daily-brief
 //!   [`BriefJobSpec`] the daemon turns into a `tdw-cron` trigger, reusing the
 //!   existing scheduler (no new loop; `tdw-partner` stays a leaf).
+//! - [`learning`] — the W4 learning-loop read seam: [`LearningState`] snapshots
+//!   the gated runtime's `versions()` + resolved adaptivity per turn so a
+//!   promoted lesson/rule/param takes effect (W4.1), and the trust-dial →
+//!   retrieval filter / route reshaping (W4.2). Core only READS the runtime.
+//! - [`walk_forward`] — the W4.3 induced-rule routing hints (read off the
+//!   installed, promoted-past-B9 rule set) + the W4.4 walk-forward usefulness
+//!   harness proving rising usefulness across a learning epoch.
 //! - this module — the [`PartnerCore::turn`] sequencer + the [`PartnerEvent`]
 //!   vocabulary, plus [`PartnerCore::answer_workspace`] (the W2.7 Workspace seam
 //!   that reuses the pure `tdw_openbb_agent` two-leg).
 
 pub mod dataplane;
+pub mod learning;
 pub mod principal;
 pub mod proactive;
 pub mod resolve;
 pub mod scheduler;
+pub mod walk_forward;
 pub mod writeback;
 
 use std::sync::Arc;
 
+use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_llm::StreamingLanguageModel;
 use tdw_openbb_agent::{Answer, QueryRequest, answer};
 
 pub use dataplane::{DataPlane, DataPlaneError};
+pub use learning::{AppliedResolution, LearningState, apply_to_resolution, retrieval_admits};
 pub use principal::{Principal, Provenance, TrustContext};
 pub use proactive::{
     BriefInputs, Dismissal, Nudge, NudgeKind, Severity, build_brief, rerank_with_dismissals,
 };
 pub use resolve::{KNOWLEDGE_VERBS, ResolvedRoute, ResolvedRoutes};
 pub use scheduler::{BRIEF_QUEUE, BRIEF_TOOL, BriefJobSpec, DAILY_BRIEF_CRON, daily_brief_spec};
+pub use walk_forward::{RoutingHint, UsefulnessReport, is_induced_type, routing_hints_from};
 // Re-export the gate type so adapters and the gate test name one path.
 pub use tdw_knowledge::proposals::{Proposal, ProposalKind, ProposalQueue};
 
@@ -116,6 +128,13 @@ pub struct TurnOutcome {
     pub provenance: Provenance,
     /// The routes the turn resolved and executed.
     pub resolved: ResolvedRoutes,
+    /// The promoted inference generation that shaped this turn (W4.1).
+    ///
+    /// `0` when learning is inactive or no rule-set has been promoted past B9;
+    /// otherwise the gated `infer_version` read from the runtime. A surface can
+    /// attribute the turn's routing to this generation, and a bumped version is
+    /// observable here — the proof that a promotion changed behavior.
+    pub infer_generation: u64,
 }
 
 /// The shared conversational front door (the partner design §1.2).
@@ -131,13 +150,55 @@ pub struct PartnerCore {
     model: Arc<dyn StreamingLanguageModel>,
     /// The data plane the execute step fetches through.
     dataplane: Arc<dyn DataPlane>,
+    /// The gated knowledge runtime Partner Core *reads* per turn for the learning
+    /// loop (the partner design §3, W4.1/W4.2). `None` keeps the partner working
+    /// without a learning loop attached (offline/CLI surfaces); when attached,
+    /// every turn snapshots its `versions()` + resolves the principal's
+    /// adaptivity so a promoted lesson/rule/param takes effect *this* turn. Core
+    /// only reads it — it never mutates the runtime, the §3 invariant.
+    knowledge: Option<Arc<KnowledgeRuntime>>,
 }
 
 impl PartnerCore {
     /// Build a Partner Core over a streaming `model` and a `dataplane` port.
+    ///
+    /// No learning loop is attached; call [`Self::with_knowledge`] to wire the
+    /// gated runtime so promoted learning reshapes turns (W4.1/W4.2).
     #[must_use]
     pub fn new(model: Arc<dyn StreamingLanguageModel>, dataplane: Arc<dyn DataPlane>) -> Self {
-        Self { model, dataplane }
+        Self {
+            model,
+            dataplane,
+            knowledge: None,
+        }
+    }
+
+    /// Attach the gated knowledge `runtime` Partner Core reads per turn
+    /// (the partner design §3, W4.1). Read-only: the core consumes
+    /// `versions()` + the adaptivity resolver but never mutates the runtime, so
+    /// every behavior change stays B9/eval-gated upstream.
+    #[must_use]
+    pub fn with_knowledge(mut self, runtime: Arc<KnowledgeRuntime>) -> Self {
+        self.knowledge = Some(runtime);
+        self
+    }
+
+    /// The current gated learning state for `principal` (W4.1/W4.2).
+    ///
+    /// A pure read over the attached runtime: the version triple + the resolved
+    /// adaptivity. Returns the inert default (`infer_version = None`, no
+    /// adaptivity → learning inactive) when no runtime is attached, so a partner
+    /// without a learning loop behaves as the un-promoted baseline.
+    #[must_use]
+    pub fn learning_state(&self, principal: &Principal) -> LearningState {
+        self.knowledge.as_ref().map_or(
+            LearningState {
+                infer_version: None,
+                rules_version: None,
+                adaptivity: None,
+            },
+            |runtime| LearningState::read_from(runtime, principal),
+        )
     }
 
     /// The model handle, for adapters that drive a leg directly.
@@ -171,8 +232,18 @@ impl PartnerCore {
             "Reviewing your question".to_string(),
         ));
 
-        // [1] RESOLVE — catalog-bounded route selection (never free-form).
-        let resolved = resolve::resolve_routes(&turn.utterance, self.model.as_ref());
+        // [0] LEARNING — read the gated runtime ONCE for this turn (W4.1/W4.2,
+        // the partner design §3). A promoted lesson/rule/param only reaches here by a
+        // gated version bump; Core reads, never mutates.
+        let learning = self.learning_state(&turn.principal);
+
+        // [1] RESOLVE — catalog-bounded route selection (never free-form), then
+        // reshaped by the gated learning state: a promoted inference generation
+        // re-weights / stamps the resolution so a bumped version changes this
+        // turn's behavior (W4.1). With learning inactive this is the baseline.
+        let base_resolved = resolve::resolve_routes(&turn.utterance, self.model.as_ref());
+        let applied = learning::apply_to_resolution(&learning, base_resolved);
+        let resolved = applied.resolved;
 
         // [3] EXECUTE — fetch each resolved data route through the port. The
         // resolver already guarded every route, so the dispatcher only resolves a
@@ -220,6 +291,7 @@ impl PartnerCore {
             answer: answer_text,
             provenance,
             resolved,
+            infer_generation: applied.infer_generation,
         })
     }
 
@@ -307,6 +379,60 @@ mod tests {
 
     fn core_with(rows: HashMap<String, serde_json::Value>) -> PartnerCore {
         PartnerCore::new(Arc::new(StubLanguageModel), Arc::new(FixturePlane { rows }))
+    }
+
+    /// A gated runtime with a fixed promoted `infer_version` and a resolver that
+    /// grants the partner agent `Learning` — the W4.1 learning-loop fixture.
+    fn runtime_at_generation(infer_version: u64) -> Arc<KnowledgeRuntime> {
+        use tdw_taxonomy::Adaptivity;
+        let embedder = Arc::new(tdw_embed_local::HashEmbeddingProvider::default());
+        let vectors = Arc::new(tdw_storage_qdrant::InMemoryVectorEngine::default());
+        let resolver: tdw_knowledge::runtime::AdaptivityResolver =
+            Arc::new(|_agent: &str| Some(Adaptivity::Learning));
+        Arc::new(
+            KnowledgeRuntime::new(embedder, vectors)
+                .with_versions(None, Some(infer_version))
+                .with_adaptivity_resolver(resolver),
+        )
+    }
+
+    // ── W4.1: a bumped promoted version changes the turn's behavior ──────────
+
+    #[tokio::test]
+    async fn bumped_runtime_version_changes_turn_outcome() {
+        // The SAME turn run against two runtimes that differ only in the promoted
+        // infer_version must produce a different outcome generation — the W4.1
+        // done-condition (Partner Core reads versions() per turn so a promotion
+        // takes effect), with Core only reading the gated runtime.
+        let turn = PartnerTurn::new(Principal::new("sess", "agent:partner"), "What is AAPL?");
+
+        let core_v1 = core_with(HashMap::new()).with_knowledge(runtime_at_generation(1));
+        let out_v1 = core_v1
+            .turn(&turn, &mut |_| {})
+            .await
+            .expect("turn completes at gen 1");
+        assert_eq!(out_v1.infer_generation, 1);
+
+        let core_v2 = core_with(HashMap::new()).with_knowledge(runtime_at_generation(2));
+        let out_v2 = core_v2
+            .turn(&turn, &mut |_| {})
+            .await
+            .expect("turn completes at gen 2");
+        assert_eq!(out_v2.infer_generation, 2);
+
+        assert_ne!(
+            out_v1.infer_generation, out_v2.infer_generation,
+            "a bumped promoted version changes the turn's behavior"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_without_knowledge_is_baseline_generation() {
+        // No learning loop attached → the inert baseline (generation 0).
+        let core = core_with(HashMap::new());
+        let turn = PartnerTurn::new(Principal::new("s", "a"), "hello");
+        let outcome = core.turn(&turn, &mut |_| {}).await.expect("turn completes");
+        assert_eq!(outcome.infer_generation, 0);
     }
 
     #[tokio::test]

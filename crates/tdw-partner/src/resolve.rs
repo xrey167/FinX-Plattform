@@ -190,11 +190,21 @@ fn guard_selection(selection: &str, utterance: &str) -> ResolvedRoutes {
 /// JSON object after the route token is parsed as the inline params.
 fn split_line(raw: &str) -> (String, Option<Value>) {
     let trimmed = raw.trim();
-    // Carve off an inline JSON params object if present.
-    let (head, params) = trimmed.find('{').map_or((trimmed, None), |brace| {
-        let (before, json_part) = trimmed.split_at(brace);
-        let parsed = serde_json::from_str::<Value>(json_part)
-            .ok()
+    // Carve off an inline JSON params object if present. Parse only the substring
+    // from the FIRST `{` to the LAST `}` (Gemini #439 fix): a model may append
+    // trailing prose after the JSON object (`… {"symbol":"AAPL"} for last month`),
+    // and `serde_json::from_str` rejects any trailing content. Bounding the parse
+    // to `[first '{' ..= last '}']` tolerates that trailing text; the result is
+    // still filtered to an object, so a non-object span is dropped, not threaded.
+    let (head, params) = trimmed.find('{').map_or((trimmed, None), |open| {
+        let before = &trimmed[..open];
+        let parsed = trimmed[open..]
+            .rfind('}')
+            .and_then(|close_rel| {
+                // close_rel is relative to the `[open..]` slice; the end-exclusive
+                // index into `trimmed[open..]` is `close_rel + 1`.
+                serde_json::from_str::<Value>(&trimmed[open..][..=close_rel]).ok()
+            })
             .filter(Value::is_object);
         (before, parsed)
     });
@@ -498,6 +508,51 @@ mod tests {
             resolved.knowledge.contains(&"tdw.kg.why".to_string()),
             "quoted verb kept: {:?}",
             resolved.knowledge
+        );
+    }
+
+    // ── Gemini #439: tolerate trailing text after the inline JSON object ──────
+
+    #[test]
+    fn inline_params_parse_with_trailing_text() {
+        // The model appends prose after the JSON object; the parser must still
+        // extract the params (bounded to first `{` .. last `}`) rather than
+        // failing the whole parse and dropping the params.
+        let model =
+            ScriptedModel("equity/price/historical {\"symbol\":\"MSFT\"} for the last month");
+        let resolved = resolve_routes("how did it do", &model);
+        let route = resolved
+            .data
+            .iter()
+            .find(|r| r.route == "equity/price/historical")
+            .expect("route resolved despite trailing text");
+        assert_eq!(
+            route.params.get("symbol").and_then(Value::as_str),
+            Some("MSFT"),
+            "symbol parsed from JSON preceding trailing prose: {:?}",
+            route.params
+        );
+    }
+
+    #[test]
+    fn split_line_bounds_json_to_first_open_and_last_close() {
+        // Directly: the JSON span is [first '{' ..= last '}'], trailing text after
+        // the closing brace is ignored.
+        let (route, params) = split_line("equity/profile {\"symbol\":\"AAPL\"} trailing junk");
+        assert_eq!(route, "equity/profile");
+        let params = params.expect("params parsed past trailing text");
+        assert_eq!(params.get("symbol").and_then(Value::as_str), Some("AAPL"));
+    }
+
+    #[test]
+    fn split_line_drops_non_object_json_span() {
+        // A `{...}` span that is not a JSON object is dropped, not threaded as
+        // params (the `is_object` filter is preserved through the new parser).
+        let (route, params) = split_line("equity/quote {not valid json at all}");
+        assert_eq!(route, "equity/quote");
+        assert!(
+            params.is_none(),
+            "non-object span yields no params: {params:?}"
         );
     }
 

@@ -230,6 +230,12 @@ pub fn build_brief(inputs: &BriefInputs, principal: &crate::Principal) -> Vec<Nu
     }
 
     sort_nudges(&mut nudges, &[]);
+    // Dedup duplicate nudges by id (Gemini #439 fix): the same source signal can
+    // arrive twice (e.g. an alert echoed by two feeds), which would render the
+    // same nudge twice. `dedup_by` removes consecutive equal-id entries; the
+    // deterministic id tie-break in `sort_nudges` guarantees duplicates are
+    // adjacent, so this collapses every duplicate to one.
+    nudges.dedup_by(|a, b| a.id == b.id);
     let _ = principal; // scopes provenance/namespace, not the ranking.
     nudges
 }
@@ -252,12 +258,25 @@ pub fn rerank_with_dismissals(mut nudges: Vec<Nudge>, dismissals: &[Dismissal]) 
 /// The dismissal penalty for a nudge kind: the recorded dismissal `count` for
 /// that kind (0 when never dismissed). Bounded so it can lower but never invert
 /// the severity ordering beyond one full severity step per few dismissals.
+///
+/// The count is capped at [`MAX_DISMISSAL_PENALTY`] (Gemini #439 fix): an
+/// unbounded `count` could grow past the per-class severity headroom (8) and
+/// invert the severity ordering, sinking a `Critical` nudge below a `Low` one.
+/// Capping at 7 keeps the penalty within a single severity step, so a heavily
+/// dismissed kind sinks within its class but never crosses a class boundary.
 fn dismissal_penalty(kind: NudgeKind, dismissals: &[Dismissal]) -> i64 {
     dismissals
         .iter()
         .find(|d| d.kind == kind)
-        .map_or(0, |d| i64::from(d.count))
+        .map_or(0, |d| i64::from(d.count).min(MAX_DISMISSAL_PENALTY))
 }
+
+/// The cap on a dismissal penalty (Gemini #439 fix).
+///
+/// One less than the per-class severity scale (8) so the penalty can reorder
+/// within a severity class but can never push a nudge across a full class
+/// boundary, regardless of how many times its kind was dismissed.
+const MAX_DISMISSAL_PENALTY: i64 = 7;
 
 /// The total, stable comparison score for a nudge.
 ///
@@ -481,6 +500,95 @@ mod tests {
         assert_eq!(
             reranked[0].headline, "high",
             "severity still dominates a small dismissal penalty"
+        );
+    }
+
+    // ── Gemini #439: dedup duplicate-id nudges ───────────────────────────────
+
+    #[test]
+    fn build_brief_dedups_duplicate_id_nudges() {
+        // The same alert echoed by two feeds yields two FiredAlerts with the same
+        // id; the brief must render the nudge once, not twice.
+        let inputs = BriefInputs {
+            alerts: vec![
+                FiredAlert {
+                    id: "dup-1".to_string(),
+                    symbol: "AAPL".to_string(),
+                    headline: "AAPL crossed $200".to_string(),
+                    fired_at: "2026-06-14".to_string(),
+                },
+                FiredAlert {
+                    id: "dup-1".to_string(),
+                    symbol: "AAPL".to_string(),
+                    headline: "AAPL crossed $200".to_string(),
+                    fired_at: "2026-06-14".to_string(),
+                },
+            ],
+            signals: vec![
+                KnowledgeSignal {
+                    id: "q-dup".to_string(),
+                    kind: NudgeKind::OpenQuestion,
+                    severity: Severity::Medium,
+                    headline: "duplicate question".to_string(),
+                    kg_nodes: Vec::new(),
+                    as_of: "2026-06-13".to_string(),
+                },
+                KnowledgeSignal {
+                    id: "q-dup".to_string(),
+                    kind: NudgeKind::OpenQuestion,
+                    severity: Severity::Medium,
+                    headline: "duplicate question".to_string(),
+                    kg_nodes: Vec::new(),
+                    as_of: "2026-06-13".to_string(),
+                },
+            ],
+        };
+        let brief = build_brief(&inputs, &principal());
+        assert_eq!(brief.len(), 2, "two distinct ids survive: {brief:?}");
+        let ids: Vec<&str> = brief.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"nudge:alert:dup-1"));
+        assert!(ids.contains(&"nudge:open_question:q-dup"));
+        // No id appears twice.
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), brief.len(), "every id is unique: {ids:?}");
+    }
+
+    #[test]
+    fn dismissal_penalty_is_capped_and_never_inverts_severity() {
+        // A massively-dismissed Critical nudge must still outrank a fresh Low
+        // nudge: the penalty is capped at MAX_DISMISSAL_PENALTY (< the per-class
+        // scale of 8) so it can never cross a severity class (Gemini #439).
+        let inputs = BriefInputs {
+            alerts: vec![FiredAlert {
+                id: "crit".to_string(),
+                symbol: "AAPL".to_string(),
+                headline: "critical alert".to_string(),
+                fired_at: "2026-06-14".to_string(),
+            }],
+            signals: vec![KnowledgeSignal {
+                id: "low".to_string(),
+                kind: NudgeKind::Staleness,
+                severity: Severity::Low,
+                headline: "low staleness".to_string(),
+                kg_nodes: Vec::new(),
+                as_of: "2026-06-14".to_string(),
+            }],
+        };
+        let brief = build_brief(&inputs, &principal());
+        // An absurd dismissal count for the Critical kind — pre-cap this would
+        // drive the score below the Low nudge and invert the ordering.
+        let reranked = rerank_with_dismissals(
+            brief,
+            &[Dismissal {
+                kind: NudgeKind::AlertFired,
+                count: 1_000_000,
+            }],
+        );
+        assert_eq!(
+            reranked[0].headline, "critical alert",
+            "a capped dismissal penalty never inverts the severity ordering"
         );
     }
 
