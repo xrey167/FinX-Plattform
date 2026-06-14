@@ -33,6 +33,7 @@ pub(crate) mod knowledge_tools;
 pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
+pub(crate) mod partner_audit_tools;
 pub(crate) mod partner_brief_tools;
 pub(crate) mod partner_tools;
 
@@ -714,6 +715,11 @@ impl McpServer {
             // The PROACTIVE brief tool (partner-system W3.6): tdw.partner.brief
             // is the second onboarding verb, gated on the same Partner Core.
             descriptors.push(partner_brief_tools::descriptor());
+            // The AUDIT & UNDO surface (partner-system W5.5): tdw.partner.audit
+            // renders the "what I did + why" feed and tdw.partner.undo describes
+            // the one-gesture reversal — gated on the same Partner Core.
+            descriptors.push(partner_audit_tools::audit_descriptor());
+            descriptors.push(partner_audit_tools::undo_descriptor());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -936,10 +942,13 @@ impl McpServer {
         name: &str,
         arguments: &Value,
     ) -> Option<Vec<Value>> {
-        if !partner_tools::owns(name) && !partner_brief_tools::owns(name) {
+        if !partner_tools::owns(name)
+            && !partner_brief_tools::owns(name)
+            && !partner_audit_tools::owns(name)
+        {
             return None;
         }
-        // Both partner verbs are gated on a Partner Core being attached so the
+        // Every partner verb is gated on a Partner Core being attached so the
         // surface is off-by-default; a call with no core is a tool error.
         let Some(partner) = self.partner.as_ref() else {
             return Some(vec![success_message(
@@ -948,11 +957,15 @@ impl McpServer {
             )]);
         };
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        // tdw.partner.brief is a pure assembler over the gathered signals (it
-        // does not drive a turn), so it does not consult the core handle; the
-        // core's presence is only the surface gate above.
+        // tdw.partner.brief and the audit/undo verbs are pure projections over
+        // the gathered records (they do not drive a turn), so they do not consult
+        // the core handle; the core's presence is only the surface gate above.
         let result = if partner_brief_tools::owns(name) {
             partner_brief_tools::execute(&arguments_object)
+        } else if name == partner_audit_tools::AUDIT_TOOL_NAME {
+            partner_audit_tools::execute_audit(&arguments_object)
+        } else if name == partner_audit_tools::UNDO_TOOL_NAME {
+            partner_audit_tools::execute_undo(&arguments_object)
         } else {
             partner_tools::execute(partner, &arguments_object)
         };

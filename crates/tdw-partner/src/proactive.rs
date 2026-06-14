@@ -229,13 +229,17 @@ pub fn build_brief(inputs: &BriefInputs, principal: &crate::Principal) -> Vec<Nu
         });
     }
 
+    // Dedup duplicate nudges by id BEFORE sorting (Gemini #440 fix): the same
+    // source signal can arrive twice (e.g. an alert echoed by two feeds), and
+    // two arrivals of one id may carry DIFFERING `created_at` / severity. The
+    // previous `dedup_by` ran AFTER the sort and only removed *consecutive*
+    // equal-id entries — but differing timestamps sort the duplicates apart, so
+    // a duplicate survived. A set-based retain collapses every duplicate id
+    // regardless of order, keeping the first occurrence, then the sort imposes
+    // the final ranking.
+    let mut seen = std::collections::BTreeSet::new();
+    nudges.retain(|nudge| seen.insert(nudge.id.clone()));
     sort_nudges(&mut nudges, &[]);
-    // Dedup duplicate nudges by id (Gemini #439 fix): the same source signal can
-    // arrive twice (e.g. an alert echoed by two feeds), which would render the
-    // same nudge twice. `dedup_by` removes consecutive equal-id entries; the
-    // deterministic id tie-break in `sort_nudges` guarantees duplicates are
-    // adjacent, so this collapses every duplicate to one.
-    nudges.dedup_by(|a, b| a.id == b.id);
     let _ = principal; // scopes provenance/namespace, not the ranking.
     nudges
 }
@@ -553,6 +557,70 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), brief.len(), "every id is unique: {ids:?}");
+    }
+
+    #[test]
+    fn build_brief_dedups_same_id_with_differing_timestamp_and_severity() {
+        // Gemini #440: the same logical signal can arrive twice with DIFFERING
+        // created_at AND severity (two feeds disagree on the metadata). These
+        // map to one nudge id but do NOT sort adjacently — the old sort-then-
+        // `dedup_by` left a duplicate. The set-based dedup-before-sort must
+        // still collapse them to a single nudge.
+        let inputs = BriefInputs {
+            alerts: Vec::new(),
+            signals: vec![
+                KnowledgeSignal {
+                    id: "thesis-x".to_string(),
+                    kind: NudgeKind::ThesisHealth,
+                    severity: Severity::High,
+                    headline: "thesis weakening (feed A)".to_string(),
+                    kg_nodes: Vec::new(),
+                    // Older timestamp.
+                    as_of: "2026-06-10".to_string(),
+                },
+                KnowledgeSignal {
+                    id: "thesis-x".to_string(),
+                    kind: NudgeKind::ThesisHealth,
+                    // A DIFFERENT severity for the same id...
+                    severity: Severity::Critical,
+                    headline: "thesis weakening (feed B)".to_string(),
+                    kg_nodes: Vec::new(),
+                    // ...and a NEWER timestamp, so post-sort the two would land
+                    // far apart and a consecutive-only dedup would miss one.
+                    as_of: "2026-06-14".to_string(),
+                },
+                // A second distinct id so the surviving count is unambiguous.
+                KnowledgeSignal {
+                    id: "q-1".to_string(),
+                    kind: NudgeKind::OpenQuestion,
+                    severity: Severity::Medium,
+                    headline: "open question".to_string(),
+                    kg_nodes: Vec::new(),
+                    as_of: "2026-06-12".to_string(),
+                },
+            ],
+        };
+        let brief = build_brief(&inputs, &principal());
+        let thesis_count = brief
+            .iter()
+            .filter(|n| n.id == "nudge:thesis_health:thesis-x")
+            .count();
+        assert_eq!(
+            thesis_count, 1,
+            "the same id with differing timestamp/severity collapses to one: {brief:?}"
+        );
+        assert_eq!(
+            brief.len(),
+            2,
+            "exactly two distinct ids survive: {brief:?}"
+        );
+        // The FIRST occurrence is the one kept (feed A), proving a stable,
+        // order-defined dedup rather than a severity- or recency-driven pick.
+        let kept = brief
+            .iter()
+            .find(|n| n.id == "nudge:thesis_health:thesis-x")
+            .expect("the thesis nudge survives");
+        assert_eq!(kept.headline, "thesis weakening (feed A)");
     }
 
     #[test]

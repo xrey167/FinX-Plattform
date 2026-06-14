@@ -99,24 +99,12 @@ async fn main() -> Result<(), CliError> {
         return export::run(&args);
     }
 
-    // partner ask: the Partner Core front door on the CLI (partner-system W2.8).
-    // Offline by default (the deterministic stub model), so it needs no daemon
-    // connection — render one turn's PartnerEvent stream to the TTY.
-    if args
-        .windows(2)
-        .any(|pair| pair[0] == "partner" && pair[1] == "ask")
-    {
-        return partner::run(&args).await;
-    }
-
-    // partner brief: the proactive morning brief on the CLI (partner-system
-    // W3.6). Pure assembly over the gathered signals (an optional trailing
-    // BriefInputs JSON token), so it is offline by default and needs no daemon.
-    if args
-        .windows(2)
-        .any(|pair| pair[0] == "partner" && pair[1] == "brief")
-    {
-        return partner::run_brief(&args);
+    // partner {ask,brief,audit}: the Partner Core surfaces on the CLI
+    // (partner-system W2.8 / W3.6 / W5.5). All offline by default (no daemon),
+    // so they are dispatched ahead of the daemon connection. The routing lives in
+    // `partner::dispatch` so `main` stays slim.
+    if let Some(result) = partner::dispatch(&args).await {
+        return result;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).
