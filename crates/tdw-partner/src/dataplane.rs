@@ -1,4 +1,4 @@
-//! The [`DataPlane`] port over the warehouse dispatcher (the FinX Partner design §1.4).
+//! The [`DataPlane`] port over the warehouse dispatcher (the partner design §1.4).
 //!
 //! `PartnerCore` needs to fetch data for a resolved route, but the dispatcher
 //! lives in the 4900-line `tdw-service-api` crate. Depending on it directly from

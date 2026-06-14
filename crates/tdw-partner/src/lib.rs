@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::pedantic, clippy::nursery)]
 //! Partner Core — the surface-agnostic conversational front door
-//! (the FinX Partner design §1, partner-system W2).
+//! (the partner design §1, partner-system W2).
 //!
 //! `PartnerCore` is the ONE shared core the design demands: built once, exposed
 //! equally on MCP, the `OpenBB` Workspace copilot, and the CLI as *thin*
@@ -45,7 +45,7 @@ pub use resolve::{KNOWLEDGE_VERBS, ResolvedRoutes};
 // Re-export the gate type so adapters and the gate test name one path.
 pub use tdw_knowledge::proposals::{Proposal, ProposalKind, ProposalQueue};
 
-/// A surface-agnostic event in a partner turn (the FinX Partner design §1.2).
+/// A surface-agnostic event in a partner turn (the partner design §1.2).
 ///
 /// Maps 1:1 to each surface's transport: `Answer`/`Citation` become
 /// `SseEvent::message_chunk`/`citations` on Workspace, MCP JSON blocks on MCP,
@@ -60,7 +60,7 @@ pub enum PartnerEvent {
     Citation(Provenance),
 }
 
-/// The input to a partner turn (the FinX Partner design §1.2).
+/// The input to a partner turn (the partner design §1.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartnerTurn {
     /// Who the turn is for (identity + trust).
@@ -83,7 +83,7 @@ impl PartnerTurn {
     }
 }
 
-/// Cross-turn / per-surface context threaded into a turn (the FinX Partner design §1.2).
+/// Cross-turn / per-surface context threaded into a turn (the partner design §1.2).
 ///
 /// Kept minimal and surface-agnostic: prior utterances for continuity. The
 /// Workspace surface carries its widget state in the [`QueryRequest`] it hands
@@ -94,7 +94,7 @@ pub struct TurnContext {
     pub prior_utterances: Vec<String>,
 }
 
-/// The terminal outcome of a partner turn (the FinX Partner design §1.2).
+/// The terminal outcome of a partner turn (the partner design §1.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnOutcome {
     /// The full answer text (the concatenation of every [`PartnerEvent::Answer`]).
@@ -105,7 +105,7 @@ pub struct TurnOutcome {
     pub resolved: ResolvedRoutes,
 }
 
-/// The shared conversational front door (the FinX Partner design §1.2).
+/// The shared conversational front door (the partner design §1.2).
 ///
 /// Holds the ports it composes — the route-selection / answer model, the
 /// [`DataPlane`] over the dispatcher — behind `Arc`s so it is cheap to clone and
@@ -114,7 +114,7 @@ pub struct TurnOutcome {
 #[derive(Clone)]
 pub struct PartnerCore {
     /// The streaming model that both selects routes and writes the grounded
-    /// answer (reused per the FinX Partner design §10 open-question: one credential gate).
+    /// answer (reused per the partner design §10 open-question: one credential gate).
     model: Arc<dyn StreamingLanguageModel>,
     /// The data plane the execute step fetches through.
     dataplane: Arc<dyn DataPlane>,
@@ -133,7 +133,7 @@ impl PartnerCore {
         &self.model
     }
 
-    /// THE single decision point for a partner turn (the FinX Partner design §1.3).
+    /// THE single decision point for a partner turn (the partner design §1.3).
     ///
     /// A sequencer, not a planner: it resolves routes (catalog-bounded), executes
     /// the data routes through the [`DataPlane`], assembles a grounded prompt, and

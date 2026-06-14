@@ -1,6 +1,6 @@
 #![allow(clippy::doc_markdown)] // narrative docstrings describe the MCP surface
 //! `tdw.partner.ask` — the single Partner Core front-door tool (partner-system
-//! W2.6, FinX Partner §1.5).
+//! W2.6, partner §1.5).
 //!
 //! This is a **thin adapter**: it maps an MCP `tools/call` request to one
 //! [`PartnerCore::turn`] and serializes the streamed [`PartnerEvent`]s into the
