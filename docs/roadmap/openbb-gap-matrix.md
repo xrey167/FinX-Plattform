@@ -113,12 +113,16 @@ and the examples suite (WS-B4).
 > The remaining gap is **paid-key or no-public-API** providers — a business
 > decision, not an engineering gap. The standing deferred list (each with a
 > documented decision, none blocking) is: **paid-key** intrinio (options
-> unusual/snapshots/surface, reported_financials) and the premium tiers of
-> benzinga/tiingo; **no-public-API** stockgrid (short_volume), wsj (etf
-> discovery), finviz (screener/groups), biztoc (news world — keyed RapidAPI
-> proxy), and TMX index-sectors; **new-keyed-crate-not-built** uscongress /
-> congress.gov; **USDA-FAS-separate-provider** commodity/psd_* (PSD); and
-> **Parquet** export (heavy-dep, vs the zero-heavy-dep posture). See the per-row
+> unusual/snapshots/surface, reported_financials — paid feed only, no free tier)
+> and the premium tiers of benzinga/tiingo; **no-public-API** stockgrid
+> (short_volume — no documented public API; OpenBB hits an undocumented internal
+> endpoint, confirmed by OpenBB issue #503 that stockgrid offers no API), wsj
+> (etf discovery — no documented public JSON API; undocumented internal
+> market-data endpoint only), finviz (screener/groups — HTML-scrape only, no
+> official API, ToS-sensitive), and TMX index-sectors; **USDA-FAS-separate-provider**
+> commodity/psd_* (PSD); and **Parquet** export (heavy-dep, vs the
+> zero-heavy-dep posture). **congress.gov (uscongress) and biztoc (news/world)
+> are now BUILT (P4W12)** — see their rows below. See the per-row
 > Status column and the deferred tables (D1–D8) for the full accounting.
 
 ---
@@ -221,7 +225,7 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | OpenBB cluster | FinX status | FinX crate / what's missing | Status |
 |---|---|---|---|
 | company | HAVE | `news/company` standardized via benzinga → `NewsArticle` (P2W7) | done |
-| world | HAVE (biztoc deferred) | `news/world` standardized via benzinga → `NewsArticle` (P2W7); biztoc variant DEFERRED (keyed RapidAPI proxy, no free public API, D2) | done (biztoc deferred) |
+| world | HAVE | `news/world` standardized via benzinga → `NewsArticle` (P2W7) **and biztoc → `NewsArticle` (P4W12, free RapidAPI key, `BIZTOC_API_KEY`)**; biztoc added as a second `news/world` provider candidate | done |
 
 ### 11. regulators (13 cmds)
 
@@ -259,20 +263,21 @@ Status legend: **HAVE** (shippable today), **PARTIAL** (some surface, gaps noted
 | crypto | 2 | 2 | 0 | — |
 | currency | 2 | 2 | 0 | — |
 | commodity | 2 | 2 | 0 | psd_* (separate USDA-FAS provider) |
-| news | 2 | 2 | 0 | biztoc world (keyed proxy) |
+| news | 2 | 2 | 0 | — (biztoc world now BUILT, P4W12) |
 | regulators | 2 | 2 | 0 | — |
 | analysis (4 routers) | 4 | 4 | 0 | long-tail indicators / panel models (documented, low value) |
 | **Total clusters** | **50** | **48** | **2** | — |
 
 **Honest read (post-P4):** the standardized fundamentals / estimates / macro /
 fixedincome / analytics surface — OpenBB's bulk — is now **delivered**. The
-catalog exposes **169 Fetch routes + 47 Compute routes** across all 17 routers,
+catalog exposes **172 Fetch routes + 47 Compute routes** across all 18 routers,
 all derived from one typed source (REST + OpenAPI + Python SDK + Workspace widgets
 + MCP tools + warehouse ingest stay in lockstep, drift-gated). Full parity holds
 on the **keyless / free-key** surface; the only standing gaps are **paid-key**
 (intrinio options, trading-economics calendar, benzinga/tiingo premium) or
-**no-public-API** (stockgrid / wsj / finviz / biztoc / TMX index-sectors)
-providers — a business decision, not an engineering gap.
+**no-public-API** (stockgrid / wsj / finviz / TMX index-sectors) providers — a
+business decision, not an engineering gap. **congress.gov (uscongress) and
+biztoc (news/world) are now BUILT (P4W12).**
 
 ---
 
@@ -293,8 +298,9 @@ providers — a business decision, not an engineering gap.
 > and the **P1/P2/P3/P4 roll-ups**, which are kept in sync with the catalog
 > (`xtask catalog-check` / `openapi-check`). Genuinely-unbuilt rows here are
 > only those matching the deferred-with-reason set (paid keys:
-> intrinio/benzinga-premium/tiingo; no public API: stockgrid/finviz/wsj/biztoc;
-> uscongress new keyed crate; USDA-FAS PSD).
+> intrinio/benzinga-premium/tiingo; no public API: stockgrid/finviz/wsj;
+> USDA-FAS PSD). uscongress (congress.gov) and biztoc (news/world) are now
+> **BUILT** (P4W12).
 
 Sizing: **S** ≈ ≤1 day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks. Each row is one `/batch` task.
 
@@ -325,7 +331,7 @@ Clean-room: add endpoints from each vendor's *own* public API docs, normalize to
 | L2.9 | **tdw-provider-ecb** · currency/reference_rates + rate/ecb + balance_of_payments shape. Gates: live-gated. Done-when: reference_rates standardized. | S | todo |
 | L2.10 | **tdw-provider-nasdaq** · calendars (dividend/earnings/ipo), top_retail, sp500_multiples (Shiller PE). Gates: live-gated. Done-when: 4 endpoints. | S | **done (top_retail deferred)** (G004p2: `equity/calendar/{dividends,earnings,ipo}` keyless; P4W11: `index/sp500_multiples` via Data Link `MULTPL` → `Sp500Multiple`. `top_retail` DEFERRED — niche, no standardized OpenBB model demand) |
 | L2.11 | **tdw-provider-finra** + **stockgrid (new, see L3)** · shorts cluster (short_interest HAVE; add short_volume, FTD via sec). Gates: live-gated. Done-when: shorts cluster complete. | S | mostly done (short_interest + SEC FTD HAVE; stockgrid `short_volume` deferred P3W7 — see D2/L3.8) |
-| L2.12 | **tdw-provider-{benzinga,tiingo,seeking-alpha}** · standardized news/company + news/world + estimates (price_target/consensus/forward). Gates: live-gated. Done-when: news + estimates clusters normalized. | M | todo |
+| L2.12 | **tdw-provider-{benzinga,tiingo,seeking-alpha,biztoc}** · standardized news/company + news/world + estimates (price_target/consensus/forward). Gates: live-gated. Done-when: news + estimates clusters normalized. | M | done (news/company + news/world normalized via benzinga P2W7; **biztoc added as a second news/world candidate P4W12**) |
 | L2.13 | **tdw-provider-deribit** · futures/instruments+info+curve, options/chains normalize. Gates: live-gated. Done-when: derivatives cluster for deribit standardized. | S | todo |
 | L2.14 | **tdw-provider-tradier** · price/quote, options/chains. Gates: live-gated. Done-when: quote+chains standardized. | S | todo |
 
@@ -340,14 +346,14 @@ the vendor's public API docs.
 | L3.2 | **tdw-provider-government-us** · US Treasury Fiscal/Direct · no key | treasury_prices, treasury_auctions, treasury yield data | S | done |
 | L3.3 | **tdw-provider-imf** · IMF SDMX · no key | indicators, direction_of_trade, balance_of_payments, shipping/*, imf_utils dataflow discovery | M | done (P3W3, #367; `economy/imf/{international_financial_statistics,direction_of_trade,balance_of_payments}`. shipping/imf_utils discovery deferred) |
 | L3.4 | **tdw-provider-econdb** · EconDB · optional key | gdp/real+nominal, indicators, country_profile, export_destinations | M | done (P3W4; `economy/econdb/series` — series-by-ticker → MacroSeries, optional token. country_profile/export_destinations deferred) |
-| L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | deferred (P3W7 — paid key, not free/live-verifiable; see D3) |
-| L3.6 | **tdw-provider-finviz** · Finviz · no key | screener, compare/groups, price/performance, metrics, price_target | M | deferred (P3W7 — no official API; HTML-scrape only, see D2. price/performance already via Yahoo) |
+| L3.5 | **tdw-provider-intrinio** · Intrinio · paid key | options/unusual+snapshots+surface, reported_financials, forward_pe, data-tag attributes, ipo calendar | L | **deferred-by-decision** — Intrinio is a **paid key with no free tier**; cannot be free/live-verified, and its surface (options unusual / IV-surface) additionally needs a compute layer. Revisit only if a paid Intrinio key is provisioned. See D3. |
+| L3.6 | **tdw-provider-finviz** · Finviz · no key | screener, compare/groups, price/performance, metrics, price_target | M | **deferred-by-decision** — Finviz publishes **no official API**; data is available only by **HTML-scraping** the site, which is **ToS-sensitive** and brittle. price/performance is already served via Yahoo. Revisit only if Finviz ships a documented API. |
 | L3.7 | **tdw-provider-cftc** · CFTC (Socrata) · app token | regulators/cftc/cot + cot_search | S | todo |
-| L3.8 | **tdw-provider-stockgrid** · Stockgrid · no key | shorts/short_volume | S | deferred (P3W7 — no vendor-published API; site-backing JSON only, see D2) |
-| L3.9 | **tdw-provider-wsj** · WSJ market data · no key | etf/discovery (active/gainers/losers) | S | todo |
-| L3.10 | **tdw-provider-biztoc** · Biztoc · free key | news/world | S | todo |
+| L3.8 | **tdw-provider-stockgrid** · Stockgrid · no key | shorts/short_volume | S | **deferred-by-decision** — Stockgrid has **no documented public API**; OpenBB hits an **undocumented internal endpoint** that backs the website. Verified via **OpenBB issue #503** that stockgrid offers no API. Implementing it would mean inventing an endpoint contract. |
+| L3.9 | **tdw-provider-wsj** · WSJ market data · no key | etf/discovery (active/gainers/losers) | S | **deferred-by-decision** — WSJ exposes **no documented public JSON API**; only an **undocumented internal market-data endpoint** backs the site. The etf-discovery parity value is already served by FMP discovery + Yahoo price/performance. |
+| L3.10 | **tdw-provider-biztoc** · Biztoc · free RapidAPI key | news/world | S | **done** (P4W12 — `tdw-provider-biztoc`, `BIZTOC_API_KEY` free RapidAPI key; added as a second `news/world` provider candidate → `NewsArticle`) |
 | L3.11 | **tdw-provider-famafrench** · Ken French Data Library · no key (academic) | famafrench/* factors + portfolio returns | M | **done** (P2W6 factors + P4W9 portfolio-formation: `economy/factors/famafrench` + `/{breakpoints,us_portfolio_returns,regional_portfolio_returns,country_portfolio_returns,international_index_returns}`; pure-Rust zip, no C) |
-| L3.12 | **tdw-provider-congress-gov** · congress.gov · key | uscongress/* (bills, bill_info, gov_trades context) | S | todo |
+| L3.12 | **tdw-provider-congress-gov** · congress.gov · free key | uscongress/* (bills, bill_info, bill_text_urls) | S | **done** (P4W12 — `tdw-provider-congress-gov`, free api.data.gov key `CONGRESS_GOV_API_KEY`; `uscongress/{bills,bill_info,bill_text_urls}` → `CongressBill` / `BillTextUrl`) |
 | L3.13 | **tdw-provider-tradingeconomics** (exists as trading-economics) · expand · paid | economy/calendar standardized | S | todo |
 
 ### L4 — Analytics crates (no current FinX crate; UDF workaround today)
@@ -441,12 +447,13 @@ vendor docs), **not** OpenBB code. Operate on L1.1 envelopes / record sets.
 > - **W4 EconDB** (#369, D4) — `tdw-provider-econdb` → `MacroSeries`: economy/econdb/series (ticker-parameterized, optional token). Dual-shape (parallel-arrays / record-list) parser.
 > - **W5 estimates breadth** (#371, D7) — FMP `tdw_domain::Estimate`: equity/estimates/{price_target (price-target-consensus), forward (analyst-estimates → forward_eps/sales/ebitda)}.
 > - **W6 XLSX export** (#372, D5) — `tdw-cli --export xlsx` via `rust_xlsxwriter` (pure-Rust, MIT, `default-features=false`, `cargo deny` green). **Parquet deferred** (arrow-rs heavy tree vs the zero-heavy-dep posture; arrow2/parquet2 archived).
-> - **W7 niche discovery/short** (#373, D2/D3) — assessed and **deferred** stockgrid/wsj/finviz/biztoc/intrinio (no vendor-published API / keyed / paid — would invent endpoints). The parity value is already served by FMP discovery + Yahoo price/performance + FINRA/SEC shorts; corrected 3 stale `MISSING` scoreboard rows.
+> - **W7 niche discovery/short** (#373, D2/D3) — assessed and **deferred** stockgrid/wsj/finviz/biztoc/intrinio (no vendor-published API / keyed / paid — would invent endpoints). The parity value is already served by FMP discovery + Yahoo price/performance + FINRA/SEC shorts; corrected 3 stale `MISSING` scoreboard rows. **(Superseded for biztoc by P4W12: biztoc DOES have a free RapidAPI key + documented endpoints and was subsequently BUILT as a `news/world` candidate.)**
 > - **W8 cutover** — this scoreboard refresh + the full quality gate.
 >
 > Net deferred-after-P3 (each with a documented decision, none blocking): **Parquet**
-> export (heavy-dep), the **niche providers** stockgrid/wsj/finviz/biztoc/intrinio
-> (no verifiable public API), **intrinio** options (paid key), **stockgrid
+> export (heavy-dep), the **niche providers** stockgrid/wsj/finviz/intrinio
+> (no verifiable public API or paid-only; biztoc was subsequently BUILT in P4W12),
+> **intrinio** options (paid key), **stockgrid
 > short_volume** (no API), and the **D8 config-file credential fallback** (a
 > layering refactor). All other D1–D8 items are **DONE**.
 
