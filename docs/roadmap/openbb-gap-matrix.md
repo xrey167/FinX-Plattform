@@ -1,5 +1,62 @@
 # OpenBB → FinX Gap-Closure Plan (clean-room "adapt the missing, don't copy")
 
+## OpenBB-parity TOTAL roll-up — 2026-06-14 (total-parity cutover, G005)
+
+> **Total parity reached.** With the OpenBB-parity-total program (G001–G005)
+> closed, **every OpenBB provider-backed command and every OpenBB compute command
+> that has a documented public API — free *or* paid — is now BUILT**, and the
+> only commands that remain unbuilt are the handful with **no documented public
+> API at all** (scrape-only / undocumented-internal sources). No OpenBB command
+> remains unbuilt merely for lack of a *documented* API.
+>
+> **Final scoreboard (verified against the catalog + `docs/schemas/openapi.json`):**
+> the endpoint catalog (`tdw-endpoint-catalog`) exposes **267 total routes** —
+> **195 `Fetch` routes** + **72 `Compute` routes** (technical 31 / quantitative
+> 21 / econometrics 15 / portfolio 5). The generated OpenAPI 3.1 document
+> (`docs/schemas/openapi.json`) carries **195 paths**, one per `Fetch` route
+> (drift-gated by `xtask openapi-check`); the Python SDK + Workspace widgets
+> derive from the same catalog. Clippy pedantic+nursery ratchet at **0**.
+>
+> **Provider coverage.** **30+ of OpenBB's 32 providers are built.** The only two
+> providers with **zero** routes are **stockgrid** and **wsj** — both have no
+> public API (see the deferred set below). **finviz** is covered by equivalents
+> (FMP screener + Yahoo price/performance) rather than its HTML-scrape surface;
+> **multpl** is covered via NASDAQ (`index/sp500_multiples`, Shiller-CAPE family)
+> rather than multpl.com's scrape-only page. **intrinio** is **BUILT but
+> key-gated** (G002) — the provider, routes, and serde models are code-complete
+> and the data lights up the moment a paid `INTRINIO_API_KEY` is configured.
+>
+> **The honest residual — the *entire* deferred set is now exactly:**
+>
+> 1. **No-documented-public-API scrape / internal sources** (a source decision,
+>    not an engineering gap — none has a documented public API to build against):
+>    - **stockgrid** (`equity/shorts/short_volume`) — no documented public API;
+>      OpenBB hits an undocumented internal endpoint (confirmed by **OpenBB issue
+>      #503**). Parity served by FINRA short-interest + SEC `fails_to_deliver`.
+>    - **wsj** (etf / `equity/discovery`) — no documented public JSON API; only an
+>      undocumented internal market-data endpoint. Parity served by FMP discovery
+>      + Yahoo price/performance.
+>    - **finviz** (`equity/screener`, `equity/compare/groups`) — HTML-scrape only,
+>      no official API, ToS-sensitive. Parity served by FMP screener + Yahoo.
+>    - **multpl** (`index/sp500_multiples`) — multpl.com is scrape-only (no API);
+>      **already covered via NASDAQ** Data Link `MULTPL`.
+> 2. **Paid-key-gated providers — BUILT, dormant without a key** (code-complete;
+>    not an unbuilt command, just an un-provisioned credential):
+>    - **intrinio** (options unusual/snapshots/IV-surface, reported_financials,
+>      forward P/E) — BUILT (G002), needs paid `INTRINIO_API_KEY`.
+>    - **benzinga premium** (`analyst_search`, premium news) — needs a paid key.
+>    - **tiingo** (`trailing_dividend_yield`) — needs a paid key.
+>
+> Everything else OpenBB ships — including the previously-deferred **congress.gov
+> (`uscongress/*`)** and **biztoc (`news/world`)** clusters, the **fixedincome
+> FRED family + economy breadth**, the **compute-router remainder**
+> (econometrics / quantitative / technical), and the **equity / etf / index /
+> commodity remainder** — is **BUILT**. See the P1/P2/P3/P4 roll-ups, the
+> per-row Status column, and the deferred tables below for the full accounting.
+
+---
+
+
 > **Clean-room rule (applies to every item below):** implement from docs-level specs only
 > (OpenBB public docs, the source vendor's own public API docs, the standard-model field
 > lists in `docs/roadmap/openbb-surface-domains.md`). **Never read or copy OpenBB source
