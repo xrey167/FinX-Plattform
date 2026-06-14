@@ -14,6 +14,54 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-06-14
+
+The **FinX Partner release.** Ties the data, warehouse, knowledge, and learning
+layers into one autonomous, learning, human-in-the-loop partner (6 waves, PRs
+#437–#442). A new `tdw-partner` crate provides one shared `PartnerCore`, exposed
+as thin adapters on MCP, the OpenBB Workspace copilot, and the CLI. MINOR — all
+additions, no breaks. See [`docs/release/v1.7.0-notes.md`](docs/release/v1.7.0-notes.md)
+and the design spec [`docs/products/finx-partner.md`](docs/products/finx-partner.md).
+
+### Added
+
+- **Partner Core — one conversational front door (#438, W2):** the `tdw-partner`
+  crate with `PartnerCore::turn` (resolve → param-extract → fetch → ground →
+  write-back), exposed as `tdw.partner.ask` (MCP), the Workspace copilot (the
+  `agent_bridge` now routes through `PartnerCore`), and a CLI `ask`. One shared
+  core, thin adapters — memory-aware (KG/episodic context per turn), every turn
+  written back as episodic memory + candidate findings.
+- **Proactive layer — brief + nudges (#439, W3):** a `Nudge` model + brief
+  assembler unifying alerts, watchlists, thesis health, open questions,
+  contradictions, and staleness; a daily brief scheduled via `tdw-cron` and
+  event-driven nudges off the knowledge feed; `tdw.partner.brief`; dismissals
+  feed learning.
+- **Learning-loop closure (#440, W4):** Partner Core reads the gated runtime
+  (`versions()`/adaptivity) per turn so promoted lessons/rules/parameters and
+  learned route preferences take effect; trust-dial-filtered retrieval; a
+  walk-forward eval harness proving rising usefulness. All behavior changes stay
+  B9/eval-gated.
+- **Audit & undo surface — audit-only autonomy (#441, W5):** an `audit` feed
+  projecting every action with its `why` (over `Proposal.history`,
+  `SelfTuneLog`, `LessonAudit`, `tdw.kg.why` — no new store); auto-accept within
+  gates with escalation of low-confidence/high-impact/irreversible actions;
+  `tdw.partner.audit`/`undo`; `undo` reverses on the governed-forgetting /
+  cold-plane machinery; `correct` = undo + feedback that records a `Lesson`.
+- **Cohesion + zero-to-partner onboarding (#442, W6):** an anti-duplication test
+  enforcing logic-free adapters; a guided first-run workflow; a
+  progressive-disclosure manifest leading with `ask`/`brief`/`audit`.
+- **Partner design spec (#437, W1):** `docs/products/finx-partner.md` — the
+  grounded architecture for the above.
+
+### Fixed
+
+- Partner Core review fixes folded forward each wave: parameterized DataPlane
+  fetch (the resolver extracts route + params from the utterance, #439); brief
+  dedup-before-sort + bounded dismissal penalty (#440); a real
+  learned-preference route re-ordering (prefix-aware) replacing a no-op (#441);
+  and **real `undo` reversal per action kind** replacing a silent `Ok` (#442) —
+  the linchpin that makes audit-only autonomy genuinely reversible.
+
 ## [1.6.0] - 2026-06-14
 
 **Total OpenBB parity.** Closes the OpenBB-parity-total program (G001–G005):
