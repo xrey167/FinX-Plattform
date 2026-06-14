@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tdw_eval_runner::StubLanguageModel;
-use tdw_partner::{DataPlane, DataPlaneError, PartnerCore, PartnerEvent, PartnerTurn, Principal};
+use tdw_partner::{
+    BriefInputs, DataPlane, DataPlaneError, PartnerCore, PartnerEvent, PartnerTurn, Principal,
+    build_brief,
+};
 
 use crate::CliError;
 
@@ -68,6 +71,58 @@ pub async fn run(args: &[String]) -> Result<(), CliError> {
         );
     }
     Ok(())
+}
+
+/// Run `tdw partner brief [<inputs-json>]`: assemble and render the proactive
+/// morning brief (partner-system W3.6).
+///
+/// A *thin adapter* over the pure [`build_brief`] assembler: it parses the
+/// gathered signal sources ([`BriefInputs`]) from the optional trailing JSON
+/// token (defaulting to an empty brief when none is supplied — the offline
+/// smoke), ranks them, and prints the ranked nudges. The daily-scheduled variant
+/// runs the same assembler off a `tdw-cron` trigger in the daemon (W3.3); this
+/// command is the on-demand CLI surface.
+///
+/// # Errors
+///
+/// Returns a [`CliError`] when the supplied inputs JSON is malformed.
+pub fn run_brief(args: &[String]) -> Result<(), CliError> {
+    let inputs = parse_brief_inputs(args)?;
+    let principal = Principal::new("cli-session", "agent:partner");
+    let brief = build_brief(&inputs, &principal);
+
+    if brief.is_empty() {
+        println!("(no nudges — nothing needs you right now)");
+        return Ok(());
+    }
+    println!("Partner brief — {} nudge(s):", brief.len());
+    for nudge in &brief {
+        println!(
+            "• [{severity:?}] {headline}",
+            severity = nudge.severity,
+            headline = nudge.headline,
+        );
+    }
+    Ok(())
+}
+
+/// Parse the optional `BriefInputs` JSON token after `partner brief`.
+///
+/// No token (or an empty one) yields the default empty inputs so the command is
+/// a self-contained offline smoke. A malformed token is a [`CliError`].
+fn parse_brief_inputs(args: &[String]) -> Result<BriefInputs, CliError> {
+    let Some(pos) = args
+        .windows(2)
+        .position(|pair| pair[0] == "partner" && pair[1] == "brief")
+    else {
+        return Ok(BriefInputs::default());
+    };
+    let rest = args[pos + 2..].join(" ");
+    if rest.trim().is_empty() {
+        return Ok(BriefInputs::default());
+    }
+    serde_json::from_str::<BriefInputs>(&rest)
+        .map_err(|error| format!("malformed brief inputs JSON: {error}").into())
 }
 
 /// Render one [`PartnerEvent`] to the TTY.
@@ -131,5 +186,30 @@ mod tests {
         // The smoke proves the command path runs end-to-end on the offline stub.
         let args = argv(&["tdw", "partner", "ask", "What", "is", "a", "P/E", "ratio?"]);
         run(&args).await.expect("offline partner ask smoke runs");
+    }
+
+    #[test]
+    fn brief_runs_offline_with_no_inputs() {
+        // The empty brief is the offline smoke — it renders the honest "nothing
+        // needs you" line without panicking.
+        let args = argv(&["tdw", "partner", "brief"]);
+        run_brief(&args).expect("offline partner brief smoke runs");
+    }
+
+    #[test]
+    fn brief_parses_inline_inputs_json() {
+        let json = r#"{"alerts":[{"id":"a-1","symbol":"AAPL","headline":"AAPL crossed $200","fired_at":"2026-06-14"}]}"#;
+        let args = argv(&["tdw", "partner", "brief", json]);
+        let inputs = parse_brief_inputs(&args).expect("parses inputs");
+        assert_eq!(inputs.alerts.len(), 1);
+        assert_eq!(inputs.alerts[0].symbol, "AAPL");
+        // And it renders without error.
+        run_brief(&args).expect("brief renders the parsed inputs");
+    }
+
+    #[test]
+    fn brief_malformed_json_is_an_error() {
+        let args = argv(&["tdw", "partner", "brief", "{not json"]);
+        assert!(parse_brief_inputs(&args).is_err());
     }
 }

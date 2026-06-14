@@ -23,15 +23,24 @@
 //! - [`principal`] — the shared persona/memory/trust seam ([`Principal`],
 //!   [`Provenance`], `TrustContext`).
 //! - [`dataplane`] — the [`DataPlane`] port over the dispatcher.
-//! - [`resolve`] — catalog-bounded route resolution (`is_valid_route` guard).
+//! - [`resolve`] — catalog-bounded route resolution (`is_valid_route` guard),
+//!   now extracting per-route params so a data route is never fetched empty.
 //! - [`writeback`] — the gated knowledge-graph write.
+//! - [`proactive`] — the W3 proactive layer: the [`Nudge`] model + the pure
+//!   [`build_brief`] assembler over [`BriefInputs`], plus dismissal-driven
+//!   re-ranking that feeds the same gated feedback path.
+//! - [`scheduler`] — the W3 schedule seam: the pure daily-brief
+//!   [`BriefJobSpec`] the daemon turns into a `tdw-cron` trigger, reusing the
+//!   existing scheduler (no new loop; `tdw-partner` stays a leaf).
 //! - this module — the [`PartnerCore::turn`] sequencer + the [`PartnerEvent`]
 //!   vocabulary, plus [`PartnerCore::answer_workspace`] (the W2.7 Workspace seam
 //!   that reuses the pure `tdw_openbb_agent` two-leg).
 
 pub mod dataplane;
 pub mod principal;
+pub mod proactive;
 pub mod resolve;
+pub mod scheduler;
 pub mod writeback;
 
 use std::sync::Arc;
@@ -41,7 +50,11 @@ use tdw_openbb_agent::{Answer, QueryRequest, answer};
 
 pub use dataplane::{DataPlane, DataPlaneError};
 pub use principal::{Principal, Provenance, TrustContext};
-pub use resolve::{KNOWLEDGE_VERBS, ResolvedRoutes};
+pub use proactive::{
+    BriefInputs, Dismissal, Nudge, NudgeKind, Severity, build_brief, rerank_with_dismissals,
+};
+pub use resolve::{KNOWLEDGE_VERBS, ResolvedRoute, ResolvedRoutes};
+pub use scheduler::{BRIEF_QUEUE, BRIEF_TOOL, BriefJobSpec, DAILY_BRIEF_CRON, daily_brief_spec};
 // Re-export the gate type so adapters and the gate test name one path.
 pub use tdw_knowledge::proposals::{Proposal, ProposalKind, ProposalQueue};
 
@@ -166,11 +179,17 @@ impl PartnerCore {
         // provider. (Knowledge verbs are read in the adapter's context step.)
         let mut provenance = Provenance::default();
         let mut fetched: Vec<(String, serde_json::Value)> = Vec::new();
-        for route in &resolved.data {
+        for resolved_route in &resolved.data {
+            let route = resolved_route.route.as_str();
             sink(PartnerEvent::Reasoning(format!("Fetching {route}")));
-            let data = self.dataplane.fetch(route, serde_json::json!({})).await?;
-            provenance.routes.push(route.clone());
-            fetched.push((route.clone(), data));
+            // Thread the resolved PARAMS into the fetch (Gemini #438 critical
+            // fix): a real data route is no longer dispatched with empty params.
+            let data = self
+                .dataplane
+                .fetch(route, resolved_route.params.clone())
+                .await?;
+            provenance.routes.push(route.to_string());
+            fetched.push((route.to_string(), data));
         }
         for verb in &resolved.knowledge {
             provenance.routes.push(verb.clone());

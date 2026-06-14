@@ -33,6 +33,7 @@ pub(crate) mod knowledge_tools;
 pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
+pub(crate) mod partner_brief_tools;
 pub(crate) mod partner_tools;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -710,6 +711,9 @@ impl McpServer {
         // onboarding surface leads with; the lower-level tdw.* tools stay listed.
         if self.partner.is_some() {
             descriptors.push(partner_tools::descriptor());
+            // The PROACTIVE brief tool (partner-system W3.6): tdw.partner.brief
+            // is the second onboarding verb, gated on the same Partner Core.
+            descriptors.push(partner_brief_tools::descriptor());
         }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
@@ -918,23 +922,25 @@ impl McpServer {
         }
     }
 
-    /// Dispatch the partner front-door tool (`tdw.partner.ask`, partner-system
-    /// W2.6).
+    /// Dispatch the partner verbs (`tdw.partner.ask`, partner-system W2.6, and
+    /// `tdw.partner.brief`, partner-system W3.6).
     ///
-    /// Returns `Some(messages)` when `name` is `tdw.partner.ask` — a tool error
-    /// (never a protocol error) when no [`tdw_partner::PartnerCore`] is attached,
-    /// otherwise the [`partner_tools::execute`] result. Returns `None` when
-    /// `name` is not the partner tool so the caller falls through to the
-    /// knowledge / registry / built-in dispatch paths.
+    /// Returns `Some(messages)` when `name` is one of the partner verbs — a tool
+    /// error (never a protocol error) when no [`tdw_partner::PartnerCore`] is
+    /// attached, otherwise the verb's execute result. Returns `None` when `name`
+    /// is not a partner verb so the caller falls through to the knowledge /
+    /// registry / built-in dispatch paths.
     fn dispatch_partner_tool(
         &self,
         id: &Value,
         name: &str,
         arguments: &Value,
     ) -> Option<Vec<Value>> {
-        if !partner_tools::owns(name) {
+        if !partner_tools::owns(name) && !partner_brief_tools::owns(name) {
             return None;
         }
+        // Both partner verbs are gated on a Partner Core being attached so the
+        // surface is off-by-default; a call with no core is a tool error.
         let Some(partner) = self.partner.as_ref() else {
             return Some(vec![success_message(
                 id,
@@ -942,7 +948,15 @@ impl McpServer {
             )]);
         };
         let arguments_object = arguments.as_object().cloned().unwrap_or_default();
-        let messages = match partner_tools::execute(partner, &arguments_object) {
+        // tdw.partner.brief is a pure assembler over the gathered signals (it
+        // does not drive a turn), so it does not consult the core handle; the
+        // core's presence is only the surface gate above.
+        let result = if partner_brief_tools::owns(name) {
+            partner_brief_tools::execute(&arguments_object)
+        } else {
+            partner_tools::execute(partner, &arguments_object)
+        };
+        let messages = match result {
             Ok(ToolExecution { structured, .. }) => {
                 vec![success_message(id, &tool_result(&structured))]
             }

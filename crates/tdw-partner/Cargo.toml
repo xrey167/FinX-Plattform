@@ -20,11 +20,19 @@ tdw-tags = { path = "../tdw-tags" }
 tdw-taxonomy = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+# tdw-cron / tdw-protocol are DEV-only here: the production schedule trigger is
+# assembled in tdw-backend (which legally depends on tdw-cron), because a normal
+# dep on tdw-cron would form a cycle (tdw-cron → tdw-worker → tdw-service-api →
+# tdw-partner). This crate stays a pure leaf; the pinned-clock scheduled-fire
+# test reuses the real tdw-cron spine to prove the design's "no new scheduler".
+tdw-cron = { path = "../tdw-cron" }
+tdw-protocol = { workspace = true }
 
 [lints]
 workspace = true

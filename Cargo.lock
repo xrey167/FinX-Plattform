@@ -5788,9 +5788,11 @@ name = "tdw-partner"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "serde",
  "serde_json",
  "tdw-core",
+ "tdw-cron",
  "tdw-domain",
  "tdw-embed-local",
  "tdw-endpoint-catalog",
@@ -5798,6 +5800,7 @@ dependencies = [
  "tdw-knowledge",
  "tdw-llm",
  "tdw-openbb-agent",
+ "tdw-protocol",
  "tdw-storage-graph",
  "tdw-storage-qdrant",
  "tdw-tags",

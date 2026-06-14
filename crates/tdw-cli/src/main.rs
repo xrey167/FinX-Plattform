@@ -109,6 +109,16 @@ async fn main() -> Result<(), CliError> {
         return partner::run(&args).await;
     }
 
+    // partner brief: the proactive morning brief on the CLI (partner-system
+    // W3.6). Pure assembly over the gathered signals (an optional trailing
+    // BriefInputs JSON token), so it is offline by default and needs no daemon.
+    if args
+        .windows(2)
+        .any(|pair| pair[0] == "partner" && pair[1] == "brief")
+    {
+        return partner::run_brief(&args);
+    }
+
     // Determine daemon address (default TCP loopback matching tdw-service default).
     let addr: SocketAddr = "127.0.0.1:7878".parse().expect("static addr");
 
