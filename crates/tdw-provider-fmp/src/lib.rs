@@ -10,14 +10,15 @@ pub use http_fetcher::{
     FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
     FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
     FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
-    FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher,
-    FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher, FmpHttpInsiderTradingFetcher,
-    FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
-    FmpHttpLatestFilingsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
-    FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher, FmpHttpSearchFetcher,
-    FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
-    FmpHttpTranscriptFetcher,
+    FmpHttpForwardEbitdaFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
+    FmpHttpMajorHoldersFetcher, FmpHttpMarketSnapshotsFetcher, FmpHttpPeersFetcher,
+    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher,
+    FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 
 use schemars::JsonSchema;
@@ -533,6 +534,41 @@ impl FmpLimitQuery {
     }
 }
 
+/// Query for the FMP full-exchange market-snapshot endpoint
+/// (`/symbol/{exchange}`).
+///
+/// FMP publishes a full quote list per exchange handle (e.g. `NASDAQ`, `NYSE`,
+/// `AMEX`). The query carries the validated exchange handle (upper-cased,
+/// ASCII-alphanumeric); an unknown / missing handle defaults to `NASDAQ`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpMarketSnapshotQuery {
+    /// Exchange handle / path segment, e.g. `"NASDAQ"`, `"NYSE"`, `"AMEX"`.
+    pub exchange: String,
+}
+
+impl FmpMarketSnapshotQuery {
+    /// Construct a snapshot query from an optional exchange handle, defaulting to
+    /// `NASDAQ` and rejecting handles with non-alphanumeric characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidSymbol`] if the handle contains characters
+    /// outside ASCII alphanumerics.
+    pub fn from_param(value: Option<&str>) -> Result<Self> {
+        let exchange = value.map(str::trim).filter(|v| !v.is_empty());
+        let exchange = match exchange {
+            Some(handle) => {
+                if !handle.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return Err(FmpError::InvalidSymbol);
+                }
+                handle.to_ascii_uppercase()
+            }
+            None => "NASDAQ".to_string(),
+        };
+        Ok(Self { exchange })
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FmpError {
     #[error("fmp symbol must not be empty")]
@@ -888,6 +924,32 @@ mod tests {
         assert_eq!(
             FmpIndexConstituentQuery::from_param(Some("bogus")).index,
             "sp500"
+        );
+    }
+
+    #[test]
+    fn market_snapshot_query_normalizes_exchange_with_nasdaq_default() {
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("nyse"))
+                .expect("valid")
+                .exchange,
+            "NYSE"
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(None)
+                .expect("default")
+                .exchange,
+            "NASDAQ"
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("  ")),
+            Ok(FmpMarketSnapshotQuery {
+                exchange: "NASDAQ".to_string()
+            })
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("NAS/DAQ")),
+            Err(FmpError::InvalidSymbol)
         );
     }
 

@@ -10,11 +10,11 @@ pub use models::{
     EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
     EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FilingFile,
     FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint, FuturesInstrument,
-    HistoricalMarketCap, ImfDiscoveryRecord, IndexConstituent, KeyExecutive, KeyMetrics,
-    LitigationRelease, MacroSeries, NewsArticle, OptionContract, OtcMarketVolume, OwnershipRecord,
-    PortfolioReturn, PricePerformance, RateObservation, Ratios, RevenueSegment, ScreenerRow,
-    SecInstitution, SeriesSearchResult, ShortInterest, SicCode, Sp500Multiple, StatementKind,
-    SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
+    HistoricalMarketCap, ImfDiscoveryRecord, IndexConstituent, IndexSector, KeyExecutive,
+    KeyMetrics, LitigationRelease, MacroSeries, NewsArticle, OptionContract, OtcMarketVolume,
+    OwnershipRecord, PortfolioReturn, PricePerformance, RateObservation, Ratios, RevenueSegment,
+    ScreenerRow, SecFilingHtml, SecInstitution, SeriesSearchResult, ShortInterest, SicCode,
+    Sp500Multiple, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

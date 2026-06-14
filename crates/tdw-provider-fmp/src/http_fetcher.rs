@@ -43,9 +43,9 @@ use tdw_domain::{
 use crate::{
     API_KEY_ENV, BASE_URL, FmpCalendarRangeQuery, FmpDiscoveryDirection, FmpDiscoveryQuery,
     FmpError, FmpFundamentalQuery, FmpFundamentalsQuery, FmpFxSnapshotQuery, FmpHistoricalQuery,
-    FmpIncomeRow, FmpIndexConstituentQuery, FmpLimitQuery, FmpQuoteQuery, FmpRevenueSegmentQuery,
-    FmpScreenerQuery, FmpSearchQuery, FmpSegmentKind, FmpStatement, FmpStatementQuery,
-    FmpSymbolLimitQuery, FmpSymbolQuery, FmpTranscriptQuery,
+    FmpIncomeRow, FmpIndexConstituentQuery, FmpLimitQuery, FmpMarketSnapshotQuery, FmpQuoteQuery,
+    FmpRevenueSegmentQuery, FmpScreenerQuery, FmpSearchQuery, FmpSegmentKind, FmpStatement,
+    FmpStatementQuery, FmpSymbolLimitQuery, FmpSymbolQuery, FmpTranscriptQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -3353,4 +3353,197 @@ fn fundamental_query(params: &Value) -> Result<FmpFundamentalQuery> {
 fn symbol_query(params: &Value) -> Result<FmpSymbolQuery> {
     let symbol = symbol_param(params)?;
     FmpSymbolQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpMajorHoldersFetcher — /institutional-holder → OwnershipRecord
+// (equity/ownership/major_holders)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP major-holders fetcher, normalized to [`OwnershipRecord`]
+    /// (`kind = "major_holder"`).
+    ///
+    /// Calls `/institutional-holder/{symbol}` and emits one [`OwnershipRecord`]
+    /// per major institutional holder, ordered by reported share count. Mirrors
+    /// the institutional-ownership leg but standardizes the distinct
+    /// `equity/ownership/major_holders` OpenBB command with its own `kind`.
+    pub FmpHttpMajorHoldersFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpMajorHoldersFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "major_holders";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/institutional-holder/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp major_holders").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let entries: Vec<FmpInstitutionalHolderRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp major_holders parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let holder = entry.holder.filter(|h| !h.trim().is_empty())?;
+                Some(OwnershipRecord {
+                    symbol: query.symbol.clone(),
+                    kind: "major_holder".to_string(),
+                    holder: Some(holder),
+                    relationship: None,
+                    date: entry.date_reported,
+                    transaction_type: None,
+                    shares: entry.shares,
+                    value: entry.change,
+                    percentage: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpMarketSnapshotsFetcher — /symbol/{exchange} → QuoteSnapshot
+// (equity/market_snapshots)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP market-snapshots fetcher, normalized to [`QuoteSnapshot`].
+    ///
+    /// Calls `/symbol/{exchange}` (the full-exchange quote list, e.g.
+    /// `NASDAQ`/`NYSE`/`AMEX`) and emits one [`QuoteSnapshot`] per listed
+    /// symbol. Standardizes `equity/market_snapshots`.
+    pub FmpHttpMarketSnapshotsFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpMarketSnapshotQuery, QuoteSnapshot> for FmpHttpMarketSnapshotsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "market_snapshots";
+
+    fn transform_query(params: Value) -> Result<FmpMarketSnapshotQuery> {
+        let exchange = params
+            .get("exchange")
+            .or_else(|| params.get("market"))
+            .and_then(Value::as_str);
+        FmpMarketSnapshotQuery::from_param(exchange).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpMarketSnapshotQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/symbol/{}",
+            self.base_url().trim_end_matches('/'),
+            query.exchange,
+        );
+        fmp_get(&url, &[], "fmp market_snapshots").await
+    }
+
+    fn transform_data(
+        &self,
+        _query: &FmpMarketSnapshotQuery,
+        raw: Bytes,
+    ) -> Result<Vec<QuoteSnapshot>> {
+        let entries: Vec<FmpQuoteRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp market_snapshots parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(QuoteSnapshot {
+                    symbol,
+                    current_price: entry.price,
+                    change: entry.change,
+                    change_percent: entry.changes_percentage,
+                    prev_close: entry.previous_close,
+                    ts_ms: entry.timestamp * 1_000,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpForwardEbitdaFetcher — /analyst-estimates/{symbol} → Estimate
+// (equity/estimates/forward_ebitda)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP forward-EBITDA-estimates fetcher, normalized to
+    /// [`Estimate`] (`kind = "forward_ebitda"`).
+    ///
+    /// Calls `/analyst-estimates/{symbol}?period=annual` and emits one
+    /// [`Estimate`] per forward period from the `estimatedEbitda*` triplet,
+    /// dropping periods whose `estimatedEbitdaAvg` is absent. Standardizes the
+    /// distinct `equity/estimates/forward_ebitda` OpenBB command (the combined
+    /// `equity/estimates/forward` route emits all three forward metrics).
+    pub FmpHttpForwardEbitdaFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpForwardEbitdaFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "forward_ebitda";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/analyst-estimates/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(
+            &url,
+            &[("period", "annual".to_string())],
+            "fmp forward_ebitda",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<Estimate>> {
+        let entries: Vec<FmpAnalystEstimateRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp forward_ebitda parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let value = entry.estimated_ebitda_avg?;
+                Some(Estimate {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    kind: "forward_ebitda".to_string(),
+                    fiscal_period: entry.date,
+                    date: None,
+                    analyst: None,
+                    recommendation: None,
+                    value: Some(value),
+                    low: entry.estimated_ebitda_low,
+                    high: entry.estimated_ebitda_high,
+                    mean: Some(value),
+                    number_of_analysts: None,
+                    currency: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
 }

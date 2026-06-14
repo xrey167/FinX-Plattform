@@ -11,8 +11,8 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CommitmentOfTraders, FilingFile, FilingHeader, FomcDocument, LitigationRelease, SecInstitution,
-    SeriesSearchResult, SicCode, SymbolMapping,
+    CommitmentOfTraders, FilingFile, FilingHeader, FomcDocument, LitigationRelease, SecFilingHtml,
+    SecInstitution, SeriesSearchResult, SicCode, SymbolMapping,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -27,6 +27,8 @@ const SEC_SIC_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "si
 const SEC_FILING_HEADERS: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "filing_headers")];
 const SEC_SCHEMA_FILES: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "schema_files")];
 const SEC_RSS_LITIGATION: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "rss_litigation")];
+// OpenBB-parity total G003c: keyless filing-HTML retrieval by EDGAR archive URL.
+const SEC_HTM_FILE: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "htm_file")];
 const FED_FOMC_DOCUMENTS: &[ProviderCandidate] = &[ProviderCandidate::new(
     "federal_reserve",
     "regulators_fed_fomc_documents",
@@ -73,6 +75,10 @@ fn filing_file() -> Schema {
 
 fn litigation_release() -> Schema {
     schema_for!(LitigationRelease)
+}
+
+fn sec_filing_html() -> Schema {
+    schema_for!(SecFilingHtml)
 }
 
 /// The `regulators` namespace's catalog entries, in declaration order.
@@ -189,6 +195,16 @@ fn sec_utility_entries() -> Vec<CatalogEntry> {
             candidates: SEC_RSS_LITIGATION,
             bronze_table: Some("raw.litigation_release"),
             doc: "SEC litigation releases from the public litigation RSS feed (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/htm_file",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: sec_filing_html,
+            candidates: SEC_HTM_FILE,
+            bronze_table: Some("raw.sec_filing_html"),
+            doc: "Retrieve an HTML file from a filing by its EDGAR archive URL (keyless).",
             chartable: false,
         },
     ]

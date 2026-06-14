@@ -185,14 +185,15 @@ use tdw_provider_fmp::{
     FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
     FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
     FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
-    FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher, FmpHttpHistoricalMarketCapFetcher,
-    FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher, FmpHttpInsiderTradingFetcher,
-    FmpHttpInstitutionalOwnershipFetcher, FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher,
-    FmpHttpLatestFilingsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
-    FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher, FmpHttpSearchFetcher,
-    FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
-    FmpHttpTranscriptFetcher,
+    FmpHttpForwardEbitdaFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
+    FmpHttpMajorHoldersFetcher, FmpHttpMarketSnapshotsFetcher, FmpHttpPeersFetcher,
+    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher,
+    FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -222,7 +223,7 @@ use tdw_provider_intrinio::{
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
-    NasdaqHttpSp500MultiplesFetcher,
+    NasdaqHttpSp500MultiplesFetcher, NasdaqHttpTopRetailFetcher,
 };
 #[cfg(feature = "provider-oecd")]
 use tdw_provider_oecd::{OecdHttpDataFetcher, OecdHttpMacroSeriesFetcher};
@@ -232,7 +233,8 @@ use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 use tdw_provider_sec::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
     SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
-    SecForm13FHttpFetcher, SecInstitutionsSearchHttpFetcher, SecLatestFinancialReportsHttpFetcher,
+    SecForm13FHttpFetcher, SecHtmFileHttpFetcher, SecInstitutionsSearchHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecManagementDiscussionAnalysisHttpFetcher,
     SecNportDisclosureHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
     SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
@@ -241,7 +243,7 @@ use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRa
 #[cfg(feature = "provider-tiingo")]
 use tdw_provider_tiingo::{TiingoHttpHistoricalFetcher, TiingoHttpNewsFetcher};
 #[cfg(feature = "provider-tmx")]
-use tdw_provider_tmx::{TmxHttpBatchQuoteFetcher, TmxHttpQuoteFetcher};
+use tdw_provider_tmx::{TmxHttpBatchQuoteFetcher, TmxHttpIndexSectorsFetcher, TmxHttpQuoteFetcher};
 #[cfg(feature = "provider-tradier")]
 use tdw_provider_tradier::{TradierHttpOptionsFetcher, TradierHttpQuoteFetcher};
 #[cfg(feature = "provider-trading-economics")]
@@ -511,6 +513,14 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpInstitutionalOwnershipFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpGovernmentTradesFetcher::registry_entry())?;
+    // OpenBB-parity total G003c: FMP major holders, full-exchange market
+    // snapshots, and the forward-EBITDA estimate.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpMajorHoldersFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpMarketSnapshotsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpForwardEbitdaFetcher::registry_entry())?;
     // FMP ETF cluster (openbb-parity P4W3): search / info / sectors / countries /
     // price performance / equity exposure.
     #[cfg(feature = "provider-fmp")]
@@ -613,6 +623,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     // Catalog-facing NASDAQ S&P 500 multiples fetcher (openbb-parity P4W11).
     #[cfg(feature = "provider-nasdaq")]
     registry.register(NasdaqHttpSp500MultiplesFetcher::registry_entry())?;
+    // Catalog-facing NASDAQ top-retail discovery fetcher (total-parity G003c).
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpTopRetailFetcher::registry_entry())?;
     #[cfg(feature = "provider-oecd")]
     registry.register(OecdHttpDataFetcher::registry_entry())?;
     // Catalog-facing OECD SDMX-JSON macro fetcher (OpenBB-parity P4W4).
@@ -654,6 +667,11 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(SecSchemaFilesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecRssLitigationHttpFetcher::registry_entry())?;
+    // OpenBB-parity total G003c: keyless SEC filing-HTML retrieval + MD&A.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecHtmFileHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecManagementDiscussionAnalysisHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
@@ -666,6 +684,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(TmxHttpQuoteFetcher::registry_entry())?;
     #[cfg(feature = "provider-tmx")]
     registry.register(TmxHttpBatchQuoteFetcher::registry_entry())?;
+    // Catalog-facing TMX index-sectors fetcher (total-parity G003c).
+    #[cfg(feature = "provider-tmx")]
+    registry.register(TmxHttpIndexSectorsFetcher::registry_entry())?;
     #[cfg(feature = "provider-tradier")]
     registry.register(TradierHttpQuoteFetcher::registry_entry())?;
     #[cfg(feature = "provider-tradier")]

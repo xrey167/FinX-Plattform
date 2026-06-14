@@ -92,13 +92,16 @@ impl Fetcher<BiztocWorldNewsQuery, NewsArticle> for BiztocWorldNewsFetcher {
     const ENDPOINT: &'static str = "news_world";
 
     fn transform_query(params: Value) -> Result<BiztocWorldNewsQuery> {
+        // The `news/world` catalog route uses `StandardParams`, which exposes the
+        // optional `limit` (not `page_size`). Accept the provider-native
+        // `page_size` first, fall back to the standard `limit`, and default to 20
+        // so a request without either still resolves instead of erroring.
         let page_size = params
             .get("page_size")
+            .or_else(|| params.get("limit"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| {
-                Error::InvalidQuery("biztoc page_size must be an integer".to_string())
-            })?;
+            .unwrap_or(20);
         BiztocWorldNewsQuery::new(page_size).map_err(|error| Error::InvalidQuery(error.to_string()))
     }
 

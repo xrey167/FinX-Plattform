@@ -3884,6 +3884,134 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_calendar_events": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "dividend",
+            "headerName": "Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "eps_estimate",
+            "headerName": "Eps Estimate"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "text",
+            "field": "name",
+            "headerName": "Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "payment_date",
+            "headerName": "Payment Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "record_date",
+            "headerName": "Record Date"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Upcoming corporate-events calendar, NASDAQ-backed (keyless).",
+    "endpoint": "/widget-data/equity/calendar/events",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_calendar_events",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Events",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_calendar_ipo": {
     "category": "equity",
     "data": {
@@ -5187,6 +5315,145 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_discovery_top_retail": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "beta",
+            "headerName": "Beta"
+          },
+          {
+            "cellDataType": "text",
+            "field": "company_name",
+            "headerName": "Company Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "country",
+            "formatterFn": "int",
+            "headerName": "Country"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange",
+            "headerName": "Exchange"
+          },
+          {
+            "cellDataType": "text",
+            "field": "exchange_short_name",
+            "headerName": "Exchange Short Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "industry",
+            "headerName": "Industry"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_actively_trading",
+            "headerName": "Is Actively Trading"
+          },
+          {
+            "cellDataType": "boolean",
+            "field": "is_etf",
+            "headerName": "Is Etf"
+          },
+          {
+            "cellDataType": "number",
+            "field": "last_annual_dividend",
+            "headerName": "Last Annual Dividend"
+          },
+          {
+            "cellDataType": "number",
+            "field": "market_cap",
+            "headerName": "Market Cap"
+          },
+          {
+            "cellDataType": "number",
+            "field": "price",
+            "headerName": "Price"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "volume",
+            "formatterFn": "int",
+            "headerName": "Volume"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Top retail-traded equities discovery feed, NASDAQ-backed (keyless).",
+    "endpoint": "/widget-data/equity/discovery/top_retail",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_discovery_top_retail",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Top Retail",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_discovery_undervalued_growth": {
     "category": "equity",
     "data": {
@@ -5676,6 +5943,133 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Forward",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_estimates_forward_ebitda": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "analyst",
+            "headerName": "Analyst"
+          },
+          {
+            "cellDataType": "text",
+            "field": "currency",
+            "headerName": "Currency"
+          },
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "fiscal_period",
+            "headerName": "Fiscal Period"
+          },
+          {
+            "cellDataType": "number",
+            "field": "high",
+            "headerName": "High"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "low",
+            "headerName": "Low"
+          },
+          {
+            "cellDataType": "number",
+            "field": "mean",
+            "headerName": "Mean"
+          },
+          {
+            "cellDataType": "number",
+            "field": "number_of_analysts",
+            "headerName": "Number Of Analysts"
+          },
+          {
+            "cellDataType": "text",
+            "field": "recommendation",
+            "headerName": "Recommendation"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Forward EBITDA analyst estimates per period for a symbol, FMP-backed.",
+    "endpoint": "/widget-data/equity/estimates/forward_ebitda",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_estimates_forward_ebitda",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Forward Ebitda",
     "params": [
       {
         "description": "Ticker symbol to query.",
@@ -7869,6 +8263,85 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_fundamental_management_discussion_analysis": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "content",
+            "headerName": "Content"
+          },
+          {
+            "cellDataType": "number",
+            "field": "content_length",
+            "headerName": "Content Length"
+          },
+          {
+            "cellDataType": "text",
+            "field": "content_type",
+            "headerName": "Content Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Management Discussion & Analysis document from the latest 10-K, SEC-backed (keyless).",
+    "endpoint": "/widget-data/equity/fundamental/management_discussion_analysis",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_fundamental_management_discussion_analysis",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Management Discussion Analysis",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_fundamental_metrics": {
     "category": "equity",
     "data": {
@@ -8828,6 +9301,104 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_market_snapshots": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "change",
+            "headerName": "Change"
+          },
+          {
+            "cellDataType": "number",
+            "field": "change_percent",
+            "formatterFn": "percent",
+            "headerName": "Change Percent"
+          },
+          {
+            "cellDataType": "number",
+            "field": "current_price",
+            "headerName": "Current Price"
+          },
+          {
+            "cellDataType": "number",
+            "field": "prev_close",
+            "headerName": "Prev Close"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "number",
+            "field": "ts_ms",
+            "headerName": "Ts Ms"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Full-exchange market snapshot (per-symbol last-price quotes), FMP-backed.",
+    "endpoint": "/widget-data/equity/market_snapshots",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_market_snapshots",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Market Snapshots",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_ownership_form_13f": {
     "category": "equity",
     "data": {
@@ -9241,6 +9812,120 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Institutional",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_ownership_major_holders": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "holder",
+            "headerName": "Holder"
+          },
+          {
+            "cellDataType": "text",
+            "field": "kind",
+            "headerName": "Kind"
+          },
+          {
+            "cellDataType": "number",
+            "field": "percentage",
+            "formatterFn": "percent",
+            "headerName": "Percentage"
+          },
+          {
+            "cellDataType": "text",
+            "field": "relationship",
+            "headerName": "Relationship"
+          },
+          {
+            "cellDataType": "number",
+            "field": "shares",
+            "formatterFn": "int",
+            "headerName": "Shares"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          },
+          {
+            "cellDataType": "text",
+            "field": "transaction_type",
+            "headerName": "Transaction Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "value",
+            "headerName": "Value"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Major institutional holders of a company, FMP-backed.",
+    "endpoint": "/widget-data/equity/ownership/major_holders",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_ownership_major_holders",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Major Holders",
     "params": [
       {
         "description": "Ticker symbol to query.",
@@ -14131,6 +14816,81 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "index_sectors": {
+    "category": "index",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "index",
+            "headerName": "Index"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sector",
+            "headerName": "Sector"
+          },
+          {
+            "cellDataType": "number",
+            "field": "weight_pct",
+            "formatterFn": "percent",
+            "headerName": "Weight Pct"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Sector-weight breakdown of a market index (default S&P/TSX), TMX-backed (keyless).",
+    "endpoint": "/widget-data/index/sectors",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "index_sectors",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Sectors",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "index_snapshots": {
     "category": "index",
     "data": {
@@ -14943,6 +15703,85 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Filing Headers",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "regulators_sec_htm_file": {
+    "category": "regulators",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "content",
+            "headerName": "Content"
+          },
+          {
+            "cellDataType": "number",
+            "field": "content_length",
+            "headerName": "Content Length"
+          },
+          {
+            "cellDataType": "text",
+            "field": "content_type",
+            "headerName": "Content Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Retrieve an HTML file from a filing by its EDGAR archive URL (keyless).",
+    "endpoint": "/widget-data/regulators/sec/htm_file",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "regulators_sec_htm_file",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Htm File",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",

@@ -15,7 +15,8 @@ pub mod http_fetcher;
 pub use http_fetcher::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
     SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
-    SecForm13FHttpFetcher, SecInstitutionsSearchHttpFetcher, SecLatestFinancialReportsHttpFetcher,
+    SecForm13FHttpFetcher, SecHtmFileHttpFetcher, SecInstitutionsSearchHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecManagementDiscussionAnalysisHttpFetcher,
     SecNportDisclosureHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
     SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
@@ -166,6 +167,42 @@ impl SecAccessionQuery {
     }
 }
 
+/// A query identifying a single SEC filing document by its EDGAR archive URL,
+/// used by `regulators/sec/htm_file`.
+///
+/// The URL is validated to be an `https://` URL on a `sec.gov` host so the
+/// fetcher cannot be pointed at an arbitrary external host.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecHtmlUrlQuery {
+    /// Absolute `https://*.sec.gov/...` URL of the filing document to retrieve.
+    pub url: String,
+}
+
+impl SecHtmlUrlQuery {
+    /// Validate and normalise `url`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecProviderError::InvalidUrl`] when the URL is blank, is not an
+    /// `https://` URL, or is not hosted on a `sec.gov` domain.
+    pub fn new(url: &str) -> Result<Self> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(SecProviderError::InvalidUrl);
+        }
+        let Some(rest) = url.strip_prefix("https://") else {
+            return Err(SecProviderError::InvalidUrl);
+        };
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+        if host != "sec.gov" && !host.ends_with(".sec.gov") {
+            return Err(SecProviderError::InvalidUrl);
+        }
+        Ok(Self {
+            url: url.to_string(),
+        })
+    }
+}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -180,6 +217,8 @@ pub enum SecProviderError {
     InvalidCik,
     #[error("sec accession number must contain only digits and dashes")]
     InvalidAccession,
+    #[error("sec url must be an https sec.gov URL")]
+    InvalidUrl,
     #[error("sec provider error: {0}")]
     Provider(String),
 }
@@ -290,6 +329,33 @@ mod tests {
 
         let q = SecFilingsQuery::new("0000320193").expect("should build");
         assert_eq!(q.padded_cik(), "0000320193");
+    }
+
+    #[test]
+    fn html_url_query_accepts_sec_gov_https_only() {
+        let q = SecHtmlUrlQuery::new(
+            "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl.htm",
+        )
+        .expect("sec.gov https url is valid");
+        assert!(q.url.contains("aapl.htm"));
+        assert!(SecHtmlUrlQuery::new("https://sec.gov/files/x.htm").is_ok());
+        // Rejected: non-https, non-sec.gov host, lookalike host, blank.
+        assert_eq!(
+            SecHtmlUrlQuery::new("http://www.sec.gov/x.htm"),
+            Err(SecProviderError::InvalidUrl)
+        );
+        assert_eq!(
+            SecHtmlUrlQuery::new("https://evil.com/x.htm"),
+            Err(SecProviderError::InvalidUrl)
+        );
+        assert_eq!(
+            SecHtmlUrlQuery::new("https://sec.gov.evil.com/x.htm"),
+            Err(SecProviderError::InvalidUrl)
+        );
+        assert_eq!(
+            SecHtmlUrlQuery::new("  "),
+            Err(SecProviderError::InvalidUrl)
+        );
     }
 
     #[test]
