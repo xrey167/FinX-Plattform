@@ -14,6 +14,7 @@
 //! deterministic classical forecasters (naive, seasonal-naive, random-walk-drift,
 //! Holt-Winters, Theta).
 
+use crate::autoarima::{self, Criterion};
 use crate::error::ForecastError;
 use crate::metrics::precision_metrics;
 use crate::params::{BacktestParams, ForecastModel, PrecisionMetrics};
@@ -33,6 +34,9 @@ fn forecast_point(
         ForecastModel::Rwd => baseline::random_walk_drift(train, horizon)?,
         ForecastModel::Expo => expo::holt_winters(train, horizon, 0.5, 0.1, 0.1, period)?,
         ForecastModel::Theta => theta::theta(train, horizon)?,
+        ForecastModel::AutoArima => {
+            autoarima::auto_arima(train, horizon, 3, 3, 2, Criterion::Aicc)?.forecast
+        }
     };
     // The horizon-step-ahead point is the last forecast point.
     result
@@ -136,6 +140,20 @@ mod tests {
             backtest(&[1.0, 2.0, 3.0], ForecastModel::Naive, 5, 1, 0),
             Err(crate::error::ForecastError::TooShort { .. })
         ));
+    }
+
+    #[test]
+    fn backtest_autoarima_on_a_trend_is_well_defined() {
+        // AutoARIMA backtests like the other models: on a clean linear trend its
+        // differencing decision makes the one-step error small and finite.
+        let y: Vec<f64> = (0..24).map(|v| 2.0 * f64::from(v)).collect();
+        let m = backtest(&y, ForecastModel::AutoArima, 14, 1, 0).expect("backtest");
+        assert!(m.n >= 1);
+        assert!(m.rmse.is_finite());
+        assert!(m.mae.is_finite());
+        // The slope-2 trend is exactly differenced away, so the one-step error is
+        // small relative to the series scale.
+        assert!(m.rmse < 5.0, "autoarima trend rmse {} too large", m.rmse);
     }
 
     #[test]

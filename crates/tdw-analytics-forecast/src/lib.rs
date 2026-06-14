@@ -27,6 +27,14 @@
 //! - [`linregr`] — a lag-feature linear-regression forecaster with optional
 //!   exogenous covariates that **reuses the OLS core from
 //!   `tdw-analytics-econometrics`**.
+//! - [`arima`] — `ARIMA(p, d, q)` estimated by the deterministic
+//!   `Hannan-Rissanen` two-stage least-squares procedure (reusing the
+//!   econometrics OLS core), with `d`-order differencing and integration of the
+//!   forecast back to the series level.
+//! - [`autoarima`] — automatic `ARIMA` order selection via a `Hyndman-Khandakar`
+//!   stepwise `(p, q)` search plus a variance-ratio differencing decision, picking
+//!   the lowest-information-criterion model (default `AICc`). This is ecosystem
+//!   item **G008**.
 //! - [`metrics`] — the standard forecast-accuracy measures (RMSE, MAE, MAPE,
 //!   SMAPE).
 //! - [`backtest`] — an expanding-window historical-forecasts harness that re-fits
@@ -62,9 +70,15 @@
 //!   selection.
 //! - **Theta** ([`theta`]) implements the classic `θ = 2` closed form, not the
 //!   generalized multi-theta optimization.
-//! - Deep-learning forecasters (`RNN`/`LSTM`/`TFT`/`NBEATS`) and `AutoARIMA` are
-//!   intentionally **out of scope** (ecosystem item G008): they require a heavy
-//!   dependency that breaks this crate's zero-heavy-dep, deterministic posture.
+//! - **`ARIMA`** ([`arima`]) is estimated by `Hannan-Rissanen` two-stage least
+//!   squares, a deterministic consistent estimator, rather than exact
+//!   maximum-likelihood with a `Kalman` filter (which needs a numeric optimizer
+//!   and is not reproducible in the same dependency-free way). This is documented
+//!   in the module docs.
+//! - Deep-learning forecasters (`RNN`/`LSTM`/`TFT`/`NBEATS`) remain intentionally
+//!   **out of scope**: they require a heavy native dependency that breaks this
+//!   crate's zero-heavy-dep, deterministic posture. See the deferral note at
+//!   `docs/roadmap/dl-forecasting-deferral.md`.
 //!
 //! # Clean-room provenance
 //!
@@ -73,10 +87,14 @@
 //! smoothing; Assimakopoulos & Nikolopoulos 2000 and Hyndman & Billah 2003 for
 //! the Theta method; the classical moving-average decomposition for MSTL; the
 //! Gauss-Markov / normal-equations OLS reused from `tdw-analytics-econometrics`
-//! for the regression forecaster; Hyndman & Koehler 2006 for the accuracy
-//! measures). No reference implementation was consulted.
+//! for the regression forecaster; Hannan & Rissanen 1982 for the two-stage
+//! `ARIMA` estimator and Hyndman & Khandakar 2008 for the automatic order search;
+//! Hyndman & Koehler 2006 for the accuracy measures). No reference implementation
+//! was consulted.
 
 pub mod anomaly;
+pub mod arima;
+pub mod autoarima;
 pub mod backtest;
 pub mod baseline;
 pub mod error;

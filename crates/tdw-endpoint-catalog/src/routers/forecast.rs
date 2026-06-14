@@ -20,9 +20,9 @@
 
 use schemars::{Schema, schema_for};
 use tdw_analytics_forecast::params::{
-    AnomalyParams, AnomalyResult, BacktestParams, BaselineParams, Decomposition, EtsParams,
-    ExpoParams, ForecastResult, LinRegrParams, MetricsParams, MstlParams, PrecisionMetrics,
-    ThetaParams,
+    AnomalyParams, AnomalyResult, ArimaParams, AutoArimaParams, BacktestParams, BaselineParams,
+    Decomposition, EtsParams, ExpoParams, ForecastResult, LinRegrParams, MetricsParams, MstlParams,
+    PrecisionMetrics, ThetaParams,
 };
 
 use crate::{CatalogEntry, EndpointKind};
@@ -46,6 +46,12 @@ fn mstl_params() -> Schema {
 }
 fn linregr_params() -> Schema {
     schema_for!(LinRegrParams)
+}
+fn arima_params() -> Schema {
+    schema_for!(ArimaParams)
+}
+fn autoarima_params() -> Schema {
+    schema_for!(AutoArimaParams)
 }
 fn backtest_params() -> Schema {
     schema_for!(BacktestParams)
@@ -136,6 +142,18 @@ const ROUTES: &[RouteSpec] = &[
         linregr_params,
         forecast_model,
         "Linear-regression forecast with autoregressive lag features and optional covariates.",
+    ),
+    (
+        "forecast/arima",
+        arima_params,
+        forecast_model,
+        "ARIMA(p, d, q) forecast estimated by Hannan-Rissanen two-stage least squares.",
+    ),
+    (
+        "forecast/autoarima",
+        autoarima_params,
+        forecast_model,
+        "AutoARIMA: stepwise Hyndman-Khandakar order selection over (p, d, q) by information criterion.",
     ),
     (
         "forecast/backtest",
