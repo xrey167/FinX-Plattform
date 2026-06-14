@@ -5,9 +5,9 @@ pub mod models;
 
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
-    Breakpoint, CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts,
-    CompanyFiling, CurrencySnapshot, EarningsTranscript, EmployeeCount, EsgScore, Estimate,
-    EtfCountryWeight, EtfEquityExposure, EtfHolding, EtfInfo, EtfSectorWeight,
+    Breakpoint, CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyAttribute,
+    CompanyFacts, CompanyFiling, CurrencySnapshot, EarningsTranscript, EmployeeCount, EsgScore,
+    Estimate, EtfCountryWeight, EtfEquityExposure, EtfHolding, EtfInfo, EtfSectorWeight,
     ExecutiveCompensation, FactorReturn, FilingFile, FilingHeader, FinancialStatement,
     FomcDocument, FuturesCurvePoint, FuturesInstrument, HistoricalMarketCap, ImfDiscoveryRecord,
     IndexConstituent, KeyExecutive, KeyMetrics, LitigationRelease, MacroSeries, NewsArticle,

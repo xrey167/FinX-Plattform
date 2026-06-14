@@ -141,6 +141,9 @@ provider-government-us = [
     "tdw-provider-government-us/http",
 ]
 provider-imf = ["dep:tdw-provider-imf", "tdw-provider-imf/http"]
+## Intrinio keyed provider (openbb-parity total wave G002). Live calls require
+## the PAID INTRINIO_API_KEY; the dispatch bindings ship and compile without it.
+provider-intrinio = ["dep:tdw-provider-intrinio", "tdw-provider-intrinio/http"]
 provider-econdb = ["dep:tdw-provider-econdb", "tdw-provider-econdb/http"]
 provider-geckoterminal = [
     "dep:tdw-provider-geckoterminal",
@@ -241,6 +244,7 @@ all-http-providers = [
     "provider-fred",
     "provider-government-us",
     "provider-imf",
+    "provider-intrinio",
     "provider-econdb",
     "provider-geckoterminal",
     "provider-glassnode",
@@ -331,6 +335,7 @@ tdw-provider-fmp = { path = "../tdw-provider-fmp", optional = true }
 tdw-provider-fred = { path = "../tdw-provider-fred", optional = true }
 tdw-provider-government-us = { path = "../tdw-provider-government-us", optional = true }
 tdw-provider-imf = { path = "../tdw-provider-imf", optional = true }
+tdw-provider-intrinio = { path = "../tdw-provider-intrinio", optional = true }
 tdw-provider-econdb = { path = "../tdw-provider-econdb", optional = true }
 tdw-provider-geckoterminal = { path = "../tdw-provider-geckoterminal", optional = true }
 tdw-provider-glassnode = { path = "../tdw-provider-glassnode", optional = true }

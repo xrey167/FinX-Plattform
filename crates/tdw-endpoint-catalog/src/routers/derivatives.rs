@@ -35,6 +35,23 @@ const DERIVATIVES_FUTURES_INSTRUMENTS: &[ProviderCandidate] =
     &[ProviderCandidate::new("deribit", "futures_instruments")];
 const DERIVATIVES_FUTURES_INFO: &[ProviderCandidate] =
     &[ProviderCandidate::new("deribit", "futures_info")];
+// Intrinio keyed options cluster (openbb-parity total wave G002): unusual
+// activity, market snapshots, and the IV-surface chain inputs. Each route's sole
+// candidate endpoint key matches the Intrinio fetcher's `ENDPOINT` const — also
+// the runtime dispatch-table key. All keyed (Intrinio only; live calls require
+// the PAID INTRINIO_API_KEY).
+const DERIVATIVES_OPTIONS_UNUSUAL: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "derivatives_options_unusual",
+)];
+const DERIVATIVES_OPTIONS_SNAPSHOTS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "derivatives_options_snapshots",
+)];
+const DERIVATIVES_OPTIONS_SURFACE: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "derivatives_options_surface",
+)];
 
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
@@ -107,6 +124,40 @@ pub fn entries() -> Vec<CatalogEntry> {
             candidates: DERIVATIVES_FUTURES_INFO,
             bronze_table: Some("raw.futures_instrument"),
             doc: "Futures instrument metadata for one instrument, Deribit-backed (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "derivatives/options/unusual",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: option_contract,
+            candidates: DERIVATIVES_OPTIONS_UNUSUAL,
+            bronze_table: Some("raw.option_contract"),
+            doc: "Unusual options activity (block / sweep trades) for a symbol, \
+                  Intrinio-backed (keyed).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "derivatives/options/snapshots",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: option_contract,
+            candidates: DERIVATIVES_OPTIONS_SNAPSHOTS,
+            bronze_table: Some("raw.option_contract"),
+            doc: "Options market snapshots across the chain (quote / greeks), \
+                  Intrinio-backed (keyed).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "derivatives/options/surface",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: option_contract,
+            candidates: DERIVATIVES_OPTIONS_SURFACE,
+            bronze_table: Some("raw.option_contract"),
+            doc: "Implied-volatility surface inputs over the options chain (per-contract \
+                  IV / greeks); the surface solver is a documented follow-up. Intrinio-backed \
+                  (keyed).",
             chartable: false,
         },
     ]

@@ -1336,6 +1336,39 @@ pub struct CurrencySnapshot {
     pub ts_ms: Option<i64>,
 }
 
+/// A single standardized company data-point / attribute observation.
+///
+/// Standardizes the `equity/fundamental/historical_attributes`,
+/// `equity/fundamental/latest_attributes`, and `equity/fundamental/search_attributes`
+/// cluster (`Intrinio`-backed). Intrinio exposes thousands of standardized
+/// "data-point" tags (e.g. `marketcap`, `pricetoearnings`, `ebitda`) reachable
+/// individually per company or as a historical series; one row = one
+/// (symbol, tag, date) observation, or one matched tag for the search variant.
+/// Numeric and descriptive fields are [`Option`] since the latest-point and
+/// metadata-search variants populate different subsets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CompanyAttribute {
+    /// Company identifier the attribute belongs to (ticker / Intrinio id).
+    /// Empty for the metadata `search_attributes` variant, which describes a
+    /// tag rather than a company observation.
+    pub symbol: Option<String>,
+    /// Standardized data-point tag, e.g. `"marketcap"`, `"pricetoearnings"`.
+    #[validate(length(min = 1))]
+    pub tag: String,
+    /// Human-readable tag name, where the API reports it (search/metadata).
+    pub name: Option<String>,
+    /// Observation date for a (historical) attribute series, `YYYY-MM-DD`.
+    pub date: Option<String>,
+    /// Numeric attribute value, when the tag is numeric.
+    pub value: Option<f64>,
+    /// Textual attribute value, when the tag is non-numeric.
+    pub text_value: Option<String>,
+    /// Unit / type label for the tag, where reported, e.g. `"usd"`, `"ratio"`.
+    pub unit: Option<String>,
+    /// Statement type / category the tag belongs to, where reported.
+    pub statement_code: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1419,6 +1452,43 @@ mod tests {
         let bad = ImfDiscoveryRecord {
             id: String::new(),
             ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn company_attribute_round_trips_and_validates() {
+        let historical = CompanyAttribute {
+            symbol: Some("AAPL".to_string()),
+            tag: "marketcap".to_string(),
+            name: Some("Market Capitalization".to_string()),
+            date: Some("2024-09-28".to_string()),
+            value: Some(3_400_000_000_000.0),
+            text_value: None,
+            unit: Some("usd".to_string()),
+            statement_code: None,
+        };
+        assert!(historical.validate().is_ok());
+        round_trip(&historical);
+
+        // The metadata `search_attributes` variant carries no symbol/value.
+        let search = CompanyAttribute {
+            symbol: None,
+            tag: "pricetoearnings".to_string(),
+            name: Some("Price to Earnings".to_string()),
+            date: None,
+            value: None,
+            text_value: None,
+            unit: Some("ratio".to_string()),
+            statement_code: Some("calculations".to_string()),
+        };
+        assert!(search.validate().is_ok());
+        round_trip(&search);
+
+        // An empty tag is the one required anchor and must be rejected.
+        let bad = CompanyAttribute {
+            tag: String::new(),
+            ..historical
         };
         assert!(bad.validate().is_err());
     }

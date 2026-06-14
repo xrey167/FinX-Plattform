@@ -205,6 +205,14 @@ use tdw_provider_government_us::{
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-imf")]
 use tdw_provider_imf::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
+#[cfg(feature = "provider-intrinio")]
+use tdw_provider_intrinio::{
+    IntrinioHttpForwardPeFetcher, IntrinioHttpForwardSalesFetcher,
+    IntrinioHttpHistoricalAttributesFetcher, IntrinioHttpLatestAttributesFetcher,
+    IntrinioHttpOptionsSnapshotsFetcher, IntrinioHttpOptionsSurfaceFetcher,
+    IntrinioHttpOptionsUnusualFetcher, IntrinioHttpReportedFinancialsFetcher,
+    IntrinioHttpSearchAttributesFetcher,
+};
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
@@ -358,6 +366,27 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CftcHttpCotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cftc")]
     registry.register(CftcHttpCotSearchFetcher::registry_entry())?;
+    // Catalog-facing Intrinio keyed fetchers (openbb-parity total wave G002):
+    // data-point attributes, as-reported financials, forward estimates, and the
+    // options unusual/snapshots/surface cluster.
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpHistoricalAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpLatestAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpSearchAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpReportedFinancialsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpForwardPeFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpForwardSalesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsUnusualFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsSnapshotsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsSurfaceFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
