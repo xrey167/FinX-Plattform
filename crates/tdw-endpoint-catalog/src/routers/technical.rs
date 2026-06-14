@@ -11,13 +11,13 @@
 
 use schemars::{Schema, schema_for};
 use tdw_analytics_technical::indicators::{
-    AdxRow, AroonRow, ChannelRow, FisherRow, IchimokuRow, MacdRow, StochasticRow, SupertrendRow,
-    VortexRow,
+    AdxRow, AroonRow, ChannelRow, ConeRow, DemarkRow, FibRow, FisherRow, IchimokuRow, MacdRow,
+    RrgRow, StochasticRow, SupertrendRow, VortexRow,
 };
 use tdw_analytics_technical::params::{
-    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams,
-    HmaParams, IchimokuParams, KeltnerParams, LengthParams, MacdParams, RocParams,
-    StochasticParams, SupertrendParams,
+    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, ClenowParams, ConesParams,
+    DonchianParams, FibParams, FisherParams, HmaParams, IchimokuParams, KeltnerParams,
+    LengthParams, MacdParams, NoParams, RocParams, RrgParams, StochasticParams, SupertrendParams,
 };
 
 use crate::{CatalogEntry, EndpointKind};
@@ -76,6 +76,21 @@ fn adosc_params() -> Schema {
 fn supertrend_params() -> Schema {
     schema_for!(SupertrendParams)
 }
+fn clenow_params() -> Schema {
+    schema_for!(ClenowParams)
+}
+fn cones_params() -> Schema {
+    schema_for!(ConesParams)
+}
+fn fib_params() -> Schema {
+    schema_for!(FibParams)
+}
+fn rrg_params() -> Schema {
+    schema_for!(RrgParams)
+}
+fn demark_params() -> Schema {
+    schema_for!(NoParams)
+}
 
 // --- Multi-line output-row schema closures. ----------------------------------
 
@@ -105,6 +120,18 @@ fn vortex_model() -> Schema {
 }
 fn supertrend_model() -> Schema {
     schema_for!(SupertrendRow)
+}
+fn demark_model() -> Schema {
+    schema_for!(DemarkRow)
+}
+fn rrg_model() -> Schema {
+    schema_for!(RrgRow)
+}
+fn cone_model() -> Schema {
+    schema_for!(ConeRow)
+}
+fn fib_model() -> Schema {
+    schema_for!(FibRow)
 }
 
 /// Construct one chartable `technical/*` Compute entry with no candidates.
@@ -287,6 +314,42 @@ const ROUTES: &[RouteSpec] = &[
         supertrend_params,
         supertrend_model,
         "SuperTrend ATR trailing-stop line and trend direction.",
+    ),
+    (
+        "technical/cg",
+        length_params,
+        scalar_model,
+        "Ehlers Center of Gravity oscillator over the close series.",
+    ),
+    (
+        "technical/clenow",
+        clenow_params,
+        scalar_model,
+        "Clenow volatility-adjusted momentum (annualized log-price slope x R-squared).",
+    ),
+    (
+        "technical/demark",
+        demark_params,
+        demark_model,
+        "DeMark TD-Sequential setup count (+/-1..9).",
+    ),
+    (
+        "technical/fib",
+        fib_params,
+        fib_model,
+        "Fibonacci retracement levels over the window swing high/low.",
+    ),
+    (
+        "technical/cones",
+        cones_params,
+        cone_model,
+        "Volatility cones: realized-volatility distribution across horizon windows.",
+    ),
+    (
+        "technical/relative_rotation",
+        rrg_params,
+        rrg_model,
+        "Relative Rotation Graph RS-Ratio and RS-Momentum versus a benchmark.",
     ),
 ];
 

@@ -4905,16 +4905,19 @@ fn service_tool_registry() -> ToolRegistry {
     registry
 }
 
-/// Map a Compute-tool name to its catalog route by swapping the first `.` for
-/// `/`, but only for the analytics namespaces (`technical`, `quantitative`,
-/// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
+/// Map a Compute-tool name to its catalog route by swapping `.` separators back
+/// to `/`, but only for the analytics namespaces (`technical`, `quantitative`,
+/// `econometrics`, `portfolio`). Returns `None` for any other tool name (e.g.
+/// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`) round-trip:
+/// the tool name `quantitative.stats.mean` maps back by restoring every inner
+/// separator after the namespace.
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
     if matches!(
         namespace,
         "technical" | "quantitative" | "econometrics" | "portfolio"
     ) {
-        Some(format!("{namespace}/{member}"))
+        Some(format!("{namespace}/{}", member.replace('.', "/")))
     } else {
         None
     }
@@ -4922,9 +4925,10 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
 
 /// Register one [`RegisteredTool`] per analytics Compute catalog route.
 ///
-/// The tool name is the route with the namespace separator `/` swapped for `.`
+/// The tool name is the route with every separator `/` swapped for `.`
 /// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
-/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`,
+/// `quantitative.sharpe_ratio`, `quantitative/stats/mean` →
+/// `quantitative.stats.mean`, `econometrics/ols` → `econometrics.ols`,
 /// `portfolio/drawdown` → `portfolio.drawdown`), so
 /// `Op::ToolCall` and the MCP tool list expose every metric for free with the
 /// route's own param/model JSON schemas attached. Driving this from
@@ -4936,7 +4940,7 @@ fn register_compute_tools(registry: &mut ToolRegistry) {
         if entry.kind != tdw_endpoint_catalog::EndpointKind::Compute {
             continue;
         }
-        let name = entry.route.replacen('/', ".", 1);
+        let name = entry.route.replace('/', ".");
         let input_schema = serde_json::to_value((entry.params_schema)())
             .unwrap_or_else(|_| json!({ "type": "object" }));
         let output_schema =

@@ -5,6 +5,7 @@
 //! input length. See the crate-level docs for the leading-`None` policy and the
 //! clean-room provenance statement.
 
+pub mod advanced;
 pub mod bands;
 pub mod moving_average;
 pub mod oscillators;
@@ -122,4 +123,56 @@ pub struct SupertrendRow {
     /// Trend direction: `+1` for up-trend (price above the line), `−1` for
     /// down-trend (price below the line).
     pub direction: Option<i8>,
+}
+
+/// One `DeMark` TD-Sequential setup row: the running buy/sell setup count.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DemarkRow {
+    /// TD-Setup count: positive `+1..=9` for a *sell* setup (consecutive closes
+    /// above the close four bars earlier), negative `−1..=−9` for a *buy* setup
+    /// (consecutive closes below). `None` until a setup is in progress.
+    pub setup: Option<i32>,
+}
+
+/// One Relative Rotation Graph (RRG) row: the normalized relative-strength ratio
+/// and its momentum.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RrgRow {
+    /// RS-Ratio: the relative-strength line (`asset/benchmark`) normalized to a
+    /// `~100`-centered z-score over the smoothing window (`100 + z`).
+    pub rs_ratio: Option<f64>,
+    /// RS-Momentum: the `~100`-centered rate of change of the RS-Ratio over the
+    /// smoothing window.
+    pub rs_momentum: Option<f64>,
+}
+
+/// One volatility-cone row for a single horizon window: the realized-volatility
+/// range observed for that horizon across the series.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConeRow {
+    /// Horizon window length (in bars) this cone row summarizes.
+    pub window: usize,
+    /// Minimum annualized realized volatility observed at this horizon.
+    pub min: f64,
+    /// Lower-quantile annualized realized volatility (the `lower_q` param).
+    pub lower: f64,
+    /// Median annualized realized volatility at this horizon.
+    pub median: f64,
+    /// Upper-quantile annualized realized volatility (the `upper_q` param).
+    pub upper: f64,
+    /// Maximum annualized realized volatility observed at this horizon.
+    pub max: f64,
+    /// The most recent (current) annualized realized volatility at this horizon.
+    pub realized: f64,
+}
+
+/// One Fibonacci-retracement level row: a named ratio and the price it maps to
+/// between the swing low and swing high.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FibRow {
+    /// Retracement ratio (`0.0`, `0.236`, `0.382`, `0.5`, `0.618`, `0.786`,
+    /// `1.0`).
+    pub level: f64,
+    /// Price at this retracement ratio between the swing low and high.
+    pub price: f64,
 }
