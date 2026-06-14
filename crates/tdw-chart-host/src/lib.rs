@@ -101,11 +101,15 @@ pub fn render_html(figure: &Value) -> String {
     )
 }
 
-/// Extract the figure's `layout.title` text for the page `<title>`, when present
-/// as a plain string (plotly titles can also be an object — only the simple
-/// string form is used here).
+/// Extract the figure's `layout.title` text for the page `<title>`.
+///
+/// Plotly's `layout.title` can be either a plain string (`"title": "…"`) or an
+/// object (`"title": {"text": "…"}`); both forms are handled here.
 fn figure_title(figure: &Value) -> Option<&str> {
-    figure.get("layout")?.get("title")?.as_str()
+    let title = figure.get("layout")?.get("title")?;
+    title
+        .as_str()
+        .or_else(|| title.get("text").and_then(|v| v.as_str()))
 }
 
 /// Minimal HTML-text escaping for the values interpolated into element text /
@@ -292,6 +296,18 @@ mod tests {
         let figure = json!({"data": [], "layout": {}});
         let html = render_html(&figure);
         assert!(html.contains("<title>Chart</title>"));
+    }
+
+    #[test]
+    fn title_comes_from_object_form_layout_title() {
+        // Plotly's `layout.title` can be an object `{"text": "..."}`; the object
+        // form's text must be extracted just like the plain-string form.
+        let figure = json!({"data": [], "layout": {"title": {"text": "Object Title"}}});
+        let html = render_html(&figure);
+        assert!(
+            html.contains("<title>Object Title</title>"),
+            "object-form layout.title.text must be used, got: {html}"
+        );
     }
 
     #[test]
