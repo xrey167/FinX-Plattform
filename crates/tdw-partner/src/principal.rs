@@ -117,8 +117,14 @@ pub struct Provenance {
 
 impl Provenance {
     /// Whether this provenance carries any attribution at all.
+    ///
+    /// Deliberately NOT `const`: it calls [`Vec::is_empty`], which the Gemini
+    /// #438 review flagged as fragile/unsupported semantics under `const fn`.
+    /// The `missing_const_for_fn` nursery lint would re-add `const`; it is
+    /// suppressed here precisely to preserve that review fix.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn is_empty(&self) -> bool {
         self.routes.is_empty() && self.kg_nodes.is_empty()
     }
 }

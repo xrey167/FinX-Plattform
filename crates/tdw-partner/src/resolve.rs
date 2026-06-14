@@ -7,8 +7,20 @@
 //! by [`tdw_endpoint_catalog::is_valid_route`] (data routes) or the known-verb
 //! set (knowledge routes) **before any I/O**. There is no graph executor and no
 //! agent loop here — just "classify intent, choose route(s), guard them".
+//!
+//! # Parameters (Gemini #438 critical fix)
+//!
+//! Resolution extracts BOTH the route AND its parameters from the utterance. The
+//! model may append a JSON object after a route (`equity/price/historical
+//! {"symbol":"AAPL"}`); whatever it omits is back-filled by a deterministic
+//! [`extract_params`] pass that mines a symbol and a date window from the
+//! utterance. The resolved [`ResolvedRoute`] carries those params so
+//! `PartnerCore::turn` threads them into [`crate::DataPlane::fetch`] — a real
+//! data route (e.g. `equity/price/historical`, which needs a `symbol`) is no
+//! longer fetched with empty params.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use tdw_llm::{ChatMessage, ChatRequest, LanguageModel, MessageRole};
 
 /// The knowledge verbs the resolver may select alongside catalog data routes.
@@ -32,13 +44,36 @@ pub fn is_selectable(route: &str) -> bool {
     is_knowledge_verb(route) || tdw_endpoint_catalog::is_valid_route(route)
 }
 
-/// The resolved targets for a turn: the guarded data routes and knowledge verbs
-/// the turn will execute, in selection order.
+/// One resolved catalog data route plus the parameters extracted for it
+/// (the partner design §1.3 step 1; Gemini #438 critical fix).
+///
+/// The `params` object is the request arguments threaded into
+/// [`crate::DataPlane::fetch`]. It is bounded by the route's catalog schema
+/// shape (`symbol` plus the `StandardParams` window) and is never free-form.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedRoute {
+    /// The catalog route (passed [`tdw_endpoint_catalog::is_valid_route`]).
+    pub route: String,
+    /// The request parameters for the route (e.g. `{"symbol":"AAPL"}`).
+    pub params: Value,
+}
+
+impl ResolvedRoute {
+    /// Whether the resolved params object carries no fields.
+    #[must_use]
+    pub fn params_empty(&self) -> bool {
+        self.params.as_object().is_none_or(Map::is_empty)
+    }
+}
+
+/// The resolved targets for a turn: the guarded data routes (each with its
+/// extracted params) and knowledge verbs the turn will execute, in selection
+/// order.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedRoutes {
     /// Catalog data routes (each one passed [`tdw_endpoint_catalog::is_valid_route`]
-    /// AND [`tdw_endpoint_catalog::lookup`]).
-    pub data: Vec<String>,
+    /// AND [`tdw_endpoint_catalog::lookup`]), each carrying its parameters.
+    pub data: Vec<ResolvedRoute>,
     /// Knowledge verbs (`tdw.kg.*`) selected for the memory-context step.
     pub knowledge: Vec<String>,
 }
@@ -49,14 +84,27 @@ impl ResolvedRoutes {
     pub const fn is_empty(&self) -> bool {
         self.data.is_empty() && self.knowledge.is_empty()
     }
+
+    /// The resolved route names (without params), in selection order.
+    ///
+    /// A convenience for surfaces that only render the route ids (the citation
+    /// line, the structured `resolved_routes` block).
+    #[must_use]
+    pub fn data_routes(&self) -> Vec<String> {
+        self.data.iter().map(|r| r.route.clone()).collect()
+    }
 }
 
-/// Resolve `utterance` into a guarded set of routes using `model` for selection.
+/// Resolve `utterance` into a guarded set of routes (with params) using `model`
+/// for selection.
 ///
 /// The model is shown the candidate vocabulary and asked to echo the routes it
-/// would use, one per line. Every line is then guarded:
+/// would use, one per line, optionally followed by a JSON params object. Every
+/// line is then guarded:
 /// - a data route is kept only if [`tdw_endpoint_catalog::lookup`] finds it
-///   (which also implies `is_valid_route`);
+///   (which also implies `is_valid_route`); its params are the model-supplied
+///   object merged over a deterministic [`extract_params`] pass so a real data
+///   route (needing e.g. `symbol`) is never fetched with empty params;
 /// - a knowledge verb is kept only if it is in [`KNOWLEDGE_VERBS`];
 /// - anything else (a hallucinated or malformed route) is dropped.
 ///
@@ -69,7 +117,7 @@ pub fn resolve_routes(utterance: &str, model: &dyn LanguageModel) -> ResolvedRou
     let Ok(response) = model.complete(request) else {
         return ResolvedRoutes::default();
     };
-    guard_selection(&response.message.content)
+    guard_selection(&response.message.content, utterance)
 }
 
 /// Build the bounded tool-selection prompt. The system message lists the
@@ -79,9 +127,10 @@ fn build_select_request(utterance: &str) -> ChatRequest {
     let system = format!(
         "You are a route selector for a financial data warehouse. Given the user's question, \
          list the data routes and knowledge verbs needed to answer it, ONE PER LINE, and nothing \
-         else. Data routes are slash-namespaced catalog routes (e.g. equity/price/historical). \
-         Knowledge verbs are exactly: {verbs}. If no data or knowledge lookup is needed, output \
-         nothing.",
+         else. Data routes are slash-namespaced catalog routes (e.g. equity/price/historical); \
+         you MAY append a JSON object of parameters after a data route on the same line \
+         (e.g. equity/price/historical {{\"symbol\":\"AAPL\"}}). Knowledge verbs are exactly: \
+         {verbs}. If no data or knowledge lookup is needed, output nothing.",
         verbs = KNOWLEDGE_VERBS.join(", "),
     );
     ChatRequest {
@@ -99,29 +148,190 @@ fn build_select_request(utterance: &str) -> ChatRequest {
     }
 }
 
-/// Guard a newline-delimited model selection against the catalog + verb set.
-fn guard_selection(selection: &str) -> ResolvedRoutes {
+/// Guard a newline-delimited model selection against the catalog + verb set,
+/// extracting per-route params from the line and the originating `utterance`.
+fn guard_selection(selection: &str, utterance: &str) -> ResolvedRoutes {
     let mut resolved = ResolvedRoutes::default();
     for raw in selection.lines() {
-        let candidate = raw.trim().trim_start_matches(['-', '*', ' ']).trim();
+        let (candidate, inline_params) = split_line(raw);
         if candidate.is_empty() {
             continue;
         }
-        if is_knowledge_verb(candidate) {
-            if !resolved.knowledge.iter().any(|v| v == candidate) {
-                resolved.knowledge.push(candidate.to_string());
+        if is_knowledge_verb(&candidate) {
+            if !resolved.knowledge.iter().any(|v| v == &candidate) {
+                resolved.knowledge.push(candidate);
             }
-        } else if tdw_endpoint_catalog::lookup(candidate).is_some() {
+        } else if tdw_endpoint_catalog::lookup(&candidate).is_some() {
             // lookup() implies is_valid_route(): an invalid route never reaches
             // the dispatcher.
-            if !resolved.data.iter().any(|r| r == candidate) {
-                resolved.data.push(candidate.to_string());
+            if resolved.data.iter().any(|r| r.route == candidate) {
+                continue;
             }
+            // Params: the deterministic extraction from the utterance, with any
+            // inline JSON the model supplied merged ON TOP (model wins per key).
+            let mut params = extract_params(&candidate, utterance);
+            merge_params(&mut params, inline_params);
+            resolved.data.push(ResolvedRoute {
+                route: candidate,
+                params,
+            });
         }
         // Anything else (hallucinated / malformed) is silently dropped — the
         // guard is the safety net, not the model.
     }
     resolved
+}
+
+/// Split one selection line into `(route, inline_params)`.
+///
+/// The route is the leading token, run through [`clean_candidate`] so numbered
+/// (`1. route`), bulleted (`- route`), and backticked / quoted (`` `route` ``)
+/// list formats all yield the bare route (Gemini #438 medium fix). Any `{...}`
+/// JSON object after the route token is parsed as the inline params.
+fn split_line(raw: &str) -> (String, Option<Value>) {
+    let trimmed = raw.trim();
+    // Carve off an inline JSON params object if present.
+    let (head, params) = trimmed.find('{').map_or((trimmed, None), |brace| {
+        let (before, json_part) = trimmed.split_at(brace);
+        let parsed = serde_json::from_str::<Value>(json_part)
+            .ok()
+            .filter(Value::is_object);
+        (before, parsed)
+    });
+    (clean_candidate(head), params)
+}
+
+/// Normalize a route token from an LLM list item to its bare form.
+///
+/// Robust against the formats a model actually emits (Gemini #438 medium fix):
+/// strips a leading ordered-list marker (`1.`, `2)`), bullet markers
+/// (`-`, `*`, `•`), and any surrounding backticks / single or double quotes /
+/// whitespace. The previous trimmer only stripped `-`/`*`/space bullets, so
+/// numbered and backticked items were silently dropped.
+fn clean_candidate(raw: &str) -> String {
+    let mut s = raw.trim();
+
+    // Strip a leading ordered-list marker: digits then a `.` or `)` separator.
+    let digits = s.trim_start_matches(|c: char| c.is_ascii_digit());
+    if digits.len() < s.len() {
+        let after = digits.trim_start_matches(['.', ')']);
+        if after.len() < digits.len() {
+            s = after;
+        }
+    }
+
+    // Strip bullet markers and surrounding whitespace/backticks/quotes from
+    // both ends.
+    s.trim()
+        .trim_start_matches(['-', '*', '•'])
+        .trim()
+        .trim_matches(['`', '"', '\'', ' '])
+        .to_string()
+}
+
+/// Merge `overlay` (the model's inline params) on top of `base` (the
+/// deterministic extraction). Object keys in `overlay` win.
+fn merge_params(base: &mut Value, overlay: Option<Value>) {
+    let (Some(base_obj), Some(Value::Object(overlay_obj))) = (base.as_object_mut(), overlay) else {
+        return;
+    };
+    for (key, value) in overlay_obj {
+        base_obj.insert(key, value);
+    }
+}
+
+/// Deterministically extract the parameters a `route` needs from the raw
+/// `utterance` (Gemini #438 critical fix).
+///
+/// Catalog routes standardize on a `symbol` plus the `StandardParams` window
+/// (`start_date` / `end_date` / `interval` / `limit`). The catalog itself does
+/// not enumerate `symbol` per route, so it is mined here from the utterance: the
+/// first bare uppercase ticker-shaped token (1–5 A–Z chars) becomes `symbol`.
+/// A coarse relative-window phrase (`last month` / `last week` / `last year`)
+/// sets a `window` hint the dispatcher can normalize. The result is always a
+/// JSON object (possibly empty for a route that genuinely needs no params).
+#[must_use]
+pub fn extract_params(route: &str, utterance: &str) -> Value {
+    let mut params = Map::new();
+
+    // Symbol: the first uppercase ticker-shaped token (1–5 A–Z). Routes that do
+    // not take a symbol simply ignore it downstream, but most equity/crypto/etf
+    // data routes need exactly this.
+    if route_takes_symbol(route)
+        && let Some(symbol) = extract_symbol(utterance)
+    {
+        params.insert("symbol".to_string(), Value::String(symbol));
+    }
+
+    // Coarse relative window hint (the dispatcher normalizes to start/end dates).
+    if let Some(window) = extract_window(utterance) {
+        params.insert("window".to_string(), Value::String(window));
+    }
+
+    Value::Object(params)
+}
+
+/// Whether a catalog `route` is one that takes a `symbol` parameter.
+///
+/// Conservative and structural: the equity / crypto / etf / index / derivative
+/// data families are all symbol-keyed. Anything else (e.g. an economy macro
+/// route) does not get a synthesized symbol.
+fn route_takes_symbol(route: &str) -> bool {
+    const SYMBOL_PREFIXES: &[&str] = &[
+        "equity/",
+        "crypto/",
+        "etf/",
+        "index/",
+        "currency/",
+        "derivatives/",
+        "fixedincome/",
+    ];
+    SYMBOL_PREFIXES
+        .iter()
+        .any(|prefix| route.starts_with(prefix))
+}
+
+/// Extract the first ticker-shaped token (1–5 ASCII uppercase letters) from the
+/// utterance, skipping common English stop-words that happen to be uppercase
+/// (e.g. a leading "I"). Returns `None` when no plausible ticker is present.
+fn extract_symbol(utterance: &str) -> Option<String> {
+    utterance
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|token| is_ticker_shaped(token))
+        .map(ToString::to_string)
+}
+
+/// Whether `token` looks like a ticker: 1–5 chars, all ASCII uppercase letters,
+/// and not a trivial English word that would be a false positive.
+fn is_ticker_shaped(token: &str) -> bool {
+    let len = token.chars().count();
+    (1..=5).contains(&len)
+        && token.chars().all(|c| c.is_ascii_uppercase())
+        && !TICKER_STOP_WORDS.contains(&token)
+}
+
+/// Uppercase English words that look like tickers but almost never are.
+const TICKER_STOP_WORDS: &[&str] = &["I", "A", "AN", "THE", "OK", "PE", "P"];
+
+/// Coarse relative-window phrases mapped to their normalized window codes.
+const RELATIVE_WINDOWS: &[(&str, &str)] = &[
+    ("last month", "1m"),
+    ("past month", "1m"),
+    ("last week", "1w"),
+    ("past week", "1w"),
+    ("last year", "1y"),
+    ("past year", "1y"),
+    ("year to date", "ytd"),
+    ("ytd", "ytd"),
+];
+
+/// Extract a coarse relative window phrase from the utterance.
+fn extract_window(utterance: &str) -> Option<String> {
+    let lower = utterance.to_ascii_lowercase();
+    RELATIVE_WINDOWS
+        .iter()
+        .find(|(phrase, _)| lower.contains(phrase))
+        .map(|(_, code)| (*code).to_string())
 }
 
 #[cfg(test)]
@@ -166,12 +376,12 @@ mod tests {
         let resolved = resolve_routes("How did AAPL do and what do we know?", &model);
         assert!(
             resolved
-                .data
+                .data_routes()
                 .contains(&"equity/price/historical".to_string())
         );
         assert!(resolved.knowledge.contains(&"tdw.kg.answer".to_string()));
         assert!(
-            !resolved.data.iter().any(|r| r.contains("not/a/real")),
+            !resolved.data.iter().any(|r| r.route.contains("not/a/real")),
             "hallucinated route is guarded out: {resolved:?}"
         );
     }
@@ -200,5 +410,110 @@ mod tests {
         let model = ScriptedModel("equity/price/historical\nequity/price/historical");
         let resolved = resolve_routes("AAPL?", &model);
         assert_eq!(resolved.data.len(), 1);
+    }
+
+    // ── Gemini #438 CRITICAL: parameterized fetch ───────────────────────────
+
+    #[test]
+    fn parameterized_query_yields_symbol_in_params() {
+        // "AAPL price last month" must resolve a data route whose params carry
+        // the symbol (so the DataPlane fetch is no longer parameterless).
+        let model = ScriptedModel("equity/price/historical");
+        let resolved = resolve_routes("AAPL price last month", &model);
+        let route = resolved
+            .data
+            .iter()
+            .find(|r| r.route == "equity/price/historical")
+            .expect("route resolved");
+        assert!(
+            !route.params_empty(),
+            "params must be non-empty for a parameterized query: {:?}",
+            route.params
+        );
+        assert_eq!(
+            route.params.get("symbol").and_then(Value::as_str),
+            Some("AAPL"),
+            "symbol extracted from the utterance: {:?}",
+            route.params
+        );
+        // The relative window is captured too.
+        assert_eq!(
+            route.params.get("window").and_then(Value::as_str),
+            Some("1m"),
+            "relative window extracted: {:?}",
+            route.params
+        );
+    }
+
+    #[test]
+    fn model_inline_params_win_over_extraction() {
+        // The model may pin params explicitly; those override the extraction.
+        let model = ScriptedModel("equity/price/historical {\"symbol\":\"MSFT\",\"limit\":5}");
+        let resolved = resolve_routes("how did AAPL do", &model);
+        let route = &resolved.data[0];
+        assert_eq!(
+            route.params.get("symbol").and_then(Value::as_str),
+            Some("MSFT"),
+            "model-supplied symbol wins: {:?}",
+            route.params
+        );
+        assert_eq!(route.params.get("limit").and_then(Value::as_i64), Some(5));
+    }
+
+    #[test]
+    fn extract_params_skips_symbol_for_non_symbol_routes() {
+        // A macro/economy route is not symbol-keyed, so no symbol is synthesized
+        // even when the utterance contains an uppercase token.
+        let params = extract_params("economy/cpi", "What is US CPI doing?");
+        assert!(
+            params.get("symbol").is_none(),
+            "non-symbol route gets no symbol: {params:?}"
+        );
+    }
+
+    // ── Gemini #438 MEDIUM: robust list trimmer ─────────────────────────────
+
+    #[test]
+    fn numbered_and_backticked_list_formats_are_kept() {
+        // The previous trimmer dropped numbered (`1.`) and backticked items.
+        let model = ScriptedModel(
+            "1. equity/price/historical\n2) equity/profile\n`tdw.kg.answer`\n- \"tdw.kg.why\"",
+        );
+        let resolved = resolve_routes("AAPL deep dive", &model);
+        let routes = resolved.data_routes();
+        assert!(
+            routes.contains(&"equity/price/historical".to_string()),
+            "numbered '1.' item kept: {routes:?}"
+        );
+        assert!(
+            routes.contains(&"equity/profile".to_string()),
+            "numbered '2)' item kept: {routes:?}"
+        );
+        assert!(
+            resolved.knowledge.contains(&"tdw.kg.answer".to_string()),
+            "backticked verb kept: {:?}",
+            resolved.knowledge
+        );
+        assert!(
+            resolved.knowledge.contains(&"tdw.kg.why".to_string()),
+            "quoted verb kept: {:?}",
+            resolved.knowledge
+        );
+    }
+
+    #[test]
+    fn clean_candidate_strips_decorations() {
+        assert_eq!(
+            clean_candidate("1. equity/price/historical"),
+            "equity/price/historical"
+        );
+        assert_eq!(clean_candidate("2) equity/profile"), "equity/profile");
+        assert_eq!(clean_candidate("- equity/quote"), "equity/quote");
+        assert_eq!(clean_candidate("`tdw.kg.answer`"), "tdw.kg.answer");
+        assert_eq!(clean_candidate("\"tdw.kg.why\""), "tdw.kg.why");
+        assert_eq!(
+            clean_candidate("  equity/price/historical  "),
+            "equity/price/historical"
+        );
     }
 }
