@@ -157,6 +157,47 @@ impl Default for CapmParams {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NoParams {}
 
+/// Parameters for the `quantile` statistic: the fraction in `[0, 1]` at which to
+/// read the empirical quantile (e.g. `0.5` for the median).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct QuantileParams {
+    /// Quantile fraction in `[0, 1]`; clamped into range before use.
+    #[serde(default = "f0_5")]
+    pub quantile: f64,
+}
+
+const fn f0_5() -> f64 {
+    0.5
+}
+
+impl Default for QuantileParams {
+    fn default() -> Self {
+        Self { quantile: 0.5 }
+    }
+}
+
+/// Parameters for the augmented Dickey-Fuller unit-root test.
+///
+/// Carries the augmentation lag order. The series under test is supplied via the
+/// dispatch envelope's `data` / `source` (the standard single-series input), not
+/// duplicated here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UnitRootTestParams {
+    /// Number of lagged-difference augmentation terms (default `1`).
+    #[serde(default = "d1")]
+    pub lags: usize,
+}
+
+const fn d1() -> usize {
+    1
+}
+
+impl Default for UnitRootTestParams {
+    fn default() -> Self {
+        Self { lags: 1 }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{SharpeParams, SortinoParams, VarParams, VolatilityParams};

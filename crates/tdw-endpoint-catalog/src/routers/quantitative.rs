@@ -20,9 +20,11 @@
 //! every single-series route additionally supports the nested `source` form.
 
 use schemars::{Schema, schema_for};
-use tdw_analytics_quant::metrics::{CapmRow, DrawdownRow, JarqueBeraRow};
+use tdw_analytics_econometrics::diagnostics::UnitRootResult;
+use tdw_analytics_quant::metrics::{CapmRow, DrawdownRow, JarqueBeraRow, NormalityRow, SummaryRow};
 use tdw_analytics_quant::params::{
-    CapmParams, NoParams, OmegaParams, SharpeParams, SortinoParams, VarParams, VolatilityParams,
+    CapmParams, NoParams, OmegaParams, QuantileParams, SharpeParams, SortinoParams,
+    UnitRootTestParams, VarParams, VolatilityParams,
 };
 
 use crate::{CatalogEntry, EndpointKind};
@@ -57,6 +59,12 @@ fn capm_params() -> Schema {
 fn no_params() -> Schema {
     schema_for!(NoParams)
 }
+fn quantile_params() -> Schema {
+    schema_for!(QuantileParams)
+}
+fn unitroot_params() -> Schema {
+    schema_for!(UnitRootTestParams)
+}
 
 // --- Multi-field output-row schema closures. ---------------------------------
 
@@ -68,6 +76,15 @@ fn drawdown_model() -> Schema {
 }
 fn jarque_bera_model() -> Schema {
     schema_for!(JarqueBeraRow)
+}
+fn summary_model() -> Schema {
+    schema_for!(SummaryRow)
+}
+fn normality_model() -> Schema {
+    schema_for!(NormalityRow)
+}
+fn unitroot_model() -> Schema {
+    schema_for!(UnitRootResult)
 }
 
 /// Construct one non-chartable `quantitative/*` Compute entry with no
@@ -168,6 +185,60 @@ const ROUTES: &[RouteSpec] = &[
         no_params,
         jarque_bera_model,
         "Jarque-Bera normality statistic and its chi-squared p-value.",
+    ),
+    (
+        "quantitative/summary",
+        no_params,
+        summary_model,
+        "Descriptive summary: count, mean, std, variance, skew, kurtosis, quartiles.",
+    ),
+    (
+        "quantitative/normality",
+        no_params,
+        normality_model,
+        "Normality diagnostics: skew, kurtosis, and the Jarque-Bera statistic/p-value.",
+    ),
+    (
+        "quantitative/unitroot_test",
+        unitroot_params,
+        unitroot_model,
+        "Augmented Dickey-Fuller unit-root test (gamma and its t-statistic).",
+    ),
+    (
+        "quantitative/stats/mean",
+        no_params,
+        scalar_model,
+        "Arithmetic mean of the value series.",
+    ),
+    (
+        "quantitative/stats/variance",
+        no_params,
+        scalar_model,
+        "Unbiased (n-1) sample variance of the value series.",
+    ),
+    (
+        "quantitative/stats/stdev",
+        no_params,
+        scalar_model,
+        "Unbiased (n-1) sample standard deviation of the value series.",
+    ),
+    (
+        "quantitative/stats/skew",
+        no_params,
+        scalar_model,
+        "Adjusted Fisher-Pearson sample skewness of the value series.",
+    ),
+    (
+        "quantitative/stats/kurtosis",
+        no_params,
+        scalar_model,
+        "Bias-corrected sample excess kurtosis of the value series.",
+    ),
+    (
+        "quantitative/stats/quantile",
+        quantile_params,
+        scalar_model,
+        "Type-7 linear-interpolation quantile of the value series.",
     ),
 ];
 

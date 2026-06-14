@@ -23,11 +23,13 @@ use serde_json::Value;
 use tdw_core::Error;
 use tdw_domain::{MarketDataBar, TimeGranularity};
 
-use tdw_analytics_technical::indicators::{bands, moving_average, oscillators, trend, volume};
+use tdw_analytics_technical::indicators::{
+    advanced, bands, moving_average, oscillators, trend, volume,
+};
 use tdw_analytics_technical::params::{
-    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, DonchianParams, FisherParams,
-    HmaParams, IchimokuParams, KeltnerParams, LengthParams, MacdParams, RocParams,
-    StochasticParams, SupertrendParams,
+    AdoscParams, AdxParams, AroonParams, BollingerParams, CciParams, ClenowParams, ConesParams,
+    DonchianParams, FibParams, FisherParams, HmaParams, IchimokuParams, KeltnerParams,
+    LengthParams, MacdParams, RocParams, RrgParams, StochasticParams, SupertrendParams,
 };
 
 /// A compute implementation: parse the route's typed params from `params`, run
@@ -67,6 +69,12 @@ pub fn compute_registry() -> BTreeMap<&'static str, ComputeFn> {
     registry.insert("technical/adosc", compute_adosc);
     registry.insert("technical/vortex", compute_vortex);
     registry.insert("technical/supertrend", compute_supertrend);
+    registry.insert("technical/cg", compute_cg);
+    registry.insert("technical/clenow", compute_clenow);
+    registry.insert("technical/demark", compute_demark);
+    registry.insert("technical/fib", compute_fib);
+    registry.insert("technical/cones", compute_cones);
+    registry.insert("technical/relative_rotation", compute_relative_rotation);
     registry
 }
 
@@ -320,6 +328,37 @@ fn compute_vortex(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, 
 fn compute_supertrend(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
     let p: SupertrendParams = parse_params(params)?;
     rows_struct(&trend::supertrend(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_cg(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: LengthParams = parse_params(params)?;
+    rows_scalar(&advanced::cg(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_clenow(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: ClenowParams = parse_params(params)?;
+    rows_scalar(&advanced::clenow(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_demark(bars: &[MarketDataBar], _params: &Value) -> Result<Vec<Value>, Error> {
+    rows_struct(&advanced::demark(bars).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_fib(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: FibParams = parse_params(params)?;
+    rows_struct(&advanced::fib(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+fn compute_cones(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: ConesParams = parse_params(params)?;
+    rows_struct(&advanced::cones(bars, p).map_err(|e| map_period_err(&e))?)
+}
+
+/// RRG needs the benchmark close series inline in `params.benchmark`; it is a
+/// paired-series study and reads its second series from the typed params.
+fn compute_relative_rotation(bars: &[MarketDataBar], params: &Value) -> Result<Vec<Value>, Error> {
+    let p: RrgParams = parse_params(params)?;
+    rows_struct(&advanced::relative_rotation(bars, p).map_err(|e| map_period_err(&e))?)
 }
 
 #[cfg(test)]

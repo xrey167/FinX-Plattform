@@ -91,6 +91,66 @@ pub struct CointegrationParams {
     pub x: Vec<f64>,
 }
 
+/// Parameters for the Breusch-Godfrey residual-autocorrelation route: the OLS
+/// inputs (`y`, design `x`) plus the number of residual lags to test.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ResidualAutocorrelationParams {
+    /// Response vector (one value per observation).
+    #[serde(default)]
+    pub y: Vec<f64>,
+    /// Design columns: `x[j]` is the `j`-th regressor, each the same length as
+    /// `y`. The intercept is added separately, so do not include a column of
+    /// ones.
+    #[serde(default)]
+    pub x: Vec<Vec<f64>>,
+    /// Whether to prepend an intercept column of ones to the primary regression
+    /// (default `true`).
+    #[serde(default = "default_true")]
+    pub intercept: bool,
+    /// Number of residual lags to include in the auxiliary regression (default
+    /// `1`).
+    #[serde(default = "d1")]
+    pub lags: usize,
+}
+
+impl Default for ResidualAutocorrelationParams {
+    fn default() -> Self {
+        Self {
+            y: Vec::new(),
+            x: Vec::new(),
+            intercept: true,
+            lags: 1,
+        }
+    }
+}
+
+/// Parameters for the panel-regression family.
+///
+/// A long-format panel where every observation carries its entity id, the
+/// response `y`, and the regressor row `x`. All vectors are positionally aligned
+/// (one entry per observation).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PanelParams {
+    /// Entity (cross-section unit) id for each observation; observations sharing
+    /// an id belong to the same panel entity.
+    #[serde(default)]
+    pub entity: Vec<i64>,
+    /// Time-period id for each observation (used by the Fama-MacBeth estimator,
+    /// which runs one cross-sectional regression per period). Optional for the
+    /// other estimators; when omitted the Fama-MacBeth route falls back to the
+    /// per-entity observation position as the period index.
+    #[serde(default)]
+    pub time: Vec<i64>,
+    /// Response value for each observation.
+    #[serde(default)]
+    pub y: Vec<f64>,
+    /// Regressor row for each observation: `x[t]` is the length-`k` regressor
+    /// vector at observation `t`. Do not include an intercept column; the
+    /// estimators add one where their definition calls for it.
+    #[serde(default)]
+    pub x: Vec<Vec<f64>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ColumnsParams, GrangerParams, OlsParams};

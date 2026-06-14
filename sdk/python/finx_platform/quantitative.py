@@ -8,11 +8,122 @@ from __future__ import annotations
 from ._client import Client, FinXObject
 
 
+class QuantitativeStatsNamespace:
+    """Accessor for the ``quantitative/stats`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def kurtosis(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Bias-corrected sample excess kurtosis of the value series.
+
+        Route: ``quantitative/stats/kurtosis``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/kurtosis' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def mean(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Arithmetic mean of the value series.
+
+        Route: ``quantitative/stats/mean``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/mean' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def quantile(
+        self,
+        *,
+        quantile: float | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Type-7 linear-interpolation quantile of the value series.
+
+        Route: ``quantitative/stats/quantile``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            quantile: Quantile fraction in `[0, 1]`; clamped into range before use.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/quantile' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def skew(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Adjusted Fisher-Pearson sample skewness of the value series.
+
+        Route: ``quantitative/stats/skew``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/skew' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def stdev(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Unbiased (n-1) sample standard deviation of the value series.
+
+        Route: ``quantitative/stats/stdev``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/stdev' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def variance(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Unbiased (n-1) sample variance of the value series.
+
+        Route: ``quantitative/stats/variance``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/stats/variance' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
 class QuantitativeNamespace:
     """Accessor for the ``quantitative`` route namespace."""
 
     def __init__(self, client: Client) -> None:
         self._client = client
+        self.stats = QuantitativeStatsNamespace(client)
 
     def calmar_ratio(
         self,
@@ -126,6 +237,22 @@ class QuantitativeNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def normality(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Normality diagnostics: skew, kurtosis, and the Jarque-Bera statistic/p-value.
+
+        Route: ``quantitative/normality``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/normality' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def omega_ratio(
         self,
         *,
@@ -217,6 +344,46 @@ class QuantitativeNamespace:
         """
         raise NotImplementedError(
             "compute route 'quantitative/sortino_ratio' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def summary(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Descriptive summary: count, mean, std, variance, skew, kurtosis, quartiles.
+
+        Route: ``quantitative/summary``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/summary' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def unitroot_test(
+        self,
+        *,
+        lags: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Augmented Dickey-Fuller unit-root test (gamma and its t-statistic).
+
+        Route: ``quantitative/unitroot_test``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            lags: Number of lagged-difference augmentation terms (default `1`).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'quantitative/unitroot_test' is not exposed over REST; "
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 

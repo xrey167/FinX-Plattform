@@ -14,6 +14,34 @@ class EconometricsNamespace:
     def __init__(self, client: Client) -> None:
         self._client = client
 
+    def autocorrelation(
+        self,
+        *,
+        intercept: bool | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Durbin-Watson residual-autocorrelation statistic of an OLS fit.
+
+        Route: ``econometrics/autocorrelation``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            intercept: Whether to prepend an intercept column of ones (default `true`).
+            x: Design columns: `x[j]` is the `j`-th regressor, each the same length as `y`. The intercept is added separately (see `intercept`), so do not include a column of ones.
+            y: Response vector (one value per observation).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/autocorrelation' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def cointegration(
         self,
         *,
@@ -117,6 +145,272 @@ class EconometricsNamespace:
         """
         raise NotImplementedError(
             "compute route 'econometrics/ols' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def ols_regression(
+        self,
+        *,
+        intercept: bool | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Ordinary least squares: the estimated coefficient table only.
+
+        Route: ``econometrics/ols_regression``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            intercept: Whether to prepend an intercept column of ones (default `true`).
+            x: Design columns: `x[j]` is the `j`-th regressor, each the same length as `y`. The intercept is added separately (see `intercept`), so do not include a column of ones.
+            y: Response vector (one value per observation).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/ols_regression' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def ols_regression_summary(
+        self,
+        *,
+        intercept: bool | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Ordinary least squares: the full summary (coefficients plus R2, F, DW).
+
+        Route: ``econometrics/ols_regression_summary``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            intercept: Whether to prepend an intercept column of ones (default `true`).
+            x: Design columns: `x[j]` is the `j`-th regressor, each the same length as `y`. The intercept is added separately (see `intercept`), so do not include a column of ones.
+            y: Response vector (one value per observation).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/ols_regression_summary' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_between(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Between panel estimator (OLS on the entity means).
+
+        Route: ``econometrics/panel_between``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_between' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_first_difference(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """First-difference panel estimator (OLS on within-entity differences).
+
+        Route: ``econometrics/panel_first_difference``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_first_difference' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_fixed(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """One-way fixed-effects (within) panel estimator.
+
+        Route: ``econometrics/panel_fixed``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_fixed' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_fmac(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Fama-MacBeth two-pass panel estimator (per-period cross-sections averaged).
+
+        Route: ``econometrics/panel_fmac``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_fmac' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_pooled(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Pooled OLS panel estimator (ignores the entity structure).
+
+        Route: ``econometrics/panel_pooled``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_pooled' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def panel_random_effects(
+        self,
+        *,
+        entity: str | None = None,
+        time: str | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Swamy-Arora random-effects (feasible-GLS) panel estimator.
+
+        Route: ``econometrics/panel_random_effects``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            entity: Entity (cross-section unit) id for each observation; observations sharing an id belong to the same panel entity.
+            time: Time-period id for each observation (used by the Fama-MacBeth estimator, which runs one cross-sectional regression per period). Optional for the other estimators; when omitted the Fama-MacBeth route falls back to the per-entity observation position as the period index.
+            x: Regressor row for each observation: `x[t]` is the length-`k` regressor vector at observation `t`. Do not include an intercept column; the estimators add one where their definition calls for it.
+            y: Response value for each observation.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/panel_random_effects' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def residual_autocorrelation(
+        self,
+        *,
+        intercept: bool | None = None,
+        lags: int | None = None,
+        x: str | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Breusch-Godfrey LM test for residual serial correlation.
+
+        Route: ``econometrics/residual_autocorrelation``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            intercept: Whether to prepend an intercept column of ones to the primary regression (default `true`).
+            lags: Number of residual lags to include in the auxiliary regression (default `1`).
+            x: Design columns: `x[j]` is the `j`-th regressor, each the same length as `y`. The intercept is added separately, so do not include a column of ones.
+            y: Response vector (one value per observation).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'econometrics/residual_autocorrelation' is not exposed over REST; "
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
