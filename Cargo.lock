@@ -5460,6 +5460,7 @@ dependencies = [
  "tdw-analytics-technical",
  "tdw-core",
  "tdw-domain",
+ "tdw-quant-options",
 ]
 
 [[package]]
@@ -6625,6 +6626,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-quant-options"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-domain",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tdw-replay"
 version = "0.1.0"
 dependencies = [
@@ -6804,6 +6816,7 @@ dependencies = [
  "tdw-provider-ws",
  "tdw-provider-ws-mock",
  "tdw-provider-yahoo",
+ "tdw-quant-options",
  "tdw-replay",
  "tdw-rollout",
  "tdw-runtime",

@@ -30,6 +30,7 @@ pub mod fetch_policy;
 pub mod function_enqueue;
 #[cfg(feature = "workspace-route")]
 mod knowledge_graph;
+mod options_compute;
 mod policy;
 mod portfolio_compute;
 mod provider_resolve;

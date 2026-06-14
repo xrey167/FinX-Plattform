@@ -56,7 +56,9 @@ use crate::{
     SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
     mask_json_response,
 };
-use crate::{econometrics_compute, portfolio_compute, quant_compute, technical_compute};
+use crate::{
+    econometrics_compute, options_compute, portfolio_compute, quant_compute, technical_compute,
+};
 
 #[async_trait]
 impl Dispatcher for AppState {
@@ -573,6 +575,11 @@ async fn dispatch_compute(
     if portfolio_compute::owns_route(route) {
         return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
             portfolio_compute::run_compute(route, params)
+        });
+    }
+    if options_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            options_compute::run_compute(route, params)
         });
     }
 
@@ -5015,16 +5022,20 @@ fn service_tool_registry() -> ToolRegistry {
 }
 
 /// Map a Compute-tool name to its catalog route by swapping `.` separators back
-/// to `/`, but only for the analytics namespaces (`technical`, `quantitative`,
-/// `econometrics`, `portfolio`). Returns `None` for any other tool name (e.g.
-/// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`) round-trip:
-/// the tool name `quantitative.stats.mean` maps back by restoring every inner
-/// separator after the namespace.
+/// to `/`, but only for the compute namespaces (`technical`, `quantitative`,
+/// `econometrics`, `portfolio`, and the `derivatives/pricing/*` option-pricing
+/// routes under `derivatives`). Returns `None` for any other tool name (e.g.
+/// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`,
+/// `derivatives/pricing/black_scholes`) round-trip: the tool name
+/// `quantitative.stats.mean` maps back by restoring every inner separator after
+/// the namespace. Only Compute routes are registered as tools, so a `derivatives`
+/// *fetch* route (e.g. `derivatives/options/chains`) is never a registered tool
+/// name and so never reaches this mapping.
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
     if matches!(
         namespace,
-        "technical" | "quantitative" | "econometrics" | "portfolio"
+        "technical" | "quantitative" | "econometrics" | "portfolio" | "derivatives"
     ) {
         Some(format!("{namespace}/{}", member.replace('.', "/")))
     } else {
@@ -5978,6 +5989,11 @@ mod tests {
                 assert!(
                     portfolio_compute::compute_registry().contains_key(route.as_str()),
                     "portfolio compute route {route} has no registered implementation"
+                );
+            } else if options_compute::owns_route(route) {
+                assert!(
+                    options_compute::compute_registry().contains_key(route.as_str()),
+                    "option-pricing compute route {route} has no registered implementation"
                 );
             } else {
                 let result = technical_compute::run_compute(route, &bars, &json!({}));
