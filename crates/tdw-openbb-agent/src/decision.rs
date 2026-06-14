@@ -67,25 +67,44 @@ fn fetchable(request: &QueryRequest, include_secondary: bool) -> Vec<&Widget> {
 /// `widget-dashboard-search` feature: when `true`, secondary (dashboard-context)
 /// widgets are fetched after the primary ones.
 ///
-/// Multi-round: the number of folded `tool` results already in the conversation
-/// is treated as the count of widgets already fetched; that many leading widgets
-/// are skipped and the remainder requested. An empty result means every widget
-/// is satisfied and the agent should answer.
+/// Multi-round: the number of folded `tool` results **for the current user
+/// turn** is treated as the count of widgets already fetched; that many leading
+/// widgets are skipped and the remainder requested. An empty result means every
+/// widget is satisfied and the agent should answer.
+///
+/// The count is scoped to the current turn — the `tool` results since the last
+/// `human` message — rather than the whole conversation. A prior turn's folded
+/// results would otherwise inflate the count and make this turn mis-skip (and so
+/// wrongly under-fetch) its widgets (G004 review fix, Gemini #447).
 #[must_use]
 pub fn widget_data_requests(
     request: &QueryRequest,
     include_secondary: bool,
 ) -> Vec<WidgetDataRequest> {
-    let already_fetched = request
-        .messages
-        .iter()
-        .filter(|message| message.role == crate::request::MessageRole::Tool)
-        .count();
+    let already_fetched = tool_results_this_turn(request);
     fetchable(request, include_secondary)
         .into_iter()
         .skip(already_fetched)
         .filter_map(request_for)
         .collect()
+}
+
+/// Count the folded `tool` results belonging to the **current** user turn: the
+/// `tool` messages that appear after the last `human` message (or, if there is
+/// no `human` message, across the whole conversation).
+///
+/// Scoping to the current turn keeps the multi-round skip count from being
+/// inflated by a *previous* turn's folded results, which would make the agent
+/// under-fetch this turn's widgets (G004 review fix, Gemini #447).
+fn tool_results_this_turn(request: &QueryRequest) -> usize {
+    use crate::request::MessageRole;
+    request
+        .messages
+        .iter()
+        .rev()
+        .take_while(|message| message.role != MessageRole::Human)
+        .filter(|message| message.role == MessageRole::Tool)
+        .count()
 }
 
 /// Decide whether the agent should request the **first** primary widget's data
@@ -278,6 +297,77 @@ mod tests {
         };
         let batch = widget_data_requests(&request, false);
         assert_eq!(batch.len(), 1, "first widget already fetched");
+        assert_eq!(batch[0].widget_id, "w-2");
+    }
+
+    #[test]
+    fn multi_turn_counts_only_current_turn_tool_results() {
+        // A *prior* user turn fetched a widget (its `tool` result is folded in),
+        // then the user asks a new question this turn. The previous turn's tool
+        // result must NOT inflate the skip count: with two primary widgets and
+        // ZERO tool results in the current turn, both widgets are requested.
+        let request = QueryRequest {
+            messages: vec![
+                human("turn 1: show AAPL"),
+                Message {
+                    role: MessageRole::Tool,
+                    content: json!({"rows": [{"close": 1}]}),
+                },
+                Message {
+                    role: MessageRole::Ai,
+                    content: json!("AAPL closed at 1."),
+                },
+                human("turn 2: now compare AAPL and MSFT"),
+            ],
+            widgets: Widgets {
+                primary: vec![widget("w-1", json!({})), widget("w-2", json!({}))],
+                secondary: vec![],
+            },
+            ..QueryRequest::default()
+        };
+        // Scoped count: zero tool results since the last `human`.
+        assert_eq!(tool_results_this_turn(&request), 0);
+        let batch = widget_data_requests(&request, false);
+        assert_eq!(
+            batch.len(),
+            2,
+            "prior-turn tool result must not skip this turn's widgets"
+        );
+        assert_eq!(batch[0].widget_id, "w-1");
+        assert_eq!(batch[1].widget_id, "w-2");
+    }
+
+    #[test]
+    fn multi_turn_skips_only_current_turn_fetches() {
+        // Prior turn fetched once; this turn has already folded ONE result for
+        // its first widget. Only the current turn's single result counts, so the
+        // second (remaining) widget of this turn is requested.
+        let request = QueryRequest {
+            messages: vec![
+                human("turn 1"),
+                Message {
+                    role: MessageRole::Tool,
+                    content: json!({"rows": []}),
+                },
+                Message {
+                    role: MessageRole::Ai,
+                    content: json!("ok"),
+                },
+                human("turn 2: compare"),
+                Message {
+                    role: MessageRole::Tool,
+                    content: json!({"rows": []}),
+                },
+            ],
+            widgets: Widgets {
+                primary: vec![widget("w-1", json!({})), widget("w-2", json!({}))],
+                secondary: vec![],
+            },
+            ..QueryRequest::default()
+        };
+        assert_eq!(tool_results_this_turn(&request), 1);
+        let batch = widget_data_requests(&request, false);
+        assert_eq!(batch.len(), 1, "only this turn's first widget is fetched");
         assert_eq!(batch[0].widget_id, "w-2");
     }
 
