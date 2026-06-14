@@ -299,13 +299,11 @@ pub fn relative_rotation(bars: &[Bar], params: RrgParams) -> Result<Vec<RrgRow>>
     let rs: Vec<f64> = bars
         .iter()
         .zip(benchmark.iter())
-        .map(|(bar, &bench)| {
-            if bench == 0.0 {
-                0.0
-            } else {
-                bar.close / bench
-            }
-        })
+        .map(
+            |(bar, &bench)| {
+                if bench == 0.0 { 0.0 } else { bar.close / bench }
+            },
+        )
         .collect();
 
     // RS-Ratio: rolling z-score of rs, centered at 100.

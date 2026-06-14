@@ -468,7 +468,11 @@ pub fn fama_macbeth(
         } else {
             0.0
         };
-        let t_stat = if std_error > 0.0 { mean / std_error } else { 0.0 };
+        let t_stat = if std_error > 0.0 {
+            mean / std_error
+        } else {
+            0.0
+        };
         coefficients.push(Coefficient {
             estimate: mean,
             std_error,
