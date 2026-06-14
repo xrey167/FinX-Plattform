@@ -20,6 +20,15 @@
 //!   restricted (own-lags) and unrestricted (own + `x`-lags) OLS model.
 //! - [`cointegration::engle_granger`] — Engle-Granger (1987) step one (the
 //!   cointegrating regression) plus a documented residual stationarity score.
+//! - [`diagnostics::augmented_dickey_fuller`] — the ADF unit-root regression
+//!   (statistic and `γ`, no critical-value-table p-value; same documented
+//!   simplification as cointegration).
+//! - [`diagnostics::breusch_godfrey`] — the Breusch-Godfrey serial-correlation
+//!   `LM = n·R²` test of the regression residuals.
+//! - [`panel`] — the long-format panel family (pooled OLS, within / fixed
+//!   effects, between, first difference, Swamy-Arora random effects, and the
+//!   Fama-MacBeth two-pass estimator), each routing its final solve through the
+//!   same OLS core.
 //!
 //! # Numeric approach
 //!
@@ -42,11 +51,11 @@
 //!   residual stationarity with a named Dickey-Fuller `ρ` slope + t-statistic
 //!   rather than a `MacKinnon`-table p-value. See [`cointegration`] for the full
 //!   rationale.
-//! - **Formal unit-root tests** (a standalone ADF / KPSS route) are deliberately
-//!   out of scope: ADF needs the same lag-augmentation regression and
-//!   critical-value tables the cointegration module already documents away, and
-//!   KPSS needs a long-run-variance estimator. The residual stationarity score
-//!   inside [`cointegration`] is the one unit-root-flavored statistic shipped.
+//! - **ADF** ([`diagnostics::augmented_dickey_fuller`]) ships the
+//!   lag-augmentation regression and reports the `γ` t-statistic, but not the
+//!   `MacKinnon`-table p-value (the same critical-value-table omission the
+//!   cointegration module documents). A formal **KPSS** test remains out of scope
+//!   (it needs a long-run-variance estimator).
 //!
 //! # Clean-room provenance
 //!
@@ -59,10 +68,12 @@
 
 pub mod cointegration;
 pub mod correlation;
+pub mod diagnostics;
 pub mod error;
 pub mod granger;
 pub mod linalg;
 pub mod ols;
+pub mod panel;
 pub mod params;
 
 pub use error::EconometricsError;

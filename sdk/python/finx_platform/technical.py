@@ -188,6 +188,96 @@ class TechnicalNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def cg(
+        self,
+        *,
+        length: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Ehlers Center of Gravity oscillator over the close series.
+
+        Route: ``technical/cg``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            length: Lookback window in bars.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/cg' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def clenow(
+        self,
+        *,
+        period: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Clenow volatility-adjusted momentum (annualized log-price slope x R-squared).
+
+        Route: ``technical/clenow``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            period: Lookback window for the log-price/time regression.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/clenow' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def cones(
+        self,
+        *,
+        lower_q: float | None = None,
+        upper_q: float | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Volatility cones: realized-volatility distribution across horizon windows.
+
+        Route: ``technical/cones``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            lower_q: Lower realized-volatility quantile (fraction in `[0, 1]`).
+            upper_q: Upper realized-volatility quantile (fraction in `[0, 1]`).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/cones' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def demark(
+        self,
+        **kwargs: object,
+    ) -> FinXObject:
+        """DeMark TD-Sequential setup count (+/-1..9).
+
+        Route: ``technical/demark``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/demark' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def donchian(
         self,
         *,
@@ -233,6 +323,30 @@ class TechnicalNamespace:
         """
         raise NotImplementedError(
             "compute route 'technical/ema' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def fib(
+        self,
+        *,
+        period: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Fibonacci retracement levels over the window swing high/low.
+
+        Route: ``technical/fib``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            period: Lookback window for the swing high/low (in bars). `0` uses the whole series.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/fib' is not exposed over REST; "
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
@@ -415,6 +529,32 @@ class TechnicalNamespace:
         """
         raise NotImplementedError(
             "compute route 'technical/obv' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def relative_rotation(
+        self,
+        *,
+        benchmark: str | None = None,
+        length: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Relative Rotation Graph RS-Ratio and RS-Momentum versus a benchmark.
+
+        Route: ``technical/relative_rotation``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            benchmark: Benchmark close series, positionally aligned with the asset bars. The relative-strength line is `asset_close / benchmark_close`.
+            length: Smoothing window (in bars) for the RS-Ratio mean/standard-deviation normalisation and the RS-Momentum rate of change.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'technical/relative_rotation' is not exposed over REST; "
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 

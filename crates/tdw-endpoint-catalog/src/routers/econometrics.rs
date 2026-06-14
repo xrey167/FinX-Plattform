@@ -21,10 +21,13 @@
 
 use schemars::{Schema, schema_for};
 use tdw_analytics_econometrics::cointegration::CointegrationResult;
+use tdw_analytics_econometrics::diagnostics::ResidualAutocorrelationResult;
 use tdw_analytics_econometrics::granger::GrangerResult;
-use tdw_analytics_econometrics::ols::OlsSummary;
+use tdw_analytics_econometrics::ols::{AutocorrelationResult, OlsCoefficients, OlsSummary};
+use tdw_analytics_econometrics::panel::PanelSummary;
 use tdw_analytics_econometrics::params::{
-    CointegrationParams, ColumnsParams, GrangerParams, OlsParams,
+    CointegrationParams, ColumnsParams, GrangerParams, OlsParams, PanelParams,
+    ResidualAutocorrelationParams,
 };
 
 use crate::{CatalogEntry, EndpointKind};
@@ -43,6 +46,12 @@ fn granger_params() -> Schema {
 fn cointegration_params() -> Schema {
     schema_for!(CointegrationParams)
 }
+fn residual_autocorrelation_params() -> Schema {
+    schema_for!(ResidualAutocorrelationParams)
+}
+fn panel_params() -> Schema {
+    schema_for!(PanelParams)
+}
 
 // --- Output-model schema closures. -------------------------------------------
 
@@ -54,6 +63,18 @@ fn granger_model() -> Schema {
 }
 fn cointegration_model() -> Schema {
     schema_for!(CointegrationResult)
+}
+fn ols_coefficients_model() -> Schema {
+    schema_for!(OlsCoefficients)
+}
+fn autocorrelation_model() -> Schema {
+    schema_for!(AutocorrelationResult)
+}
+fn residual_autocorrelation_model() -> Schema {
+    schema_for!(ResidualAutocorrelationResult)
+}
+fn panel_model() -> Schema {
+    schema_for!(PanelSummary)
 }
 
 /// Model schema for a route whose row is a numeric vector — the correlation
@@ -116,6 +137,66 @@ const ROUTES: &[RouteSpec] = &[
         cointegration_params,
         cointegration_model,
         "Engle-Granger step one plus a residual stationarity score.",
+    ),
+    (
+        "econometrics/ols_regression",
+        ols_params,
+        ols_coefficients_model,
+        "Ordinary least squares: the estimated coefficient table only.",
+    ),
+    (
+        "econometrics/ols_regression_summary",
+        ols_params,
+        ols_model,
+        "Ordinary least squares: the full summary (coefficients plus R2, F, DW).",
+    ),
+    (
+        "econometrics/autocorrelation",
+        ols_params,
+        autocorrelation_model,
+        "Durbin-Watson residual-autocorrelation statistic of an OLS fit.",
+    ),
+    (
+        "econometrics/residual_autocorrelation",
+        residual_autocorrelation_params,
+        residual_autocorrelation_model,
+        "Breusch-Godfrey LM test for residual serial correlation.",
+    ),
+    (
+        "econometrics/panel_pooled",
+        panel_params,
+        panel_model,
+        "Pooled OLS panel estimator (ignores the entity structure).",
+    ),
+    (
+        "econometrics/panel_fixed",
+        panel_params,
+        panel_model,
+        "One-way fixed-effects (within) panel estimator.",
+    ),
+    (
+        "econometrics/panel_between",
+        panel_params,
+        panel_model,
+        "Between panel estimator (OLS on the entity means).",
+    ),
+    (
+        "econometrics/panel_first_difference",
+        panel_params,
+        panel_model,
+        "First-difference panel estimator (OLS on within-entity differences).",
+    ),
+    (
+        "econometrics/panel_random_effects",
+        panel_params,
+        panel_model,
+        "Swamy-Arora random-effects (feasible-GLS) panel estimator.",
+    ),
+    (
+        "econometrics/panel_fmac",
+        panel_params,
+        panel_model,
+        "Fama-MacBeth two-pass panel estimator (per-period cross-sections averaged).",
     ),
 ];
 
