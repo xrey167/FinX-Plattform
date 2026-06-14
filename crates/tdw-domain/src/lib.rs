@@ -5,14 +5,15 @@ pub mod models;
 
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
-    CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts, CompanyFiling,
-    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
-    EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FilingFile,
-    FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint, FuturesInstrument,
-    HistoricalMarketCap, KeyExecutive, KeyMetrics, LitigationRelease, MacroSeries, NewsArticle,
-    OptionContract, OtcMarketVolume, OwnershipRecord, PricePerformance, RateObservation, Ratios,
-    RevenueSegment, ScreenerRow, SecInstitution, SeriesSearchResult, ShortInterest, SicCode,
-    StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
+    Breakpoint, CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts,
+    CompanyFiling, EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight,
+    EtfEquityExposure, EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn,
+    FilingFile, FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint,
+    FuturesInstrument, HistoricalMarketCap, ImfDiscoveryRecord, KeyExecutive, KeyMetrics,
+    LitigationRelease, MacroSeries, NewsArticle, OptionContract, OtcMarketVolume, OwnershipRecord,
+    PortfolioReturn, PricePerformance, RateObservation, Ratios, RevenueSegment, ScreenerRow,
+    SecInstitution, SeriesSearchResult, ShortInterest, SicCode, StatementKind, SymbolMapping,
+    TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

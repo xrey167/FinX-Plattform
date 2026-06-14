@@ -16,6 +16,7 @@ pub mod economy;
 pub mod equity;
 pub mod etf;
 pub mod fixedincome;
+pub mod imf_utils;
 pub mod index;
 pub mod news;
 pub mod portfolio;

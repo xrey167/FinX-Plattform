@@ -372,6 +372,86 @@ pub struct FactorReturn {
     pub rf: Option<f64>,
 }
 
+/// A single portfolio-return observation from the Ken French Data Library.
+///
+/// Standardizes the portfolio-formation return routes
+/// (`economy/factors/famafrench/{us,regional,country}_portfolio_returns` and
+/// `economy/factors/famafrench/international_index_returns`). The Data Library
+/// publishes these as wide tables — a leading date column followed by one column
+/// per formed portfolio (e.g. `SMALL LoBM`, `BIG HiBM`) or per region/index. To
+/// keep a stable, warehouse-friendly grain, each wide cell becomes one long row:
+/// one (date, portfolio) observation. `value` is a decimal return (the source
+/// publishes percent — the fetcher converts percent → fraction); it is
+/// [`Option`] so the library's missing-value sentinels map to absent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct PortfolioReturn {
+    /// Observation date: `YYYY-MM-DD` (daily) or `YYYY-MM` (monthly).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Formed-portfolio (or region / index) column label, e.g. `"SMALL LoBM"`.
+    #[validate(length(min = 1))]
+    pub portfolio: String,
+    /// Portfolio return for the (date, portfolio) cell, as a decimal fraction.
+    pub value: Option<f64>,
+}
+
+/// A single portfolio-formation breakpoint observation from the Ken French Data
+/// Library.
+///
+/// Standardizes `economy/factors/famafrench/breakpoints`. The breakpoint files
+/// are wide tables: a leading date column, an optional count column, then the
+/// percentile breakpoint columns (e.g. the size or book-to-market deciles). Each
+/// wide cell becomes one long row: one (date, breakpoint) observation. `value`
+/// is [`Option`] so blank / sentinel cells map to absent. Breakpoint values are
+/// the source's native units (the library publishes them as levels, not
+/// percent), so the fetcher carries them through unscaled.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct Breakpoint {
+    /// Observation date: `YYYY-MM-DD` (daily) or `YYYY-MM` (monthly).
+    #[validate(length(min = 1))]
+    pub date: String,
+    /// Breakpoint column label, e.g. `"5"`, `"95"`, or `"Count"`.
+    #[validate(length(min = 1))]
+    pub breakpoint: String,
+    /// Breakpoint value for the (date, breakpoint) cell, in source units.
+    pub value: Option<f64>,
+}
+
+/// A single IMF SDMX discovery record (dataflow, table, dimension, or
+/// presentation-table cell).
+///
+/// Standardizes the `imf_utils/*` SDMX discovery helpers
+/// (`list_dataflows`, `list_tables`, `get_dataflow_dimensions`,
+/// `presentation_table`). The IMF Data Services SDMX-JSON service exposes
+/// `Dataflow` and `DataStructure` discovery shapes that are distinct from the
+/// `CompactData` observation envelope; one record shape serves all four helpers
+/// because they share a discovery grain (an identifier, a human-readable name,
+/// and a handful of variant-specific descriptors). The `kind` field
+/// discriminates the variant; most fields are [`Option`] since each helper
+/// reports a different subset.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ImfDiscoveryRecord {
+    /// Record variant: `"dataflow"`, `"table"`, `"dimension"`, or
+    /// `"presentation_cell"`.
+    #[validate(length(min = 1))]
+    pub kind: String,
+    /// Primary identifier for the record (dataflow id, table id, dimension id,
+    /// or presentation-table cell key).
+    #[validate(length(min = 1))]
+    pub id: String,
+    /// Human-readable name / description, where the service reports one.
+    pub name: Option<String>,
+    /// SDMX dataflow id this record belongs to (set for table / dimension /
+    /// presentation rows; the dataflow's own id for `"dataflow"` records).
+    pub dataflow: Option<String>,
+    /// SDMX `DataStructure` (DSD) id backing the dataflow, when reported.
+    pub structure: Option<String>,
+    /// Dimension position within the SDMX key order (dimension records only).
+    pub position: Option<u32>,
+    /// Presentation-table cell value (presentation rows only).
+    pub value: Option<String>,
+}
+
 /// A scheduled corporate-calendar event (dividend, earnings, or IPO).
 ///
 /// Standardizes the NASDAQ calendar cluster — `equity/calendar/dividends`,
@@ -1194,6 +1274,80 @@ mod tests {
         let json = serde_json::to_string(value).expect("serialize model");
         let back: T = serde_json::from_str(&json).expect("deserialize model");
         assert_eq!(value, &back);
+    }
+
+    #[test]
+    fn portfolio_return_round_trips_and_validates() {
+        let row = PortfolioReturn {
+            date: "2024-06-03".to_string(),
+            portfolio: "SMALL LoBM".to_string(),
+            value: Some(0.0123),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let absent = PortfolioReturn {
+            value: None,
+            ..row.clone()
+        };
+        assert!(absent.validate().is_ok());
+        round_trip(&absent);
+
+        let bad = PortfolioReturn {
+            portfolio: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn breakpoint_round_trips_and_validates() {
+        let row = Breakpoint {
+            date: "2024-06".to_string(),
+            breakpoint: "95".to_string(),
+            value: Some(12.5),
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let bad = Breakpoint {
+            date: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn imf_discovery_record_round_trips_and_validates() {
+        let row = ImfDiscoveryRecord {
+            kind: "dataflow".to_string(),
+            id: "IFS".to_string(),
+            name: Some("International Financial Statistics".to_string()),
+            dataflow: Some("IFS".to_string()),
+            structure: Some("ECOFIN_DSD".to_string()),
+            position: None,
+            value: None,
+        };
+        assert!(row.validate().is_ok());
+        round_trip(&row);
+
+        let dimension = ImfDiscoveryRecord {
+            kind: "dimension".to_string(),
+            id: "FREQ".to_string(),
+            name: Some("Frequency".to_string()),
+            dataflow: Some("IFS".to_string()),
+            structure: Some("ECOFIN_DSD".to_string()),
+            position: Some(1),
+            value: None,
+        };
+        assert!(dimension.validate().is_ok());
+        round_trip(&dimension);
+
+        let bad = ImfDiscoveryRecord {
+            id: String::new(),
+            ..row
+        };
+        assert!(bad.validate().is_err());
     }
 
     #[test]

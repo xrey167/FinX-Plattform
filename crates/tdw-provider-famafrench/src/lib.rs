@@ -17,16 +17,20 @@
 //! and converts each percent value to a decimal fraction.
 
 pub mod catalog;
+pub mod portfolio;
 
 #[cfg(feature = "http")]
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::FamaFrenchHttpFetcher;
+pub use http_fetcher::{
+    FamaFrenchBreakpointsHttpFetcher, FamaFrenchHttpFetcher, FamaFrenchPortfolioHttpFetcher,
+};
 
 pub use catalog::{
     COMMAND, DATASETS, ENDPOINTS, FactorSet, FamaFrenchDataset, FamaFrenchEndpoint, Frequency,
 };
+pub use portfolio::{PortfolioDataset, PortfolioEndpoint, PortfolioKind};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -148,6 +152,66 @@ impl FamaFrenchQuery {
     }
 }
 
+/// Query for a standardized Ken French portfolio-formation / breakpoint route
+/// (OpenBB-parity **P4W9**).
+///
+/// The caller supplies an `economy/factors/famafrench/*` `command` path; the
+/// query resolves it against [`portfolio`] to a concrete
+/// [`portfolio::PortfolioDataset`] (the ZIP archive + inner CSV member + whether
+/// the table holds returns or breakpoints). Like the research-factor route, the
+/// Data Library exposes no server-side filtering, so no shared params are
+/// carried — callers post-filter the returned rows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FamaFrenchPortfolioQuery {
+    /// The resolved `economy/factors/famafrench/*` command path.
+    pub command: String,
+}
+
+impl FamaFrenchPortfolioQuery {
+    /// Build a query for a portfolio / breakpoint `command`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FamaFrenchProviderError::UnknownCommand`] when `command` does
+    /// not resolve to a known portfolio dataset.
+    pub fn new(command: &str) -> Result<Self> {
+        portfolio::resolve(command)
+            .ok_or_else(|| FamaFrenchProviderError::UnknownCommand(command.to_string()))?;
+        Ok(Self {
+            command: command.to_string(),
+        })
+    }
+
+    /// Build a query from a raw caller payload, reading and resolving the
+    /// required `command` token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tdw_core::Error::InvalidQuery`] when `command` is missing or
+    /// does not resolve to a known portfolio dataset.
+    pub fn from_value(params: &serde_json::Value) -> std::result::Result<Self, tdw_core::Error> {
+        let command = params
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                tdw_core::Error::InvalidQuery("famafrench command must be a string".to_string())
+            })?;
+        Self::new(command).map_err(|error| tdw_core::Error::InvalidQuery(error.to_string()))
+    }
+
+    /// The concrete portfolio dataset (ZIP + inner CSV + kind) this query
+    /// resolves to.
+    ///
+    /// # Panics
+    ///
+    /// Never panics for a query built via the public constructors.
+    #[must_use]
+    pub fn dataset(&self) -> &'static PortfolioDataset {
+        portfolio::resolve(&self.command)
+            .expect("FamaFrenchPortfolioQuery resolves to a known dataset at construction")
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FamaFrenchProviderError {
     /// The `(factor_set, frequency)` selection is not a known dataset.
@@ -156,6 +220,9 @@ pub enum FamaFrenchProviderError {
         factor_set: String,
         frequency: String,
     },
+    /// The supplied portfolio / breakpoint `command` is not a known dataset.
+    #[error("famafrench command {0:?} is not a known portfolio dataset")]
+    UnknownCommand(String),
     /// The CSV table carried no recognizable column header row.
     #[error("famafrench CSV has no recognizable factor header row")]
     MissingHeader,

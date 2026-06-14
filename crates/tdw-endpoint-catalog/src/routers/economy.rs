@@ -15,7 +15,9 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{FactorReturn, FomcDocument, MacroSeries, SeriesSearchResult};
+use tdw_domain::{
+    Breakpoint, FactorReturn, FomcDocument, MacroSeries, PortfolioReturn, SeriesSearchResult,
+};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -52,6 +54,35 @@ const ECONOMY_FRED_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fred
 const ECONOMY_FACTORS_FAMAFRENCH: &[ProviderCandidate] = &[ProviderCandidate::new(
     "famafrench",
     "economy_factors_famafrench",
+)];
+/// Keyless Ken French portfolio-formation candidates (OpenBB-parity **P4W9**).
+/// Each portfolio-return route binds its own `(famafrench, <route '/'→'_'>)`
+/// dispatch endpoint (the shared portfolio fetcher's `command` is injected per
+/// route, mirroring the IMF cluster); the breakpoints route binds its own
+/// endpoint. A conformance test keeps these keys and the dispatch bindings in
+/// sync. Mirrors the `famafrench` research-factor binding above.
+const ECONOMY_FACTORS_FAMAFRENCH_US_PORTFOLIO: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "famafrench",
+    "economy_factors_famafrench_us_portfolio_returns",
+)];
+const ECONOMY_FACTORS_FAMAFRENCH_REGIONAL_PORTFOLIO: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_regional_portfolio_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_COUNTRY_PORTFOLIO: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_country_portfolio_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_INTERNATIONAL_INDEX: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_international_index_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_BREAKPOINTS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "famafrench",
+    "economy_factors_famafrench_breakpoints",
 )];
 /// IMF SDMX-JSON candidates (OpenBB-parity **P3W3**) — international/cross-country
 /// macro series the US-centric FRED cluster does not cover. The endpoint key is
@@ -154,6 +185,14 @@ fn series_search_result() -> Schema {
 
 fn factor_return() -> Schema {
     schema_for!(FactorReturn)
+}
+
+fn portfolio_return() -> Schema {
+    schema_for!(PortfolioReturn)
+}
+
+fn breakpoint() -> Schema {
+    schema_for!(Breakpoint)
 }
 
 fn fomc_document() -> Schema {
@@ -282,12 +321,66 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries
 }
 
+/// The Ken French portfolio-formation breadth additions (OpenBB-parity
+/// **P4W9**): the four portfolio-return routes (US / regional / country /
+/// international index) standardized to [`PortfolioReturn`], plus the
+/// breakpoints route standardized to [`Breakpoint`]. All are keyless Ken French
+/// Data Library ZIP-of-CSV archives. Split from [`entries`] so neither function
+/// trips the `too_many_lines` lint.
+fn p4w9_famafrench_entries() -> Vec<CatalogEntry> {
+    let portfolio_entry =
+        |route: &'static str, candidates: &'static [ProviderCandidate], doc: &'static str| {
+            CatalogEntry {
+                route,
+                kind: EndpointKind::Fetch,
+                params_schema: standard_params,
+                model: portfolio_return,
+                candidates,
+                bronze_table: Some("raw.portfolio_return"),
+                doc,
+                chartable: true,
+            }
+        };
+    vec![
+        CatalogEntry {
+            route: "economy/factors/famafrench/breakpoints",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: breakpoint,
+            candidates: ECONOMY_FACTORS_FAMAFRENCH_BREAKPOINTS,
+            bronze_table: Some("raw.breakpoint"),
+            doc: "Ken French portfolio-formation breakpoints (size deciles, keyless).",
+            chartable: false,
+        },
+        portfolio_entry(
+            "economy/factors/famafrench/us_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_US_PORTFOLIO,
+            "Ken French US portfolios-formed returns (book-to-market, keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/regional_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_REGIONAL_PORTFOLIO,
+            "Ken French developed-markets regional portfolio returns (keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/country_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_COUNTRY_PORTFOLIO,
+            "Ken French country (Japan) portfolio returns (keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/international_index_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_INTERNATIONAL_INDEX,
+            "Ken French developed-markets international index returns (keyless).",
+        ),
+    ]
+}
+
 /// The `economy` namespace's OpenBB-parity **P4W4** breadth additions: the OECD
 /// SDMX-JSON cross-country macro cluster, the FRED single-series survey / price
 /// breadth, and the keyless Federal Reserve SOMA / primary-dealer routes. Split
 /// from [`entries`] so neither function trips the `too_many_lines` lint.
 fn p4w4_entries() -> Vec<CatalogEntry> {
-    vec![
+    let mut entries = vec![
         // -- OECD SDMX-JSON keyless cross-country macro -----------------------
         macro_entry(
             "economy/gdp/forecast",
@@ -366,5 +459,7 @@ fn p4w4_entries() -> Vec<CatalogEntry> {
             doc: "FOMC meeting documents index (Federal Reserve, keyless).",
             chartable: false,
         },
-    ]
+    ];
+    entries.extend(p4w9_famafrench_entries());
+    entries
 }

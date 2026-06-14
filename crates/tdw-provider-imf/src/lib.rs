@@ -14,14 +14,16 @@
 //! [`tdw_domain::MacroSeries`] at the fetcher boundary — no raw SDMX shapes leak.
 
 pub mod catalog;
+pub mod discovery;
 
 #[cfg(feature = "http")]
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::ImfHttpMacroSeriesFetcher;
+pub use http_fetcher::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
 
 pub use catalog::{ENDPOINTS, ImfEndpoint};
+pub use discovery::{ENDPOINTS as IMF_UTILS_ENDPOINTS, ImfUtilsEndpoint};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -149,6 +151,97 @@ fn validate_key(key: &str) -> Result<String> {
         return Err(ImfProviderError::InvalidKey);
     }
     Ok(key.to_string())
+}
+
+/// Query for a standardized `imf_utils/*` SDMX discovery helper (OpenBB-parity
+/// **P4W9**).
+///
+/// The caller supplies an `imf_utils/*` `command` path; the query resolves it
+/// against [`discovery`] to the SDMX-JSON REST method to call (`Dataflow` or
+/// `DataStructure`). Helpers that read `DataStructure` require a `dataflow` id;
+/// the list helpers accept an optional `query` prefix filter. No `CompactData`
+/// observation shape is involved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImfUtilsDiscoveryQuery {
+    /// The resolved `imf_utils/*` command path.
+    pub command: String,
+    /// Optional SDMX dataflow id (required by the `DataStructure`-backed
+    /// helpers, ignored by the list helpers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataflow: Option<String>,
+    /// Optional case-insensitive id/name filter for the list helpers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+}
+
+impl ImfUtilsDiscoveryQuery {
+    /// Build a discovery query from a raw caller payload, resolving `command`
+    /// against the discovery catalog and reading the optional `dataflow` /
+    /// `query` filters. A `dataflow`-requiring helper without a `dataflow` is
+    /// rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tdw_core::Error::InvalidQuery`] when `command` is missing /
+    /// unknown, or a `DataStructure`-backed helper is missing its `dataflow`.
+    pub fn from_value(params: &serde_json::Value) -> std::result::Result<Self, tdw_core::Error> {
+        let command = params
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                tdw_core::Error::InvalidQuery("imf_utils command must be a string".to_string())
+            })?;
+        let entry = discovery::resolve(command).ok_or_else(|| {
+            tdw_core::Error::InvalidQuery(format!(
+                "imf_utils command {command:?} is not a known discovery helper"
+            ))
+        })?;
+        let dataflow = params
+            .get("dataflow")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        if entry.requires_dataflow && dataflow.is_none() {
+            return Err(tdw_core::Error::InvalidQuery(format!(
+                "imf_utils command {command:?} requires a dataflow id"
+            )));
+        }
+        // The dataflow rides on the request path; constrain it to the SDMX id
+        // grammar to close a path-injection gap.
+        if let Some(dataflow) = dataflow.as_deref()
+            && !dataflow
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(tdw_core::Error::InvalidQuery(
+                "imf_utils dataflow contains characters outside the SDMX id grammar".to_string(),
+            ));
+        }
+        let query = params
+            .get("query")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        Ok(Self {
+            command: entry.command.to_string(),
+            dataflow,
+            query,
+        })
+    }
+
+    /// The resolved discovery catalog entry for this query.
+    ///
+    /// # Panics
+    ///
+    /// Never panics for a query built via [`ImfUtilsDiscoveryQuery::from_value`],
+    /// which validates `command` against the discovery catalog at construction.
+    #[must_use]
+    pub fn endpoint(&self) -> &'static ImfUtilsEndpoint {
+        discovery::resolve(&self.command)
+            .expect("ImfUtilsDiscoveryQuery::command is validated against the catalog")
+    }
 }
 
 /// Errors produced by `tdw-provider-imf`.

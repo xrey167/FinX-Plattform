@@ -1765,10 +1765,7 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     #[cfg(feature = "provider-government-us")]
     insert_government_us_fetch_bindings(&mut table);
     #[cfg(feature = "provider-famafrench")]
-    table.insert(
-        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
-    );
+    insert_famafrench_fetch_bindings(&mut table);
     // OpenBB-parity P4W10: keyless FINRA shorts / dark-pool routes.
     #[cfg(feature = "provider-finra")]
     insert_finra_fetch_bindings(&mut table);
@@ -2052,6 +2049,22 @@ fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
         };
         table.insert(key, imf_command_fetch_binding(endpoint.command));
     }
+    // OpenBB-parity P4W9: imf_utils/* SDMX discovery fetch.
+    insert_imf_utils_fetch_bindings(table);
+}
+
+/// Register the keyless Ken French fetch bindings: the single research-factor
+/// route plus the OpenBB-parity **P4W9** portfolio-formation / breakpoint
+/// routes. Mirrors [`insert_famafrench_ingest_bindings`] on the fetch path.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
+    );
+    insert_famafrench_portfolio_fetch_bindings(table);
 }
 
 /// Resolve an IMF `economy/imf/*` `command` to the `'static` `(provider,
@@ -2060,6 +2073,149 @@ fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
 /// conformance test catches. Mirrors [`fred_catalog_key`].
 #[cfg(feature = "provider-imf")]
 fn imf_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "imf")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
+/// Serialize a batch of fetched rows into the `Vec<Value>` shape a
+/// [`FetchBinding`] returns. Shared by the OpenBB-parity **P4W9** command-injecting
+/// bindings (famafrench portfolio / breakpoints, imf_utils discovery).
+#[cfg(any(feature = "provider-famafrench", feature = "provider-imf"))]
+fn rows_to_records<T: serde::Serialize>(rows: &[T]) -> Result<Vec<Value>> {
+    let mut records = Vec::with_capacity(rows.len());
+    for row in rows {
+        records.push(
+            serde_json::to_value(row)
+                .map_err(|e| Error::Provider(format!("fetch record serialize: {e}")))?,
+        );
+    }
+    Ok(records)
+}
+
+/// Build a [`FetchBinding`] for the shared Ken French portfolio fetcher that
+/// injects a fixed `economy/factors/famafrench/*` `command` before the fetcher
+/// runs, so one fetcher type serves every portfolio-return route. Mirrors
+/// [`imf_command_fetch_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_portfolio_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FamaFrenchPortfolioHttpFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for the Ken French breakpoints fetcher that injects
+/// the fixed `economy/factors/famafrench/breakpoints` `command` before the
+/// fetcher runs. Mirrors [`famafrench_portfolio_fetch_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_breakpoints_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FamaFrenchBreakpointsHttpFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Register the Ken French portfolio-formation fetch bindings (OpenBB-parity
+/// **P4W9**), keyed by the route-derived endpoint key resolved through the
+/// catalog so the dispatch key never drifts from the candidate. The breakpoints
+/// route binds the breakpoints fetcher; the four return routes share the
+/// portfolio fetcher. Mirrors [`insert_imf_fetch_bindings`].
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_portfolio_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    for dataset in tdw_provider_famafrench::portfolio::DATASETS {
+        let Some(key) = famafrench_catalog_key(dataset.command) else {
+            continue;
+        };
+        let binding = match dataset.kind {
+            tdw_provider_famafrench::PortfolioKind::Breakpoint => {
+                famafrench_breakpoints_fetch_binding(dataset.command)
+            }
+            tdw_provider_famafrench::PortfolioKind::Return => {
+                famafrench_portfolio_fetch_binding(dataset.command)
+            }
+        };
+        table.insert(key, binding);
+    }
+}
+
+/// Resolve a Ken French portfolio `command` to the `'static` `(provider,
+/// endpoint)` dispatch key declared for it in the endpoint catalog. Returns
+/// `None` only if a portfolio command is missing its catalog route — a bug the
+/// conformance test catches. Mirrors [`imf_catalog_key`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "famafrench")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
+/// Build a [`FetchBinding`] for the shared IMF discovery fetcher that injects a
+/// fixed `imf_utils/*` `command` before the fetcher runs, so one fetcher type
+/// serves every discovery route. Mirrors [`imf_command_fetch_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::ImfUtilsHttpDiscoveryFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Register the IMF SDMX discovery (`imf_utils/*`) fetch bindings (OpenBB-parity
+/// **P4W9**), keyed by the route-derived endpoint key resolved through the
+/// catalog. Mirrors [`insert_imf_fetch_bindings`].
+#[cfg(feature = "provider-imf")]
+fn insert_imf_utils_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    for endpoint in tdw_provider_imf::IMF_UTILS_ENDPOINTS {
+        let Some(key) = imf_utils_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, imf_utils_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an `imf_utils/*` `command` to the `'static` `(provider, endpoint)`
+/// dispatch key declared for it in the endpoint catalog. Mirrors
+/// [`imf_catalog_key`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
     let route = tdw_endpoint_catalog::lookup(command)?;
     route
         .candidates
@@ -3351,6 +3507,137 @@ fn insert_famafrench_ingest_bindings(
         ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
         binding::<crate::FamaFrenchHttpFetcher, _, _>("raw.factor_return"),
     );
+    // OpenBB-parity P4W9: portfolio-formation / breakpoint ingest.
+    insert_famafrench_portfolio_ingest_bindings(table);
+}
+
+/// Build an [`IngestBinding`] for the shared Ken French portfolio fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it to its
+/// bronze landing table. Mirrors [`imf_command_ingest_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_portfolio_ingest_binding(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FamaFrenchPortfolioHttpFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Build an [`IngestBinding`] for the Ken French breakpoints fetcher that injects
+/// the fixed breakpoints `command` before fetching one batch and persisting it.
+/// Mirrors [`famafrench_portfolio_ingest_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_breakpoints_ingest_binding(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FamaFrenchBreakpointsHttpFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the Ken French portfolio-formation ingest bindings (OpenBB-parity
+/// **P4W9**), mirroring [`insert_famafrench_portfolio_fetch_bindings`] so the
+/// fetch and ingest paths stay in lockstep. The bronze tables are provisioned by
+/// the warehouse migration.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_portfolio_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    for dataset in tdw_provider_famafrench::portfolio::DATASETS {
+        let Some(key) = famafrench_catalog_key(dataset.command) else {
+            continue;
+        };
+        let binding = match dataset.kind {
+            tdw_provider_famafrench::PortfolioKind::Breakpoint => {
+                famafrench_breakpoints_ingest_binding(dataset.command, "raw.breakpoint")
+            }
+            tdw_provider_famafrench::PortfolioKind::Return => {
+                famafrench_portfolio_ingest_binding(dataset.command, "raw.portfolio_return")
+            }
+        };
+        table.insert(key, binding);
+    }
+}
+
+/// Build an [`IngestBinding`] for the shared IMF discovery fetcher that injects a
+/// fixed `imf_utils/*` `command` before fetching one batch and persisting it to
+/// the `raw.imf_discovery_record` bronze table. Mirrors
+/// [`imf_command_ingest_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::ImfUtilsHttpDiscoveryFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the IMF SDMX discovery (`imf_utils/*`) ingest bindings (OpenBB-parity
+/// **P4W9**), mirroring [`insert_imf_utils_fetch_bindings`].
+#[cfg(feature = "provider-imf")]
+fn insert_imf_utils_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    for endpoint in tdw_provider_imf::IMF_UTILS_ENDPOINTS {
+        let Some(key) = imf_utils_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            imf_utils_ingest_binding(endpoint.command, "raw.imf_discovery_record"),
+        );
+    }
 }
 
 /// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
@@ -3901,6 +4188,8 @@ fn insert_imf_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str),
             imf_command_ingest_binding(endpoint.command, "raw.macro_series"),
         );
     }
+    // OpenBB-parity P4W9: imf_utils/* SDMX discovery ingest.
+    insert_imf_utils_ingest_bindings(table);
 }
 
 /// Build an [`IngestBinding`] for the `EconDB` catalog-backed fetcher that injects

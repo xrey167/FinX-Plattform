@@ -28,6 +28,7 @@ from .economy import EconomyNamespace
 from .equity import EquityNamespace
 from .etf import EtfNamespace
 from .fixedincome import FixedincomeNamespace
+from .imf_utils import ImfUtilsNamespace
 from .index import IndexNamespace
 from .news import NewsNamespace
 from .portfolio import PortfolioNamespace
@@ -69,6 +70,7 @@ class FinX:
         self.equity = EquityNamespace(self._client)
         self.etf = EtfNamespace(self._client)
         self.fixedincome = FixedincomeNamespace(self._client)
+        self.imf_utils = ImfUtilsNamespace(self._client)
         self.index = IndexNamespace(self._client)
         self.news = NewsNamespace(self._client)
         self.portfolio = PortfolioNamespace(self._client)

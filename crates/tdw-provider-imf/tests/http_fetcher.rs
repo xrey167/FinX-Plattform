@@ -13,7 +13,7 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
-use tdw_provider_imf::ImfHttpMacroSeriesFetcher;
+use tdw_provider_imf::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
 /// A single-`Series` envelope whose `Obs` is itself a single object (not an
@@ -172,6 +172,98 @@ fn transform_query_rejects_unknown_command_and_missing_key() {
         }))
         .is_err()
     );
+}
+
+#[test]
+fn discovery_decodes_dataflow_list() {
+    let fetcher = ImfUtilsHttpDiscoveryFetcher::default();
+    let query = ImfUtilsHttpDiscoveryFetcher::transform_query(json!({
+        "command": "imf_utils/list_dataflows"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let raw = cassette_bytes!({
+        "Structure": { "Dataflows": { "Dataflow": [
+            {
+                "@id": "IFS",
+                "Name": { "#text": "International Financial Statistics", "@xml:lang": "en" },
+                "KeyFamilyRef": { "KeyFamilyID": "ECOFIN_DSD" }
+            }
+        ] } }
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+    assert_eq!(rows.len(), 1, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "dataflow");
+    assert_eq!(rows[0].id, "IFS");
+    assert_eq!(rows[0].structure.as_deref(), Some("ECOFIN_DSD"));
+}
+
+#[test]
+fn discovery_decodes_dataflow_dimensions() {
+    let fetcher = ImfUtilsHttpDiscoveryFetcher::default();
+    let query = ImfUtilsHttpDiscoveryFetcher::transform_query(json!({
+        "command": "imf_utils/get_dataflow_dimensions",
+        "dataflow": "IFS"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let raw = cassette_bytes!({
+        "Structure": { "KeyFamilies": { "KeyFamily": {
+            "@id": "ECOFIN_DSD",
+            "Components": { "Dimension": [
+                { "@conceptRef": "FREQ", "Name": "Frequency" },
+                { "@conceptRef": "REF_AREA", "@codelist": "CL_AREA" }
+            ] }
+        } } }
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].kind, "dimension");
+    assert_eq!(rows[0].id, "FREQ");
+    assert_eq!(rows[0].position, Some(1));
+    assert_eq!(rows[0].dataflow.as_deref(), Some("IFS"));
+}
+
+#[test]
+fn discovery_rejects_missing_dataflow_and_unknown_command() {
+    // A DataStructure-backed helper requires a dataflow id.
+    assert!(
+        ImfUtilsHttpDiscoveryFetcher::transform_query(json!({
+            "command": "imf_utils/get_dataflow_dimensions"
+        }))
+        .is_err()
+    );
+    assert!(
+        ImfUtilsHttpDiscoveryFetcher::transform_query(json!({ "command": "imf_utils/bogus" }))
+            .is_err()
+    );
+    // A path-injection dataflow id is rejected.
+    assert!(
+        ImfUtilsHttpDiscoveryFetcher::transform_query(json!({
+            "command": "imf_utils/get_dataflow_dimensions",
+            "dataflow": "../../etc"
+        }))
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn live_imf_utils_dataflows_return_rows_when_env_set() {
+    if std::env::var("TDW_IMF_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("TDW_IMF_LIVE != 1; skipping live IMF dataflow discovery test");
+        return;
+    }
+    let fetcher = ImfUtilsHttpDiscoveryFetcher::default();
+    let query = ImfUtilsHttpDiscoveryFetcher::transform_query(json!({
+        "command": "imf_utils/list_dataflows"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+    let rows = live_fetch_nonempty!(fetcher, query);
+    assert!(!rows.is_empty(), "live IMF dataflow list must include rows");
 }
 
 #[tokio::test]

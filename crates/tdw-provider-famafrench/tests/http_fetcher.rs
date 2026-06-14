@@ -15,7 +15,9 @@ use std::io::Write;
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
-use tdw_provider_famafrench::FamaFrenchHttpFetcher;
+use tdw_provider_famafrench::{
+    FamaFrenchBreakpointsHttpFetcher, FamaFrenchHttpFetcher, FamaFrenchPortfolioHttpFetcher,
+};
 use tdw_provider_testkit::live_fetch_nonempty;
 use zip::write::SimpleFileOptions;
 
@@ -92,6 +94,71 @@ fn cassette_surfaces_non_zip_bytes_as_error() {
 fn transform_query_rejects_unknown_tokens() {
     assert!(FamaFrenchHttpFetcher::transform_query(json!({ "factor_set": "4factor" })).is_err());
     assert!(FamaFrenchHttpFetcher::transform_query(json!({ "frequency": "weekly" })).is_err());
+}
+
+const PORTFOLIO_CSV: &str = "\
+This file was created by ...
+
+,SMALL LoBM,BIG HiBM
+192607,1.50,0.30
+192608,-0.50,0.20
+
+  Equal Weighted Returns -- Monthly
+,SMALL LoBM,BIG HiBM
+192607,9.99,9.99
+";
+
+#[test]
+fn cassette_unzips_and_parses_us_portfolio_returns() {
+    let fetcher = FamaFrenchPortfolioHttpFetcher::default();
+    let query = FamaFrenchPortfolioHttpFetcher::transform_query(json!({
+        "command": "economy/factors/famafrench/us_portfolio_returns"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let raw = zip_with_csv("Portfolios_Formed_on_BE-ME.CSV", PORTFOLIO_CSV);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    // Two date rows × two portfolio columns; the equal-weighted block is ignored.
+    assert_eq!(rows.len(), 4, "rows={rows:#?}");
+    assert_eq!(rows[0].date, "1926-07");
+    assert_eq!(rows[0].portfolio, "SMALL LoBM");
+    // Percent -> fraction.
+    assert!((rows[0].value.expect("value") - 0.015).abs() < 1e-12);
+}
+
+#[test]
+fn cassette_unzips_and_parses_breakpoints_unscaled() {
+    let fetcher = FamaFrenchBreakpointsHttpFetcher::default();
+    let query = FamaFrenchBreakpointsHttpFetcher::transform_query(json!({
+        "command": "economy/factors/famafrench/breakpoints"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let csv = ",Count,5,95\n192607,5,12.50,95.00\n192608,6,13.00,96.00\n";
+    let raw = zip_with_csv("ME_Breakpoints.CSV", csv);
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    assert_eq!(rows.len(), 6, "rows={rows:#?}");
+    assert_eq!(rows[0].date, "1926-07");
+    assert_eq!(rows[0].breakpoint, "Count");
+    // Breakpoints carry through unscaled.
+    assert!((rows[0].value.expect("count") - 5.0).abs() < 1e-12);
+}
+
+#[test]
+fn portfolio_transform_query_rejects_unknown_command() {
+    assert!(
+        FamaFrenchPortfolioHttpFetcher::transform_query(json!({
+            "command": "economy/factors/famafrench/bogus"
+        }))
+        .is_err()
+    );
+    assert!(FamaFrenchPortfolioHttpFetcher::transform_query(json!({})).is_err());
 }
 
 #[tokio::test]
