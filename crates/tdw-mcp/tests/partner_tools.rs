@@ -68,6 +68,72 @@ fn call(server: &mut McpServer, name: &str, arguments: &Value) -> Value {
         .unwrap_or_else(|e| panic!("response should be json: {e}; {}", messages[0]))
 }
 
+fn list_tools(server: &mut McpServer) -> Vec<Value> {
+    let listed: Value = serde_json::from_str(
+        &server.handle_json_rpc_line(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)[0],
+    )
+    .expect("tools/list json");
+    listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .clone()
+}
+
+#[test]
+fn partner_verbs_lead_the_catalog_and_are_marked_primary() {
+    // Progressive disclosure (partner-system W6.3, partner §5): the few
+    // high-value partner verbs LEAD tools/list (the "intelligent few" first), and
+    // each carries the partnerPrimary annotation so a client can feature them.
+    let mut server = McpServer::new().with_partner(partner_core());
+    initialize(&mut server);
+    let tools = list_tools(&mut server);
+
+    // The first four tools are the partner verbs, in onboarding priority order.
+    let leading: Vec<&str> = tools
+        .iter()
+        .take(4)
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(
+        leading,
+        vec![
+            "tdw.partner.ask",
+            "tdw.partner.brief",
+            "tdw.partner.audit",
+            "tdw.partner.undo",
+        ],
+        "the partner verbs lead the catalog: {leading:?}"
+    );
+    // Each leading verb is marked primary for explicit featuring.
+    for tool in tools.iter().take(4) {
+        assert_eq!(
+            tool["annotations"]["partnerPrimary"],
+            json!(true),
+            "partner verb is marked primary: {tool}"
+        );
+    }
+    // The rest of the catalog is still present (discoverable), e.g. a route tool.
+    assert!(
+        tools.len() > 4,
+        "the lower-level tools stay registered after the featured few: {}",
+        tools.len()
+    );
+    // A non-partner tool does NOT carry the primary marker.
+    let non_partner = tools
+        .iter()
+        .find(|t| {
+            t["name"]
+                .as_str()
+                .is_some_and(|n| !n.starts_with("tdw.partner."))
+        })
+        .expect("a non-partner tool exists");
+    assert_ne!(
+        non_partner["annotations"]["partnerPrimary"],
+        json!(true),
+        "a non-partner tool is not marked primary: {non_partner}"
+    );
+}
+
 #[test]
 fn partner_ask_is_listed_only_when_core_attached() {
     // Bare server: no partner core → tool absent.

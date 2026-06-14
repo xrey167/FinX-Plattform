@@ -36,6 +36,12 @@ tdw-induction = { workspace = true }
 tdw-patterns = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
+# tdw-workflow-engine / tdw-agent are DEV-only: the W6.2 zero-to-partner first
+# run is authored as a workflow DAG and compiled by the engine in a test, proving
+# the <10-min onboarding walkthrough sequences offline/deterministically. Both
+# are light leaves (tdw-agent → tdw-taxonomy only), so no cycle.
+tdw-agent = { path = "../tdw-agent" }
+tdw-workflow-engine = { path = "../tdw-workflow-engine" }
 # tdw-cron / tdw-protocol are DEV-only here: the production schedule trigger is
 # assembled in tdw-backend (which legally depends on tdw-cron), because a normal
 # dep on tdw-cron would form a cycle (tdw-cron → tdw-worker → tdw-service-api →

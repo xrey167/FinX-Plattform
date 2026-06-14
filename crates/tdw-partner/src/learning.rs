@@ -217,23 +217,31 @@ pub fn apply_to_resolution(
 /// preference's own priority order, with all other routes following in their
 /// original relative order (W4.2).
 ///
-/// "Preferred" is an exact route-id match against an entry in `preferred`. A
-/// stable partition is used (not a comparator sort) so two equally-resolved
-/// non-preferred routes keep their incoming order, and two preferred routes are
-/// ordered by their rank in `preferred` (earlier = higher priority). An empty
-/// `preferred` list is a no-op, so the baseline order is preserved exactly.
+/// A preference entry matches a route either EXACTLY (`route == p`) or as a path
+/// PREFIX (`route` starts with `p/`) — so a preference for `"equity"` ranks
+/// `"equity/profile"` and `"equity/quote"` ahead, matching the doc contract that
+/// a `preferred_routes` entry can be a route id OR a prefix (Gemini #441 MEDIUM;
+/// the prior impl only matched exact ids). A stable partition is used (not a
+/// comparator sort) so two equally-resolved non-preferred routes keep their
+/// incoming order, and two preferred routes are ordered by their rank in
+/// `preferred` (earlier = higher priority). An empty `preferred` list is a
+/// no-op, so the baseline order is preserved exactly.
 fn reorder_by_preference(routes: &mut [crate::resolve::ResolvedRoute], preferred: &[String]) {
     if preferred.is_empty() || routes.len() < 2 {
         return;
     }
-    // The preference rank of a route: its index in `preferred`, or `len` (i.e.
-    // after every preferred route) when it is not preferred. A stable sort by
-    // this key moves preferred routes ahead in priority order while leaving the
-    // relative order of equal-rank (e.g. all non-preferred) routes intact.
+    // A preference `p` matches `route` exactly OR as a path prefix (`route`
+    // under `p/`), honoring the "id OR prefix" contract.
+    let matches = |p: &str, route: &str| route == p || route.starts_with(&format!("{p}/"));
+    // The preference rank of a route: the index of the FIRST preference it
+    // matches, or `len` (after every preferred route) when none match. A stable
+    // sort by this key moves preferred routes ahead in priority order while
+    // leaving the relative order of equal-rank (e.g. all non-preferred) routes
+    // intact.
     let rank = |route: &str| {
         preferred
             .iter()
-            .position(|p| p == route)
+            .position(|p| matches(p, route))
             .unwrap_or(preferred.len())
     };
     routes.sort_by_key(|item| rank(&item.route));
@@ -380,6 +388,50 @@ mod tests {
         assert_eq!(
             applied.resolved.data[1].route, "equity/price/historical",
             "the non-preferred route follows"
+        );
+    }
+
+    #[test]
+    fn preference_prefix_ranks_routes_under_the_prefix_ahead() {
+        // Gemini #441 MEDIUM: a preference entry may be a PREFIX, not just an
+        // exact id. Preference "equity" must rank "equity/profile" ahead of a
+        // non-matching peer — the contract the doc states and the impl now honors.
+        let state = LearningState::read_from(
+            &runtime_with(Some(1), Some(learning_resolver())),
+            &principal(),
+        )
+        .with_preferred_routes(vec!["equity".to_string()]);
+        assert!(state.honors_induced_rules());
+
+        // Incoming order: a non-equity route first, then the equity route.
+        let resolved = two_routes("news/headlines", "equity/profile");
+        let applied = apply_to_resolution(&state, resolved);
+        assert_eq!(
+            applied.resolved.data[0].route,
+            "equity/profile",
+            "the prefix-matched route leads: {:?}",
+            applied.resolved.data_routes()
+        );
+        assert_eq!(
+            applied.resolved.data[1].route, "news/headlines",
+            "the non-matching route follows"
+        );
+    }
+
+    #[test]
+    fn preference_prefix_does_not_match_a_mere_string_prefix() {
+        // "equity" must NOT match "equityx/foo" — only an exact id or a path
+        // segment boundary (`equity/...`) matches, so the prefix is path-aware.
+        let state = LearningState::read_from(
+            &runtime_with(Some(1), Some(learning_resolver())),
+            &principal(),
+        )
+        .with_preferred_routes(vec!["equity".to_string()]);
+        let resolved = two_routes("equityx/foo", "equity/profile");
+        let applied = apply_to_resolution(&state, resolved);
+        assert_eq!(
+            applied.resolved.data[0].route, "equity/profile",
+            "only the path-boundary match leads, not the bare string prefix"
         );
     }
 

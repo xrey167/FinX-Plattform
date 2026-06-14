@@ -178,22 +178,60 @@ pub fn execute_undo(arguments: &Map<String, Value>) -> Result<ToolExecution, Too
         .map_err(|error| ToolFailure::Execution(format!("malformed action: {error}")))?;
 
     // The reversal plan is derived purely from the action kind — the same mapping
-    // `tdw_partner::undo` uses, surfaced here without an engine.
-    let (method, edge) = match &action.what {
+    // `tdw_partner::undo` performs, surfaced here without an engine so a caller
+    // (or the daemon adapter) can act on it deterministically. Every plan is a
+    // REAL reversal; a genuinely-irreversible write is flagged `unsupported`, not
+    // a vacuous success (mirrors `tdw_partner::undo`'s UndoError::Unsupported).
+    let (method, edge, param, restore_value) = match &action.what {
         tdw_partner::ActionKind::Forget { from, rel, to, .. } => (
             "recall_cold_edge",
             Some(json!({ "from": from, "rel": rel, "to": to })),
+            None,
+            None,
         ),
         tdw_partner::ActionKind::Edge { from, rel, to } => (
             "retire_edge_to_cold",
             Some(json!({ "from": from, "rel": rel, "to": to })),
+            None,
+            None,
         ),
-        tdw_partner::ActionKind::ParamTune { .. } => ("re_tune", None),
-        // A tag/annotation write and a promoted lesson both reverse by retiring
-        // their backing proposal through the queue (no single cold-plane edge).
-        tdw_partner::ActionKind::KgWrite { .. } | tdw_partner::ActionKind::RuledPromote { .. } => {
-            ("retire_proposal", None)
-        }
+        // An annotation write retires its `annotated_by` edge to cold; a tag
+        // assign/define has no reversal primitive and is explicitly unsupported.
+        tdw_partner::ActionKind::KgWrite { reversal, .. } => match reversal {
+            tdw_partner::KgWriteReversal::Annotation {
+                entity_id,
+                annotation_node,
+            } => (
+                "retire_edge_to_cold",
+                Some(json!({ "from": entity_id, "rel": "annotated_by", "to": annotation_node })),
+                None,
+                None,
+            ),
+            tdw_partner::KgWriteReversal::Unsupported { .. } => ("unsupported", None, None, None),
+        },
+        // A param tune is reversed by restoring its PRIOR value (carried on the
+        // action) — a real re-tune, not a no-op.
+        tdw_partner::ActionKind::ParamTune {
+            param,
+            restore_value,
+            ..
+        } => (
+            "restore_param",
+            None,
+            Some(param.clone()),
+            Some(*restore_value),
+        ),
+        // A promoted lesson retires its `annotated_by` edge to cold (demote).
+        tdw_partner::ActionKind::RuledPromote {
+            subject_entity,
+            annotation_node,
+            ..
+        } => (
+            "retire_edge_to_cold",
+            Some(json!({ "from": subject_entity, "rel": "annotated_by", "to": annotation_node })),
+            None,
+            None,
+        ),
     };
 
     Ok(structured(json!({
@@ -201,6 +239,8 @@ pub fn execute_undo(arguments: &Map<String, Value>) -> Result<ToolExecution, Too
         "reversible": action.reversible,
         "method": method,
         "edge": edge,
+        "param": param,
+        "restore_value": restore_value,
     })))
 }
 
@@ -320,6 +360,65 @@ mod tests {
         let execution = ok(execute_undo(&arguments));
         assert_eq!(execution.structured["method"], json!("retire_edge_to_cold"));
         assert_eq!(execution.structured["edge"]["to"], json!("b"));
+    }
+
+    #[test]
+    fn undo_describes_restore_param_for_a_param_tune() {
+        // A param tune reverses by restoring its PRIOR value — surfaced in the
+        // plan, not a no-op (the Gemini #441 HIGH fix reflected on the surface).
+        let arguments = args(&json!({
+            "action": {
+                "id": "action:tune:t1",
+                "agent_id": "system:self-tuner",
+                "what": { "kind": "param_tune", "record_id": "t1", "param": "rrf_k", "applied_value": 62.0, "restore_value": 60.0 },
+                "why": { "routes": ["agent:system:self-tuner;gated:true"], "kg_nodes": [], "as_of": null },
+                "confidence": 0.95,
+                "reversible": true,
+                "status": "auto_accepted"
+            }
+        }));
+        let execution = ok(execute_undo(&arguments));
+        assert_eq!(execution.structured["method"], json!("restore_param"));
+        assert_eq!(execution.structured["param"], json!("rrf_k"));
+        assert_eq!(execution.structured["restore_value"], json!(60.0));
+    }
+
+    #[test]
+    fn undo_flags_a_tag_write_as_unsupported_not_a_silent_ok() {
+        // A tag assign/define has no reversal primitive: the plan must say
+        // `unsupported`, never pretend a reversal exists.
+        let arguments = args(&json!({
+            "action": {
+                "id": "action:proposal:p8",
+                "agent_id": "agent:partner",
+                "what": { "kind": "kg_write", "proposal_id": "p8", "reversal": { "reversal": "unsupported", "detail": "tag has no reversal primitive" } },
+                "why": { "routes": ["2026-06-14 draft"], "kg_nodes": [], "as_of": null },
+                "confidence": 0.95,
+                "reversible": false,
+                "status": "awaiting_human"
+            }
+        }));
+        let execution = ok(execute_undo(&arguments));
+        assert_eq!(execution.structured["method"], json!("unsupported"));
+        assert_eq!(execution.structured["reversible"], json!(false));
+    }
+
+    #[test]
+    fn undo_describes_annotation_edge_retire_for_a_kgwrite() {
+        let arguments = args(&json!({
+            "action": {
+                "id": "action:proposal:p7",
+                "agent_id": "agent:partner",
+                "what": { "kind": "kg_write", "proposal_id": "p7", "reversal": { "reversal": "annotation", "entity_id": "company:ACME", "annotation_node": "annotation:p7" } },
+                "why": { "routes": ["2026-06-14 draft"], "kg_nodes": [], "as_of": null },
+                "confidence": 0.95,
+                "reversible": true,
+                "status": "auto_accepted"
+            }
+        }));
+        let execution = ok(execute_undo(&arguments));
+        assert_eq!(execution.structured["method"], json!("retire_edge_to_cold"));
+        assert_eq!(execution.structured["edge"]["to"], json!("annotation:p7"));
     }
 
     #[test]
