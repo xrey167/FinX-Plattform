@@ -53,4 +53,29 @@ describe("storage helpers", () => {
     // Must not throw a ReferenceError outside the Office host (Gemini #453).
     await expect(setStorageItem("k", "v")).resolves.toBeUndefined();
   });
+
+  it("degrades to null/no-op when localStorage access throws SecurityError", async () => {
+    // A restricted third-party iframe can throw on any localStorage access
+    // (Gemini #454). The helpers must swallow it, not crash the caller.
+    const boom = () => {
+      throw new Error("SecurityError");
+    };
+    G.localStorage = { getItem: boom, setItem: boom };
+
+    await expect(getStorageItem("k")).resolves.toBeNull();
+    await expect(setStorageItem("k", "v")).resolves.toBeUndefined();
+  });
+
+  it("falls back to localStorage when the OfficeRuntime promise rejects", async () => {
+    const hostGet = vi.fn().mockRejectedValue(new Error("SecurityError"));
+    const hostSet = vi.fn().mockRejectedValue(new Error("SecurityError"));
+    G.OfficeRuntime = { storage: { getItem: hostGet, setItem: hostSet } };
+    const browserGet = vi.fn().mockReturnValue("browser-value");
+    const browserSet = vi.fn();
+    G.localStorage = { getItem: browserGet, setItem: browserSet };
+
+    expect(await getStorageItem("k")).toBe("browser-value");
+    await setStorageItem("k", "v");
+    expect(browserSet).toHaveBeenCalledWith("k", "v");
+  });
 });
