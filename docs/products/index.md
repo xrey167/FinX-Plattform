@@ -49,6 +49,11 @@ fixings, BTC OHLC, and Apple's filings through two tools.
 |---|---|---|
 | `tdw-mcp` | Live financial data tools for AI agents | [quickstart](mcp-quickstart.md) |
 | OpenBB parity (REST + Workspace + copilot) | Catalog-derived `GET /api/v1` + OpenAPI, OpenBB Workspace data backend + copilot | [openbb-parity](openbb-parity.md) |
+| Computed analytics (option-pricing, forecasting / AutoARIMA) | Pure-Rust `Compute` routes OpenBB's Platform doesn't compute — Black-Scholes/greeks/IV, classical forecasting + ARIMA/AutoARIMA | [ecosystem gap-map](../roadmap/openbb-ecosystem-gap.md) |
+| `tdw-chart-host` | Plotly host-page assembler + optional native desktop window (`gui` feature) | [ecosystem gap-map](../roadmap/openbb-ecosystem-gap.md) |
+| `tdw-workspace-mcp` | Workspace control-plane MCP — dashboard/widget CRUD + layout + navigate | [ecosystem gap-map](../roadmap/openbb-ecosystem-gap.md) |
+| `tdw-bot` | Discord/Telegram chat-bot over the REST catalog (feature-gated transports) | [ecosystem gap-map](../roadmap/openbb-ecosystem-gap.md) |
+| Excel / Office add-in | Office.js `FINX.GET` / `FINX.BYOD` / `FINX.ROUTES` custom functions | [add-in README](../../integrations/excel-addin/README.md) |
 | `tdw-service` + `tdw-worker` | Self-hosted, event-sourced ingestion warehouse | [local stack runbook](../release/local-stack-runbook.md) |
 | `tdw-cli` / `tdw-tui` | Operator tooling | [release docs](../release.md) |
 | `tdw-backend` | Embeddable Rust facade (roadmap: crates.io) | [architecture](../architecture.md) |

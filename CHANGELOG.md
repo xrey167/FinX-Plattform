@@ -14,6 +14,73 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-06-14
+
+The **OpenBB ecosystem-parity release.** v1.4.0–v1.6.0 reached total OpenBB
+command/data parity and v1.7.x shipped the FinX Partner; v1.8.0 closes the
+**ecosystem** half — the capability *surfaces* the OpenBB organization ships
+beyond the Platform's data/command surface. The `openbb-ecosystem-p1` campaign
+(waves G001–G010, PRs #444–#453) added computed analytics, four new operator/
+client surfaces, and a provider scaffolder. MINOR — every change is a
+backward-compatible **addition**; the native `gui`/`discord`/`telegram`/`charts`
+features are **off by default**, so default builds are unaffected. No protocol,
+persistence-schema, or operator-contract breaks. See
+[`docs/release/v1.8.0-notes.md`](docs/release/v1.8.0-notes.md) and the ecosystem
+gap-map [`docs/roadmap/openbb-ecosystem-gap.md`](docs/roadmap/openbb-ecosystem-gap.md).
+
+### Added
+
+- **Computed option pricing & greeks (#444, G001):** a new pure-Rust
+  `tdw-quant-options` crate — Black-Scholes, the full greek set, implied-vol
+  inversion, a binomial (CRR) tree, and Monte-Carlo — exposed as offline
+  `Compute` routes. OpenBB's Platform fetches vendor option data; FinX *computes*
+  it.
+- **Provider scaffolder (#445, G002):** `xtask new-provider` scaffolds a new
+  `tdw-provider-<name>` crate against `tdw_core::Fetcher`, the FinX equivalent of
+  OpenBB's provider-extension cookiecutter.
+- **Classical forecasting (#446, G003):** a new pure-Rust `tdw-analytics-forecast`
+  crate — naive / seasonal-naive / random-walk-drift baselines, Holt-Winters / ETS,
+  Theta, MSTL decomposition, lag-feature linear regression, an expanding-window
+  backtest harness, RMSE / MAE / MAPE / SMAPE measures, and a quantile-band anomaly
+  scan — as `forecast/*` `Compute` routes.
+- **Workspace-SDK completeness (#447, G004):** the OpenBB Workspace widgets/apps
+  backend (`tdw-widgets`) and copilot bridge (`tdw-openbb-agent`) brought to
+  SDK-completeness (citations, the agent contract).
+- **Desktop chart-render host (#448, G005):** a new `tdw-chart-host` crate — a
+  pure-Rust Plotly host-page assembler with an optional native window behind the
+  off-by-default `gui` feature (`wry`/`tao`); the PyWry-equivalent.
+- **Workspace control-plane MCP (#450, G006):** a new `tdw-workspace-mcp` crate —
+  dashboard/widget CRUD + layout + navigate over a catalog-validated
+  `WorkspaceState` that serializes to `apps.json`.
+- **Discord/Telegram chat-bot surface (#451, G007):** a new `tdw-bot` crate — a
+  pure-Rust offline bot core (parser + router + `BotResponse` + chart payload)
+  with feature-gated `discord`/`telegram` transports and a `charts` PNG path
+  (all off by default); the `openbb-bot`-equivalent.
+- **AutoARIMA (#452, G008):** `ARIMA(p, d, q)` (Hannan-Rissanen two-stage least
+  squares) and `AutoARIMA` (Hyndman-Khandakar-style stepwise order search) added
+  to `tdw-analytics-forecast`, exposed as the `forecast/arima` and
+  `forecast/autoarima` `Compute` routes. Pure Rust, deterministic — OpenBB's
+  Platform does not compute these.
+- **Excel / Office add-in (#453, G009):** `integrations/excel-addin`, a TypeScript
+  Office.js package providing the `FINX.GET` / `FINX.BYOD` / `FINX.ROUTES` custom
+  functions over the FinX REST catalog (all real logic in a unit-tested pure
+  `src/lib`). Shipped as a separate TS package — the deliberate non-Rust
+  deliverable of the campaign.
+
+### Deferred (documented decisions)
+
+- **Deep-learning forecasting** (RNN/LSTM/GRU, NBEATS, NHITS, TCN, TFT,
+  Transformer — OpenBB's `torch`/`darts` tail) is **deferred by decision**: it is
+  at odds with the pure-Rust, zero-heavy-dependency, deterministic, offline-compute
+  posture of the analytics surface. The rationale and the supported future path (an
+  off-by-default `candle`/`burn` feature, or a sidecar) are in
+  [`docs/roadmap/dl-forecasting-deferral.md`](docs/roadmap/dl-forecasting-deferral.md).
+
+### Also included
+
+- **FinX Partner integrity patch (v1.7.1):** the v1.7.1 patch (released
+  2026-06-14) is carried forward — see [1.7.1] below.
+
 ## [1.7.1] - 2026-06-14
 
 **FinX Partner integrity patch.** Closes the integrity gaps a post-release
