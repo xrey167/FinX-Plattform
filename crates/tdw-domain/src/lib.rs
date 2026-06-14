@@ -13,9 +13,8 @@ pub use models::{
     HistoricalMarketCap, ImfDiscoveryRecord, IndexConstituent, IndexSector, KeyExecutive,
     KeyMetrics, LitigationRelease, MacroSeries, NewsArticle, OptionContract, OtcMarketVolume,
     OwnershipRecord, PortfolioReturn, PricePerformance, RateObservation, Ratios, RevenueSegment,
-    ScreenerRow, SecFilingHtml,
-    SecInstitution, SeriesSearchResult, ShortInterest, SicCode, Sp500Multiple, StatementKind,
-    SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
+    ScreenerRow, SecFilingHtml, SecInstitution, SeriesSearchResult, ShortInterest, SicCode,
+    Sp500Multiple, StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;
