@@ -14263,5 +14263,322 @@
     ],
     "staleTime": 60000,
     "type": "table"
+  },
+  "uscongress_bill_info": {
+    "category": "uscongress",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "bill_number",
+            "headerName": "Bill Number"
+          },
+          {
+            "cellDataType": "text",
+            "field": "bill_type",
+            "headerName": "Bill Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "congress",
+            "headerName": "Congress"
+          },
+          {
+            "cellDataType": "text",
+            "field": "introduced_date",
+            "headerName": "Introduced Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "latest_action",
+            "headerName": "Latest Action"
+          },
+          {
+            "cellDataType": "text",
+            "field": "latest_action_date",
+            "headerName": "Latest Action Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "origin_chamber",
+            "headerName": "Origin Chamber"
+          },
+          {
+            "cellDataType": "text",
+            "field": "policy_area",
+            "headerName": "Policy Area"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sponsor",
+            "headerName": "Sponsor"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "update_date",
+            "headerName": "Update Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Detailed metadata for a single US Congress bill (congress.gov, free key).",
+    "endpoint": "/widget-data/uscongress/bill_info",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "uscongress_bill_info",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Bill Info",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "uscongress_bill_text_urls": {
+    "category": "uscongress",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "date",
+            "headerName": "Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "format_type",
+            "headerName": "Format Type"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          },
+          {
+            "cellDataType": "text",
+            "field": "version_type",
+            "headerName": "Version Type"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Downloadable text-version URLs for a US Congress bill (congress.gov, free key).",
+    "endpoint": "/widget-data/uscongress/bill_text_urls",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "uscongress_bill_text_urls",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Bill Text Urls",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "uscongress_bills": {
+    "category": "uscongress",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "bill_number",
+            "headerName": "Bill Number"
+          },
+          {
+            "cellDataType": "text",
+            "field": "bill_type",
+            "headerName": "Bill Type"
+          },
+          {
+            "cellDataType": "number",
+            "field": "congress",
+            "headerName": "Congress"
+          },
+          {
+            "cellDataType": "text",
+            "field": "introduced_date",
+            "headerName": "Introduced Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "latest_action",
+            "headerName": "Latest Action"
+          },
+          {
+            "cellDataType": "text",
+            "field": "latest_action_date",
+            "headerName": "Latest Action Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "origin_chamber",
+            "headerName": "Origin Chamber"
+          },
+          {
+            "cellDataType": "text",
+            "field": "policy_area",
+            "headerName": "Policy Area"
+          },
+          {
+            "cellDataType": "text",
+            "field": "sponsor",
+            "headerName": "Sponsor"
+          },
+          {
+            "cellDataType": "text",
+            "field": "title",
+            "headerName": "Title"
+          },
+          {
+            "cellDataType": "text",
+            "field": "update_date",
+            "headerName": "Update Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "url",
+            "headerName": "Url"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "List US Congress bills for a congress and bill type (congress.gov, free key).",
+    "endpoint": "/widget-data/uscongress/bills",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "uscongress_bills",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Bills",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
   }
 }

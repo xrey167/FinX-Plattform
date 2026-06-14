@@ -35,6 +35,7 @@ from .portfolio import PortfolioNamespace
 from .quantitative import QuantitativeNamespace
 from .regulators import RegulatorsNamespace
 from .technical import TechnicalNamespace
+from .uscongress import UscongressNamespace
 
 __all__ = [
     "FinX",
@@ -77,4 +78,5 @@ class FinX:
         self.quantitative = QuantitativeNamespace(self._client)
         self.regulators = RegulatorsNamespace(self._client)
         self.technical = TechnicalNamespace(self._client)
+        self.uscongress = UscongressNamespace(self._client)
 
