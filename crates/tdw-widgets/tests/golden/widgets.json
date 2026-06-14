@@ -770,7 +770,6 @@
           {
             "cellDataType": "number",
             "field": "expiration_timestamp",
-            "formatterFn": "percent",
             "headerName": "Expiration Timestamp"
           },
           {
@@ -865,7 +864,6 @@
           {
             "cellDataType": "number",
             "field": "expiration_timestamp",
-            "formatterFn": "percent",
             "headerName": "Expiration Timestamp"
           },
           {
@@ -975,7 +973,6 @@
           {
             "cellDataType": "text",
             "field": "expiration",
-            "formatterFn": "percent",
             "headerName": "Expiration"
           },
           {
@@ -1116,7 +1113,6 @@
           {
             "cellDataType": "text",
             "field": "expiration",
-            "formatterFn": "percent",
             "headerName": "Expiration"
           },
           {
@@ -1257,7 +1253,6 @@
           {
             "cellDataType": "text",
             "field": "expiration",
-            "formatterFn": "percent",
             "headerName": "Expiration"
           },
           {
@@ -1398,7 +1393,6 @@
           {
             "cellDataType": "text",
             "field": "expiration",
-            "formatterFn": "percent",
             "headerName": "Expiration"
           },
           {

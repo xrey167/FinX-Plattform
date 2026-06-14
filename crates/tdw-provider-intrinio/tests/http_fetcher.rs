@@ -154,20 +154,57 @@ fn reported_financials_cassette_collapses_line_items() {
             { "xbrl_tag": "Revenues", "value": 391035000000.0 },
             { "reported_tag": { "tag": "NetIncomeLoss" }, "value": 93736000000.0 },
             { "xbrl_tag": "Skipped", "value": null }
-        ]
+        ],
+        "fundamental": {
+            "fiscal_year": 2024,
+            "fiscal_period": "FY",
+            "end_date": "2024-09-28",
+            "filing_date": "2024-11-01T00:00:00.000Z",
+            "company": { "ticker": "AAPL" }
+        }
     });
     let rows = fetcher
         .transform_data(&query, raw)
         .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].symbol, "fun_abc123");
+    // The standardized row anchors on the company ticker and lifts the typed
+    // period headers from the sibling `fundamental` block (not the query id).
+    assert_eq!(rows[0].symbol, "AAPL");
+    assert_eq!(rows[0].fiscal_year, Some(2024));
+    assert_eq!(rows[0].fiscal_period.as_deref(), Some("FY"));
+    assert_eq!(rows[0].date.as_deref(), Some("2024-09-28"));
+    assert_eq!(rows[0].filing_date.as_deref(), Some("2024-11-01"));
     assert_eq!(rows[0].line_items.get("Revenues"), Some(&391_035_000_000.0));
     assert_eq!(
         rows[0].line_items.get("NetIncomeLoss"),
         Some(&93_736_000_000.0)
     );
     assert!(!rows[0].line_items.contains_key("Skipped"));
+}
+
+#[test]
+fn reported_financials_falls_back_to_query_id_without_fundamental() {
+    let fetcher = IntrinioHttpReportedFinancialsFetcher::default();
+    let query = IntrinioHttpReportedFinancialsFetcher::transform_query(json!({
+        "command": "equity/fundamental/reported_financials",
+        "identifier": "fun_abc123"
+    }))
+    .unwrap_or_else(|error| panic!("query should transform: {error}"));
+
+    let rows = fetcher
+        .transform_data(
+            &query,
+            cassette_bytes!({
+                "reported_financials": [{ "xbrl_tag": "Revenues", "value": 1.0 }]
+            }),
+        )
+        .unwrap_or_else(|error| panic!("transform_data must succeed: {error}"));
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].symbol, "fun_abc123");
+    assert_eq!(rows[0].fiscal_year, None);
+    assert_eq!(rows[0].fiscal_period, None);
 }
 
 #[test]
