@@ -307,6 +307,72 @@
         "title": "CommodityReportRow",
         "type": "object"
       },
+      "CompanyAttribute": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single standardized company data-point / attribute observation.\n\nStandardizes the `equity/fundamental/historical_attributes`,\n`equity/fundamental/latest_attributes`, and `equity/fundamental/search_attributes`\ncluster (`Intrinio`-backed). Intrinio exposes thousands of standardized\n\"data-point\" tags (e.g. `marketcap`, `pricetoearnings`, `ebitda`) reachable\nindividually per company or as a historical series; one row = one\n(symbol, tag, date) observation, or one matched tag for the search variant.\nNumeric and descriptive fields are [`Option`] since the latest-point and\nmetadata-search variants populate different subsets.",
+        "properties": {
+          "date": {
+            "description": "Observation date for a (historical) attribute series, `YYYY-MM-DD`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Human-readable tag name, where the API reports it (search/metadata).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statement_code": {
+            "description": "Statement type / category the tag belongs to, where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "description": "Company identifier the attribute belongs to (ticker / Intrinio id).\nEmpty for the metadata `search_attributes` variant, which describes a\ntag rather than a company observation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tag": {
+            "description": "Standardized data-point tag, e.g. `\"marketcap\"`, `\"pricetoearnings\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "text_value": {
+            "description": "Textual attribute value, when the tag is non-numeric.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "description": "Unit / type label for the tag, where reported, e.g. `\"usd\"`, `\"ratio\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "Numeric attribute value, when the tag is numeric.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "tag"
+        ],
+        "title": "CompanyAttribute",
+        "type": "object"
+      },
       "CompanyFacts": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A single reported company fact (an XBRL concept value for a period).\n\nStandardizes `equity/compare/company_facts` (SEC\n`api/xbrl/companyfacts/CIK*.json`). One row = one (concept, period) value the\nfiler reported. The taxonomy/concept/unit identify the fact; `value` and the\nperiod anchors are [`Option`] because the SEC fact set reports a variable\nsubset per concept.",
@@ -4974,6 +5040,333 @@
           }
         },
         "summary": "Delayed options chain (calls and puts across expiries), Yahoo-backed.",
+        "tags": [
+          "derivatives"
+        ]
+      }
+    },
+    "/api/v1/derivatives/options/snapshots": {
+      "get": {
+        "operationId": "derivatives_options_snapshots",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionContract"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Options market snapshots across the chain (quote / greeks), Intrinio-backed (keyed).",
+        "tags": [
+          "derivatives"
+        ]
+      }
+    },
+    "/api/v1/derivatives/options/surface": {
+      "get": {
+        "operationId": "derivatives_options_surface",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionContract"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Implied-volatility surface inputs over the options chain (per-contract IV / greeks); the surface solver is a documented follow-up. Intrinio-backed (keyed).",
+        "tags": [
+          "derivatives"
+        ]
+      }
+    },
+    "/api/v1/derivatives/options/unusual": {
+      "get": {
+        "operationId": "derivatives_options_unusual",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptionContract"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Unusual options activity (block / sweep trades) for a symbol, Intrinio-backed (keyed).",
         "tags": [
           "derivatives"
         ]
@@ -10865,6 +11258,224 @@
         ]
       }
     },
+    "/api/v1/equity/estimates/forward_pe": {
+      "get": {
+        "operationId": "equity_estimates_forward_pe",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Forward price-to-earnings analyst estimates per period, Intrinio-backed (keyed).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/estimates/forward_sales": {
+      "get": {
+        "operationId": "equity_estimates_forward_sales",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Forward sales analyst estimates per period, Intrinio-backed (keyed).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/estimates/historical_eps": {
       "get": {
         "operationId": "equity_estimates_historical_eps",
@@ -11955,6 +12566,115 @@
         ]
       }
     },
+    "/api/v1/equity/fundamental/historical_attributes": {
+      "get": {
+        "operationId": "equity_fundamental_historical_attributes",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAttribute"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Historical time series for a standardized data-point tag of a company, Intrinio-backed (keyed).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/fundamental/historical_eps": {
       "get": {
         "operationId": "equity_fundamental_historical_eps",
@@ -12277,6 +12997,115 @@
           }
         },
         "summary": "Income-statement growth rates per period, FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/latest_attributes": {
+      "get": {
+        "operationId": "equity_fundamental_latest_attributes",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAttribute"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Latest value of a standardized data-point tag for a company, Intrinio-backed (keyed).",
         "tags": [
           "equity"
         ]
@@ -12718,6 +13547,115 @@
         ]
       }
     },
+    "/api/v1/equity/fundamental/reported_financials": {
+      "get": {
+        "operationId": "equity_fundamental_reported_financials",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialStatement"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "As-reported financial statement line items for a fundamental, Intrinio-backed (keyed).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/fundamental/revenue_per_geography": {
       "get": {
         "operationId": "equity_fundamental_revenue_per_geography",
@@ -12931,6 +13869,115 @@
           }
         },
         "summary": "Revenue broken down by business product segment per period, FMP-backed.",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/fundamental/search_attributes": {
+      "get": {
+        "operationId": "equity_fundamental_search_attributes",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyAttribute"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Search the standardized data-point tag dictionary, Intrinio-backed (keyed).",
         "tags": [
           "equity"
         ]

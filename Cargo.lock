@@ -6345,6 +6345,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tdw-provider-intrinio"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "tdw-provider-testkit",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "tdw-provider-nasdaq"
 version = "0.1.0"
 dependencies = [
@@ -6735,6 +6752,7 @@ dependencies = [
  "tdw-provider-government-us",
  "tdw-provider-huggingface",
  "tdw-provider-imf",
+ "tdw-provider-intrinio",
  "tdw-provider-nasdaq",
  "tdw-provider-oecd",
  "tdw-provider-polygon",

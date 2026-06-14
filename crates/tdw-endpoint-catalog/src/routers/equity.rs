@@ -3,7 +3,7 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CalendarEvent, CompanyFacts, CompanyFiling, CompanyProfile, CorporateAction,
+    CalendarEvent, CompanyAttribute, CompanyFacts, CompanyFiling, CompanyProfile, CorporateAction,
     EarningsTranscript, EmployeeCount, EquityHistoricalData, EsgScore, Estimate,
     ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument, KeyExecutive,
     KeyMetrics, OtcMarketVolume, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
@@ -207,6 +207,35 @@ const EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS: &[ProviderCandidate] = &[Provider
     "discovery_undervalued_large_caps",
 )];
 
+// Intrinio keyed-provider fundamentals/estimates breadth (openbb-parity total
+// wave G002). Each route is its own catalog-backed Intrinio fetcher whose
+// `ENDPOINT` const is the route's `'/'→'_'` form (the dispatch key). All keyed
+// (Intrinio only; live calls require the PAID INTRINIO_API_KEY).
+const EQUITY_FUNDAMENTAL_HISTORICAL_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_historical_attributes",
+)];
+const EQUITY_FUNDAMENTAL_LATEST_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_latest_attributes",
+)];
+const EQUITY_FUNDAMENTAL_SEARCH_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_search_attributes",
+)];
+const EQUITY_FUNDAMENTAL_REPORTED_FINANCIALS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_reported_financials",
+)];
+const EQUITY_ESTIMATES_FORWARD_PE: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_estimates_forward_pe",
+)];
+const EQUITY_ESTIMATES_FORWARD_SALES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_estimates_forward_sales",
+)];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
 }
@@ -245,6 +274,10 @@ fn calendar_event() -> Schema {
 
 fn financial_statement() -> Schema {
     schema_for!(FinancialStatement)
+}
+
+fn company_attribute() -> Schema {
+    schema_for!(CompanyAttribute)
 }
 
 fn key_metrics() -> Schema {
@@ -469,7 +502,64 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries.extend(p4w2_entries());
     entries.extend(p4w3_entries());
     entries.extend(p4w10_entries());
+    entries.extend(g002_intrinio_entries());
     entries
+}
+
+/// Intrinio keyed-provider fundamentals/estimates entries (openbb-parity total
+/// wave **G002**): the three data-point attribute routes, as-reported
+/// financials, and the forward-PE / forward-sales analyst estimates. Each is its
+/// own catalog-backed Intrinio fetcher keyed by its `ENDPOINT` const. Split out
+/// of [`entries`] to keep each function compact; appended in declaration order.
+/// All keyed (Intrinio only; live calls require the PAID `INTRINIO_API_KEY`).
+fn g002_intrinio_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/historical_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_HISTORICAL_ATTRIBUTES,
+            "raw.company_attribute",
+            "Historical time series for a standardized data-point tag of a company, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/latest_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_LATEST_ATTRIBUTES,
+            "raw.company_attribute",
+            "Latest value of a standardized data-point tag for a company, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/search_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_SEARCH_ATTRIBUTES,
+            "raw.company_attribute",
+            "Search the standardized data-point tag dictionary, Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/reported_financials",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_REPORTED_FINANCIALS,
+            "raw.financial_statement",
+            "As-reported financial statement line items for a fundamental, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/estimates/forward_pe",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_PE,
+            "raw.estimate",
+            "Forward price-to-earnings analyst estimates per period, Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/estimates/forward_sales",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_SALES,
+            "raw.estimate",
+            "Forward sales analyst estimates per period, Intrinio-backed (keyed).",
+        ),
+    ]
 }
 
 /// Keyless FINRA shorts / dark-pool entries (openbb-parity **P4W10**): reported
