@@ -55,6 +55,7 @@ pub mod writeback;
 
 use std::sync::Arc;
 
+use tdw_infer::InferEngine;
 use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_llm::StreamingLanguageModel;
 use tdw_openbb_agent::{Answer, QueryRequest, answer};
@@ -141,6 +142,15 @@ pub struct TurnOutcome {
     /// attribute the turn's routing to this generation, and a bumped version is
     /// observable here — the proof that a promotion changed behavior.
     pub infer_generation: u64,
+    /// The answer model's failure, when the streamed generation did NOT complete
+    /// cleanly (MEDIUM, v1.7.1).
+    ///
+    /// `None` on a successful turn. `Some(message)` when `complete_streaming`
+    /// errored mid-stream: [`Self::answer`] then holds at most a PARTIAL answer
+    /// and MUST NOT be persisted as a complete answer. A write-back caller checks
+    /// this flag to distinguish a failed/partial generation from a successful one
+    /// (it previously could only infer failure from a `Reasoning` event string).
+    pub model_error: Option<String>,
 }
 
 /// The shared conversational front door (the partner design §1.2).
@@ -163,6 +173,14 @@ pub struct PartnerCore {
     /// adaptivity so a promoted lesson/rule/param takes effect *this* turn. Core
     /// only reads it — it never mutates the runtime, the §3 invariant.
     knowledge: Option<Arc<KnowledgeRuntime>>,
+    /// The gated induced-rule engine Partner Core READS per turn for learned
+    /// route preferences (the partner design §3, W4.2/W4.3). The gated daemon
+    /// worker owns the engine and hot-reloads only promoted-past-B9 rules into
+    /// it; Core reads the installed rule set via
+    /// [`walk_forward::routing_hints_from`] and never mutates it. `None` keeps a
+    /// surface at the baseline route order (no learned reshaping). The preference
+    /// is therefore ALWAYS the gated signal — never a caller-supplied hint.
+    infer: Option<Arc<InferEngine>>,
 }
 
 impl PartnerCore {
@@ -176,6 +194,7 @@ impl PartnerCore {
             model,
             dataplane,
             knowledge: None,
+            infer: None,
         }
     }
 
@@ -187,6 +206,38 @@ impl PartnerCore {
     pub fn with_knowledge(mut self, runtime: Arc<KnowledgeRuntime>) -> Self {
         self.knowledge = Some(runtime);
         self
+    }
+
+    /// Attach the gated induced-rule `engine` Partner Core reads per turn for
+    /// learned route preferences (the partner design §3, W4.2/W4.3).
+    ///
+    /// Read-only: the core reads the installed (promoted-past-B9) rule set via
+    /// [`walk_forward::routing_hints_from`] to derive a gated route-preference
+    /// list, but never mutates the engine — the daemon worker is the sole writer
+    /// (it hot-reloads only promoted rules). Wiring this is what makes the W4.2
+    /// learned-route reshaping fire on a LIVE turn rather than only in unit tests:
+    /// a preferred route leads the resolution, gated by the principal's adaptivity.
+    #[must_use]
+    pub fn with_infer_engine(mut self, engine: Arc<InferEngine>) -> Self {
+        self.infer = Some(engine);
+        self
+    }
+
+    /// The gated learned route preferences for this turn (W4.2/W4.3).
+    ///
+    /// Reads the installed rule set off the attached [`InferEngine`] and maps its
+    /// induced routing hints to a route-preference list via
+    /// [`walk_forward::route_preferences_from_hints`]. The preference is ALWAYS
+    /// the gated, promoted-past-B9 signal (the engine holds only hot-reloaded
+    /// rules) — never caller-supplied — preserving the audit-only/gated posture.
+    /// Empty when no engine is attached or no induced rule is installed, so the
+    /// resolution stays at the baseline order. The trust-dial gate is applied
+    /// downstream in [`learning::apply_to_resolution`], so a below-`Learning`
+    /// principal is never reshaped even when preferences are present.
+    fn gated_preferred_routes(&self) -> Vec<String> {
+        self.infer.as_ref().map_or_else(Vec::new, |engine| {
+            walk_forward::route_preferences_from_hints(&walk_forward::routing_hints_from(engine))
+        })
     }
 
     /// The current gated learning state for `principal` (W4.1/W4.2).
@@ -227,9 +278,10 @@ impl PartnerCore {
     /// # Errors
     ///
     /// Returns a [`DataPlaneError`] if a resolved data route fails to fetch. The
-    /// answer model's own failure is rendered as a terminal
-    /// [`PartnerEvent::Reasoning`] rather than an error, so the stream always
-    /// closes cleanly.
+    /// answer model's own failure is NOT an `Err`: the stream always closes
+    /// cleanly, the failure is rendered as a terminal [`PartnerEvent::Reasoning`],
+    /// AND it is recorded on [`TurnOutcome::model_error`] so a write-back caller
+    /// can detect a failed/partial generation (MEDIUM, v1.7.1).
     pub async fn turn(
         &self,
         turn: &PartnerTurn,
@@ -241,13 +293,20 @@ impl PartnerCore {
 
         // [0] LEARNING — read the gated runtime ONCE for this turn (W4.1/W4.2,
         // the partner design §3). A promoted lesson/rule/param only reaches here by a
-        // gated version bump; Core reads, never mutates.
-        let learning = self.learning_state(&turn.principal);
+        // gated version bump; Core reads, never mutates. The learned route
+        // preferences are derived from the gated InferEngine's installed
+        // (promoted-past-B9) rule set and threaded onto the snapshot BEFORE the
+        // resolution is reshaped — the gated signal, never a caller hint (W4.2).
+        let learning = self
+            .learning_state(&turn.principal)
+            .with_preferred_routes(self.gated_preferred_routes());
 
         // [1] RESOLVE — catalog-bounded route selection (never free-form), then
         // reshaped by the gated learning state: a promoted inference generation
-        // re-weights / stamps the resolution so a bumped version changes this
-        // turn's behavior (W4.1). With learning inactive this is the baseline.
+        // re-weights / stamps the resolution AND a learned route preference moves
+        // a preferred route ahead, so a bumped version + an induced hint change
+        // this turn's behavior (W4.1/W4.2). With learning inactive this is the
+        // baseline.
         let base_resolved = resolve::resolve_routes(&turn.utterance, self.model.as_ref());
         let applied = learning::apply_to_resolution(&learning, base_resolved);
         let resolved = applied.resolved;
@@ -285,9 +344,19 @@ impl PartnerCore {
             answer_text.push_str(chunk);
             sink(PartnerEvent::Answer(chunk.to_string()));
         });
-        if let Err(error) = stream_result {
-            sink(PartnerEvent::Reasoning(format!("Model error: {error}")));
-        }
+        // A streamed-generation failure is surfaced BOTH as the reasoning step
+        // (so the stream still closes cleanly) AND as `model_error` on the
+        // outcome (MEDIUM, v1.7.1), so a write-back caller can distinguish a
+        // failed/partial generation from a successful one and refuse to persist
+        // the (at most partial) answer as complete.
+        let model_error = match stream_result {
+            Ok(_response) => None,
+            Err(error) => {
+                let message = error.to_string();
+                sink(PartnerEvent::Reasoning(format!("Model error: {message}")));
+                Some(message)
+            }
+        };
 
         // [5] CITATION — close with the provenance the adapter renders.
         if !provenance.is_empty() {
@@ -299,6 +368,7 @@ impl PartnerCore {
             provenance,
             resolved,
             infer_generation: applied.infer_generation,
+            model_error,
         })
     }
 
@@ -401,6 +471,187 @@ mod tests {
                 .with_versions(None, Some(infer_version))
                 .with_adaptivity_resolver(resolver),
         )
+    }
+
+    /// A model that returns a SCRIPTED selection verbatim from `complete` (so the
+    /// resolve step yields exactly the routes named, one per line) and whose
+    /// streaming answer echoes the same text. Used to drive a LIVE turn with a
+    /// known multi-route resolution so the learned-reorder is observable.
+    struct ScriptedModel {
+        selection: String,
+    }
+
+    impl tdw_llm::LanguageModel for ScriptedModel {
+        fn model_id(&self) -> &'static str {
+            "scripted-test"
+        }
+        fn complete(
+            &self,
+            _request: tdw_llm::ChatRequest,
+        ) -> tdw_llm::Result<tdw_llm::ChatResponse> {
+            Ok(tdw_llm::ChatResponse {
+                model_id: "scripted-test".to_string(),
+                message: tdw_llm::ChatMessage {
+                    role: tdw_llm::MessageRole::Assistant,
+                    content: self.selection.clone(),
+                },
+                usage: tdw_llm::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
+            })
+        }
+    }
+    impl tdw_llm::StreamingLanguageModel for ScriptedModel {}
+
+    /// A model whose generation leg ALWAYS fails — drives the MEDIUM model-error
+    /// path so the turn surfaces `model_error` instead of a silent partial Ok.
+    struct FailingModel;
+    impl tdw_llm::LanguageModel for FailingModel {
+        fn model_id(&self) -> &'static str {
+            "failing-test"
+        }
+        fn complete(
+            &self,
+            _request: tdw_llm::ChatRequest,
+        ) -> tdw_llm::Result<tdw_llm::ChatResponse> {
+            Err(tdw_llm::LlmError::EmptyMessages)
+        }
+    }
+    impl tdw_llm::StreamingLanguageModel for FailingModel {}
+
+    // ── MEDIUM (v1.7.1): a model-leg failure is detectable on the outcome ─────
+
+    #[tokio::test]
+    async fn model_error_is_surfaced_on_the_turn_outcome() {
+        // The generation leg fails: the turn still returns Ok (the stream closes
+        // cleanly) BUT model_error is Some, and the answer is empty — a write-back
+        // caller MUST NOT persist this partial answer as complete.
+        let core = PartnerCore::new(Arc::new(FailingModel), Arc::new(FixturePlane::default()));
+        let turn = PartnerTurn::new(Principal::new("s", "a"), "hello");
+        let mut events = Vec::new();
+        let outcome = core
+            .turn(&turn, &mut |event| events.push(event))
+            .await
+            .expect("turn closes cleanly even on a model error");
+        assert!(
+            outcome.model_error.is_some(),
+            "a failed generation is detectable on the outcome: {outcome:?}"
+        );
+        assert!(
+            outcome.answer.is_empty(),
+            "no partial answer accumulated when the model errors: {:?}",
+            outcome.answer
+        );
+        // The reasoning event still reports the error so the stream is legible.
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, PartnerEvent::Reasoning(message) if message.contains("Model error"))),
+            "the model error is also rendered as a reasoning step: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_turn_has_no_model_error() {
+        // The happy path: a clean generation leaves model_error None, so a
+        // write-back caller knows the answer is complete.
+        let core = core_with(HashMap::new());
+        let turn = PartnerTurn::new(Principal::new("s", "a"), "What is a P/E ratio?");
+        let outcome = core.turn(&turn, &mut |_| {}).await.expect("turn completes");
+        assert!(
+            outcome.model_error.is_none(),
+            "a successful turn carries no model_error: {outcome:?}"
+        );
+    }
+
+    /// A gated infer engine holding one INSTALLED (hot-reloaded, hence
+    /// promoted-past-B9) induced rule whose derived type's route-prefix segment is
+    /// `route_prefix` — the gated W4.2 route-preference signal Partner Core reads.
+    fn infer_engine_preferring(route_prefix: &str) -> Arc<tdw_infer::InferEngine> {
+        use tdw_infer::{EdgePattern, InferEngine, InferRule};
+        let mut engine = InferEngine::default();
+        engine
+            .hot_reload(vec![InferRule::DeriveEdge {
+                rule_id: "inducted_pattern_test".to_string(),
+                stratum: 0,
+                when: vec![EdgePattern {
+                    rel: "supplier_of".to_string(),
+                }],
+                // `inducted:<prefix>--<rel>`: route_preferences_from_hints strips
+                // the namespace and takes the pre-`--` segment as the preference.
+                derived_type: format!("inducted:{route_prefix}--supplier_of"),
+            }])
+            .expect("hot_reload installs the induced rule");
+        Arc::new(engine)
+    }
+
+    // ── W4.2 (v1.7.1): a LIVE turn re-orders routes so the learned route leads ─
+
+    #[tokio::test]
+    async fn live_turn_reorders_routes_so_gated_preference_leads() {
+        // A scripted resolution names a non-equity route FIRST, then an equity
+        // route. The gated infer engine carries an induced rule preferring the
+        // `equity` family. On a LIVE turn (gate open via the Learning runtime),
+        // the learned preference must move the equity route AHEAD — the W4.2
+        // promise firing in the product, not only in a learning.rs unit test.
+        let mut rows = HashMap::new();
+        rows.insert("news/world".to_string(), serde_json::json!({"rows": []}));
+        rows.insert(
+            "equity/profile".to_string(),
+            serde_json::json!({"rows": []}),
+        );
+        let scripted = Arc::new(ScriptedModel {
+            selection: "news/world\nequity/profile".to_string(),
+        });
+        let core = PartnerCore {
+            model: scripted,
+            dataplane: Arc::new(FixturePlane { rows }),
+            knowledge: Some(runtime_at_generation(1)),
+            infer: Some(infer_engine_preferring("equity")),
+        };
+        let turn = PartnerTurn::new(Principal::new("sess", "agent:partner"), "How did AAPL do?");
+        let outcome = core
+            .turn(&turn, &mut |_| {})
+            .await
+            .expect("live turn completes");
+
+        // Baseline resolution order is news/world then equity/profile; the
+        // gated preference for `equity` moves the equity route to lead.
+        assert_eq!(
+            outcome.resolved.data_routes(),
+            vec!["equity/profile".to_string(), "news/world".to_string()],
+            "the learned-preferred route leads on a live turn: {:?}",
+            outcome.resolved.data_routes()
+        );
+    }
+
+    #[tokio::test]
+    async fn live_turn_without_infer_engine_keeps_baseline_order() {
+        // No gated engine attached → no learned preference → baseline order, so
+        // the reshaping is bounded by the gated signal even with learning active.
+        let mut rows = HashMap::new();
+        rows.insert("news/world".to_string(), serde_json::json!({"rows": []}));
+        rows.insert(
+            "equity/profile".to_string(),
+            serde_json::json!({"rows": []}),
+        );
+        let scripted = Arc::new(ScriptedModel {
+            selection: "news/world\nequity/profile".to_string(),
+        });
+        let core = PartnerCore {
+            model: scripted,
+            dataplane: Arc::new(FixturePlane { rows }),
+            knowledge: Some(runtime_at_generation(1)),
+            infer: None,
+        };
+        let turn = PartnerTurn::new(Principal::new("sess", "agent:partner"), "How did AAPL do?");
+        let outcome = core.turn(&turn, &mut |_| {}).await.expect("turn completes");
+        assert_eq!(
+            outcome.resolved.data_routes(),
+            vec!["news/world".to_string(), "equity/profile".to_string()],
+            "no gated engine → baseline order preserved"
+        );
     }
 
     // ── W4.1: a bumped promoted version changes the turn's behavior ──────────

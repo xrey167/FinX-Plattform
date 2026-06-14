@@ -23,6 +23,17 @@ tdw-llm = { workspace = true }
 tdw-openbb-agent = { workspace = true }
 tdw-tags = { path = "../tdw-tags" }
 tdw-taxonomy = { workspace = true }
+# tdw-eval-runner backs the W4.4 walk-forward usefulness harness
+# (walk_forward::walk_forward_usefulness), exposed as a PUBLIC non-test eval
+# entry point ONLY under the `eval-harness` feature. The default (leaf) build
+# never pulls it in — the gated daemon's eval loop / a benchmark gate turns the
+# feature on. Keeping it optional preserves tdw-partner's leaf posture.
+tdw-eval-runner = { path = "../tdw-eval-runner", optional = true }
+
+[features]
+# Compiles the public walk-forward usefulness eval entry point (W4.4). Off by
+# default so the heavy offline-replay dependency stays out of the leaf build.
+eval-harness = ["dep:tdw-eval-runner"]
 
 [dev-dependencies]
 chrono = { workspace = true }

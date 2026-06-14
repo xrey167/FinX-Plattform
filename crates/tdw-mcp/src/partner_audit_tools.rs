@@ -100,8 +100,12 @@ pub fn undo_descriptor() -> ToolDescriptor {
          an inverse Forget (retire to cold); a param-tune / promote is reversed by a re-tune / \
          retire through the gate. Pass the audited `action` (one record from tdw.partner.audit). \
          Returns the reversal plan: which cold-plane move undoes it and the (from, rel, to) edge \
-         it touches. The graph write itself is performed by the daemon, which holds the engine; \
-         the historical record is never destroyed (recall/retire preserve the cold audit trail).",
+         it touches, plus the action's `status` and a `needs_confirmation` flag. When the action \
+         is AwaitingHuman (high-impact / low-confidence / irreversible), `needs_confirmation` is \
+         true and the daemon must NOT apply the reversal without explicit human confirmation — the \
+         human-in-the-loop posture survives into the reversal surface. The graph write itself is \
+         performed by the daemon, which holds the engine; the historical record is never destroyed \
+         (recall/retire preserve the cold audit trail).",
         json!({
             "type": "object",
             "properties": {
@@ -234,9 +238,19 @@ pub fn execute_undo(arguments: &Map<String, Value>) -> Result<ToolExecution, Too
         ),
     };
 
+    // The HITL posture must survive into the reversal surface (MEDIUM, v1.7.1):
+    // an action the escalation predicate flagged `AwaitingHuman` (high-impact /
+    // low-confidence / irreversible) must NOT yield a ready-to-execute reversal.
+    // We surface the action's status and, when it is AwaitingHuman, mark the plan
+    // `needs_confirmation` so the daemon refuses to apply it without explicit
+    // human confirmation — mirroring the escalation predicate, not re-deciding it.
+    let needs_confirmation = action.status == tdw_partner::ActionStatus::AwaitingHuman;
+
     Ok(structured(json!({
         "action_id": action.id,
         "reversible": action.reversible,
+        "status": action.status,
+        "needs_confirmation": needs_confirmation,
         "method": method,
         "edge": edge,
         "param": param,
@@ -419,6 +433,55 @@ mod tests {
         let execution = ok(execute_undo(&arguments));
         assert_eq!(execution.structured["method"], json!("retire_edge_to_cold"));
         assert_eq!(execution.structured["edge"]["to"], json!("annotation:p7"));
+    }
+
+    #[test]
+    fn undo_of_an_awaiting_human_action_requires_confirmation() {
+        // A high-impact Forget the escalation predicate flagged AwaitingHuman must
+        // NOT yield a ready-to-execute reversal: the plan still describes the
+        // cold-plane move (so the human can see what WOULD happen) but flags
+        // `needs_confirmation` so the daemon refuses to apply it un-reviewed
+        // (MEDIUM, v1.7.1 — the HITL posture survives into the reversal surface).
+        let arguments = args(&json!({
+            "action": {
+                "id": "action:proposal:p9",
+                "agent_id": "agent:partner",
+                "what": { "kind": "forget", "proposal_id": "p9", "from": "thesis:core", "rel": "supports", "to": "x" },
+                "why": { "routes": ["why: high-impact"], "kg_nodes": [], "as_of": null },
+                "confidence": 0.95,
+                "reversible": true,
+                "status": "awaiting_human"
+            }
+        }));
+        let execution = ok(execute_undo(&arguments));
+        // The reversal is still described (reversible action), but gated on a human.
+        assert_eq!(execution.structured["method"], json!("recall_cold_edge"));
+        assert_eq!(execution.structured["status"], json!("awaiting_human"));
+        assert_eq!(
+            execution.structured["needs_confirmation"],
+            json!(true),
+            "an AwaitingHuman action's reversal requires explicit confirmation"
+        );
+    }
+
+    #[test]
+    fn undo_of_an_auto_accepted_action_needs_no_confirmation() {
+        // The default posture: an auto-accepted action's reversal is ready to
+        // execute (no human gate), so needs_confirmation is false.
+        let arguments = args(&json!({
+            "action": {
+                "id": "action:proposal:p1",
+                "agent_id": "agent:partner",
+                "what": { "kind": "forget", "proposal_id": "p1", "from": "company:ACME", "rel": "hq_in", "to": "city:old" },
+                "why": { "routes": ["why: stale"], "kg_nodes": [], "as_of": null },
+                "confidence": 0.95,
+                "reversible": true,
+                "status": "auto_accepted"
+            }
+        }));
+        let execution = ok(execute_undo(&arguments));
+        assert_eq!(execution.structured["status"], json!("auto_accepted"));
+        assert_eq!(execution.structured["needs_confirmation"], json!(false));
     }
 
     #[test]

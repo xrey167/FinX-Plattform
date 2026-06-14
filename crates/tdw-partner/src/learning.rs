@@ -91,13 +91,15 @@ impl LearningState {
             infer_version: versions.infer_version,
             rules_version: versions.rules_version,
             adaptivity,
-            // The runtime exposes no structured per-principal preference map; the
-            // gated daemon populates learned preferences onto the snapshot via
-            // [`Self::with_preferred_routes`] from the induction/self_tune output
-            // (whose presence is itself a gated version bump). Reading the
-            // baseline runtime yields no preferences, so routing is untouched
-            // until the gate produces one — the honest "bounded by the gated
-            // signal" default.
+            // The runtime exposes no structured per-principal preference map, so
+            // this read yields no preferences by itself. Partner Core fills them on
+            // the snapshot via [`Self::with_preferred_routes`] from the gated
+            // InferEngine's installed (promoted-past-B9) rule set — see
+            // `PartnerCore::gated_preferred_routes` /
+            // [`crate::routing_hints_from`] — BEFORE `apply_to_resolution` runs, so
+            // a live turn is reshaped by the gated signal. Reading the baseline
+            // runtime alone leaves routing untouched — the honest "bounded by the
+            // gated signal" default.
             preferred_routes: Vec::new(),
         }
     }
