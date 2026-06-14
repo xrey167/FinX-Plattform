@@ -13,6 +13,11 @@ thiserror = { workspace = true }
 tdw-core = { workspace = true }
 tdw-domain = { workspace = true }
 tdw-endpoint-catalog = { workspace = true }
+# tdw-infer is a LIGHT leaf (core/tags/taxonomy/storage-graph — no cycle): the
+# W4.3 routing-hint reader reads the installed (promoted-past-B9) rule set off
+# an InferEngine. Partner Core only READS it; the engine is driven by the gated
+# daemon worker, never mutated here.
+tdw-infer = { path = "../tdw-infer" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
 tdw-openbb-agent = { workspace = true }
@@ -24,6 +29,11 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 tdw-embed-local = { path = "../tdw-embed-local" }
 tdw-eval-runner = { path = "../tdw-eval-runner" }
+# tdw-induction / tdw-patterns are DEV-only: the W4.3 gate test and the W4.4
+# walk-forward usefulness harness drive the real induction → promote-gate →
+# hot_reload path offline. Production code reads only the installed rule set.
+tdw-induction = { workspace = true }
+tdw-patterns = { workspace = true }
 tdw-storage-graph = { path = "../tdw-storage-graph" }
 tdw-storage-qdrant = { path = "../tdw-storage-qdrant" }
 # tdw-cron / tdw-protocol are DEV-only here: the production schedule trigger is
