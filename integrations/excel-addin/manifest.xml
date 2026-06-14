@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FinX Excel Add-in manifest.
+
+  Declares the Office.js custom functions (FINX.GET / FINX.BYOD / FINX.ROUTES)
+  and a configuration task pane. The https URLs below are PLACEHOLDERS for the
+  static bundle you host yourself (see README.md): replace `https://localhost:3000`
+  with the origin where you serve `dist/` + the html pages, then sideload this
+  manifest into Excel.
+
+  The GUID below is a placeholder — generate your own (e.g. `uuidgen`) before
+  publishing to avoid clashing with other tenants' add-ins.
+-->
+<OfficeApp
+  xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+  xsi:type="TaskPaneApp">
+
+  <Id>00000000-0000-0000-0000-000000000000</Id>
+  <Version>0.1.0.0</Version>
+  <ProviderName>FinX</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="FinX" />
+  <Description DefaultValue="FinX custom functions over the FinX REST API: FINX.GET / FINX.BYOD." />
+  <IconUrl DefaultValue="https://localhost:3000/assets/icon-32.png" />
+  <HighResolutionIconUrl DefaultValue="https://localhost:3000/assets/icon-64.png" />
+  <SupportUrl DefaultValue="https://localhost:3000/" />
+
+  <Hosts>
+    <Host Name="Workbook" />
+  </Hosts>
+
+  <Requirements>
+    <Sets DefaultMinVersion="1.1">
+      <Set Name="SharedRuntime" MinVersion="1.1" />
+    </Sets>
+  </Requirements>
+
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://localhost:3000/taskpane.html" />
+  </DefaultSettings>
+
+  <Permissions>ReadWriteDocument</Permissions>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Workbook">
+        <Runtimes>
+          <Runtime resid="FinX.SharedRuntime.Url" lifetime="long" />
+        </Runtimes>
+        <AllFormFactors>
+          <ExtensionPoint xsi:type="CustomFunctions">
+            <Script>
+              <SourceLocation resid="FinX.Functions.Script.Url" />
+            </Script>
+            <Page>
+              <SourceLocation resid="FinX.Functions.Page.Url" />
+            </Page>
+            <Metadata>
+              <SourceLocation resid="FinX.Functions.Metadata.Url" />
+            </Metadata>
+            <Namespace resid="FinX.Namespace" />
+          </ExtensionPoint>
+        </AllFormFactors>
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="FinX.GetStarted.Title" />
+            <Description resid="FinX.GetStarted.Description" />
+            <LearnMoreUrl resid="FinX.SupportUrl" />
+          </GetStarted>
+          <FunctionFile resid="FinX.SharedRuntime.Url" />
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="FinX.Group">
+                <Label resid="FinX.Group.Label" />
+                <Control xsi:type="Button" id="FinX.TaskpaneButton">
+                  <Label resid="FinX.Taskpane.Label" />
+                  <Supertip>
+                    <Title resid="FinX.Taskpane.Label" />
+                    <Description resid="FinX.Taskpane.Tip" />
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="FinX.Icon.16" />
+                    <bt:Image size="32" resid="FinX.Icon.32" />
+                    <bt:Image size="80" resid="FinX.Icon.80" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>FinX.Taskpane</TaskpaneId>
+                    <SourceLocation resid="FinX.Taskpane.Url" />
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+
+    <Resources>
+      <bt:Images>
+        <bt:Image id="FinX.Icon.16" DefaultValue="https://localhost:3000/assets/icon-16.png" />
+        <bt:Image id="FinX.Icon.32" DefaultValue="https://localhost:3000/assets/icon-32.png" />
+        <bt:Image id="FinX.Icon.80" DefaultValue="https://localhost:3000/assets/icon-80.png" />
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="FinX.SharedRuntime.Url" DefaultValue="https://localhost:3000/functions.html" />
+        <bt:Url id="FinX.Functions.Script.Url" DefaultValue="https://localhost:3000/functions.js" />
+        <bt:Url id="FinX.Functions.Page.Url" DefaultValue="https://localhost:3000/functions.html" />
+        <bt:Url id="FinX.Functions.Metadata.Url" DefaultValue="https://localhost:3000/functions.json" />
+        <bt:Url id="FinX.Taskpane.Url" DefaultValue="https://localhost:3000/taskpane.html" />
+        <bt:Url id="FinX.SupportUrl" DefaultValue="https://localhost:3000/" />
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="FinX.Namespace" DefaultValue="FINX" />
+        <bt:String id="FinX.Group.Label" DefaultValue="FinX" />
+        <bt:String id="FinX.Taskpane.Label" DefaultValue="FinX Settings" />
+        <bt:String id="FinX.GetStarted.Title" DefaultValue="FinX is ready" />
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="FinX.Taskpane.Tip" DefaultValue="Configure the FinX REST base URL and API key." />
+        <bt:String id="FinX.GetStarted.Description" DefaultValue="Use =FINX.GET(route, params) in any cell. Open FinX Settings to set the base URL." />
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

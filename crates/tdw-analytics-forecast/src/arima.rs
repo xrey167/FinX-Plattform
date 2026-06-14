@@ -123,6 +123,14 @@ fn integrate(diff_fc: &[f64], anchors: &[f64]) -> Vec<f64> {
 /// residuals)`. The residuals are aligned to `w[order..]`.
 fn fit_ar(w: &[f64], order: usize) -> Result<(f64, Vec<f64>, Vec<f64>), ForecastError> {
     let n = w.len();
+    // Guard the row-count subtraction: with `n <= order` there are no rows to
+    // regress on and `n - order` would underflow (panic in debug, wrap to a
+    // huge value in release). Fail cleanly instead.
+    if n <= order {
+        return Err(ForecastError::Regression(
+            "series too short for the requested AR order".to_string(),
+        ));
+    }
     let rows = n - order;
     let mut response = Vec::with_capacity(rows);
     let mut lag_cols: Vec<Vec<f64>> = vec![Vec::with_capacity(rows); order];
@@ -564,6 +572,24 @@ mod tests {
             fit(&[1.0, 2.0, 3.0], 2, 1, 2),
             Err(crate::error::ForecastError::TooShort { .. })
         ));
+    }
+
+    #[test]
+    fn fit_ar_rejects_series_shorter_than_order() {
+        // A series no longer than the AR order has no regression rows: the
+        // row-count subtraction would underflow, so `fit_ar` must return a clean
+        // `Regression` error rather than panic.
+        use super::fit_ar;
+        for (len, order) in [(2usize, 2usize), (1, 3), (3, 5)] {
+            let w = vec![1.0_f64; len];
+            assert!(
+                matches!(
+                    fit_ar(&w, order),
+                    Err(crate::error::ForecastError::Regression(_))
+                ),
+                "fit_ar(len={len}, order={order}) should be a Regression error, not a panic"
+            );
+        }
     }
 
     #[test]
