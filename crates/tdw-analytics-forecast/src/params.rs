@@ -212,6 +212,94 @@ impl Default for LinRegrParams {
     }
 }
 
+const fn d3() -> usize {
+    3
+}
+
+const fn default_criterion() -> String {
+    String::new()
+}
+
+/// `ARIMA(p, d, q)` forecast parameters: the series, the horizon, and the fixed
+/// model order.
+///
+/// The model is estimated by the `Hannan-Rissanen` two-stage least-squares
+/// procedure (reusing the `tdw-analytics-econometrics` OLS core), forecast on the
+/// `d`-th-difference scale, and integrated back to the level of the series.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ArimaParams {
+    /// Historical observations in time order (oldest first).
+    #[serde(default)]
+    pub y: Vec<f64>,
+    /// Number of future steps to forecast (`>= 1`).
+    #[serde(default = "d1")]
+    pub horizon: usize,
+    /// Autoregressive order `p` (`>= 0`).
+    #[serde(default = "d1")]
+    pub p: usize,
+    /// Differencing order `d` (`>= 0`).
+    #[serde(default)]
+    pub d: usize,
+    /// Moving-average order `q` (`>= 0`).
+    #[serde(default)]
+    pub q: usize,
+}
+
+impl Default for ArimaParams {
+    fn default() -> Self {
+        Self {
+            y: Vec::new(),
+            horizon: 1,
+            p: 1,
+            d: 0,
+            q: 0,
+        }
+    }
+}
+
+/// `AutoARIMA` forecast parameters: the series, the horizon, the order-search
+/// bounds, and the selecting information criterion.
+///
+/// The order `(p, d, q)` is selected by a `Hyndman-Khandakar`-style stepwise
+/// search bounded by `p_max` / `q_max` / `d_max`, picking the order with the
+/// lowest information criterion. The chosen order is encoded in the forecast's
+/// `model` label.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AutoArimaParams {
+    /// Historical observations in time order (oldest first).
+    #[serde(default)]
+    pub y: Vec<f64>,
+    /// Number of future steps to forecast (`>= 1`).
+    #[serde(default = "d1")]
+    pub horizon: usize,
+    /// Maximum autoregressive order `p` to search. Defaults to `3`.
+    #[serde(default = "d3")]
+    pub p_max: usize,
+    /// Maximum moving-average order `q` to search. Defaults to `3`.
+    #[serde(default = "d3")]
+    pub q_max: usize,
+    /// Maximum differencing order `d` to consider. Defaults to `2`.
+    #[serde(default = "d2")]
+    pub d_max: usize,
+    /// Information criterion driving the search: `"aic"`, `"aicc"`, or `"bic"`.
+    /// Any other value (including the empty default) selects `AICc`.
+    #[serde(default = "default_criterion")]
+    pub criterion: String,
+}
+
+impl Default for AutoArimaParams {
+    fn default() -> Self {
+        Self {
+            y: Vec::new(),
+            horizon: 1,
+            p_max: 3,
+            q_max: 3,
+            d_max: 2,
+            criterion: String::new(),
+        }
+    }
+}
+
 /// The forecast model identifier for the backtest harness, selecting which
 /// forecaster the expanding-window backtest re-fits at each fold.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -228,6 +316,8 @@ pub enum ForecastModel {
     Expo,
     /// The Theta method.
     Theta,
+    /// `AutoARIMA` (automatic `ARIMA(p, d, q)` order selection).
+    AutoArima,
 }
 
 /// Backtest (historical-forecasts) parameters: the series, the model to

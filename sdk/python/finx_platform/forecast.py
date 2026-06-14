@@ -42,6 +42,72 @@ class ForecastNamespace:
             "use the MCP tool surface or the daemon Op::FetchData compute path"
         )
 
+    def arima(
+        self,
+        *,
+        d: int | None = None,
+        horizon: int | None = None,
+        p: int | None = None,
+        q: int | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """ARIMA(p, d, q) forecast estimated by Hannan-Rissanen two-stage least squares.
+
+        Route: ``forecast/arima``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            d: Differencing order `d` (`>= 0`).
+            horizon: Number of future steps to forecast (`>= 1`).
+            p: Autoregressive order `p` (`>= 0`).
+            q: Moving-average order `q` (`>= 0`).
+            y: Historical observations in time order (oldest first).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'forecast/arima' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def autoarima(
+        self,
+        *,
+        criterion: str | None = None,
+        d_max: int | None = None,
+        horizon: int | None = None,
+        p_max: int | None = None,
+        q_max: int | None = None,
+        y: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """AutoARIMA: stepwise Hyndman-Khandakar order selection over (p, d, q) by information criterion.
+
+        Route: ``forecast/autoarima``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            criterion: Information criterion driving the search: `"aic"`, `"aicc"`, or `"bic"`. Any other value (including the empty default) selects `AICc`.
+            d_max: Maximum differencing order `d` to consider. Defaults to `2`.
+            horizon: Number of future steps to forecast (`>= 1`).
+            p_max: Maximum autoregressive order `p` to search. Defaults to `3`.
+            q_max: Maximum moving-average order `q` to search. Defaults to `3`.
+            y: Historical observations in time order (oldest first).
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'forecast/autoarima' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
     def backtest(
         self,
         *,

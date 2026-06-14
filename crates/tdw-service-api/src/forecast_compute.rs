@@ -24,10 +24,12 @@ use serde_json::Value;
 use tdw_core::Error;
 
 use tdw_analytics_forecast::params::{
-    AnomalyParams, BacktestParams, BaselineParams, EtsParams, ExpoParams, LinRegrParams,
-    MetricsParams, MstlParams, ThetaParams,
+    AnomalyParams, ArimaParams, AutoArimaParams, BacktestParams, BaselineParams, EtsParams,
+    ExpoParams, LinRegrParams, MetricsParams, MstlParams, ThetaParams,
 };
-use tdw_analytics_forecast::{anomaly, backtest, baseline, expo, linregr, metrics, mstl, theta};
+use tdw_analytics_forecast::{
+    anomaly, arima, autoarima, backtest, baseline, expo, linregr, metrics, mstl, theta,
+};
 
 /// A forecasting compute implementation: parse the route's typed params from
 /// `params` (the series live inside the params) and serialize the result rows.
@@ -47,6 +49,8 @@ pub fn compute_registry() -> BTreeMap<&'static str, ComputeFn> {
     registry.insert("forecast/theta", compute_theta);
     registry.insert("forecast/mstl", compute_mstl);
     registry.insert("forecast/linregr", compute_linregr);
+    registry.insert("forecast/arima", compute_arima);
+    registry.insert("forecast/autoarima", compute_autoarima);
     registry.insert("forecast/backtest", compute_backtest);
     registry.insert("forecast/metrics", compute_metrics);
     registry.insert("forecast/anomaly", compute_anomaly);
@@ -139,6 +143,18 @@ fn compute_mstl(params: &Value) -> Result<Vec<Value>, Error> {
 fn compute_linregr(params: &Value) -> Result<Vec<Value>, Error> {
     let p: LinRegrParams = parse_params(params)?;
     let result = linregr::linregr_from_params(&p).map_err(|e| map_forecast_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_arima(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: ArimaParams = parse_params(params)?;
+    let result = arima::arima_from_params(&p).map_err(|e| map_forecast_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_autoarima(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: AutoArimaParams = parse_params(params)?;
+    let result = autoarima::autoarima_from_params(&p).map_err(|e| map_forecast_err(&e))?;
     Ok(vec![to_value(&result)?])
 }
 
@@ -237,6 +253,31 @@ mod tests {
             matches!(err, tdw_core::Error::InvalidQuery(_)),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn run_compute_autoarima_on_a_trend_forecasts_upward() {
+        // A clean upward trend: AutoARIMA differences it and continues upward.
+        let y: Vec<f64> = (0..40).map(|v| 2.0 * f64::from(v)).collect();
+        let params = json!({ "y": y, "horizon": 3 });
+        let rows = run_compute("forecast/autoarima", &params).expect("autoarima");
+        assert_eq!(rows.len(), 1);
+        let points = rows[0]["points"].as_array().expect("points");
+        assert_eq!(points.len(), 3);
+        let first = points[0]["value"].as_f64().expect("v");
+        assert!(first > 78.0, "h1 {first} should continue the trend past 78");
+        // The model label carries the chosen order.
+        let model = rows[0]["model"].as_str().expect("model");
+        assert!(model.starts_with("arima("), "model {model}");
+    }
+
+    #[test]
+    fn run_compute_arima_fixed_order_forecasts() {
+        let y: Vec<f64> = (0..30).map(|v| 3.0 * f64::from(v)).collect();
+        let params = json!({ "y": y, "horizon": 2, "p": 0, "d": 1, "q": 0 });
+        let rows = run_compute("forecast/arima", &params).expect("arima");
+        let points = rows[0]["points"].as_array().expect("points");
+        assert_eq!(points.len(), 2);
     }
 
     #[test]

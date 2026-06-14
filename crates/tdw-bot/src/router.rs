@@ -6,7 +6,7 @@
 
 use crate::chart::chart_reply;
 use crate::command::{Command, ParseError, parse};
-use crate::data::DataSource;
+use crate::data::{DataSource, NewsItem};
 use crate::response::{BotResponse, Table};
 
 /// Usage text for `/help` (and any unparseable input).
@@ -86,16 +86,26 @@ fn news(source: &dyn DataSource, ticker: &str) -> BotResponse {
                 .iter()
                 .take(5)
                 .enumerate()
-                .map(|(i, item)| {
-                    (
-                        format!("{}.", i + 1),
-                        format!("{} ({}, {})", item.title, item.source, item.published),
-                    )
-                })
+                .map(|(i, item)| (format!("{}.", i + 1), format_news_item(item)))
                 .collect();
             BotResponse::Table(Table::new(format!("{ticker} news"), rows))
         }
         Err(error) => BotResponse::text(format!("Could not fetch news for {ticker}: {error}")),
+    }
+}
+
+/// Render one headline as `Title (Source, Published)`, including only the
+/// non-empty metadata fields so an empty source or date never produces a
+/// dangling comma or empty parentheses.
+fn format_news_item(item: &NewsItem) -> String {
+    let meta: Vec<&str> = [item.source.as_str(), item.published.as_str()]
+        .into_iter()
+        .filter(|field| !field.is_empty())
+        .collect();
+    if meta.is_empty() {
+        item.title.clone()
+    } else {
+        format!("{} ({})", item.title, meta.join(", "))
     }
 }
 
@@ -203,6 +213,42 @@ mod tests {
         assert!(chart.caption.contains("3 points"));
         // The figure spec is always present (a Plotly figure object).
         assert!(chart.figure_json.get("data").is_some());
+    }
+
+    #[test]
+    fn news_with_empty_metadata_has_no_dangling_punctuation() {
+        // A headline whose source and date are both empty must render as the
+        // bare title — no `(, )` and no empty parentheses.
+        let item = NewsItem {
+            title: "Headline only".to_string(),
+            source: String::new(),
+            published: String::new(),
+        };
+        assert_eq!(format_news_item(&item), "Headline only");
+
+        // Only the source present → `Title (Source)`, no trailing comma.
+        let with_source = NewsItem {
+            title: "With source".to_string(),
+            source: "Wire".to_string(),
+            published: String::new(),
+        };
+        assert_eq!(format_news_item(&with_source), "With source (Wire)");
+
+        // Only the date present → `Title (Date)`, no leading comma.
+        let with_date = NewsItem {
+            title: "With date".to_string(),
+            source: String::new(),
+            published: "2026-06-14".to_string(),
+        };
+        assert_eq!(format_news_item(&with_date), "With date (2026-06-14)");
+
+        // Both present → `Title (Source, Date)`.
+        let both = NewsItem {
+            title: "Both".to_string(),
+            source: "Wire".to_string(),
+            published: "2026-06-14".to_string(),
+        };
+        assert_eq!(format_news_item(&both), "Both (Wire, 2026-06-14)");
     }
 
     #[test]
