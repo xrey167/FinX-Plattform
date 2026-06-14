@@ -12,8 +12,10 @@ use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
 use tdw_provider_deribit::{
-    DeribitFundingQuery, DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher,
-    DeribitHttpOrderBookFetcher, DeribitInstrumentsQuery, DeribitKind, DeribitOrderBookQuery,
+    BASE_URL, DeribitFundingQuery, DeribitFuturesInfoQuery, DeribitHttpFundingFetcher,
+    DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher,
+    DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher, DeribitInstrumentsQuery,
+    DeribitKind, DeribitOrderBookQuery,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_nonempty};
 
@@ -296,6 +298,95 @@ fn transform_query_funding_rejects_inverted_time_range() {
         }))
         .is_err(),
         "inverted time range must be rejected"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Cassette tests — catalog-facing futures instruments / info (P4W7)
+// ---------------------------------------------------------------------------
+
+fn futures_instruments_cassette() -> Bytes {
+    cassette_bytes!({
+        "result": [
+            {
+                "instrument_name": "BTC-PERPETUAL",
+                "kind": "future",
+                "base_currency": "BTC",
+                "is_active": true
+            },
+            {
+                "instrument_name": "BTC-27DEC24",
+                "kind": "future",
+                "base_currency": "BTC",
+                "expiration_timestamp": 1735286400000u64,
+                "is_active": true
+            }
+        ]
+    })
+}
+
+#[test]
+fn cassette_replay_decodes_futures_instruments_list() {
+    let fetcher = DeribitHttpFuturesInstrumentsFetcher::default();
+    let query = DeribitHttpFuturesInstrumentsFetcher::transform_query(json!({ "currency": "BTC" }))
+        .unwrap_or_else(|e| panic!("futures_instruments query should transform: {e}"));
+    assert_eq!(query.kind, DeribitKind::Future);
+
+    let rows = fetcher
+        .transform_data(&query, futures_instruments_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].instrument_name, "BTC-PERPETUAL");
+    assert_eq!(rows[0].kind, "future");
+    assert_eq!(rows[0].currency.as_deref(), Some("BTC"));
+    assert_eq!(rows[0].strike, None);
+    assert_eq!(rows[0].is_active, Some(true));
+    assert_eq!(rows[1].instrument_name, "BTC-27DEC24");
+    assert_eq!(rows[1].expiration_timestamp, Some(1_735_286_400_000));
+}
+
+#[test]
+fn futures_instruments_accepts_symbol_alias() {
+    let query = DeribitHttpFuturesInstrumentsFetcher::transform_query(json!({ "symbol": "eth" }))
+        .unwrap_or_else(|e| panic!("symbol alias should transform: {e}"));
+    assert_eq!(query.currency, "ETH");
+    assert_eq!(query.kind, DeribitKind::Future);
+}
+
+#[test]
+fn futures_info_query_derives_currency_and_filters() {
+    let query = DeribitHttpFuturesInfoFetcher::transform_query(
+        json!({ "instrument_name": "btc-perpetual" }),
+    )
+    .unwrap_or_else(|e| panic!("futures_info query should transform: {e}"));
+    assert_eq!(query.instrument_name, "BTC-PERPETUAL");
+    assert_eq!(query.currency, "BTC");
+
+    let fetcher = DeribitHttpFuturesInfoFetcher::default();
+    let rows = fetcher
+        .transform_data(&query, futures_instruments_cassette())
+        .unwrap_or_else(|e| panic!("transform_data must succeed: {e}"));
+    assert_eq!(
+        rows.len(),
+        1,
+        "only the matching instrument; rows={rows:#?}"
+    );
+    assert_eq!(rows[0].instrument_name, "BTC-PERPETUAL");
+}
+
+#[test]
+fn futures_info_query_rejects_empty_instrument() {
+    assert!(
+        DeribitFuturesInfoQuery::new("").is_err(),
+        "empty instrument name must be rejected"
+    );
+}
+
+#[test]
+fn base_url_uses_tls() {
+    assert!(
+        BASE_URL.starts_with("https://"),
+        "deribit base URL must use TLS, got: {BASE_URL}"
     );
 }
 

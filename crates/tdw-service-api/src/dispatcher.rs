@@ -1133,6 +1133,26 @@ fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     );
 }
 
+/// Register the keyless Deribit futures-instrument fetch bindings (OpenBB-parity
+/// P4W7): `derivatives/futures/instruments` and `derivatives/futures/info`. Each
+/// is keyed by the catalog-facing fetcher's `ENDPOINT` const, mirroring the
+/// Deribit candidates declared in the endpoint catalog. Mirrors
+/// [`insert_deribit_ingest_bindings`] so the fetch and ingest paths stay in
+/// lockstep; a conformance test keeps these keys and the catalog candidates in
+/// sync.
+#[cfg(feature = "provider-deribit")]
+fn insert_deribit_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::{DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher};
+    table.insert(
+        ("deribit", DeribitHttpFuturesInstrumentsFetcher::ENDPOINT),
+        fetch_binding::<DeribitHttpFuturesInstrumentsFetcher, _, _>(),
+    );
+    table.insert(
+        ("deribit", DeribitHttpFuturesInfoFetcher::ENDPOINT),
+        fetch_binding::<DeribitHttpFuturesInfoFetcher, _, _>(),
+    );
+}
+
 /// Build a [`FetchBinding`] for the EIA report fetcher that injects a fixed
 /// `report` discriminator into the caller's params before the shared fetcher
 /// runs, so one fetcher type serves both report routes while the dispatch key
@@ -1764,6 +1784,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_ecb_fetch_bindings(&mut table);
     #[cfg(feature = "provider-cboe")]
     insert_cboe_fetch_bindings(&mut table);
+    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
+    #[cfg(feature = "provider-deribit")]
+    insert_deribit_fetch_bindings(&mut table);
     #[cfg(feature = "provider-eia")]
     insert_eia_fetch_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
@@ -1837,6 +1860,32 @@ fn insert_sec_government_fetch_bindings(
     table.insert(
         ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
         fetch_binding::<crate::SecNportDisclosureHttpFetcher, _, _>(),
+    );
+    // Regulator utilities (openbb-parity P4W8): symbol_map, institutions_search,
+    // sic_search, filing_headers, schema_files, rss_litigation.
+    table.insert(
+        ("sec", crate::SecSymbolMapHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSymbolMapHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecInstitutionsSearchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecInstitutionsSearchHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecSicSearchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSicSearchHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecFilingHeadersHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecFilingHeadersHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecSchemaFilesHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSchemaFilesHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecRssLitigationHttpFetcher, _, _>(),
     );
 }
 
@@ -2893,6 +2942,25 @@ fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Register the keyless Deribit futures-instrument ingest bindings (OpenBB-parity
+/// P4W7), keyed identically to [`insert_deribit_fetch_bindings`]. Both land
+/// [`tdw_domain::FuturesInstrument`] rows in the shared `raw.futures_instrument`
+/// bronze table.
+#[cfg(feature = "provider-deribit")]
+fn insert_deribit_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    use crate::{DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher};
+    table.insert(
+        ("deribit", DeribitHttpFuturesInstrumentsFetcher::ENDPOINT),
+        binding::<DeribitHttpFuturesInstrumentsFetcher, _, _>("raw.futures_instrument"),
+    );
+    table.insert(
+        ("deribit", DeribitHttpFuturesInfoFetcher::ENDPOINT),
+        binding::<DeribitHttpFuturesInfoFetcher, _, _>("raw.futures_instrument"),
+    );
+}
+
 /// Build an [`IngestBinding`] for the EIA report fetcher that injects a fixed
 /// `report` discriminator before fetching one batch and persisting it into
 /// `table`. Mirrors [`fred_command_ingest_binding`].
@@ -3194,6 +3262,9 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_ecb_ingest_bindings(&mut table);
     #[cfg(feature = "provider-cboe")]
     insert_cboe_ingest_bindings(&mut table);
+    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
+    #[cfg(feature = "provider-deribit")]
+    insert_deribit_ingest_bindings(&mut table);
     #[cfg(feature = "provider-eia")]
     insert_eia_ingest_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
@@ -3608,6 +3679,32 @@ fn insert_sec_government_ingest_bindings(
     table.insert(
         ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
         binding::<crate::SecNportDisclosureHttpFetcher, _, _>("raw.company_filing"),
+    );
+    // Regulator utilities (openbb-parity P4W8): each lands its standardized
+    // model in the matching bronze table declared by the catalog route.
+    table.insert(
+        ("sec", crate::SecSymbolMapHttpFetcher::ENDPOINT),
+        binding::<crate::SecSymbolMapHttpFetcher, _, _>("raw.symbol_mapping"),
+    );
+    table.insert(
+        ("sec", crate::SecInstitutionsSearchHttpFetcher::ENDPOINT),
+        binding::<crate::SecInstitutionsSearchHttpFetcher, _, _>("raw.sec_institution"),
+    );
+    table.insert(
+        ("sec", crate::SecSicSearchHttpFetcher::ENDPOINT),
+        binding::<crate::SecSicSearchHttpFetcher, _, _>("raw.sic_code"),
+    );
+    table.insert(
+        ("sec", crate::SecFilingHeadersHttpFetcher::ENDPOINT),
+        binding::<crate::SecFilingHeadersHttpFetcher, _, _>("raw.filing_header"),
+    );
+    table.insert(
+        ("sec", crate::SecSchemaFilesHttpFetcher::ENDPOINT),
+        binding::<crate::SecSchemaFilesHttpFetcher, _, _>("raw.filing_file"),
+    );
+    table.insert(
+        ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
+        binding::<crate::SecRssLitigationHttpFetcher, _, _>("raw.litigation_release"),
     );
 }
 

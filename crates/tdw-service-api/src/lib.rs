@@ -150,7 +150,8 @@ use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
 use tdw_provider_databento::{DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher};
 #[cfg(feature = "provider-deribit")]
 use tdw_provider_deribit::{
-    DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
+    DeribitHttpFundingFetcher, DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher,
+    DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
 };
 #[cfg(feature = "provider-ecb")]
 use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
@@ -212,8 +213,10 @@ use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
 use tdw_provider_sec::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
-    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
-    SecLatestFinancialReportsHttpFetcher, SecNportDisclosureHttpFetcher, SecXbrlHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
+    SecForm13FHttpFetcher, SecInstitutionsSearchHttpFetcher, SecLatestFinancialReportsHttpFetcher,
+    SecNportDisclosureHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
+    SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
 #[cfg(feature = "provider-seeking-alpha")]
 use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
@@ -365,6 +368,11 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(DeribitHttpOrderBookFetcher::registry_entry())?;
     #[cfg(feature = "provider-deribit")]
     registry.register(DeribitHttpFundingFetcher::registry_entry())?;
+    // OpenBB-parity P4W7: catalog-facing futures-instrument fetchers.
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpFuturesInstrumentsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpFuturesInfoFetcher::registry_entry())?;
     #[cfg(feature = "provider-ecb")]
     registry.register(EcbHttpDataFetcher::registry_entry())?;
     // Catalog-facing ECB reference-rates fetcher (G004 part 2).
@@ -566,6 +574,19 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     // ETF cluster (openbb-parity P4W3): keyless SEC N-PORT disclosure index.
     #[cfg(feature = "provider-sec")]
     registry.register(SecNportDisclosureHttpFetcher::registry_entry())?;
+    // Regulator utilities (openbb-parity P4W8): keyless SEC EDGAR helpers.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSymbolMapHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecInstitutionsSearchHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSicSearchHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecFilingHeadersHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSchemaFilesHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecRssLitigationHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]

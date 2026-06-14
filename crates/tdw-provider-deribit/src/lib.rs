@@ -9,7 +9,8 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
+    DeribitHttpFundingFetcher, DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher,
+    DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
 };
 
 use schemars::JsonSchema;
@@ -75,6 +76,44 @@ impl DeribitInstrumentsQuery {
         Ok(Self {
             currency: normalize_currency(currency)?,
             kind,
+        })
+    }
+}
+
+/// Query parameters for the catalog-facing `derivatives/futures/info` route.
+///
+/// Carries the target `instrument_name` and the `currency` derived from its
+/// leading segment (Deribit instrument names are `<CCY>-<...>`), so the fetcher
+/// can list the currency's futures and filter to the requested instrument.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DeribitFuturesInfoQuery {
+    /// Instrument name to look up (e.g. `"BTC-PERPETUAL"`, `"BTC-27DEC24"`).
+    pub instrument_name: String,
+    /// Base currency derived from the instrument name's leading segment.
+    pub currency: String,
+}
+
+impl DeribitFuturesInfoQuery {
+    /// Construct and validate a futures-info query, deriving the currency from
+    /// the instrument name's leading `<CCY>-` segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeribitProviderError::EmptyInstrumentName`] or
+    /// [`DeribitProviderError::InvalidInstrumentName`] for an invalid name, or
+    /// [`DeribitProviderError::InvalidCurrency`] when no alphabetic currency
+    /// prefix can be derived.
+    pub fn new(instrument_name: &str) -> Result<Self> {
+        let instrument_name = normalize_instrument_name(instrument_name)?;
+        let prefix = instrument_name
+            .split('-')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let currency = normalize_currency(&prefix)?;
+        Ok(Self {
+            instrument_name,
+            currency,
         })
     }
 }

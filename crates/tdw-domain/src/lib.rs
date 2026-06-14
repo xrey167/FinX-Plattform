@@ -7,11 +7,12 @@ pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
     CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts, CompanyFiling,
     EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
-    EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FinancialStatement,
-    FomcDocument, FuturesCurvePoint, HistoricalMarketCap, KeyExecutive, KeyMetrics, MacroSeries,
-    NewsArticle, OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios,
-    RevenueSegment, ScreenerRow, SeriesSearchResult, StatementKind, SymbolMapping, TreasuryAuction,
-    TreasuryPrice, YieldCurvePoint,
+    EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FilingFile,
+    FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint, FuturesInstrument,
+    HistoricalMarketCap, KeyExecutive, KeyMetrics, LitigationRelease, MacroSeries, NewsArticle,
+    OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios, RevenueSegment,
+    ScreenerRow, SecInstitution, SeriesSearchResult, SicCode, StatementKind, SymbolMapping,
+    TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

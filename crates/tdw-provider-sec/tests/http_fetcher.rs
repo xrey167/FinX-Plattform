@@ -13,10 +13,13 @@
 use bytes::Bytes;
 use serde_json::json;
 use tdw_core::Fetcher;
+use tdw_provider_sec::http_fetcher::WWW_BASE_URL;
 use tdw_provider_sec::{
-    SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
-    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecFilingsQuery, SecForm13FHttpFetcher,
-    SecHistoricalQuery, SecLatestFinancialReportsHttpFetcher, SecXbrlHttpFetcher,
+    BASE_URL, SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
+    SecFilingsQuery, SecForm13FHttpFetcher, SecHistoricalQuery, SecInstitutionsSearchHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
+    SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
 use tdw_provider_testkit::{cassette_bytes, live_fetch_rows_expect};
 
@@ -241,6 +244,190 @@ fn cassette_parse_nport_etf_holdings() {
     assert_eq!(rows[0].value_usd, Some(194_030_000.0));
     assert_eq!(rows[0].weight_pct, Some(6.85));
     assert_eq!(rows[1].holding_name, "MICROSOFT CORP");
+}
+
+// ── P4W8 keyless regulator utilities (cassette tests) ────────────────────────
+
+fn company_tickers_cassette() -> Bytes {
+    cassette_bytes!({
+        "0": { "cik_str": 320_193, "ticker": "aapl", "title": "Apple Inc." },
+        "1": { "cik_str": 19_617, "ticker": "JPM", "title": "JPMORGAN CHASE & CO" },
+        "2": { "cik_str": 886_982, "ticker": "GS", "title": "GOLDMAN SACHS GROUP INC" }
+    })
+}
+
+#[test]
+fn cassette_symbol_map_parses_company_tickers() {
+    let fetcher = SecSymbolMapHttpFetcher::default();
+    let query = SecSymbolMapHttpFetcher::transform_query(json!({})).expect("empty query");
+    let rows = fetcher
+        .transform_data(&query, company_tickers_cassette())
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 3, "rows={rows:#?}");
+    let aapl = rows.iter().find(|r| r.symbol == "AAPL").expect("aapl row");
+    assert_eq!(aapl.cik, "320193");
+}
+
+#[test]
+fn cassette_institutions_search_filters_by_name() {
+    let fetcher = SecInstitutionsSearchHttpFetcher::default();
+    let query = SecInstitutionsSearchHttpFetcher::transform_query(json!({"query": "goldman"}))
+        .expect("search query");
+    let rows = fetcher
+        .transform_data(&query, company_tickers_cassette())
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 1, "only the goldman row; rows={rows:#?}");
+    assert_eq!(rows[0].cik, "886982");
+    assert_eq!(rows[0].symbol.as_deref(), Some("GS"));
+    assert!(rows[0].name.to_lowercase().contains("goldman"));
+}
+
+#[test]
+fn institutions_search_empty_query_lists_all() {
+    let fetcher = SecInstitutionsSearchHttpFetcher::default();
+    let query =
+        SecInstitutionsSearchHttpFetcher::transform_query(json!({})).expect("empty search query");
+    let rows = fetcher
+        .transform_data(&query, company_tickers_cassette())
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 3, "empty query lists all; rows={rows:#?}");
+}
+
+#[test]
+fn sic_search_filters_by_code_or_description() {
+    let fetcher = SecSicSearchHttpFetcher::default();
+    let query = SecSicSearchHttpFetcher::transform_query(json!({"query": "software"}))
+        .expect("search query");
+    // The SIC table is embedded; extract_data returns empty bytes by design.
+    let rows = fetcher
+        .transform_data(&query, Bytes::new())
+        .expect("transform_data must succeed");
+    assert!(
+        rows.iter().any(|r| r.code == "7372"),
+        "expected Prepackaged Software (7372); rows={rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|r| r.description.to_lowercase().contains("software")),
+        "all rows match the needle; rows={rows:#?}"
+    );
+
+    // Numeric-code needle.
+    let by_code =
+        SecSicSearchHttpFetcher::transform_query(json!({"query": "3571"})).expect("code query");
+    let code_rows = fetcher
+        .transform_data(&by_code, Bytes::new())
+        .expect("transform_data must succeed");
+    assert_eq!(code_rows.len(), 1);
+    assert_eq!(code_rows[0].code, "3571");
+}
+
+#[test]
+fn cassette_filing_headers_parses_index() {
+    let fetcher = SecFilingHeadersHttpFetcher::default();
+    let query = SecFilingHeadersHttpFetcher::transform_query(
+        json!({"cik": "320193", "accession": "0000320193-24-000123"}),
+    )
+    .expect("accession query");
+    let raw = cassette_bytes!({
+        "directory": {
+            "name": "/Archives/edgar/data/320193/000032019324000123",
+            "item": []
+        },
+        "formType": "10-K",
+        "filingDate": "2024-11-01",
+        "periodOfReport": "2024-09-28",
+        "description": "Annual report"
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].cik, "320193");
+    assert_eq!(rows[0].accession_number, "0000320193-24-000123");
+    assert_eq!(rows[0].form_type.as_deref(), Some("10-K"));
+    assert_eq!(rows[0].period_of_report.as_deref(), Some("2024-09-28"));
+}
+
+#[test]
+fn cassette_schema_files_lists_directory_items() {
+    let fetcher = SecSchemaFilesHttpFetcher::default();
+    let query = SecSchemaFilesHttpFetcher::transform_query(
+        json!({"cik": "320193", "accession": "0000320193-24-000123"}),
+    )
+    .expect("accession query");
+    let raw = cassette_bytes!({
+        "directory": {
+            "item": [
+                {"name": "aapl-20240928.htm", "type": "10-K", "size": "1234567",
+                 "last-modified": "2024-11-01 18:01:14"},
+                {"name": "aapl-20240928.xsd", "type": "EX-101.SCH", "size": 8910},
+                {"name": "", "type": "ignored"}
+            ]
+        }
+    });
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 2, "empty-name row skipped; rows={rows:#?}");
+    assert_eq!(rows[0].name, "aapl-20240928.htm");
+    assert_eq!(rows[0].file_type.as_deref(), Some("10-K"));
+    assert_eq!(rows[0].size, Some(1_234_567));
+    assert_eq!(rows[1].size, Some(8910));
+}
+
+#[test]
+fn cassette_rss_litigation_parses_items() {
+    let fetcher = SecRssLitigationHttpFetcher::default();
+    let query = SecRssLitigationHttpFetcher::transform_query(json!({})).expect("empty query");
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>SEC Litigation Releases</title>
+    <item>
+      <title><![CDATA[SEC Charges Example Corp]]></title>
+      <link>https://www.sec.gov/litigation/litreleases/lr-12345</link>
+      <pubDate>Mon, 03 Jun 2024 12:00:00 EST</pubDate>
+      <description>The SEC announced charges against Example Corp.</description>
+    </item>
+    <item>
+      <title>SEC Settles With John Doe</title>
+      <link>https://www.sec.gov/litigation/litreleases/lr-12346</link>
+      <pubDate>Tue, 04 Jun 2024 09:30:00 EST</pubDate>
+    </item>
+  </channel>
+</rss>"#;
+    let raw = Bytes::from(xml.as_bytes().to_vec());
+    let rows = fetcher
+        .transform_data(&query, raw)
+        .expect("transform_data must succeed");
+    assert_eq!(rows.len(), 2, "rows={rows:#?}");
+    assert_eq!(rows[0].title, "SEC Charges Example Corp");
+    assert_eq!(
+        rows[0].link,
+        "https://www.sec.gov/litigation/litreleases/lr-12345"
+    );
+    assert!(
+        rows[0]
+            .summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Example Corp")
+    );
+    assert_eq!(rows[1].title, "SEC Settles With John Doe");
+    assert_eq!(rows[1].summary, None);
+}
+
+#[test]
+fn base_urls_use_tls() {
+    assert!(
+        BASE_URL.starts_with("https://"),
+        "data base URL: {BASE_URL}"
+    );
+    assert!(
+        WWW_BASE_URL.starts_with("https://"),
+        "www base URL: {WWW_BASE_URL}"
+    );
 }
 
 // ── Live integration tests (gated by TDW_SEC_LIVE=1) ─────────────────────────

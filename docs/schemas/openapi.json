@@ -1202,6 +1202,95 @@
         "title": "FactorReturn",
         "type": "object"
       },
+      "FilingFile": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single file listed within an EDGAR filing's document index.\n\nStandardizes `regulators/sec/schema_files` (the `directory.item[]` array of\nthe EDGAR `{accession}-index.json`). One row = one document/schema file in the\nfiling. The file name is the identity anchor; size, type, and last-modified\nare [`Option`] since the index reports a variable subset.",
+        "properties": {
+          "file_type": {
+            "description": "Document type label where reported, e.g. `\"10-K\"`, `\"EX-101.SCH\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_modified": {
+            "description": "Last-modified timestamp where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "File name within the filing directory, e.g. `\"aapl-20240928.htm\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "size": {
+            "description": "File size in bytes where reported.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "FilingFile",
+        "type": "object"
+      },
+      "FilingHeader": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Filing header metadata for a single EDGAR accession.\n\nStandardizes `regulators/sec/filing_headers` (the EDGAR\n`{accession}-index.json` header block). One row = one filing. The CIK and\naccession number are the identity anchors; the remaining descriptive fields\nare [`Option`] because the index header populates a variable subset.",
+        "properties": {
+          "accession_number": {
+            "description": "Accession number, e.g. `\"0000320193-24-000123\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "cik": {
+            "description": "Filer Central Index Key (CIK), unpadded.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": {
+            "description": "Human-readable filing description where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filing_date": {
+            "description": "Filing / acceptance date (`YYYY-MM-DD`) where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "form_type": {
+            "description": "Form type, e.g. `\"10-K\"`, `\"8-K\"`, where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "period_of_report": {
+            "description": "Period of report (`YYYY-MM-DD`) where reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cik",
+          "accession_number"
+        ],
+        "title": "FilingHeader",
+        "type": "object"
+      },
       "FinancialStatement": {
         "$defs": {
           "StatementKind": {
@@ -1367,6 +1456,66 @@
           "contract_symbol"
         ],
         "title": "FuturesCurvePoint",
+        "type": "object"
+      },
+      "FuturesInstrument": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single tradable derivatives instrument.\n\nStandardizes `derivatives/futures/instruments` (the list of tradable\ncontracts) and `derivatives/futures/info` (metadata for one contract), both\nDeribit-backed. One row = one instrument. The optional fields cover the\noption-specific attributes (`strike`, `option_type`) that futures rows omit,\nand the expiry timestamp that perpetuals omit.",
+        "properties": {
+          "currency": {
+            "description": "Base currency / settlement asset, e.g. `\"BTC\"`, `\"ETH\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiration_timestamp": {
+            "description": "Expiry as a Unix timestamp in milliseconds, when the contract expires.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "instrument_name": {
+            "description": "Exchange instrument name, e.g. `\"BTC-PERPETUAL\"`, `\"BTC-27DEC24\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "is_active": {
+            "description": "Whether the instrument is currently active / tradable.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Instrument kind as reported by the venue, e.g. `\"future\"`, `\"option\"`,\n`\"future_combo\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "option_type": {
+            "description": "Option type (`\"call\"` / `\"put\"`) for option instruments.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "strike": {
+            "description": "Strike price for option instruments (absent for futures/perpetuals).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "instrument_name",
+          "kind"
+        ],
+        "title": "FuturesInstrument",
         "type": "object"
       },
       "HistoricalMarketCap": {
@@ -1603,6 +1752,42 @@
           "symbol"
         ],
         "title": "KeyMetrics",
+        "type": "object"
+      },
+      "LitigationRelease": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single SEC litigation-release item from the litigation RSS feed.\n\nStandardizes `regulators/sec/rss_litigation` (the SEC litigation-releases RSS\nfeed). One row = one release. The title and link are the identity anchors; the\npublication date and summary are [`Option`] because feed items vary.",
+        "properties": {
+          "link": {
+            "description": "Link to the litigation-release document.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "published": {
+            "description": "Publication date as reported in the feed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "description": "Short summary / description of the release.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Release title.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "link"
+        ],
+        "title": "LitigationRelease",
         "type": "object"
       },
       "MacroSeries": {
@@ -2424,6 +2609,35 @@
         "title": "ScreenerRow",
         "type": "object"
       },
+      "SecInstitution": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A SEC-regulated institution discovery row.\n\nStandardizes `regulators/sec/institutions_search` (filtering SEC's public\n`company_tickers.json` directory by name). One row = one institution / issuer\nmatched by the query. The CIK and reported name are the identity anchors; the\nticker is [`Option`] because not every filer in the directory lists one.",
+        "properties": {
+          "cik": {
+            "description": "Central Index Key (CIK) as reported by SEC, unpadded.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "description": "Institution / issuer name as reported in the directory.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "symbol": {
+            "description": "Exchange ticker symbol where the directory supplies one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cik",
+          "name"
+        ],
+        "title": "SecInstitution",
+        "type": "object"
+      },
       "SeriesSearchResult": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A FRED series-search metadata result.\n\nStandardizes `economy/fred_search` (FRED `series/search`). One row = one\nmatched series; all descriptive fields beyond the id are optional since the\nsearch API may omit them. Carries no observations — it is a discovery result\nthat callers feed into the macro/rate observation endpoints.",
@@ -2467,6 +2681,35 @@
           "series_id"
         ],
         "title": "SeriesSearchResult",
+        "type": "object"
+      },
+      "SicCode": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A Standard Industrial Classification (SIC) industry-code row.\n\nStandardizes `regulators/sec/sic_search` (filtering the SEC-published SIC\ncode list by query). One row = one (code, description) pair. The office is the\nSEC Division of Corporation Finance industry-review office, present for most\ncodes.",
+        "properties": {
+          "code": {
+            "description": "Four-digit SIC code, e.g. `\"3571\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": {
+            "description": "Industry-title description for the code.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "office": {
+            "description": "SEC industry-review office responsible for the code, where known.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "description"
+        ],
+        "title": "SicCode",
         "type": "object"
       },
       "SymbolMapping": {
@@ -3769,6 +4012,224 @@
           }
         },
         "summary": "Historical OHLCV bars for a futures continuation symbol, Yahoo-backed.",
+        "tags": [
+          "derivatives"
+        ]
+      }
+    },
+    "/api/v1/derivatives/futures/info": {
+      "get": {
+        "operationId": "derivatives_futures_info",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FuturesInstrument"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Futures instrument metadata for one instrument, Deribit-backed (keyless).",
+        "tags": [
+          "derivatives"
+        ]
+      }
+    },
+    "/api/v1/derivatives/futures/instruments": {
+      "get": {
+        "operationId": "derivatives_futures_instruments",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FuturesInstrument"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "List tradable futures instruments for a currency, Deribit-backed (keyless).",
         "tags": [
           "derivatives"
         ]
@@ -18702,6 +19163,660 @@
           }
         },
         "summary": "Map ticker symbols to SEC CIKs via SEC company_tickers.json (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/filing_headers": {
+      "get": {
+        "operationId": "regulators_sec_filing_headers",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilingHeader"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Filing header metadata for an accession from the EDGAR index (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/institutions_search": {
+      "get": {
+        "operationId": "regulators_sec_institutions_search",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecInstitution"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Search SEC-regulated institutions by name in company_tickers.json (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/rss_litigation": {
+      "get": {
+        "operationId": "regulators_sec_rss_litigation",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LitigationRelease"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "SEC litigation releases from the public litigation RSS feed (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/schema_files": {
+      "get": {
+        "operationId": "regulators_sec_schema_files",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilingFile"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "List the schema/data files in a filing from the EDGAR index (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/sic_search": {
+      "get": {
+        "operationId": "regulators_sec_sic_search",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SicCode"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Search the SEC Standard Industrial Classification (SIC) code list (keyless).",
+        "tags": [
+          "regulators"
+        ]
+      }
+    },
+    "/api/v1/regulators/sec/symbol_map": {
+      "get": {
+        "operationId": "regulators_sec_symbol_map",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SymbolMapping"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Map SEC CIKs to ticker symbols via company_tickers.json (keyless).",
         "tags": [
           "regulators"
         ]

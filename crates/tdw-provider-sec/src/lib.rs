@@ -6,6 +6,7 @@
 //! without any network access.
 
 pub mod catalog;
+pub mod sic;
 
 #[cfg(feature = "http")]
 pub mod http_fetcher;
@@ -13,8 +14,10 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::{
     SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
-    SecFailsToDeliverHttpFetcher, SecFilingsHttpFetcher, SecForm13FHttpFetcher,
-    SecLatestFinancialReportsHttpFetcher, SecNportDisclosureHttpFetcher, SecXbrlHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
+    SecForm13FHttpFetcher, SecInstitutionsSearchHttpFetcher, SecLatestFinancialReportsHttpFetcher,
+    SecNportDisclosureHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
+    SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
 
 pub use catalog::{ENDPOINTS, SecEndpoint, SecModel};
@@ -104,6 +107,65 @@ impl SecCikMapQuery {
     }
 }
 
+/// A free-text search query used by the keyless regulator-utility routes
+/// (`regulators/sec/institutions_search`, `regulators/sec/sic_search`).
+///
+/// The query is trimmed but otherwise preserved verbatim (case-insensitive
+/// matching happens in the fetcher). An empty query is permitted and lists all
+/// rows, mirroring the directory-listing convention of the other keyless routes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecSearchQuery {
+    /// Free-text needle (matched case-insensitively against names/descriptions).
+    pub query: String,
+}
+
+impl SecSearchQuery {
+    /// Build a search query, trimming surrounding whitespace.
+    #[must_use]
+    pub fn new(query: &str) -> Self {
+        Self {
+            query: query.trim().to_string(),
+        }
+    }
+}
+
+/// A query identifying a single EDGAR filing by CIK and accession number, used
+/// by `regulators/sec/filing_headers` and `regulators/sec/schema_files`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecAccessionQuery {
+    /// Central Index Key (CIK), validated as digits and padded when needed.
+    pub cik: String,
+    /// Accession number, e.g. `"0000320193-24-000123"` (dashes optional).
+    pub accession: String,
+}
+
+impl SecAccessionQuery {
+    /// Validate and normalise the CIK and accession number.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecProviderError::EmptyCik`] / [`SecProviderError::InvalidCik`]
+    /// for a bad CIK, or [`SecProviderError::InvalidAccession`] when the
+    /// accession is blank or contains characters outside `[0-9-]`.
+    pub fn new(cik: &str, accession: &str) -> Result<Self> {
+        let cik = normalize_cik(cik)?;
+        let accession = normalize_accession(accession)?;
+        Ok(Self { cik, accession })
+    }
+
+    /// Return the CIK zero-padded to 10 digits.
+    #[must_use]
+    pub fn padded_cik(&self) -> String {
+        format!("{:0>10}", self.cik)
+    }
+
+    /// Return the accession number with dashes stripped (EDGAR archive form).
+    #[must_use]
+    pub fn accession_nodash(&self) -> String {
+        self.accession.replace('-', "")
+    }
+}
+
 // ── Error type ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -116,6 +178,8 @@ pub enum SecProviderError {
     EmptyCik,
     #[error("sec CIK must contain only digits")]
     InvalidCik,
+    #[error("sec accession number must contain only digits and dashes")]
+    InvalidAccession,
     #[error("sec provider error: {0}")]
     Provider(String),
 }
@@ -145,6 +209,17 @@ fn normalize_cik(cik: &str) -> Result<String> {
         return Err(SecProviderError::InvalidCik);
     }
     Ok(cik.to_string())
+}
+
+fn normalize_accession(accession: &str) -> Result<String> {
+    let accession = accession.trim();
+    if accession.is_empty() {
+        return Err(SecProviderError::InvalidAccession);
+    }
+    if !accession.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Err(SecProviderError::InvalidAccession);
+    }
+    Ok(accession.to_string())
 }
 
 // ── Unit tests (no network, no feature gate needed) ───────────────────────────

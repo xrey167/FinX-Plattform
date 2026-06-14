@@ -458,16 +458,21 @@ impl Fetcher<CboeIndexDirectoryQuery, Instrument> for CboeHttpIndexDirectoryFetc
             .map_err(|e| Error::Provider(format!("cboe directory parse_json: {e}")))?;
         let needle = query.query.to_ascii_lowercase();
         let instruments = entries
-            .into_iter()
+            .iter()
             .filter_map(|entry| {
-                let symbol = entry.index.trim().to_string();
+                // Borrow the trimmed slices while filtering; only allocate the
+                // owned `String`s for entries that actually match the query so a
+                // large index directory does not churn allocations for rows that
+                // are discarded.
+                let symbol = entry.index.trim();
                 if symbol.is_empty() {
                     return None;
                 }
-                let name = if entry.name.trim().is_empty() {
-                    symbol.clone()
+                let trimmed_name = entry.name.trim();
+                let name = if trimmed_name.is_empty() {
+                    symbol
                 } else {
-                    entry.name.trim().to_string()
+                    trimmed_name
                 };
                 if !needle.is_empty()
                     && !symbol.to_ascii_lowercase().contains(&needle)
@@ -476,8 +481,8 @@ impl Fetcher<CboeIndexDirectoryQuery, Instrument> for CboeHttpIndexDirectoryFetc
                     return None;
                 }
                 Some(Instrument {
-                    symbol,
-                    name,
+                    symbol: symbol.to_string(),
+                    name: name.to_string(),
                     venue: "cboe".to_string(),
                 })
             })
