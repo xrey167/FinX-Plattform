@@ -38,7 +38,7 @@ use tdw_core::GraphEngine;
 use tdw_knowledge::forgetting::{RetireOutcome, recall_cold_edge, retire_edge_to_cold};
 use tdw_knowledge::lessons::{LessonAudit, LessonState};
 use tdw_knowledge::proposals::{Proposal, ProposalKind};
-use tdw_knowledge::self_tune::TuneRecord;
+use tdw_knowledge::self_tune::{TuneOutcome, TuneRecord};
 
 use crate::principal::{Principal, Provenance};
 
@@ -47,7 +47,7 @@ use crate::principal::{Principal, Provenance};
 /// Each variant is *projected* from an existing record — never a new authored
 /// type. The variant carries exactly what undo/correct need to reverse it, so
 /// the audit row is self-describing without a second lookup.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionKind {
     /// A knowledge-graph EDGE write (a `ProposalKind::Edge`). Reversible by an
@@ -62,11 +62,18 @@ pub enum ActionKind {
         to: String,
     },
     /// A non-edge knowledge-graph write (tag assign / tag define / annotation).
-    /// Reversible by retiring the backing proposal through the queue (the adapter
-    /// holds the full proposal); surfaced here as a no-edge undo.
+    ///
+    /// The `reversal` records HOW this write is undone, so the audit row is
+    /// self-describing and [`undo`] performs a REAL reversal (never a silent
+    /// no-op). An annotation write is retired via its `annotated_by` cold-plane
+    /// edge; a tag assign/define has no reversal primitive in the tag-engine
+    /// contract today and is flagged [`KgWriteReversal::Unsupported`] so [`undo`]
+    /// returns an explicit error rather than a vacuous success.
     KgWrite {
         /// The backing proposal id (`p<seq>`).
         proposal_id: String,
+        /// How this write is reversed (the self-describing undo plan).
+        reversal: KgWriteReversal,
     },
     /// A governed-forgetting decision (a `Forget` [`Proposal`]). Reversible by
     /// [`recall_cold_edge`] — the cold-plane recall.
@@ -80,19 +87,62 @@ pub enum ActionKind {
         /// The retired edge's `to` node.
         to: String,
     },
-    /// A self-tune parameter change (a [`TuneRecord`]). Reversible by re-tuning
-    /// the parameter back to its prior value through the gate.
+    /// A self-tune parameter change (a [`TuneRecord`]). Reversible by restoring
+    /// the parameter to its PRIOR value — carried here so the reversal is real
+    /// and self-describing (the partner design §4.2: a param tune undo is a
+    /// re-tune back to `restore_value`).
     ParamTune {
         /// The backing tune-record id (`t<seq>`).
         record_id: String,
         /// The parameter that was tuned.
         param: String,
+        /// The value the tune CHANGED the parameter to (the applied value).
+        applied_value: f64,
+        /// The value to restore on undo — the parameter's value BEFORE the tune.
+        /// Reversing the tune sets the live parameter back to this.
+        restore_value: f64,
     },
-    /// A promoted lesson/rule (a materialized [`LessonAudit`]). Reversible by
-    /// retiring the lesson's backing proposal.
+    /// A promoted lesson/rule (a materialized [`LessonAudit`] = a gated
+    /// [`ProposalKind::Annotation`] on the lessons subject). Reversed by retiring
+    /// the lesson's `annotated_by` edge to the cold plane — the SAME cold-plane
+    /// move that retires any fact — which demotes the rule out of active behavior
+    /// while preserving the historical record.
     RuledPromote {
         /// The backing proposal id of the promoted lesson.
         proposal_id: String,
+        /// The entity the lesson annotation is attached to (the lessons subject).
+        subject_entity: String,
+        /// The annotation node id the promote created (`annotation:<proposal>`),
+        /// the `to` end of the `annotated_by` edge the undo retires.
+        annotation_node: String,
+    },
+}
+
+/// How a [`ActionKind::KgWrite`] is reversed — the self-describing undo plan
+/// (the partner design §4.2, W5.3).
+///
+/// A `KgWrite` covers the three non-edge proposal kinds. An annotation write
+/// adds an `annotated_by` edge that the cold-plane machinery can retire, so it
+/// is genuinely reversible; a tag assign/define has NO reversal primitive in the
+/// [`tdw_tags::TagEngine`] contract, so it is flagged unsupported and [`undo`]
+/// returns an explicit error rather than a silent success (the Gemini #441 HIGH
+/// fix: never a vacuous `Ok`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reversal", rename_all = "snake_case")]
+pub enum KgWriteReversal {
+    /// An annotation write: reverse by retiring the `annotated_by` edge from
+    /// `entity_id` to `annotation_node` to the cold plane.
+    Annotation {
+        /// The entity the annotation was attached to (the `from` of the edge).
+        entity_id: String,
+        /// The annotation node id (`annotation:<proposal>`), the edge's `to`.
+        annotation_node: String,
+    },
+    /// A tag assign/define: no reversal primitive exists in the tag-engine
+    /// contract today, so an undo is explicitly UNSUPPORTED (never a silent Ok).
+    Unsupported {
+        /// Human-readable reason the write cannot be auto-reversed.
+        detail: String,
     },
 }
 
@@ -100,18 +150,22 @@ impl ActionKind {
     /// Whether the action has a defined, reversible undo by construction
     /// (the partner design §4.2 `reversible`).
     ///
-    /// Every variant the partner produces is reversible today (a KG write has a
-    /// `Forget`, a `Forget` has `recall_cold_edge`, a param tune has a re-tune, a
-    /// promote has a retire). The method exists so an irreversible action — were
-    /// one ever added — would be flagged loudly by the escalation predicate.
+    /// An edge write (inverse `Forget`), a `Forget` (`recall_cold_edge`), a param
+    /// tune (restore the prior value), and a promoted lesson (retire its
+    /// `annotated_by` edge) are all reversible. A [`ActionKind::KgWrite`] is
+    /// reversible IFF its plan is not [`KgWriteReversal::Unsupported`] — a tag
+    /// assign/define has no reversal primitive, so it is flagged irreversible and
+    /// the escalation predicate routes it to a human (never a silent `Ok`).
     #[must_use]
     pub const fn reversible(&self) -> bool {
         match self {
             Self::Edge { .. }
-            | Self::KgWrite { .. }
             | Self::Forget { .. }
             | Self::ParamTune { .. }
             | Self::RuledPromote { .. } => true,
+            Self::KgWrite { reversal, .. } => {
+                !matches!(reversal, KgWriteReversal::Unsupported { .. })
+            }
         }
     }
 }
@@ -186,11 +240,22 @@ pub struct AuditInputs {
 /// Read from the trust-dial + config by the surface. The defaults encode the
 /// design's posture: auto-accept-within-gates is the norm, and only the explicit
 /// flagged set escalates.
+///
+/// # Partial-config defaults (Gemini #441)
+///
+/// `#[serde(default)]` at the container level plus a per-field
+/// `#[serde(default = ...)]` on `confidence_floor` mean a PARTIAL `config` JSON
+/// — e.g. `{"high_impact_entities":[...]}` — deserializes with the sane default
+/// floor instead of zeroing it out (which would make every action
+/// "high-confidence" and silently disable the low-confidence escalation).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EscalationConfig {
     /// Confidence below this escalates as "low-confidence" (the partner design
     /// §4.3). The default `0.5` treats a coin-flip-or-worse action as needing a
-    /// human; a routine high-confidence act auto-accepts.
+    /// human; a routine high-confidence act auto-accepts. A `config` JSON that
+    /// omits this field keeps the default floor (never `0.0`).
+    #[serde(default = "default_confidence_floor")]
     pub confidence_floor: f64,
     /// Entity ids deemed "high-impact" (e.g. a core thesis). An action touching
     /// one escalates regardless of confidence (the partner design §4.3). Empty by
@@ -199,10 +264,19 @@ pub struct EscalationConfig {
     pub high_impact_entities: Vec<String>,
 }
 
+/// The default low-confidence escalation floor (the partner design §4.3).
+///
+/// A standalone function so both [`Default`] and the per-field
+/// `#[serde(default = ...)]` share ONE source of truth — a partial config can
+/// never silently zero the floor.
+const fn default_confidence_floor() -> f64 {
+    0.5
+}
+
 impl Default for EscalationConfig {
     fn default() -> Self {
         Self {
-            confidence_floor: 0.5,
+            confidence_floor: default_confidence_floor(),
             high_impact_entities: Vec::new(),
         }
     }
@@ -220,12 +294,15 @@ impl EscalationConfig {
             return false;
         }
         let touches = |node: &str| self.high_impact_entities.iter().any(|e| e == node);
-        if let ActionKind::Forget { from, to, .. } = &action.what
-            && (touches(from) || touches(to))
-        {
-            return true;
-        }
-        action.why.kg_nodes.iter().any(|node| touches(node))
+        // A `match` rather than an `if let ... && ...` let-chain: the let-chain
+        // feature is unstable on older toolchains, so the portable form avoids
+        // the unstable-feature dependency (Gemini #441 MEDIUM). A `match` (vs a
+        // nested `if let`) also keeps clippy::collapsible_if happy.
+        let forget_touches_core = match &action.what {
+            ActionKind::Forget { from, to, .. } => touches(from) || touches(to),
+            _ => false,
+        };
+        forget_touches_core || action.why.kg_nodes.iter().any(|node| touches(node))
     }
 }
 
@@ -354,9 +431,29 @@ fn project_proposal(proposal: &Proposal) -> ActionRecord {
             vec![from.clone(), to.clone()],
             None,
         ),
-        ProposalKind::TagAssign { entity_id, .. } | ProposalKind::Annotation { entity_id, .. } => (
+        ProposalKind::Annotation { entity_id, .. } => (
             ActionKind::KgWrite {
                 proposal_id: proposal.id.clone(),
+                // An annotation write adds an `annotated_by` edge from the entity
+                // to `annotation:<proposal>`; the undo retires THAT edge to cold,
+                // so the reversal is real and self-describing.
+                reversal: KgWriteReversal::Annotation {
+                    entity_id: entity_id.clone(),
+                    annotation_node: annotation_node_id(&proposal.id),
+                },
+            },
+            vec![entity_id.clone()],
+            None,
+        ),
+        ProposalKind::TagAssign { entity_id, tag_id } => (
+            ActionKind::KgWrite {
+                proposal_id: proposal.id.clone(),
+                reversal: KgWriteReversal::Unsupported {
+                    detail: format!(
+                        "tag assign {tag_id} on {entity_id} has no reversal primitive in the \
+                         tag-engine contract; reverse by re-defining/re-assigning through the gate"
+                    ),
+                },
             },
             vec![entity_id.clone()],
             None,
@@ -364,6 +461,11 @@ fn project_proposal(proposal: &Proposal) -> ActionRecord {
         ProposalKind::TagDefine { tag_id, .. } => (
             ActionKind::KgWrite {
                 proposal_id: proposal.id.clone(),
+                reversal: KgWriteReversal::Unsupported {
+                    detail: format!(
+                        "tag define {tag_id} has no reversal primitive in the tag-engine contract"
+                    ),
+                },
             },
             vec![tag_id.clone()],
             None,
@@ -383,7 +485,21 @@ fn project_proposal(proposal: &Proposal) -> ActionRecord {
     }
 }
 
+/// The annotation node id a materialized [`ProposalKind::Annotation`] creates
+/// (`annotation:<proposal>`), matching `write_proposal` in `tdw-knowledge`.
+///
+/// The undo retires the `annotated_by` edge whose `to` is this node, so the
+/// id must be derived identically to the write side.
+fn annotation_node_id(proposal_id: &str) -> String {
+    format!("annotation:{proposal_id}")
+}
+
 /// Project one APPLIED [`TuneRecord`] into a `ParamTune` action (W5.1).
+///
+/// Only a [`TuneOutcome::Promoted`] reaches here (the feed filters on
+/// `outcome.applied()`), so the prior (`old_value`) and applied (`new_value`)
+/// values are both present — carried onto the action so [`undo`] can restore the
+/// PRIOR value for real, never a silent no-op (Gemini #441 HIGH).
 fn project_tune(tune: &TuneRecord) -> ActionRecord {
     // An applied tune is a gated, eval-passed change → high confidence.
     let why = Provenance {
@@ -391,9 +507,22 @@ fn project_tune(tune: &TuneRecord) -> ActionRecord {
         kg_nodes: Vec::new(),
         as_of: Some(tune.decided_at.clone()),
     };
+    // `project_tune` is only called for an applied (Promoted) outcome; fall back
+    // defensively to the same value (a no-op restore) if that ever changes,
+    // rather than panicking inside a pure projection.
+    let (applied_value, restore_value) = match &tune.outcome {
+        TuneOutcome::Promoted {
+            old_value,
+            new_value,
+            ..
+        } => (*new_value, *old_value),
+        _ => (0.0, 0.0),
+    };
     let what = ActionKind::ParamTune {
         record_id: tune.id.clone(),
         param: tune.param.id().to_string(),
+        applied_value,
+        restore_value,
     };
     let reversible = what.reversible();
     ActionRecord {
@@ -420,6 +549,11 @@ fn project_lesson(lesson: &LessonAudit) -> ActionRecord {
     };
     let what = ActionKind::RuledPromote {
         proposal_id: lesson.proposal_id.clone(),
+        // A lesson is a gated annotation on the lessons subject; the promote
+        // added an `annotated_by` edge subject -> annotation:<proposal>. The undo
+        // retires THAT edge to cold, demoting the rule out of active behavior.
+        subject_entity: tdw_knowledge::lessons::LESSON_SUBJECT_ENTITY.to_string(),
+        annotation_node: annotation_node_id(&lesson.proposal_id),
     };
     let reversible = what.reversible();
     ActionRecord {
@@ -492,15 +626,63 @@ pub struct FeedbackSignal {
 /// correction LOWERS trust). Bounded and negative.
 const CORRECTION_TRUST_DELTA: f64 = -0.1;
 
-/// The outcome of reversing an action against the graph (W5.3).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The outcome of reversing an action — a REAL reversal record, never a silent
+/// no-op (the partner design §4.2, W5.3; the Gemini #441 HIGH fix).
+///
+/// Every variant documents what was actually reverted: a recalled/retired
+/// cold-plane edge for the graph reversals, or the restored parameter value for
+/// a param tune. A genuinely-irreversible action does NOT reach here — [`undo`]
+/// returns [`UndoError::Unsupported`] for it instead of fabricating a success.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UndoOutcome {
     /// The action that was reversed.
     pub action_id: String,
-    /// The cold-plane move/recall the reversal performed (when it touched the
-    /// graph). `None` for a reversal that is a re-tune (no graph edge).
-    #[serde(default)]
-    pub edge: Option<RetiredEdge>,
+    /// What the reversal actually did (the real reverted edge/record).
+    pub reversal: UndoReversal,
+}
+
+/// What a successful [`undo`] actually reverted (W5.3).
+///
+/// This is the proof the undo was REAL: the cold-plane edge that was
+/// recalled/retired, or the parameter value that was restored. There is no
+/// "did nothing" variant — an action with no real reversal is an
+/// [`UndoError::Unsupported`], never a silent `Ok`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "reversal", rename_all = "snake_case")]
+pub enum UndoReversal {
+    /// A cold-plane edge was recalled (undo a `Forget`) or retired (undo an
+    /// added edge / annotation / promoted lesson). The reverted edge is carried.
+    Edge(RetiredEdge),
+    /// A self-tune parameter was restored to its prior value (undo a param tune).
+    ParamRestored {
+        /// The parameter that was restored.
+        param: String,
+        /// The value it was restored TO (the value before the tune).
+        restored_value: f64,
+    },
+}
+
+/// An error reversing an action (W5.3).
+///
+/// Either the underlying cold-plane move failed, or the action is genuinely
+/// irreversible — in which case [`undo`] returns [`Self::Unsupported`] LOUDLY
+/// rather than a vacuous success (the Gemini #441 HIGH fix: never a silent `Ok`
+/// that callers mistake for a real undo).
+#[derive(Debug, thiserror::Error)]
+pub enum UndoError {
+    /// The cold-plane recall/retire failed (e.g. no matching edge).
+    #[error(transparent)]
+    Knowledge(#[from] tdw_knowledge::KnowledgeError),
+    /// The action has no defined reversal (e.g. a tag assign/define, which the
+    /// tag-engine contract cannot retire). Reversal must be driven explicitly
+    /// through the gate; an automatic undo refuses rather than pretend.
+    #[error("action {action_id} is not reversible: {detail}")]
+    Unsupported {
+        /// The action that could not be reversed.
+        action_id: String,
+        /// Why it is irreversible.
+        detail: String,
+    },
 }
 
 /// The `(from, rel, to)` edge an undo recalled or retired (W5.3).
@@ -530,37 +712,39 @@ impl From<RetireOutcome> for RetiredEdge {
 /// One-gesture undo: reverse `action` against the graph, reusing the
 /// already-reversible cold-plane machinery (the partner design §4.2, W5.3).
 ///
-/// This is the heart of "audit-only autonomy is SAFE": every KG action has a
-/// defined inverse and undo just calls it.
+/// This is the heart of "audit-only autonomy is SAFE": every reversible action
+/// has a defined inverse and undo PERFORMS it (the Gemini #441 HIGH fix — no
+/// action returns a vacuous `Ok` that the caller mistakes for a real undo):
 /// - a [`ActionKind::Forget`] is reversed by [`recall_cold_edge`] (recall the
 ///   retired edge back to the active plane);
-/// - a [`ActionKind::KgWrite`] of an added edge is reversed by an inverse
-///   `Forget` ([`retire_edge_to_cold`]) — the same cold-plane move that retires
-///   any fact;
-/// - a [`ActionKind::ParamTune`] / [`ActionKind::RuledPromote`] is a non-edge
-///   reversal (re-tune / retire the backing proposal) the adapter drives through
-///   the gate; here it is a no-edge [`UndoOutcome`].
+/// - a [`ActionKind::Edge`] write is reversed by an inverse `Forget`
+///   ([`retire_edge_to_cold`]) — the same cold-plane move that retires any fact;
+/// - a [`ActionKind::KgWrite`] that is an annotation is reversed by retiring its
+///   `annotated_by` edge to cold; a tag assign/define `KgWrite` has NO reversal
+///   primitive and returns [`UndoError::Unsupported`] (never a silent success);
+/// - a [`ActionKind::ParamTune`] restores the parameter's PRIOR value (carried
+///   on the action) — the real re-tune, surfaced as [`UndoReversal::ParamRestored`];
+/// - a [`ActionKind::RuledPromote`] retires the promoted lesson's `annotated_by`
+///   edge to cold, demoting the rule out of active behavior.
 ///
 /// The historical record is NEVER destroyed — recall/retire preserve the cold
 /// audit trail, so a prior `as_of` query is unaffected (the partner design §4.1).
 ///
 /// # Errors
 ///
-/// Returns the knowledge-layer error when the cold-plane move fails (e.g. no
-/// matching edge to recall/retire).
+/// Returns [`UndoError::Knowledge`] when the cold-plane move fails (e.g. no
+/// matching edge to recall/retire), or [`UndoError::Unsupported`] when the action
+/// is genuinely irreversible (a tag assign/define) — LOUDLY, never a silent `Ok`.
 pub async fn undo(
     graph: &Arc<dyn GraphEngine>,
     action: &ActionRecord,
     now: &str,
-) -> tdw_knowledge::Result<UndoOutcome> {
-    match &action.what {
+) -> Result<UndoOutcome, UndoError> {
+    let reversal = match &action.what {
         ActionKind::Forget { from, rel, to, .. } => {
             // Reverse a Forget: recall the cold edge back to active.
             let outcome = recall_cold_edge(graph, from, rel, to, now).await?;
-            Ok(UndoOutcome {
-                action_id: action.id.clone(),
-                edge: Some(outcome.into()),
-            })
+            UndoReversal::Edge(outcome.into())
         }
         ActionKind::Edge { from, rel, to } => {
             // Reverse an added edge: the inverse Forget retires it to cold — the
@@ -576,22 +760,75 @@ pub async fn undo(
                 now,
             )
             .await?;
-            Ok(UndoOutcome {
-                action_id: action.id.clone(),
-                edge: Some(outcome.into()),
-            })
+            UndoReversal::Edge(outcome.into())
         }
-        ActionKind::KgWrite { .. }
-        | ActionKind::ParamTune { .. }
-        | ActionKind::RuledPromote { .. } => {
-            // Non-edge reversals (re-tune / retire the backing proposal) are
-            // driven by the adapter through the gate; no cold-plane edge here.
-            Ok(UndoOutcome {
-                action_id: action.id.clone(),
-                edge: None,
-            })
+        ActionKind::KgWrite { reversal, .. } => match reversal {
+            // An annotation write is reversed by retiring its `annotated_by`
+            // edge to cold — a REAL reversal on the same machinery, not a no-op.
+            KgWriteReversal::Annotation {
+                entity_id,
+                annotation_node,
+            } => {
+                let outcome = retire_edge_to_cold(
+                    graph,
+                    entity_id,
+                    "annotated_by",
+                    annotation_node,
+                    "undo: retire autonomous annotation",
+                    "partner-undo",
+                    now,
+                )
+                .await?;
+                UndoReversal::Edge(outcome.into())
+            }
+            // A tag assign/define has no reversal primitive: refuse LOUDLY.
+            KgWriteReversal::Unsupported { detail } => {
+                return Err(UndoError::Unsupported {
+                    action_id: action.id.clone(),
+                    detail: detail.clone(),
+                });
+            }
+        },
+        ActionKind::ParamTune {
+            param,
+            restore_value,
+            ..
+        } => {
+            // Reverse a self-tune: restore the parameter to its PRIOR value. The
+            // value travels on the action (read from the TuneRecord's old_value),
+            // so the reversal is real and self-contained — no second lookup, no
+            // silent no-op. The daemon applies `restored_value` through the same
+            // gated self-tune path the original change took.
+            UndoReversal::ParamRestored {
+                param: param.clone(),
+                restored_value: *restore_value,
+            }
         }
-    }
+        ActionKind::RuledPromote {
+            subject_entity,
+            annotation_node,
+            ..
+        } => {
+            // Reverse a promoted lesson: retire its `annotated_by` edge to cold,
+            // demoting the rule out of active behavior (the historical record is
+            // preserved). A REAL reversal, not a no-op.
+            let outcome = retire_edge_to_cold(
+                graph,
+                subject_entity,
+                "annotated_by",
+                annotation_node,
+                "undo: demote promoted lesson",
+                "partner-undo",
+                now,
+            )
+            .await?;
+            UndoReversal::Edge(outcome.into())
+        }
+    };
+    Ok(UndoOutcome {
+        action_id: action.id.clone(),
+        reversal,
+    })
 }
 
 /// Correct an action: undo it **and** emit the training feedback (the partner
@@ -605,14 +842,16 @@ pub async fn undo(
 ///
 /// # Errors
 ///
-/// Propagates the [`undo`] error when the reversal fails; the feedback is only
-/// emitted alongside a successful undo.
+/// Propagates the [`undo`] error when the reversal fails or the action is
+/// irreversible ([`UndoError`]); the feedback is only emitted alongside a
+/// successful undo, so a correction never trains the loop on a reversal that did
+/// not actually happen.
 pub async fn correct(
     graph: &Arc<dyn GraphEngine>,
     action: &ActionRecord,
     correction: &Correction,
     now: &str,
-) -> tdw_knowledge::Result<(UndoOutcome, FeedbackSignal)> {
+) -> Result<(UndoOutcome, FeedbackSignal), UndoError> {
     let undo_outcome = undo(graph, action, now).await?;
     let feedback = FeedbackSignal {
         action_id: action.id.clone(),
@@ -669,6 +908,65 @@ mod tests {
             materialized: true,
             history: vec!["2026-06-14 draft by agent:partner".to_string()],
         }
+    }
+
+    fn annotation_proposal(id: &str, entity_id: &str) -> Proposal {
+        Proposal {
+            id: id.to_string(),
+            kind: ProposalKind::Annotation {
+                entity_id: entity_id.to_string(),
+                note: "an autonomous annotation".to_string(),
+            },
+            agent_id: "agent:partner".to_string(),
+            status: tdw_taxonomy::ValidationStatus::Validated,
+            rejected: None,
+            materialized: true,
+            history: vec!["2026-06-14 draft by agent:partner".to_string()],
+        }
+    }
+
+    fn tag_assign_proposal(id: &str) -> Proposal {
+        Proposal {
+            id: id.to_string(),
+            kind: ProposalKind::TagAssign {
+                entity_id: "company:ACME".to_string(),
+                tag_id: "sector:tech".to_string(),
+            },
+            agent_id: "agent:partner".to_string(),
+            status: tdw_taxonomy::ValidationStatus::Validated,
+            rejected: None,
+            materialized: true,
+            history: vec!["2026-06-14 draft by agent:partner".to_string()],
+        }
+    }
+
+    /// Materialize an Annotation proposal into the graph EXACTLY as
+    /// `write_proposal` does (annotation node + `annotated_by` edge), so a real
+    /// write→undo→retired test runs against the real cold-plane.
+    async fn seed_annotation(graph: &Arc<dyn GraphEngine>, proposal_id: &str, entity_id: &str) {
+        let annotation_id = annotation_node_id(proposal_id);
+        graph
+            .upsert_nodes(vec![
+                node(entity_id, entity_id),
+                node(&annotation_id, "note"),
+            ])
+            .await
+            .expect("seed annotation nodes");
+        graph
+            .upsert_edges(vec![tdw_core::GraphEdge {
+                from: entity_id.to_string(),
+                to: annotation_id,
+                rel: "annotated_by".to_string(),
+                props: serde_json::Value::Null,
+                provenance: tdw_core::Provenance::Agent {
+                    agent_id: "agent:partner".to_string(),
+                    gated: true,
+                },
+                valid_from: Some("2026-06-14T00:00:00Z".to_string()),
+                valid_to: None,
+            }])
+            .await
+            .expect("seed annotated_by edge");
     }
 
     // ── W5.1: the feed renders a `why` for EVERY action ──────────────────────
@@ -872,7 +1170,9 @@ mod tests {
         let outcome = undo(&graph, &action, "2026-06-15")
             .await
             .expect("undo recalls the cold edge");
-        let edge = outcome.edge.expect("undo touched an edge");
+        let UndoReversal::Edge(edge) = outcome.reversal else {
+            panic!("a Forget undo reverts an edge: {:?}", outcome.reversal);
+        };
         assert_eq!(edge.from, "company:ACME");
         assert_eq!(edge.to, "city:old");
 
@@ -914,7 +1214,11 @@ mod tests {
         let outcome = undo(&graph, &action, "2026-06-15")
             .await
             .expect("undo retires the added edge");
-        assert!(outcome.edge.is_some(), "the edge undo touched the graph");
+        assert!(
+            matches!(outcome.reversal, UndoReversal::Edge(_)),
+            "the edge undo touched the graph: {:?}",
+            outcome.reversal
+        );
 
         let edges = graph
             .edges(Some("supplier_of"), 0, 16)
@@ -923,6 +1227,164 @@ mod tests {
         assert!(
             edges.iter().all(|e| e.valid_to.is_some()),
             "the added edge is now cold after undo: {edges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_an_annotation_kgwrite_retires_the_annotated_by_edge() {
+        // The KgWrite (annotation) undo path the Gemini #441 HIGH fix demands a
+        // REAL reversal for: write the annotation, undo, assert the annotated_by
+        // edge is now cold (write → undo → state restored).
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        seed_annotation(&graph, "p7", "company:ACME").await;
+
+        let action = project_proposal(&annotation_proposal("p7", "company:ACME"));
+        assert!(
+            matches!(
+                &action.what,
+                ActionKind::KgWrite {
+                    reversal: KgWriteReversal::Annotation { .. },
+                    ..
+                }
+            ),
+            "an annotation projects to a reversible KgWrite: {:?}",
+            action.what
+        );
+        assert!(action.reversible, "an annotation KgWrite is reversible");
+
+        let outcome = undo(&graph, &action, "2026-06-15")
+            .await
+            .expect("undo retires the annotation edge");
+        let UndoReversal::Edge(edge) = outcome.reversal else {
+            panic!("an annotation undo reverts an edge: {:?}", outcome.reversal);
+        };
+        assert_eq!(edge.from, "company:ACME");
+        assert_eq!(edge.to, annotation_node_id("p7"));
+
+        let edges = graph
+            .edges(Some("annotated_by"), 0, 16)
+            .await
+            .expect("read edges");
+        assert!(
+            edges.iter().all(|e| e.valid_to.is_some()),
+            "the annotation edge is cold after undo: {edges:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_a_tag_kgwrite_is_explicitly_unsupported_not_silent_ok() {
+        // A tag assign/define has NO reversal primitive: undo must refuse LOUDLY
+        // (UndoError::Unsupported), never the silent Ok the Gemini #441 HIGH flag
+        // called out. No graph state is needed — the refusal is structural.
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let action = project_proposal(&tag_assign_proposal("p8"));
+        assert!(
+            !action.reversible,
+            "a tag KgWrite is flagged irreversible: {:?}",
+            action.what
+        );
+
+        let error = undo(&graph, &action, "2026-06-15")
+            .await
+            .expect_err("a tag write undo is explicitly unsupported");
+        match error {
+            UndoError::Unsupported { action_id, .. } => {
+                assert_eq!(action_id, action.id, "names the refused action");
+            }
+            other @ UndoError::Knowledge(_) => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn undo_a_param_tune_restores_the_prior_value() {
+        // The ParamTune undo path: a promoted tune (60 → 62) must undo by
+        // RESTORING 60 — a real re-tune, surfaced as ParamRestored, never a
+        // silent no-op (the Gemini #441 HIGH fix).
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        let mut log = SelfTuneLog::new();
+        log.record(
+            TunableParam::RrfK,
+            TuneOutcome::Promoted {
+                old_value: 60.0,
+                new_value: 62.0,
+                incumbent_score: 0.80,
+                candidate_score: 0.86,
+            },
+            "2026-06-14",
+        );
+        let tune = log.last().expect("a record").clone();
+        let action = project_tune(&tune);
+        assert!(action.reversible, "a param tune is reversible");
+        match &action.what {
+            ActionKind::ParamTune {
+                applied_value,
+                restore_value,
+                ..
+            } => {
+                assert!((applied_value - 62.0).abs() < 1e-12);
+                assert!((restore_value - 60.0).abs() < 1e-12);
+            }
+            other => panic!("expected ParamTune, got {other:?}"),
+        }
+
+        let outcome = undo(&graph, &action, "2026-06-15")
+            .await
+            .expect("a param tune undo restores the prior value");
+        match outcome.reversal {
+            UndoReversal::ParamRestored {
+                param,
+                restored_value,
+            } => {
+                assert_eq!(param, "rrf_k");
+                assert!(
+                    (restored_value - 60.0).abs() < 1e-12,
+                    "restored to the prior value 60, got {restored_value}"
+                );
+            }
+            other @ UndoReversal::Edge(_) => panic!("expected ParamRestored, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn undo_a_ruled_promote_demotes_the_lesson_edge() {
+        // The RuledPromote undo path: a materialized lesson is a gated annotation
+        // on the lessons subject; undo retires its annotated_by edge to cold,
+        // demoting the rule (write → undo → demoted), never a silent no-op.
+        use tdw_knowledge::lessons::{LESSON_SUBJECT_ENTITY, Lesson};
+        let graph: Arc<dyn GraphEngine> = Arc::new(InMemoryGraphEngine::default());
+        seed_annotation(&graph, "p10", LESSON_SUBJECT_ENTITY).await;
+
+        let lesson_audit = LessonAudit {
+            proposal_id: "p10".to_string(),
+            lesson: Lesson {
+                agent_id: "agent:partner".to_string(),
+                task_class: "valuation".to_string(),
+                recommended_behavior: "prefer approach Y".to_string(),
+                evidence: vec!["ep-1".to_string()],
+                confidence: 0.9,
+            },
+            state: LessonState::Active,
+        };
+        let action = project_lesson(&lesson_audit);
+        assert!(matches!(action.what, ActionKind::RuledPromote { .. }));
+        assert!(action.reversible, "a promoted lesson is reversible");
+
+        let outcome = undo(&graph, &action, "2026-06-15")
+            .await
+            .expect("a promoted-lesson undo retires its edge");
+        let UndoReversal::Edge(edge) = outcome.reversal else {
+            panic!("a lesson undo reverts an edge: {:?}", outcome.reversal);
+        };
+        assert_eq!(edge.from, LESSON_SUBJECT_ENTITY);
+        assert_eq!(edge.to, annotation_node_id("p10"));
+
+        let edges = graph
+            .edges(Some("annotated_by"), 0, 16)
+            .await
+            .expect("read edges");
+        assert!(
+            edges.iter().all(|e| e.valid_to.is_some()),
+            "the lesson edge is cold (demoted) after undo: {edges:?}"
         );
     }
 
@@ -970,7 +1432,11 @@ mod tests {
             .await
             .expect("correct undoes + feeds back");
 
-        assert!(undo_outcome.edge.is_some(), "correct reversed the action");
+        assert!(
+            matches!(undo_outcome.reversal, UndoReversal::Edge(_)),
+            "correct reversed the action: {:?}",
+            undo_outcome.reversal
+        );
         // The correction LOWERS trust (negative delta) and carries the note as
         // the lesson body — the W5.4 "lowers trust + records a Lesson" gate.
         assert!(
@@ -999,6 +1465,54 @@ mod tests {
     #[test]
     fn audit_record_round_trips_through_serde() {
         let action = project_proposal(&forget_proposal("p1", true));
+        let json = serde_json::to_string(&action).expect("serialize");
+        let back: ActionRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(action, back);
+    }
+
+    // ── Gemini #441 MEDIUM: partial EscalationConfig keeps the default floor ──
+
+    #[test]
+    fn partial_config_deserializes_with_default_confidence_floor() {
+        // A partial config that sets ONLY high_impact_entities must keep the
+        // default floor (0.5), NOT zero it out — otherwise every action would be
+        // "high-confidence" and the low-confidence escalation would silently die.
+        let config: EscalationConfig =
+            serde_json::from_str(r#"{"high_impact_entities":["thesis:core"]}"#)
+                .expect("partial config deserializes");
+        assert!(
+            (config.confidence_floor - 0.5).abs() < 1e-12,
+            "the omitted floor keeps its default, got {}",
+            config.confidence_floor
+        );
+        assert_eq!(config.high_impact_entities, vec!["thesis:core".to_string()]);
+
+        // And an empty config object is the full default.
+        let empty: EscalationConfig = serde_json::from_str("{}").expect("empty config");
+        assert_eq!(empty, EscalationConfig::default());
+
+        // An explicit floor still overrides.
+        let explicit: EscalationConfig =
+            serde_json::from_str(r#"{"confidence_floor":0.9}"#).expect("explicit floor");
+        assert!((explicit.confidence_floor - 0.9).abs() < 1e-12);
+    }
+
+    #[test]
+    fn param_tune_action_round_trips_through_serde() {
+        // The enriched ParamTune carries the prior/applied values; round-trip so
+        // the daemon can serialize the audit row and reverse it later.
+        let mut log = SelfTuneLog::new();
+        log.record(
+            TunableParam::RrfK,
+            TuneOutcome::Promoted {
+                old_value: 60.0,
+                new_value: 62.0,
+                incumbent_score: 0.80,
+                candidate_score: 0.86,
+            },
+            "2026-06-14",
+        );
+        let action = project_tune(log.last().expect("a record"));
         let json = serde_json::to_string(&action).expect("serialize");
         let back: ActionRecord = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(action, back);

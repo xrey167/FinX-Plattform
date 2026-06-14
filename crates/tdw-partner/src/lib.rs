@@ -61,7 +61,8 @@ use tdw_openbb_agent::{Answer, QueryRequest, answer};
 
 pub use audit::{
     ActionKind, ActionRecord, ActionStatus, AuditInputs, Correction, EscalationConfig,
-    FeedbackSignal, RetiredEdge, UndoOutcome, audit_feed, correct, escalation_status, undo,
+    FeedbackSignal, KgWriteReversal, RetiredEdge, UndoError, UndoOutcome, UndoReversal, audit_feed,
+    correct, escalation_status, undo,
 };
 pub use dataplane::{DataPlane, DataPlaneError};
 pub use learning::{AppliedResolution, LearningState, apply_to_resolution, retrieval_admits};

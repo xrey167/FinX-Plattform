@@ -5791,6 +5791,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tdw-agent",
  "tdw-core",
  "tdw-cron",
  "tdw-domain",
@@ -5808,6 +5809,7 @@ dependencies = [
  "tdw-storage-qdrant",
  "tdw-tags",
  "tdw-taxonomy",
+ "tdw-workflow-engine",
  "thiserror 2.0.18",
  "tokio",
 ]

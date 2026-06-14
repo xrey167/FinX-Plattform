@@ -1,7 +1,14 @@
-# FinX Partner — Design Spec (partner-system W1)
+# FinX Partner — Design Spec (IMPLEMENTED — W1 design → W6 cohesion)
 
-> **Status:** design + capability spec (W1). Read-only architecture pass; no Rust
-> changed in this wave. Grounds the W2–W6 build in the crates that already exist.
+> **Status: IMPLEMENTED.** The W1 design below is now built end-to-end across
+> W2–W6: Partner Core (the shared front door), the proactive brief + nudges, the
+> learning-loop read seam, the audit & undo surface, and W6 cohesion (the
+> anti-duplication invariant, the zero-to-partner first run, and the
+> progressive-disclosure manifest). Each section's design is realized in
+> `crates/tdw-partner` plus the three thin adapters (MCP / Workspace / CLI); the
+> wave tables in §7 record the per-task status. See the end-to-end usage guide in
+> §11. The remaining gate is the orchestrator's final architect sign-off + the
+> v1.7.0 cut after this merges.
 >
 > **Vision (from `.plans/partner-system-plan.md`):** turn FinX — the data
 > warehouse (268 routes), OpenBB parity, and the knowledge/learning system —
@@ -472,12 +479,12 @@ eval/gate.
 
 ### W6 — Cohesion, onboarding & release
 
-| # | Task | Crates / files | Eval / gate |
-|---|---|---|---|
-| W6.1 | Anti-duplication test: adapters contain no core logic | adapters + a workspace test | review-gate: adapters only map events/principal |
-| W6.2 | Guided "zero-to-partner" first run | **wire** `tdw-workflow-engine` workflow | < 10 min walkthrough passes |
-| W6.3 | Progressive-disclosure manifest (default = `ask`/`brief`/`audit`) | `manifest.rs` + MCP registration | onboarding eval |
-| W6.4 | Docs + final architect gate + partner release | `docs/products/finx-partner.md` (this) + release | architect sign-off |
+| # | Task | Status | Crates / files | Eval / gate |
+|---|---|---|---|---|
+| W6.1 | Anti-duplication test: adapters contain no core logic | ✅ done | `crates/tdw-partner/tests/adapter_anti_duplication.rs` scans the 3 adapters (`tdw-mcp` partner tools, `tdw-service-api/agent_bridge.rs`, `tdw-cli/partner.rs`) | review-gate: adapters reference no `tdw_endpoint_catalog` / `ProposalQueue` / `self_tune`, only delegate to `PartnerCore` |
+| W6.2 | Guided "zero-to-partner" first run | ✅ done | `crates/tdw-partner/tests/zero_to_partner.rs` authors the onboarding DAG and compiles it via `tdw-workflow-engine` | < 10 min walkthrough: a small, fixed, offline/deterministic sequence (context→watchlist→thesis→ask→brief→audit) that runs end-to-end on the offline core |
+| W6.3 | Progressive-disclosure manifest (default = `ask`/`brief`/`audit`) | ✅ done | `tdw-openbb-agent/manifest.rs` (`FEATURED_PARTNER_VERBS`, partner-named copilot entry) + `tdw-mcp` registration (partner verbs LEAD `tools/list`, marked `partnerPrimary`) | onboarding: the few high-value verbs lead; the ~49 tools stay registered + callable but follow |
+| W6.4 | Docs + final architect gate + partner release | ✅ docs (this); ⏳ architect gate + release by orchestrator | `docs/products/finx-partner.md` (this, incl. §11 usage) | architect sign-off + v1.7.0 cut |
 
 ---
 
@@ -526,6 +533,67 @@ eval/gate.
   must W4.2 introduce its persistence? (Audit before W4.)
 - Workspace widget framework for the audit/brief widgets — confirm the existing
   widget contract (`tdw.widgets.describe/list`) covers a custom partner widget.
+
+---
+
+## 11. Using the Partner end-to-end (across MCP / Workspace / CLI)
+
+The Partner is one shared core (`crates/tdw-partner`) behind three thin adapters.
+The same four verbs — **ask**, **brief**, **audit**, **undo** — are exposed on
+every surface; pick whichever surface your workflow lives in. The few high-value
+verbs lead each surface (progressive disclosure, §5/W6.3); the lower-level
+`tdw.*` tools stay available for power users.
+
+### Zero-to-partner first run (< 10 min)
+
+The guided first run walks: connect a data context → seed the first watchlist →
+state one thesis → **ask** one question → see the first **brief** → review the
+**audit** feed. The sequence is authored as a deterministic `tdw-workflow-engine`
+workflow and exercised offline in
+`crates/tdw-partner/tests/zero_to_partner.rs` — no network or credentials on the
+path, so it completes in one sitting.
+
+### MCP surface
+
+- `tdw.partner.ask` — ask FinX anything; returns the streamed answer + a
+  citation of the routes / KG nodes it drew from. It dispatches internally to the
+  right data routes and `tdw.kg.*` verbs (bounded by the endpoint catalog).
+- `tdw.partner.brief` — the proactive "what changed / what needs you" feed.
+- `tdw.partner.audit` — the "what I did + why" stream; auto-accepted actions and
+  the `AwaitingHuman` escalations share one ranked feed.
+- `tdw.partner.undo` — the one-gesture reversal plan for an audited action.
+
+These four LEAD `tools/list` and carry a `partnerPrimary: true` annotation; the
+rest of the catalog follows as the discoverable surface.
+
+### Workspace (OpenBB copilot)
+
+The `agents.json` manifest advertises the **FinX Partner** copilot, leading with
+ask / brief / audit. The Workspace bridge routes every turn through the SAME
+`PartnerCore::answer_workspace`, preserving the two-leg widget-data contract — so
+the copilot you already use is the partner, with no per-surface logic.
+
+### CLI
+
+```
+tdw partner ask  "How did AAPL do this quarter?"
+tdw partner brief                  # the proactive morning brief
+tdw partner audit                  # the audit-only autonomy feed
+```
+
+The CLI renders the shared `PartnerEvent` stream to the TTY; like the other two
+adapters it only maps events/principal to its wire format (the anti-duplication
+invariant, §6/W6.1).
+
+### Autonomy & safety in one line
+
+The partner acts autonomously **inside the gates** (Adaptivity ≥ Learning + eval
+threshold) and you review **after the fact**: every write is reversible (a KG
+write retires to the cold plane, a param tune restores its prior value, a
+promoted lesson is demoted), and **undo** performs that real reversal — a
+genuinely-irreversible write (a tag assign/define) is refused loudly rather than
+silently "succeeding". **correct** = undo + a feedback signal that trains the
+loop (lowers trust for the action's source, records a lesson).
 
 ---
 

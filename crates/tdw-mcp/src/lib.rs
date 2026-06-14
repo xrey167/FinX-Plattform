@@ -707,24 +707,38 @@ impl McpServer {
         {
             descriptors.push(knowledge_export_tools::descriptor());
         }
-        // The PARTNER front-door tool (partner-system W2.6): tdw.partner.ask is
-        // appended ONLY when a PartnerCore is attached. It is the one verb the
-        // onboarding surface leads with; the lower-level tdw.* tools stay listed.
-        if self.partner.is_some() {
-            descriptors.push(partner_tools::descriptor());
-            // The PROACTIVE brief tool (partner-system W3.6): tdw.partner.brief
-            // is the second onboarding verb, gated on the same Partner Core.
-            descriptors.push(partner_brief_tools::descriptor());
-            // The AUDIT & UNDO surface (partner-system W5.5): tdw.partner.audit
-            // renders the "what I did + why" feed and tdw.partner.undo describes
-            // the one-gesture reversal — gated on the same Partner Core.
-            descriptors.push(partner_audit_tools::audit_descriptor());
-            descriptors.push(partner_audit_tools::undo_descriptor());
-        }
         // `registry_descriptors` is already deduped against built-in names at attach time
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
         descriptors.extend(self.registry_descriptors.iter().cloned());
+
+        // PROGRESSIVE DISCLOSURE (partner-system W6.3, partner §5): when a Partner
+        // Core is attached, the few high-value partner verbs LEAD `tools/list`
+        // (tdw.partner.ask / brief / audit / undo) so onboarding sees the
+        // "intelligent few" first; the other ~49 tdw.* tools stay registered and
+        // callable but follow as the discoverable surface. Prepending (not
+        // appending) is the disclosure — a client that renders the list in order
+        // meets `ask` before the tool-soup. Each partner descriptor also carries a
+        // `partnerPrimary: true` annotation so a client can feature them
+        // explicitly rather than rely on position alone.
+        if self.partner.is_some() {
+            let mut featured = vec![
+                partner_tools::descriptor(),
+                // The PROACTIVE brief tool (partner-system W3.6): tdw.partner.brief.
+                partner_brief_tools::descriptor(),
+                // The AUDIT & UNDO surface (partner-system W5.5): tdw.partner.audit
+                // renders the "what I did + why" feed and tdw.partner.undo describes
+                // the one-gesture reversal.
+                partner_audit_tools::audit_descriptor(),
+                partner_audit_tools::undo_descriptor(),
+            ];
+            for descriptor in &mut featured {
+                mark_partner_primary(descriptor);
+            }
+            // Prepend the featured verbs so they LEAD the catalog.
+            featured.extend(descriptors);
+            descriptors = featured;
+        }
         descriptors
     }
 
@@ -3793,6 +3807,16 @@ const DATA_MODE_DISCLOSURE: &str = "Market-data tools serve DETERMINISTIC OFFLIN
 
 fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
     tool_with_annotations(name, title, description, input_schema, true, true)
+}
+
+/// Mark a descriptor as a PRIMARY partner verb for progressive disclosure
+/// (partner-system W6.3): set `annotations.partnerPrimary = true` so a client can
+/// feature the few high-value verbs (`ask`/`brief`/`audit`/`undo`) ahead of the
+/// discoverable tool surface, independent of list position.
+fn mark_partner_primary(descriptor: &mut ToolDescriptor) {
+    if let Value::Object(map) = &mut descriptor.annotations {
+        map.insert("partnerPrimary".to_string(), Value::Bool(true));
+    }
 }
 
 fn daemon_tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {

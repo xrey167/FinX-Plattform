@@ -78,14 +78,30 @@ pub struct AgentEntry {
     pub image: Option<String>,
 }
 
+/// The few high-value partner verbs the onboarding surface leads with.
+///
+/// Partner-system W6.3, partner §5 (the "intelligent few"). The full tool
+/// surface stays reachable through `ask` (which dispatches internally); these are
+/// what a new user meets first.
+pub const FEATURED_PARTNER_VERBS: [&str; 3] = ["ask", "brief", "audit"];
+
 impl AgentEntry {
     /// Build the default copilot entry whose `query` endpoint is `query_url`.
+    ///
+    /// The description leads with the few high-value partner verbs
+    /// ([`FEATURED_PARTNER_VERBS`]) so the Workspace copilot picker advertises the
+    /// "ask / brief / audit" front door, not the ~49-tool soup (partner-system
+    /// W6.3, the progressive-disclosure manifest). The lower-level tools stay
+    /// reachable through ask, which dispatches internally.
     #[must_use]
     pub fn default_entry(query_url: impl Into<String>) -> Self {
         Self {
-            name: "FinX Copilot".to_string(),
-            description: "Answers questions grounded in your FinX dashboard widgets, \
-                fetching widget data on demand and citing its sources."
+            name: "FinX Partner".to_string(),
+            description: "Your autonomous, learning research partner. Ask anything in natural \
+                language (ask), get a proactive morning brief of what changed and what needs you \
+                (brief), and review everything it did with one-gesture undo (audit) — grounded in \
+                your dashboard widgets and citing its sources. The few high-value verbs lead; the \
+                full tool surface is reachable through ask, which dispatches internally."
                 .to_string(),
             endpoints: AgentEndpoints {
                 query: query_url.into(),
@@ -142,6 +158,26 @@ mod tests {
         assert!(entry["description"].is_string());
         // `image` omitted when None.
         assert!(entry.get("image").is_none());
+    }
+
+    #[test]
+    fn default_entry_advertises_the_featured_partner_verbs() {
+        // Progressive disclosure (partner-system W6.3): the copilot the manifest
+        // advertises leads with the few high-value verbs (ask/brief/audit), not
+        // the full tool soup.
+        let entry = AgentEntry::default_entry("http://127.0.0.1:6900/v1/query");
+        for verb in FEATURED_PARTNER_VERBS {
+            assert!(
+                entry.description.contains(verb),
+                "the manifest description leads with the featured verb {verb:?}: {:?}",
+                entry.description
+            );
+        }
+        assert!(
+            entry.name.contains("Partner"),
+            "the copilot is named for the partner: {:?}",
+            entry.name
+        );
     }
 
     #[test]
