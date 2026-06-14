@@ -14,6 +14,57 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-06-14
+
+**Total OpenBB parity.** Closes the OpenBB-parity-total program (G001–G005):
+**every OpenBB command with a documented public API — free *or* paid — is now
+built**, paid ones key-gated and dormant until a key is configured. The endpoint
+catalog grows from **216 → 267 routes** (**169 → 195 `Fetch` routes** + 72
+`Compute` routes); OpenAPI paths **169 → 195**. The only residual is scrape /
+undocumented-internal sources with no public API (stockgrid, wsj, finviz, multpl)
+— a source decision, not an engineering gap. MINOR release — backward-compatible
+additions, no breaks. See [`docs/release/v1.6.0-notes.md`](docs/release/v1.6.0-notes.md),
+[`docs/products/openbb-total-parity.md`](docs/products/openbb-total-parity.md),
+and the TOTAL roll-up in [`docs/roadmap/openbb-gap-matrix.md`](docs/roadmap/openbb-gap-matrix.md).
+
+### Added
+
+- **fixedincome FRED family + economy breadth (G003a, #431):** the remaining FRED
+  fixedincome rate/spread/curve family and the economy-router breadth fill →
+  standardized `tdw-domain` models, drift-gated.
+- **intrinio provider — key-gated (G002, #432):** new `tdw-provider-intrinio`
+  (paid `INTRINIO_API_KEY`) wiring intrinio's options unusual/snapshots/IV-surface,
+  reported_financials, and forward-P/E routes; code-complete and dormant until a
+  paid key is provisioned (no free tier to live-verify).
+- **congress.gov + biztoc providers (#430):** the
+  `uscongress/{bills,bill_info,bill_text_urls}` cluster (`tdw-provider-congress-gov`,
+  free `CONGRESS_GOV_API_KEY`) and biztoc as a second `news/world` candidate
+  (`tdw-provider-biztoc`, free `BIZTOC_API_KEY`) — closes the previously
+  mislabeled deferrals.
+- **compute-router remainder (G003b, #433):** the econometrics / quantitative /
+  technical Compute-route remainder → 72 total `Compute` routes (technical 31 /
+  quantitative 21 / econometrics 15 / portfolio 5), each also an MCP tool.
+- **equity / etf / index / commodity remainder (G003c, #434):** the standardized
+  provider-fetch remainder across the equity, etf, index, commodity, regulators
+  and index routers, closing the documented-public-API surface.
+
+### Changed
+
+- **Scoreboard truth-up to TOTAL parity (G005, #436):**
+  `docs/roadmap/openbb-gap-matrix.md` gains a top **OpenBB-parity TOTAL roll-up**
+  section; `docs/products/openbb-parity.md` refreshes the scoreboard to
+  **267 catalog / 195 Fetch / 72 Compute** and adds a total-parity statement; new
+  `docs/products/openbb-total-parity.md` states the total-parity claim, the
+  provider coverage (30+ of 32 built), and the honest residual.
+
+### Fixed
+
+- **scrape-provider assessment + intrinio fixes (G004, #435):** each remaining
+  no-API provider (stockgrid, wsj, finviz, multpl) was re-assessed against the
+  vendor's own site for a documented public API and confirmed unimplementable
+  clean-room (built none); plus intrinio `reported_financials` + Workspace-widget
+  fixes folded forward.
+
 ## [1.5.0] - 2026-06-14
 
 The **OpenBB command-parity release.** Closes the real OpenBB command-breadth
