@@ -5286,6 +5286,7 @@ dependencies = [
 name = "tdw-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "clap",
  "rust_xlsxwriter",
@@ -5297,9 +5298,11 @@ dependencies = [
  "tdw-embed-local",
  "tdw-embed-openai",
  "tdw-endpoint-catalog",
+ "tdw-eval-runner",
  "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
+ "tdw-partner",
  "tdw-protocol",
  "tdw-storage-graph",
  "tdw-storage-meilisearch",
@@ -5718,10 +5721,12 @@ dependencies = [
  "tdw-embed",
  "tdw-embed-local",
  "tdw-endpoint-catalog",
+ "tdw-eval-runner",
  "tdw-induction",
  "tdw-infer",
  "tdw-kg",
  "tdw-knowledge",
+ "tdw-partner",
  "tdw-patterns",
  "tdw-protocol",
  "tdw-retrieve",
@@ -5775,6 +5780,29 @@ dependencies = [
  "tdw-core",
  "tdw-event",
  "tdw-storage-postgres",
+ "tokio",
+]
+
+[[package]]
+name = "tdw-partner"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tdw-core",
+ "tdw-domain",
+ "tdw-embed-local",
+ "tdw-endpoint-catalog",
+ "tdw-eval-runner",
+ "tdw-knowledge",
+ "tdw-llm",
+ "tdw-openbb-agent",
+ "tdw-storage-graph",
+ "tdw-storage-qdrant",
+ "tdw-tags",
+ "tdw-taxonomy",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -6720,6 +6748,7 @@ dependencies = [
  "tdw-mask",
  "tdw-openbb-agent",
  "tdw-outbox",
+ "tdw-partner",
  "tdw-pipe",
  "tdw-protocol",
  "tdw-provider-adanos",

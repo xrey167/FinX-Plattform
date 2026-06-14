@@ -32,7 +32,7 @@ workspace-route = ["rest-api-route", "tdw-app-server/workspace-route"]
 ## on a thin state wrapper that drives a `StreamingLanguageModel` (the offline
 ## `StubLanguageModel` by default) through the pure `tdw-openbb-agent` sequencer.
 ## Forwards `tdw-app-server/agent-route` (which implies `workspace-route`).
-agent-route = ["workspace-route", "tdw-app-server/agent-route", "dep:tdw-openbb-agent"]
+agent-route = ["workspace-route", "tdw-app-server/agent-route", "dep:tdw-openbb-agent", "dep:tdw-partner"]
 
 ## Swap the relational engine in `AppState` for the real `PgEngine`
 ## (backed by `sqlx::PgPool`). Activates `tdw-storage-postgres/postgres`.
@@ -313,6 +313,7 @@ tdw-kg = { path = "../tdw-kg" }
 tdw-knowledge = { workspace = true }
 tdw-llm = { workspace = true }
 tdw-openbb-agent = { workspace = true, optional = true }
+tdw-partner = { path = "../tdw-partner", optional = true }
 tdw-llm-anthropic = { workspace = true }
 tdw-llm-openai-compat = { workspace = true }
 tdw-mask = { path = "../tdw-mask" }
