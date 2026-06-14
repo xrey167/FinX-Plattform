@@ -1769,6 +1769,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
         ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
         fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
     );
+    // OpenBB-parity P4W10: keyless FINRA shorts / dark-pool routes.
+    #[cfg(feature = "provider-finra")]
+    insert_finra_fetch_bindings(&mut table);
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
@@ -1819,6 +1822,22 @@ fn insert_benzinga_news_fetch_bindings(
     table.insert(
         ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
         fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+    );
+}
+
+/// Register the keyless FINRA shorts / dark-pool fetch bindings (openbb-parity
+/// **P4W10**), keyed by each fetcher's `ENDPOINT` const — the same key its
+/// catalog candidate declares. A conformance test keeps these keys and the
+/// catalog candidates in sync. Mirrors [`insert_finra_ingest_bindings`].
+#[cfg(feature = "provider-finra")]
+fn insert_finra_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("finra", crate::FinraShortInterestHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FinraShortInterestHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("finra", crate::FinraOtcSummaryHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FinraOtcSummaryHttpFetcher, _, _>(),
     );
 }
 
@@ -3243,10 +3262,9 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     #[cfg(feature = "provider-government-us")]
     insert_government_us_ingest_bindings(&mut table);
     #[cfg(feature = "provider-famafrench")]
-    table.insert(
-        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
-        binding::<crate::FamaFrenchHttpFetcher, _, _>("raw.factor_return"),
-    );
+    insert_famafrench_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-finra")]
+    insert_finra_ingest_bindings(&mut table);
     #[cfg(feature = "provider-cftc")]
     insert_cftc_ingest_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
@@ -3299,6 +3317,39 @@ fn insert_benzinga_news_ingest_bindings(
     table.insert(
         ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
         binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+    );
+}
+
+/// Register the keyless FINRA shorts / dark-pool ingest bindings (openbb-parity
+/// **P4W10**), keyed by each fetcher's `ENDPOINT` const and bound to its bronze
+/// landing table. Mirrors [`insert_finra_fetch_bindings`] so the fetch and
+/// ingest paths stay in lockstep; a conformance test keeps these keys and the
+/// catalog candidates in sync. The bronze tables are provisioned by the
+/// warehouse story; registering the binding now keeps every catalog candidate
+/// dispatchable.
+#[cfg(feature = "provider-finra")]
+fn insert_finra_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    table.insert(
+        ("finra", crate::FinraShortInterestHttpFetcher::ENDPOINT),
+        binding::<crate::FinraShortInterestHttpFetcher, _, _>("raw.short_interest"),
+    );
+    table.insert(
+        ("finra", crate::FinraOtcSummaryHttpFetcher::ENDPOINT),
+        binding::<crate::FinraOtcSummaryHttpFetcher, _, _>("raw.otc_market_volume"),
+    );
+}
+
+/// Register the keyless Ken French Data Library ingest binding (OpenBB-parity
+/// **P2W6**), keyed by the fetcher's `ENDPOINT` const and bound to the
+/// `raw.factor_return` bronze table. Extracted from [`ingest_dispatch_table`] so
+/// that function stays within the `too_many_lines` budget.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
+        binding::<crate::FamaFrenchHttpFetcher, _, _>("raw.factor_return"),
     );
 }
 
@@ -5308,6 +5359,50 @@ mod tests {
                 "SEC candidate {}/{} for route {} is not in the ingest dispatch table",
                 sec.provider,
                 sec.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ FINRA `ENDPOINTS` sync (openbb-parity **P4W10**): every
+    /// standardized FINRA command (`equity/shorts/short_interest`,
+    /// `equity/darkpool/otc`) has a catalog route whose `finra` candidate
+    /// endpoint equals the provider's declared dispatch key and is registered in
+    /// both the fetch and ingest dispatch tables under `provider-finra`. Mirrors
+    /// `sec_catalog_routes_match_provider_endpoints`.
+    #[cfg(feature = "provider-finra")]
+    #[test]
+    fn finra_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_finra::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("FINRA command {} has no catalog route", endpoint.command)
+            });
+            let finra = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "finra")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no finra candidate", endpoint.command)
+                });
+            assert_eq!(
+                finra.endpoint, endpoint.endpoint,
+                "catalog route {} finra endpoint key drifted from the provider table",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(finra.provider, finra.endpoint)),
+                "FINRA candidate {}/{} for route {} is not in the fetch dispatch table",
+                finra.provider,
+                finra.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(finra.provider, finra.endpoint)),
+                "FINRA candidate {}/{} for route {} is not in the ingest dispatch table",
+                finra.provider,
+                finra.endpoint,
                 endpoint.command
             );
         }

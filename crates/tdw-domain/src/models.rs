@@ -1130,6 +1130,59 @@ pub struct LitigationRelease {
     pub summary: Option<String>,
 }
 
+/// A reported short-interest record.
+///
+/// Standardizes `equity/shorts/short_interest` (FINRA consolidated short
+/// interest). One row = one issuer's bi-monthly short-interest report: the
+/// current and previous settlement-cycle short-interest counts, the percent
+/// change between them, the average daily share volume, and the days-to-cover
+/// ratio. `current_short_interest`/`previous_short_interest`/
+/// `avg_daily_share_volume` are share counts; `percent_change` and
+/// `days_to_cover` are ratios as reported by FINRA.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct ShortInterest {
+    /// Issuer / company name.
+    #[validate(length(min = 1))]
+    pub issuer_name: String,
+    /// Ticker symbol the record concerns.
+    #[validate(length(min = 1))]
+    pub symbol: String,
+    /// FINRA market-class code (e.g. `"G"`).
+    pub market_class_code: Option<String>,
+    /// Reported short interest for the current settlement cycle (share count).
+    pub current_short_interest: Option<i64>,
+    /// Reported short interest for the previous settlement cycle (share count).
+    pub previous_short_interest: Option<i64>,
+    /// Percent change in short interest versus the previous cycle.
+    pub percent_change: Option<f64>,
+    /// Average daily share volume over the cycle.
+    pub avg_daily_share_volume: Option<i64>,
+    /// Days-to-cover (short interest divided by average daily volume).
+    pub days_to_cover: Option<f64>,
+    /// Settlement date the cycle reports for, in `YYYY-MM-DD` form.
+    pub settlement_date: Option<String>,
+}
+
+/// A weekly OTC / dark-pool market-volume record.
+///
+/// Standardizes `equity/darkpool/otc` (FINRA weekly OTC transparency / ATS &
+/// non-ATS summary). One row = one market participant's weekly aggregate over-
+/// the-counter trading: the total share quantity and trade count it reported for
+/// the trade-report week.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct OtcMarketVolume {
+    /// Trade-report week start date, in `YYYY-MM-DD` form.
+    #[validate(length(min = 1))]
+    pub trade_report_date: String,
+    /// FINRA market-participant identifier (MPID).
+    #[validate(length(min = 1))]
+    pub market_participant_identifier: String,
+    /// Total share quantity the participant reported for the week.
+    pub total_share_quantity: Option<i64>,
+    /// Total trade count the participant reported for the week.
+    pub total_trade_count: Option<i64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

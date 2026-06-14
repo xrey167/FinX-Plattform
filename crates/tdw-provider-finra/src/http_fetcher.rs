@@ -9,11 +9,40 @@
 //! The FINRA API returns pipe-delimited plain text, not JSON.
 
 use tdw_core::http_support::prelude::*;
+use tdw_domain::{OtcMarketVolume, ShortInterest};
 
 use crate::{
     BASE_URL, FinraOtcSummaryQuery, FinraOtcSummaryRecord, FinraShortInterestQuery,
     FinraShortInterestRecord, parse_otc_summary_response, parse_short_interest_response,
 };
+
+/// Map a parsed FINRA short-interest wire record to the standardized
+/// [`tdw_domain::ShortInterest`] model — the raw pipe-delimited shape never
+/// leaks past the fetcher boundary.
+fn to_short_interest(record: FinraShortInterestRecord) -> ShortInterest {
+    ShortInterest {
+        issuer_name: record.issuer_name,
+        symbol: record.symbol,
+        market_class_code: Some(record.market_class_code).filter(|c| !c.is_empty()),
+        current_short_interest: Some(record.current_short_interest),
+        previous_short_interest: Some(record.previous_short_interest),
+        percent_change: Some(record.percent_change),
+        avg_daily_share_volume: Some(record.avg_daily_share_volume),
+        days_to_cover: Some(record.days_to_cover),
+        settlement_date: Some(record.settlement_date).filter(|d| !d.is_empty()),
+    }
+}
+
+/// Map a parsed FINRA weekly-OTC wire record to the standardized
+/// [`tdw_domain::OtcMarketVolume`] model.
+fn to_otc_market_volume(record: FinraOtcSummaryRecord) -> OtcMarketVolume {
+    OtcMarketVolume {
+        trade_report_date: record.trade_report_date,
+        market_participant_identifier: record.market_participant_identifier,
+        total_share_quantity: Some(record.total_share_quantity),
+        total_trade_count: Some(record.total_trade_count),
+    }
+}
 
 // ── Short-interest fetcher ────────────────────────────────────────────────────
 
@@ -27,7 +56,7 @@ tdw_core::provider_fetcher_struct!(
 );
 
 #[async_trait]
-impl Fetcher<FinraShortInterestQuery, FinraShortInterestRecord> for FinraShortInterestHttpFetcher {
+impl Fetcher<FinraShortInterestQuery, ShortInterest> for FinraShortInterestHttpFetcher {
     const PROVIDER: &'static str = "finra";
     const ENDPOINT: &'static str = "short_interest";
 
@@ -88,11 +117,12 @@ impl Fetcher<FinraShortInterestQuery, FinraShortInterestRecord> for FinraShortIn
         &self,
         _query: &FinraShortInterestQuery,
         raw: Bytes,
-    ) -> Result<Vec<FinraShortInterestRecord>> {
+    ) -> Result<Vec<ShortInterest>> {
         let text = std::str::from_utf8(&raw)
             .map_err(|e| Error::Provider(format!("finra short_interest utf8: {e}")))?;
-        parse_short_interest_response(text)
-            .map_err(|e| Error::Provider(format!("finra short_interest parse: {e}")))
+        let records = parse_short_interest_response(text)
+            .map_err(|e| Error::Provider(format!("finra short_interest parse: {e}")))?;
+        Ok(records.into_iter().map(to_short_interest).collect())
     }
 }
 
@@ -108,7 +138,7 @@ tdw_core::provider_fetcher_struct!(
 );
 
 #[async_trait]
-impl Fetcher<FinraOtcSummaryQuery, FinraOtcSummaryRecord> for FinraOtcSummaryHttpFetcher {
+impl Fetcher<FinraOtcSummaryQuery, OtcMarketVolume> for FinraOtcSummaryHttpFetcher {
     const PROVIDER: &'static str = "finra";
     const ENDPOINT: &'static str = "otc_summary";
 
@@ -161,11 +191,12 @@ impl Fetcher<FinraOtcSummaryQuery, FinraOtcSummaryRecord> for FinraOtcSummaryHtt
         &self,
         _query: &FinraOtcSummaryQuery,
         raw: Bytes,
-    ) -> Result<Vec<FinraOtcSummaryRecord>> {
+    ) -> Result<Vec<OtcMarketVolume>> {
         let text = std::str::from_utf8(&raw)
             .map_err(|e| Error::Provider(format!("finra otc_summary utf8: {e}")))?;
-        parse_otc_summary_response(text)
-            .map_err(|e| Error::Provider(format!("finra otc_summary parse: {e}")))
+        let records = parse_otc_summary_response(text)
+            .map_err(|e| Error::Provider(format!("finra otc_summary parse: {e}")))?;
+        Ok(records.into_iter().map(to_otc_market_volume).collect())
     }
 }
 
@@ -256,8 +287,8 @@ mod tests {
         assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:#?}");
         assert_eq!(rows[0].issuer_name, "APPLE INC");
         assert_eq!(rows[0].symbol, "AAPL");
-        assert_eq!(rows[0].current_short_interest, 108_234_568);
-        assert_eq!(rows[0].settlement_date, "2024-01-15");
+        assert_eq!(rows[0].current_short_interest, Some(108_234_568));
+        assert_eq!(rows[0].settlement_date.as_deref(), Some("2024-01-15"));
         assert_eq!(rows[1].symbol, "TSLA");
     }
 
@@ -271,8 +302,8 @@ mod tests {
         assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:#?}");
         assert_eq!(rows[0].trade_report_date, "2024-01-15");
         assert_eq!(rows[0].market_participant_identifier, "MKTX");
-        assert_eq!(rows[0].total_share_quantity, 1_234_567);
-        assert_eq!(rows[1].total_trade_count, 1200);
+        assert_eq!(rows[0].total_share_quantity, Some(1_234_567));
+        assert_eq!(rows[1].total_trade_count, Some(1200));
     }
 
     #[test]

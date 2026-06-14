@@ -52,13 +52,13 @@ fn cassette_parse_short_interest_response() {
 
     assert_eq!(rows[0].issuer_name, "APPLE INC");
     assert_eq!(rows[0].symbol, "AAPL");
-    assert_eq!(rows[0].market_class_code, "G");
-    assert_eq!(rows[0].current_short_interest, 108_234_568);
-    assert_eq!(rows[0].previous_short_interest, 107_982_345);
-    assert!((rows[0].percent_change - 0.23).abs() < f64::EPSILON);
-    assert_eq!(rows[0].avg_daily_share_volume, 56_789_012);
-    assert!((rows[0].days_to_cover - 1.9).abs() < f64::EPSILON);
-    assert_eq!(rows[0].settlement_date, "2024-01-15");
+    assert_eq!(rows[0].market_class_code.as_deref(), Some("G"));
+    assert_eq!(rows[0].current_short_interest, Some(108_234_568));
+    assert_eq!(rows[0].previous_short_interest, Some(107_982_345));
+    assert!((rows[0].percent_change.expect("percent_change") - 0.23).abs() < f64::EPSILON);
+    assert_eq!(rows[0].avg_daily_share_volume, Some(56_789_012));
+    assert!((rows[0].days_to_cover.expect("days_to_cover") - 1.9).abs() < f64::EPSILON);
+    assert_eq!(rows[0].settlement_date.as_deref(), Some("2024-01-15"));
 
     assert_eq!(rows[1].symbol, "TSLA");
     assert_eq!(rows[2].symbol, "MSFT");
@@ -77,13 +77,13 @@ fn cassette_parse_otc_summary_response() {
 
     assert_eq!(rows[0].trade_report_date, "2024-01-15");
     assert_eq!(rows[0].market_participant_identifier, "MKTX");
-    assert_eq!(rows[0].total_share_quantity, 1_234_567);
-    assert_eq!(rows[0].total_trade_count, 890);
+    assert_eq!(rows[0].total_share_quantity, Some(1_234_567));
+    assert_eq!(rows[0].total_trade_count, Some(890));
 
     assert_eq!(rows[1].trade_report_date, "2024-01-08");
     assert_eq!(rows[1].market_participant_identifier, "GSCO");
-    assert_eq!(rows[1].total_share_quantity, 9_876_543);
-    assert_eq!(rows[1].total_trade_count, 1200);
+    assert_eq!(rows[1].total_share_quantity, Some(9_876_543));
+    assert_eq!(rows[1].total_trade_count, Some(1200));
 }
 
 #[test]

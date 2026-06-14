@@ -3493,6 +3493,86 @@
     "staleTime": 60000,
     "type": "table"
   },
+  "equity_darkpool_otc": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "text",
+            "field": "market_participant_identifier",
+            "headerName": "Market Participant Identifier"
+          },
+          {
+            "cellDataType": "number",
+            "field": "total_share_quantity",
+            "headerName": "Total Share Quantity"
+          },
+          {
+            "cellDataType": "number",
+            "field": "total_trade_count",
+            "formatterFn": "int",
+            "headerName": "Total Trade Count"
+          },
+          {
+            "cellDataType": "text",
+            "field": "trade_report_date",
+            "headerName": "Trade Report Date"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Weekly OTC / dark-pool market-volume summary, FINRA-backed (keyless).",
+    "endpoint": "/widget-data/equity/darkpool/otc",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_darkpool_otc",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Otc",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
   "equity_discovery_active": {
     "category": "equity",
     "data": {
@@ -8444,6 +8524,120 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "Fails To Deliver",
+    "params": [
+      {
+        "description": "Ticker symbol to query.",
+        "label": "Symbol",
+        "multiSelect": false,
+        "paramName": "symbol",
+        "type": "ticker",
+        "value": "AAPL"
+      },
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "table"
+  },
+  "equity_shorts_short_interest": {
+    "category": "equity",
+    "data": {
+      "dataKey": "results",
+      "table": {
+        "columnsDefs": [
+          {
+            "cellDataType": "number",
+            "field": "avg_daily_share_volume",
+            "formatterFn": "int",
+            "headerName": "Avg Daily Share Volume"
+          },
+          {
+            "cellDataType": "number",
+            "field": "current_short_interest",
+            "headerName": "Current Short Interest"
+          },
+          {
+            "cellDataType": "number",
+            "field": "days_to_cover",
+            "headerName": "Days To Cover"
+          },
+          {
+            "cellDataType": "text",
+            "field": "issuer_name",
+            "headerName": "Issuer Name"
+          },
+          {
+            "cellDataType": "text",
+            "field": "market_class_code",
+            "headerName": "Market Class Code"
+          },
+          {
+            "cellDataType": "number",
+            "field": "percent_change",
+            "formatterFn": "percent",
+            "headerName": "Percent Change"
+          },
+          {
+            "cellDataType": "number",
+            "field": "previous_short_interest",
+            "headerName": "Previous Short Interest"
+          },
+          {
+            "cellDataType": "text",
+            "field": "settlement_date",
+            "headerName": "Settlement Date"
+          },
+          {
+            "cellDataType": "text",
+            "field": "symbol",
+            "headerName": "Symbol"
+          }
+        ],
+        "showAll": true
+      }
+    },
+    "description": "Reported consolidated short interest for equities, FINRA-backed (keyless).",
+    "endpoint": "/widget-data/equity/shorts/short_interest",
+    "gridData": {
+      "h": 9,
+      "minH": 4,
+      "minW": 8,
+      "w": 20
+    },
+    "id": "equity_shorts_short_interest",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Short Interest",
     "params": [
       {
         "description": "Ticker symbol to query.",

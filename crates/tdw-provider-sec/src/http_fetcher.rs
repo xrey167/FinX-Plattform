@@ -37,6 +37,22 @@ const USER_AGENT: &str = "tdw-provider-sec/0.1 (contact@finx.example)";
 /// request to stay comfortably below it.
 const RATE_LIMIT_DELAY: Duration = Duration::from_millis(100);
 
+/// Allocation-free, ASCII case-insensitive substring test: is `needle` a
+/// substring of `haystack`, ignoring ASCII case? Used by the SEC search routes,
+/// which scan thousands of `company_tickers.json` / SIC entries per query — a
+/// per-item `to_ascii_lowercase()` would allocate a fresh `String` for every
+/// row. An empty `needle` matches (mirrors `str::contains("")`).
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 // ── Filings fetcher ───────────────────────────────────────────────────────────
 
 tdw_core::provider_fetcher_struct!(
@@ -1252,7 +1268,7 @@ impl Fetcher<SecSearchQuery, SecInstitution> for SecInstitutionsSearchHttpFetche
         let map: std::collections::BTreeMap<String, SecCompanyTicker> =
             serde_json::from_slice(&raw)
                 .map_err(|e| Error::Provider(format!("sec institutions_search parse_json: {e}")))?;
-        let needle = query.query.to_ascii_lowercase();
+        let needle = query.query.trim();
         let mut rows = Vec::new();
         for entry in map.into_values() {
             let Some(cik) = entry.cik_str else { continue };
@@ -1260,7 +1276,7 @@ impl Fetcher<SecSearchQuery, SecInstitution> for SecInstitutionsSearchHttpFetche
             if name.trim().is_empty() {
                 continue;
             }
-            if !needle.is_empty() && !name.to_ascii_lowercase().contains(&needle) {
+            if !needle.is_empty() && !contains_ascii_case_insensitive(&name, needle) {
                 continue;
             }
             rows.push(SecInstitution {
@@ -1312,13 +1328,13 @@ impl Fetcher<SecSearchQuery, SicCode> for SecSicSearchHttpFetcher {
     }
 
     fn transform_data(&self, query: &SecSearchQuery, _raw: Bytes) -> Result<Vec<SicCode>> {
-        let needle = query.query.to_ascii_lowercase();
+        let needle = query.query.trim();
         Ok(crate::sic::SIC_CODES
             .iter()
             .filter(|e| {
                 needle.is_empty()
-                    || e.code.contains(&needle)
-                    || e.description.to_ascii_lowercase().contains(&needle)
+                    || contains_ascii_case_insensitive(e.code, needle)
+                    || contains_ascii_case_insensitive(e.description, needle)
             })
             .map(|e| SicCode {
                 code: e.code.to_string(),
@@ -1426,19 +1442,17 @@ impl Fetcher<SecAccessionQuery, FilingHeader> for SecFilingHeadersHttpFetcher {
         // is out of scope for this keyless index-backed route.
         let value: Value = serde_json::from_slice(&raw)
             .map_err(|e| Error::Provider(format!("sec filing_headers parse_json: {e}")))?;
-        let form_type = value
-            .get("directory")
-            .and_then(|d| d.get("name"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
         Ok(vec![FilingHeader {
             cik: query.cik.clone(),
             accession_number: query.accession.clone(),
+            // `directory.name` is the archive directory PATH (e.g.
+            // `/Archives/edgar/data/...`), not a SEC form type. When the index
+            // omits `formType`, leave the field `None` rather than populating it
+            // with a path that no consumer can interpret as a form type.
             form_type: value
                 .get("formType")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .or(form_type),
+                .map(str::to_string),
             filing_date: value
                 .get("filingDate")
                 .and_then(Value::as_str)
