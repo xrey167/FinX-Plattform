@@ -1,0 +1,80 @@
+{
+  "allowCustomDataForDataTypeAny": true,
+  "functions": [
+    {
+      "id": "GET",
+      "name": "GET",
+      "description": "Fetch a FinX catalog route and spill it as a 2-D grid (GET {baseUrl}/api/v1/{route}).",
+      "parameters": [
+        {
+          "name": "route",
+          "description": "Catalog route, e.g. equity/price/historical.",
+          "type": "string",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "params",
+          "description": "Query params as k=v;k2=v2, e.g. symbol=AAPL;provider=yahoo.",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        },
+        {
+          "name": "options",
+          "description": "Slicing, e.g. fields=date,close;rows=30;transpose=true.",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        }
+      ],
+      "result": {
+        "dimensionality": "matrix"
+      }
+    },
+    {
+      "id": "BYOD",
+      "name": "BYOD",
+      "description": "Bring-your-own-data: fetch from an explicit base URL + route with the same slicing.",
+      "parameters": [
+        {
+          "name": "baseUrl",
+          "description": "Backend base URL, e.g. https://my-finx.example.com.",
+          "type": "string",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "route",
+          "description": "Catalog route, e.g. equity/price/historical.",
+          "type": "string",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "params",
+          "description": "Query params as k=v;k2=v2.",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        },
+        {
+          "name": "options",
+          "description": "Slicing, e.g. fields=date,close;rows=30.",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        }
+      ],
+      "result": {
+        "dimensionality": "matrix"
+      }
+    },
+    {
+      "id": "ROUTES",
+      "name": "ROUTES",
+      "description": "List the catalog routes the configured backend exposes, one per row.",
+      "parameters": [],
+      "result": {
+        "dimensionality": "matrix"
+      }
+    }
+  ]
+}

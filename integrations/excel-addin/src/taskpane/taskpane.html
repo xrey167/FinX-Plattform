@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FinX Add-in</title>
+    <script
+      type="text/javascript"
+      src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"
+    ></script>
+    <style>
+      body {
+        font-family: "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 16px;
+        color: #201f1e;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 4px;
+      }
+      p.sub {
+        margin: 0 0 16px;
+        color: #605e5c;
+        font-size: 13px;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        margin: 12px 0 4px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        font-size: 13px;
+        border: 1px solid #8a8886;
+        border-radius: 2px;
+      }
+      button {
+        margin-top: 16px;
+        padding: 8px 16px;
+        font-size: 13px;
+        color: #fff;
+        background: #0078d4;
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #106ebe;
+      }
+      #status {
+        margin-top: 12px;
+        font-size: 13px;
+        min-height: 18px;
+      }
+      code {
+        background: #f3f2f1;
+        padding: 1px 4px;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>FinX</h1>
+    <p class="sub">Configure the FinX REST API the worksheet functions call.</p>
+
+    <label for="baseUrl">Base URL</label>
+    <input id="baseUrl" type="url" placeholder="https://api.example.com" />
+
+    <label for="apiKey">API key (optional)</label>
+    <input id="apiKey" type="password" placeholder="Bearer token" />
+
+    <button id="save" type="button">Save</button>
+    <div id="status" role="status"></div>
+
+    <p class="sub" style="margin-top: 24px">
+      Then call <code>=FINX.GET("equity/price/historical","symbol=AAPL")</code>
+      in any cell.
+    </p>
+
+    <script type="text/javascript" src="taskpane.js"></script>
+  </body>
+</html>
