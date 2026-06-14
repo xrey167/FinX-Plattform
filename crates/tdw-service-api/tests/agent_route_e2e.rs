@@ -179,10 +179,14 @@ async fn two_request_widget_data_round_trip() {
             names2.iter().any(|name| name == "message_chunk"),
             "second leg answers; events: {names2:?}"
         );
+        assert!(
+            names2.iter().any(|name| name == "citations"),
+            "second leg attributes its sources; events: {names2:?}"
+        );
         assert_eq!(
             names2.last().map(String::as_str),
-            Some("citations"),
-            "second leg closes with citations; events: {names2:?}"
+            Some("prompt_suggestions"),
+            "second leg closes with follow-up suggestions; events: {names2:?}"
         );
         // The folded tool data reaches the answer (the stub echoes context).
         let answer: String = response_body(&resp2)
@@ -190,6 +194,75 @@ async fn two_request_widget_data_round_trip() {
             .filter_map(|line| line.strip_prefix("data: "))
             .collect();
         assert!(answer.contains("185.6"), "folded widget data is in context");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_json_advertises_configurable_feature_objects() {
+    with_server(WorkspaceConfig::default(), |addr| async move {
+        let resp = raw_request(addr, "GET", "/agents.json", "", "").await;
+        assert_eq!(response_status(&resp), 200);
+        let body = response_body_json(&resp);
+        let (_id, entry) = body
+            .as_object()
+            .and_then(|map| map.iter().next())
+            .expect("one entry");
+        let features = &entry["features"];
+        // The dashboard-search capability is now wired/advertised.
+        assert_eq!(features["widget-dashboard-search"], true);
+        // The four documented feature objects are present.
+        assert_eq!(features["web-search"]["type"], "toggle");
+        assert_eq!(features["deep-research"]["type"], "toggle");
+        assert_eq!(features["model"]["type"], "select");
+        assert_eq!(features["agent-name"]["type"], "text");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_closes_with_prompt_suggestions() {
+    with_server(WorkspaceConfig::default(), |addr| async move {
+        let body = serde_json::json!({
+            "messages": [{"role": "human", "content": "What is a P/E ratio?"}]
+        })
+        .to_string();
+        let resp = raw_request(addr, "POST", "/v1/query", "", &body).await;
+        let names = sse_event_names(&resp);
+        assert_eq!(
+            names.last().map(String::as_str),
+            Some("prompt_suggestions"),
+            "the answered turn ends with follow-up suggestions; events: {names:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_requests_multiple_primary_widgets_in_one_batch() {
+    with_server(WorkspaceConfig::default(), |addr| async move {
+        let body = serde_json::json!({
+            "messages": [{"role": "human", "content": "compare AAPL and MSFT"}],
+            "widgets": {"primary": [
+                {"uuid": "w-1", "params": {"symbol": "AAPL"}},
+                {"uuid": "w-2", "params": {"symbol": "MSFT"}}
+            ]}
+        })
+        .to_string();
+        let resp = raw_request(addr, "POST", "/v1/query", "", &body).await;
+        assert_eq!(response_status(&resp), 200);
+        // The single get_widget_data frame names both widgets.
+        let data_line: String = response_body(&resp)
+            .lines()
+            .skip_while(|line| *line != "event: get_widget_data")
+            .find_map(|line| line.strip_prefix("data: ").map(str::to_string))
+            .expect("a get_widget_data frame");
+        let data: serde_json::Value = serde_json::from_str(&data_line).expect("json");
+        assert_eq!(
+            data["data_sources"].as_array().map(Vec::len),
+            Some(2),
+            "both primary widgets requested at once: {data}"
+        );
     })
     .await;
 }

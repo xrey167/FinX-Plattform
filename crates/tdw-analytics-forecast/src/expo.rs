@@ -229,11 +229,18 @@ pub fn ets(y: &[f64], horizon: usize, period: usize) -> Result<ForecastResult, F
 }
 
 /// Keep the lower-SSE fit (ignoring fits that failed to initialize).
+//
+// Portability (G003 Gemini #446): written as a nested `if let { if … }` rather
+// than a `let`-chain (`if let Ok(fit) = … && cond`). The `let`-chain only
+// stabilized on recent toolchains, so the nested form keeps this portable to
+// the project's MSRV; the `collapsible_if` lint (which prefers the let-chain) is
+// suppressed here for that reason.
+#[allow(clippy::collapsible_if)]
 fn consider(best: &mut Option<HoltWintersFit>, candidate: Result<HoltWintersFit, ForecastError>) {
-    if let Ok(fit) = candidate
-        && best.as_ref().is_none_or(|b| fit.sse < b.sse)
-    {
-        *best = Some(fit);
+    if let Ok(fit) = candidate {
+        if best.as_ref().is_none_or(|b| fit.sse < b.sse) {
+            *best = Some(fit);
+        }
     }
 }
 

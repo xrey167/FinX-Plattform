@@ -55,7 +55,13 @@ pub fn precision_metrics(
             mape_sum += abs_err / a.abs();
             mape_n += 1;
         }
-        let denom = f64::midpoint(a.abs(), f.abs());
+        // Portability (G003 Gemini #446): the explicit mean is used instead of
+        // `f64::midpoint`, which only stabilized on recent toolchains; the
+        // `manual_midpoint` lint is suppressed for that reason. Values for the
+        // sMAPE denominator are well within range, so the overflow `midpoint`
+        // guards against is not a concern here.
+        #[allow(clippy::manual_midpoint)]
+        let denom = (a.abs() + f.abs()) / 2.0;
         if denom != 0.0 {
             smape_sum += abs_err / denom;
             smape_n += 1;
