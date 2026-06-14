@@ -9980,6 +9980,120 @@
     "staleTime": 60000,
     "type": "chart"
   },
+  "fixedincome_bond_indices_us_corporate_ig": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "ICE BofA US Corporate (investment-grade) index option-adjusted spread, FRED-backed.",
+    "endpoint": "/widget-data/fixedincome/bond_indices/us_corporate_ig",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_bond_indices_us_corporate_ig",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Us Corporate Ig",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_bond_indices_us_high_yield_oas": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "ICE BofA US High Yield index option-adjusted spread, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/bond_indices/us_high_yield_oas",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_bond_indices_us_high_yield_oas",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Us High Yield Oas",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
   "fixedincome_corporate_commercial_paper_90d": {
     "category": "fixedincome",
     "data": {
@@ -10173,6 +10287,177 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "5y",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_corporate_ice_bofa": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "ICE BofA US Corporate Index effective yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/corporate/ice_bofa",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_corporate_ice_bofa",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Ice Bofa",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_corporate_moody_aaa": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Moody's Seasoned Aaa corporate bond yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/corporate/moody/aaa",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_corporate_moody_aaa",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Aaa",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_corporate_moody_baa": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "Moody's Seasoned Baa corporate bond yield, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/corporate/moody/baa",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_corporate_moody_baa",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "Baa",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",
@@ -10968,6 +11253,63 @@
       "tool_id": "tdw.provider.fetch"
     },
     "name": "US Treasury Yield Curve",
+    "params": [
+      {
+        "description": "Inclusive upper date bound, if the caller supplied one.",
+        "label": "End Date",
+        "paramName": "end_date",
+        "type": "date"
+      },
+      {
+        "description": "Bar / observation frequency (defaults to one day).",
+        "label": "Interval",
+        "paramName": "interval",
+        "type": "text"
+      },
+      {
+        "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+        "label": "Limit",
+        "paramName": "limit",
+        "type": "number"
+      },
+      {
+        "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+        "label": "Period",
+        "paramName": "period",
+        "type": "text"
+      },
+      {
+        "description": "Inclusive lower date bound, if the caller supplied one.",
+        "label": "Start Date",
+        "paramName": "start_date",
+        "type": "date"
+      }
+    ],
+    "staleTime": 60000,
+    "type": "chart"
+  },
+  "fixedincome_mortgage_indices_15y_fixed": {
+    "category": "fixedincome",
+    "data": {
+      "chart": {
+        "chartType": "candlestick"
+      },
+      "dataKey": "results"
+    },
+    "description": "15-Year fixed-rate mortgage average, FRED-backed rate observation.",
+    "endpoint": "/widget-data/fixedincome/mortgage_indices/15y_fixed",
+    "gridData": {
+      "h": 12,
+      "minH": 6,
+      "minW": 10,
+      "w": 20
+    },
+    "id": "fixedincome_mortgage_indices_15y_fixed",
+    "mcp_tool": {
+      "mcp_server": "tdw-mcp",
+      "tool_id": "tdw.provider.fetch"
+    },
+    "name": "15y Fixed",
     "params": [
       {
         "description": "Inclusive upper date bound, if the caller supplied one.",
