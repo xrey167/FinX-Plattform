@@ -60,6 +60,17 @@ pub struct LearningState {
     /// to its routing. `None` when the runtime exposes no resolver (learning
     /// off) or the resolver does not know this agent.
     pub adaptivity: Option<Adaptivity>,
+    /// Learned route preferences, most-preferred first (W4.2).
+    ///
+    /// A `self_tune`/induction output the gated runtime surfaces (its presence
+    /// is itself a gated, version-bumped signal). Each entry is a catalog route
+    /// id (or prefix) the learning loop has validated as worth leading with for
+    /// this principal. [`apply_to_resolution`] stably moves a resolved data
+    /// route whose id matches a preference ahead of the rest, preserving the
+    /// relative order otherwise — so a learned preference *reshapes behavior*,
+    /// not just the audit stamp. Empty (the default) leaves routing untouched,
+    /// so a partner with no learned preferences resolves at the baseline order.
+    pub preferred_routes: Vec<String>,
 }
 
 impl LearningState {
@@ -80,7 +91,29 @@ impl LearningState {
             infer_version: versions.infer_version,
             rules_version: versions.rules_version,
             adaptivity,
+            // The runtime exposes no structured per-principal preference map; the
+            // gated daemon populates learned preferences onto the snapshot via
+            // [`Self::with_preferred_routes`] from the induction/self_tune output
+            // (whose presence is itself a gated version bump). Reading the
+            // baseline runtime yields no preferences, so routing is untouched
+            // until the gate produces one — the honest "bounded by the gated
+            // signal" default.
+            preferred_routes: Vec::new(),
         }
+    }
+
+    /// Attach learned route preferences (most-preferred first) to this snapshot
+    /// (W4.2).
+    ///
+    /// The gated daemon calls this with the induction/`self_tune` output after a
+    /// promotion clears the eval gate, so the preferences carried here are always
+    /// the gated, version-bumped signal — never a free-form caller hint. They are
+    /// only *applied* when [`Self::honors_induced_rules`] also holds, so a
+    /// below-`Learning` principal is never reshaped even if preferences are set.
+    #[must_use]
+    pub fn with_preferred_routes(mut self, preferred_routes: Vec<String>) -> Self {
+        self.preferred_routes = preferred_routes;
+        self
     }
 
     /// Whether learned behavior is applied for this principal at all
@@ -152,7 +185,10 @@ pub fn retrieval_admits(principal: &Principal, score: f64) -> bool {
 /// Returns the (possibly re-ordered) routes plus the applied inference
 /// generation, so the caller can both act on and audit the learned reshaping.
 #[must_use]
-pub fn apply_to_resolution(state: &LearningState, resolved: ResolvedRoutes) -> AppliedResolution {
+pub fn apply_to_resolution(
+    state: &LearningState,
+    mut resolved: ResolvedRoutes,
+) -> AppliedResolution {
     let generation = state.infer_generation();
     // Learning inactive (or no promoted rule-set): behavior is the un-reshaped
     // resolution. Generation 0 is the "before any promotion" baseline.
@@ -163,14 +199,44 @@ pub fn apply_to_resolution(state: &LearningState, resolved: ResolvedRoutes) -> A
         };
     }
 
-    // A promoted rule-set is in force: keep the resolution but stamp the
-    // generation so the change is observable and auditable. The route order is
-    // already deterministic from `resolve`; the promoted generation is what a
-    // later turn reads differently, which is the behavior change the gate drove.
+    // A promoted rule-set is in force. Stamp the generation (so the change is
+    // observable/auditable) AND apply the learned route preferences for real:
+    // stably move any preferred route ahead of the rest, preserving relative
+    // order within both the preferred and the non-preferred group. This is the
+    // W4 promise that learned preferences SHAPE behavior — not merely an audit
+    // stamp. The preference set is the gated signal carried on `state`, so an
+    // empty set (the baseline) leaves the order untouched.
+    reorder_by_preference(&mut resolved.data, &state.preferred_routes);
     AppliedResolution {
         resolved,
         infer_generation: generation,
     }
+}
+
+/// Stably reorder `routes` so any route the learning loop prefers leads, in the
+/// preference's own priority order, with all other routes following in their
+/// original relative order (W4.2).
+///
+/// "Preferred" is an exact route-id match against an entry in `preferred`. A
+/// stable partition is used (not a comparator sort) so two equally-resolved
+/// non-preferred routes keep their incoming order, and two preferred routes are
+/// ordered by their rank in `preferred` (earlier = higher priority). An empty
+/// `preferred` list is a no-op, so the baseline order is preserved exactly.
+fn reorder_by_preference(routes: &mut [crate::resolve::ResolvedRoute], preferred: &[String]) {
+    if preferred.is_empty() || routes.len() < 2 {
+        return;
+    }
+    // The preference rank of a route: its index in `preferred`, or `len` (i.e.
+    // after every preferred route) when it is not preferred. A stable sort by
+    // this key moves preferred routes ahead in priority order while leaving the
+    // relative order of equal-rank (e.g. all non-preferred) routes intact.
+    let rank = |route: &str| {
+        preferred
+            .iter()
+            .position(|p| p == route)
+            .unwrap_or(preferred.len())
+    };
+    routes.sort_by_key(|item| rank(&item.route));
 }
 
 /// The resolution after the gated learning state has been applied (W4.1).
@@ -234,6 +300,23 @@ mod tests {
         }
     }
 
+    /// Two equally-resolved data routes, X then Y in incoming order.
+    fn two_routes(first: &str, second: &str) -> ResolvedRoutes {
+        ResolvedRoutes {
+            data: vec![
+                ResolvedRoute {
+                    route: first.to_string(),
+                    params: serde_json::json!({}),
+                },
+                ResolvedRoute {
+                    route: second.to_string(),
+                    params: serde_json::json!({}),
+                },
+            ],
+            knowledge: Vec::new(),
+        }
+    }
+
     // ── W4.1: a bumped version changes behavior ──────────────────────────────
 
     #[test]
@@ -263,6 +346,112 @@ mod tests {
         assert_ne!(
             applied_before, applied_after,
             "the same turn resolves differently after the version bump"
+        );
+    }
+
+    // ── W4.2: a learned preference re-orders resolved routes (Gemini #440) ────
+
+    #[test]
+    fn learned_preference_moves_route_ahead_of_equal_peer() {
+        // Two equally-resolved data routes, X then Y. A learned preference for Y
+        // (the second) must move Y AHEAD of X — the real re-ordering the W4
+        // promise demands, not a no-op stamp.
+        let state = LearningState::read_from(
+            &runtime_with(Some(1), Some(learning_resolver())),
+            &principal(),
+        )
+        .with_preferred_routes(vec!["equity/profile".to_string()]);
+        assert!(
+            state.honors_induced_rules(),
+            "the gate is open for the reorder"
+        );
+
+        let resolved = two_routes("equity/price/historical", "equity/profile");
+        // Baseline incoming order is X (historical) then Y (profile).
+        assert_eq!(resolved.data[0].route, "equity/price/historical");
+
+        let applied = apply_to_resolution(&state, resolved);
+        assert_eq!(
+            applied.resolved.data[0].route,
+            "equity/profile",
+            "the learned-preferred route leads after reshaping: {:?}",
+            applied.resolved.data_routes()
+        );
+        assert_eq!(
+            applied.resolved.data[1].route, "equity/price/historical",
+            "the non-preferred route follows"
+        );
+    }
+
+    #[test]
+    fn preference_reorder_is_stable_for_non_preferred_routes() {
+        // Three routes A, B, C; only C is preferred. C leads; A and B keep their
+        // incoming relative order (a stable partition, not a full sort).
+        let state = LearningState::read_from(
+            &runtime_with(Some(1), Some(learning_resolver())),
+            &principal(),
+        )
+        .with_preferred_routes(vec!["equity/quote".to_string()]);
+        let resolved = ResolvedRoutes {
+            data: vec![
+                ResolvedRoute {
+                    route: "equity/price/historical".to_string(),
+                    params: serde_json::json!({}),
+                },
+                ResolvedRoute {
+                    route: "equity/profile".to_string(),
+                    params: serde_json::json!({}),
+                },
+                ResolvedRoute {
+                    route: "equity/quote".to_string(),
+                    params: serde_json::json!({}),
+                },
+            ],
+            knowledge: Vec::new(),
+        };
+        let applied = apply_to_resolution(&state, resolved);
+        assert_eq!(
+            applied.resolved.data_routes(),
+            vec![
+                "equity/quote".to_string(),
+                "equity/price/historical".to_string(),
+                "equity/profile".to_string(),
+            ],
+            "preferred route leads; non-preferred keep their order"
+        );
+    }
+
+    #[test]
+    fn no_preferences_leaves_route_order_untouched() {
+        // With learning active but NO learned preferences, the baseline order is
+        // preserved exactly — the reshaping is bounded by the gated signal.
+        let state = LearningState::read_from(
+            &runtime_with(Some(1), Some(learning_resolver())),
+            &principal(),
+        );
+        assert!(state.preferred_routes.is_empty());
+        let resolved = two_routes("equity/price/historical", "equity/profile");
+        let applied = apply_to_resolution(&state, resolved);
+        assert_eq!(
+            applied.resolved.data[0].route, "equity/price/historical",
+            "no preferences → baseline order is preserved"
+        );
+    }
+
+    #[test]
+    fn below_learning_principal_ignores_preferences() {
+        // The gate dominates: a Configured (< Learning) principal does not honor
+        // induced rules, so even a set preference does NOT reshape routing.
+        let configured: AdaptivityResolver = Arc::new(|_| Some(Adaptivity::Configured));
+        let state =
+            LearningState::read_from(&runtime_with(Some(3), Some(configured)), &principal())
+                .with_preferred_routes(vec!["equity/profile".to_string()]);
+        assert!(!state.honors_induced_rules());
+        let incoming = two_routes("equity/price/historical", "equity/profile");
+        let applied = apply_to_resolution(&state, incoming);
+        assert_eq!(
+            applied.resolved.data[0].route, "equity/price/historical",
+            "a below-Learning principal's routing is never reshaped by preferences"
         );
     }
 

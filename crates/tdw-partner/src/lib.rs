@@ -43,6 +43,7 @@
 //!   vocabulary, plus [`PartnerCore::answer_workspace`] (the W2.7 Workspace seam
 //!   that reuses the pure `tdw_openbb_agent` two-leg).
 
+pub mod audit;
 pub mod dataplane;
 pub mod learning;
 pub mod principal;
@@ -58,6 +59,10 @@ use tdw_knowledge::runtime::KnowledgeRuntime;
 use tdw_llm::StreamingLanguageModel;
 use tdw_openbb_agent::{Answer, QueryRequest, answer};
 
+pub use audit::{
+    ActionKind, ActionRecord, ActionStatus, AuditInputs, Correction, EscalationConfig,
+    FeedbackSignal, RetiredEdge, UndoOutcome, audit_feed, correct, escalation_status, undo,
+};
 pub use dataplane::{DataPlane, DataPlaneError};
 pub use learning::{AppliedResolution, LearningState, apply_to_resolution, retrieval_admits};
 pub use principal::{Principal, Provenance, TrustContext};
@@ -196,6 +201,7 @@ impl PartnerCore {
                 infer_version: None,
                 rules_version: None,
                 adaptivity: None,
+                preferred_routes: Vec::new(),
             },
             |runtime| LearningState::read_from(runtime, principal),
         )

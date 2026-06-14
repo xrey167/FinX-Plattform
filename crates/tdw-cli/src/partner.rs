@@ -14,8 +14,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tdw_eval_runner::StubLanguageModel;
 use tdw_partner::{
-    BriefInputs, DataPlane, DataPlaneError, PartnerCore, PartnerEvent, PartnerTurn, Principal,
-    build_brief,
+    AuditInputs, BriefInputs, DataPlane, DataPlaneError, EscalationConfig, PartnerCore,
+    PartnerEvent, PartnerTurn, Principal, audit_feed, build_brief,
 };
 
 use crate::CliError;
@@ -35,6 +35,28 @@ impl DataPlane for NoopDataPlane {
             route: route.to_string(),
             message: "the offline CLI partner has no server-side data plane".to_string(),
         })
+    }
+}
+
+/// Route a `partner {ask,brief,audit}` subcommand (partner-system W2.8/W3.6/W5.5).
+///
+/// Returns `Some(result)` when `args` names a partner subcommand (so `main`
+/// returns it), or `None` when it is not a partner command (so `main` falls
+/// through to the daemon dispatch). Keeps the three offline partner surfaces in
+/// one place and `main` slim.
+pub async fn dispatch(args: &[String]) -> Option<Result<(), CliError>> {
+    let is = |verb: &str| {
+        args.windows(2)
+            .any(|pair| pair[0] == "partner" && pair[1] == verb)
+    };
+    if is("ask") {
+        Some(run(args).await)
+    } else if is("brief") {
+        Some(run_brief(args))
+    } else if is("audit") {
+        Some(run_audit(args))
+    } else {
+        None
     }
 }
 
@@ -104,6 +126,66 @@ pub fn run_brief(args: &[String]) -> Result<(), CliError> {
         );
     }
     Ok(())
+}
+
+/// Run `tdw partner audit [<inputs-json>]`: project and render the audit-only
+/// autonomy feed (partner-system W5.5).
+///
+/// A *thin adapter* over the pure [`audit_feed`] projection: it parses the
+/// gathered source records ([`AuditInputs`]) from the optional trailing JSON
+/// token (defaulting to an empty feed when none is supplied — the offline smoke),
+/// applies the default escalation predicate, and prints each action with its
+/// status and a one-line `why`. The audit feed is a projection over records that
+/// already exist (no new store); this command is the on-demand CLI surface.
+///
+/// # Errors
+///
+/// Returns a [`CliError`] when the supplied inputs JSON is malformed.
+pub fn run_audit(args: &[String]) -> Result<(), CliError> {
+    let inputs = parse_audit_inputs(args)?;
+    let principal = Principal::new("cli-session", "agent:partner");
+    let feed = audit_feed(&inputs, &principal, &EscalationConfig::default());
+
+    if feed.is_empty() {
+        println!("(no audited actions — the partner has done nothing to review)");
+        return Ok(());
+    }
+    let awaiting = feed
+        .iter()
+        .filter(|record| record.status == tdw_partner::ActionStatus::AwaitingHuman)
+        .count();
+    println!(
+        "Partner audit — {total} action(s), {awaiting} awaiting you:",
+        total = feed.len(),
+    );
+    for record in &feed {
+        let why = record.why.routes.first().map_or("", String::as_str);
+        println!(
+            "• [{status:?}] {kind:?} — why: {why}",
+            status = record.status,
+            kind = record.what,
+        );
+    }
+    Ok(())
+}
+
+/// Parse the optional `AuditInputs` JSON token after `partner audit`.
+///
+/// No token (or an empty one) yields the default empty inputs so the command is a
+/// self-contained offline smoke. A malformed token is a [`CliError`].
+fn parse_audit_inputs(args: &[String]) -> Result<AuditInputs, CliError> {
+    let Some(pos) = args
+        .windows(2)
+        .position(|pair| pair[0] == "partner" && pair[1] == "audit")
+    else {
+        return Ok(AuditInputs::default());
+    };
+    let rest = args[pos + 2..].join(" ");
+    if rest.trim().is_empty() {
+        return Ok(AuditInputs::default());
+    }
+    serde_json::from_str::<AuditInputs>(&rest)
+        .map_err(|error| format!("malformed audit inputs JSON: {error}").into())
 }
 
 /// Parse the optional `BriefInputs` JSON token after `partner brief`.
@@ -211,5 +293,29 @@ mod tests {
     fn brief_malformed_json_is_an_error() {
         let args = argv(&["tdw", "partner", "brief", "{not json"]);
         assert!(parse_brief_inputs(&args).is_err());
+    }
+
+    #[test]
+    fn audit_runs_offline_with_no_inputs() {
+        // The empty audit feed is the offline smoke — it renders the honest
+        // "nothing to review" line without panicking.
+        let args = argv(&["tdw", "partner", "audit"]);
+        run_audit(&args).expect("offline partner audit smoke runs");
+    }
+
+    #[test]
+    fn audit_parses_inline_inputs_json_and_renders() {
+        // A materialized Forget proposal projects to one audited action.
+        let json = r#"{"proposals":[{"id":"p1","kind":{"kind":"forget","from":"company:ACME","rel":"hq_in","to":"city:old","reason":"stale"},"agent_id":"agent:partner","status":"validated","materialized":true,"history":["2026-06-14 draft by agent:partner"]}]}"#;
+        let args = argv(&["tdw", "partner", "audit", json]);
+        let inputs = parse_audit_inputs(&args).expect("parses inputs");
+        assert_eq!(inputs.proposals.len(), 1);
+        run_audit(&args).expect("audit renders the parsed inputs");
+    }
+
+    #[test]
+    fn audit_malformed_json_is_an_error() {
+        let args = argv(&["tdw", "partner", "audit", "{not json"]);
+        assert!(parse_audit_inputs(&args).is_err());
     }
 }
