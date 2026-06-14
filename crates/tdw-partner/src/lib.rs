@@ -761,7 +761,8 @@ mod tests {
             .map(tdw_openbb_agent::SseEvent::event_name)
             .collect();
         assert!(names2.contains(&"message_chunk"));
-        assert_eq!(names2.last(), Some(&"citations"));
+        assert!(names2.contains(&"citations"));
+        assert_eq!(names2.last(), Some(&"prompt_suggestions"));
     }
 
     #[tokio::test]

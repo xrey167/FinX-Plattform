@@ -1,0 +1,57 @@
+# tdw-chart-host: native desktop render HOST for tdw-charting Plotly figures
+# (openbb-ecosystem-p1 G005 — the PyWry-equivalent).
+#
+# `tdw-charting` emits the figure *spec* (Plotly figure JSON). This crate turns
+# that spec into a self-contained HTML host page (a templated plotly.js page that
+# embeds the figure JSON and calls `Plotly.newPlot`) and — behind the OPTIONAL,
+# NON-DEFAULT `gui` feature — opens it in a native window via `tao` + `wry`
+# (exactly what PyWry does: PyWry literally wraps Rust `wry`).
+#
+# CI-SAFETY: `wry` + `tao` pull native webview deps (WebView2 / WebKitGTK /
+# WebKit) that CI runners may lack, so they are OPTIONAL and gated behind `gui`.
+# The DEFAULT build — what `cargo build/clippy/test --workspace` runs — compiles
+# ONLY the pure-Rust HTML spec assembler, with ZERO native webview dependency, so
+# the workspace lint/test stays green on a runner with no system webview libs.
+[package]
+name = "tdw-chart-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde_json = { workspace = true }
+
+# Native desktop window stack — OPTIONAL, only compiled under `--features gui`.
+# `tao` is the winit-fork event loop and `wry` the cross-platform webview; both
+# bind the host platform's system webview (WebView2 on Windows, WebKitGTK on
+# Linux, WKWebView on macOS). Kept out of the default feature set so a CI runner
+# lacking those system libs still builds the workspace.
+tao = { version = "0.35", optional = true }
+wry = { version = "0.55", optional = true }
+
+[dev-dependencies]
+# The figure-spec source: the integration test feeds a real `tdw-charting`
+# candlestick figure through `render_html` to prove the host page embeds it.
+tdw-charting = { workspace = true }
+tdw-domain = { workspace = true }
+
+[features]
+# DEFAULT is empty: the pure-Rust HTML spec assembler only. wry/tao are NOT
+# compiled, so `cargo build/clippy/test --workspace` needs no system webview.
+default = []
+# Opt in to the native desktop render host. Requires a platform webview runtime
+# (WebView2 / WebKitGTK / WKWebView) at build+run time.
+gui = ["dep:wry", "dep:tao"]
+
+# The native render-host binary: reads a figure-JSON (file arg or stdin) and
+# shows it in a desktop window. Only built under `--features gui`, so the default
+# workspace build does not require a webview toolchain. `required-features` keeps
+# `cargo build --workspace` from trying to build it without `gui`.
+[[bin]]
+name = "tdw-chart-host"
+path = "src/bin/tdw-chart-host.rs"
+required-features = ["gui"]
+
+[lints]
+workspace = true

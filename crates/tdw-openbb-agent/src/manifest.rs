@@ -21,6 +21,77 @@
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+/// One configurable agent feature object advertised in `agents.json` (gap #14).
+///
+/// `OpenBB` Workspace renders a control for each feature and sends the user's
+/// chosen value back in the query payload's `workspace_options`, keyed by the
+/// feature's `name`. The `type` discriminates the control:
+/// - `toggle` — a boolean switch (`web-search`, `deep-research`),
+/// - `select` — a dropdown over `options` (`model`),
+/// - `text` — a free-text field (`agent-name`).
+///
+/// Doc source: <https://docs.openbb.co/workspace/developers/ai-features/custom-agent-features>.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AgentFeature {
+    /// The feature key the chosen value arrives under in `workspace_options`.
+    pub name: String,
+    /// The control type: `toggle`, `select`, or `text`.
+    #[serde(rename = "type")]
+    pub feature_type: String,
+    /// The label shown next to the control in the Workspace UI.
+    pub description: String,
+    /// The default value the control starts at (a bool for a toggle, a string
+    /// for select/text), when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<Value>,
+    /// The selectable options for a `select` feature.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+}
+
+impl AgentFeature {
+    /// A boolean `toggle` feature defaulting to `default`.
+    #[must_use]
+    pub fn toggle(name: impl Into<String>, description: impl Into<String>, default: bool) -> Self {
+        Self {
+            name: name.into(),
+            feature_type: "toggle".to_string(),
+            description: description.into(),
+            default: Some(Value::Bool(default)),
+            options: Vec::new(),
+        }
+    }
+
+    /// A `select` (dropdown) feature over `options`.
+    #[must_use]
+    pub fn select(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        options: Vec<String>,
+    ) -> Self {
+        let default = options.first().map(|first| Value::String(first.clone()));
+        Self {
+            name: name.into(),
+            feature_type: "select".to_string(),
+            description: description.into(),
+            default,
+            options,
+        }
+    }
+
+    /// A free-`text` feature.
+    #[must_use]
+    pub fn text(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            feature_type: "text".to_string(),
+            description: description.into(),
+            default: None,
+            options: Vec::new(),
+        }
+    }
+}
+
 /// The id of the single default copilot this bridge exposes.
 ///
 /// Assembled from fragments so the clean-room source audit (which forbids the
@@ -31,17 +102,24 @@ pub fn default_agent_id() -> String {
     concat!("finx", "-copilot").to_string()
 }
 
-/// The streaming + widget-dashboard capability flags an agent advertises.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// The capability flags + configurable feature objects an agent advertises.
+///
+/// The boolean flags (`streaming`, `widget-dashboard-select`,
+/// `widget-dashboard-search`) plus each configurable [`AgentFeature`] (keyed by
+/// its `name`) serialize as sibling keys of the `features` object, matching the
+/// documented `agents.json` shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentFeatures {
     /// Whether the agent streams its answer over SSE (always `true` here).
     pub streaming: bool,
     /// Whether the agent can act on the user's selected dashboard widgets.
-    #[serde(rename = "widget-dashboard-select")]
     pub widget_dashboard_select: bool,
-    /// Whether the agent can search the dashboard's widgets.
-    #[serde(rename = "widget-dashboard-search")]
+    /// Whether the agent can search the dashboard's widgets (the secondary
+    /// widget tier). Enabled so the agent reads the whole dashboard context.
     pub widget_dashboard_search: bool,
+    /// The configurable feature objects (`web-search`, `deep-research`, `model`,
+    /// `agent-name`, and any custom toggle/text/select).
+    pub configurable: Vec<AgentFeature>,
 }
 
 impl Default for AgentFeatures {
@@ -49,8 +127,52 @@ impl Default for AgentFeatures {
         Self {
             streaming: true,
             widget_dashboard_select: true,
-            widget_dashboard_search: false,
+            widget_dashboard_search: true,
+            configurable: default_configurable_features(),
         }
+    }
+}
+
+/// The default configurable feature objects the copilot advertises (gap #14).
+///
+/// These are web search, deep research, a model select, and a custom agent
+/// name. The chosen values arrive in the query payload's `workspace_options`.
+#[must_use]
+pub fn default_configurable_features() -> Vec<AgentFeature> {
+    vec![
+        AgentFeature::toggle("web-search", "Search the web for fresh context", false),
+        AgentFeature::toggle(
+            "deep-research",
+            "Decompose the question and research it in depth",
+            false,
+        ),
+        AgentFeature::select(
+            "model",
+            "Answer model",
+            vec![
+                "balanced".to_string(),
+                "fast".to_string(),
+                "deep".to_string(),
+            ],
+        ),
+        AgentFeature::text("agent-name", "Give this agent a custom name"),
+    ]
+}
+
+impl Serialize for AgentFeatures {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("streaming", &self.streaming)?;
+        map.serialize_entry("widget-dashboard-select", &self.widget_dashboard_select)?;
+        map.serialize_entry("widget-dashboard-search", &self.widget_dashboard_search)?;
+        for feature in &self.configurable {
+            map.serialize_entry(&feature.name, feature)?;
+        }
+        map.end()
     }
 }
 
@@ -186,5 +308,58 @@ mod tests {
         assert!(value.get("widget-dashboard-select").is_some());
         assert!(value.get("widget-dashboard-search").is_some());
         assert!(value.get("streaming").is_some());
+    }
+
+    #[test]
+    fn widget_dashboard_search_is_enabled_by_default() {
+        let value = serde_json::to_value(AgentFeatures::default()).expect("serializes");
+        assert_eq!(value["widget-dashboard-search"], true);
+    }
+
+    #[test]
+    fn features_advertise_the_configurable_feature_objects() {
+        let value = serde_json::to_value(AgentFeatures::default()).expect("serializes");
+        // The four documented feature objects are present, keyed by name.
+        assert_eq!(value["web-search"]["type"], "toggle");
+        assert_eq!(value["web-search"]["default"], false);
+        assert_eq!(value["deep-research"]["type"], "toggle");
+        assert_eq!(value["model"]["type"], "select");
+        assert_eq!(value["model"]["default"], "balanced");
+        assert!(
+            value["model"]["options"]
+                .as_array()
+                .is_some_and(|o| o.len() == 3)
+        );
+        assert_eq!(value["agent-name"]["type"], "text");
+        // A text feature carries no default and no options.
+        assert!(value["agent-name"].get("default").is_none());
+        assert!(value["agent-name"].get("options").is_none());
+    }
+
+    #[test]
+    fn custom_feature_constructors_build_the_documented_shapes() {
+        let toggle = AgentFeature::toggle("flag", "A flag", true);
+        assert_eq!(toggle.feature_type, "toggle");
+        assert_eq!(toggle.default, Some(serde_json::Value::Bool(true)));
+
+        let select = AgentFeature::select("pick", "Pick", vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(select.feature_type, "select");
+        assert_eq!(
+            select.default,
+            Some(serde_json::Value::String("a".to_string()))
+        );
+        assert_eq!(select.options.len(), 2);
+
+        let text = AgentFeature::text("note", "Note");
+        assert_eq!(text.feature_type, "text");
+        assert!(text.default.is_none());
+    }
+
+    #[test]
+    fn manifest_entry_carries_the_configurable_features() {
+        let document = default_manifest("http://127.0.0.1:6900/v1/query");
+        let entry = &document[default_agent_id()];
+        assert_eq!(entry["features"]["web-search"]["type"], "toggle");
+        assert_eq!(entry["features"]["model"]["type"], "select");
     }
 }
