@@ -14,6 +14,44 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-06-14
+
+**FinX Partner integrity patch.** Closes the integrity gaps a post-release
+`tdw-partner` re-review found: the learning loop's behavior-shaping was wired to
+nothing live, contradicting the docstrings. PATCH — all changes are
+backward-compatible (the additions to `TurnOutcome` and the `tdw.partner.undo`
+plan are new fields; no breaks). See
+[`docs/release/v1.7.1-notes.md`](docs/release/v1.7.1-notes.md).
+
+### Fixed
+
+- **Learned-route reshaping now fires on a live turn (HIGH, W4.2/W4.3):**
+  `PartnerCore` gains a gated `InferEngine` seam (`with_infer_engine`); a turn now
+  reads the installed (promoted-past-B9) rule set via `routing_hints_from`,
+  derives a route-preference list (`route_preferences_from_hints`), and threads it
+  onto the `LearningState` snapshot before resolution — so a learned preference
+  re-orders the resolved routes on a real turn, not only in a unit test. The
+  preference is always the gated signal, never caller-supplied, preserving the
+  audit-only/gated posture. A live-turn test asserts the preferred route leads.
+- **Walk-forward usefulness harness is a public eval entry point (HIGH, W4.4):**
+  `walk_forward::walk_forward_usefulness` is promoted out of `#[cfg(test)]` to a
+  public function behind the new `eval-harness` feature, so the gated eval loop /
+  a benchmark gate can compute the "more useful with use" metric rather than it
+  living only inside a test (the offline `tdw-eval-runner` dependency stays out of
+  the default leaf build).
+- **Undo respects `AwaitingHuman` (MEDIUM):** `tdw.partner.undo` now surfaces the
+  action's `status` and a `needs_confirmation` flag; an action the escalation
+  predicate flagged `AwaitingHuman` (high-impact / low-confidence / irreversible)
+  no longer yields a ready-to-execute reversal — the human-in-the-loop posture
+  survives into the reversal surface.
+- **Model error surfaced on the turn outcome (MEDIUM):** `TurnOutcome` gains
+  `model_error: Option<String>`; a `complete_streaming` failure is now detectable
+  by a write-back caller (it previously had to infer failure from a `Reasoning`
+  event string), so a partial answer is never persisted as complete.
+- **Ticker stop-words expanded (LOW):** `TICKER_STOP_WORDS` now covers common
+  macro/geo/role acronyms (`US`, `EU`, `CPI`, `GDP`, `ETF`, …) so a question like
+  "What is US CPI doing?" does not mine `US` as a symbol on an equity route.
+
 ## [1.7.0] - 2026-06-14
 
 The **FinX Partner release.** Ties the data, warehouse, knowledge, and learning

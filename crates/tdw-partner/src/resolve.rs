@@ -321,7 +321,16 @@ fn is_ticker_shaped(token: &str) -> bool {
 }
 
 /// Uppercase English words that look like tickers but almost never are.
-const TICKER_STOP_WORDS: &[&str] = &["I", "A", "AN", "THE", "OK", "PE", "P"];
+///
+/// Includes common macro / geo / role acronyms (`US`, `EU`, `CEO`, `CPI`, `GDP`,
+/// `ETF`, …) so a question like "What is US CPI doing?" does not mine `US` as a
+/// symbol on a symbol-keyed route (post-release LOW finding, v1.7.1). The
+/// route-family guard (`route_takes_symbol`) already excludes economy routes; this
+/// narrows the residual equity/* false-positive surface.
+const TICKER_STOP_WORDS: &[&str] = &[
+    "I", "A", "AN", "THE", "OK", "PE", "P", "US", "EU", "UK", "CEO", "CFO", "CPI", "GDP", "Q",
+    "YTD", "ETF", "IPO", "FED", "ECB",
+];
 
 /// Coarse relative-window phrases mapped to their normalized window codes.
 const RELATIVE_WINDOWS: &[(&str, &str)] = &[

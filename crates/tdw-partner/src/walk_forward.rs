@@ -76,6 +76,44 @@ pub fn is_induced_type(derived_type: &str) -> bool {
     derived_type.starts_with("inducted:")
 }
 
+/// Map gated routing hints to the learned route-preference list Partner Core
+/// threads onto its [`LearningState`](crate::LearningState) snapshot (W4.2/W4.3).
+///
+/// Each hint's derived edge type is namespaced `inducted:<route-prefix>--<...>`
+/// by `tdw-induction`; the route-prefix segment (before the first `--`, with the
+/// `inducted:` namespace stripped) is the catalog route family the learning loop
+/// has validated as worth leading with. The bridge is deliberately conservative:
+/// it only surfaces a preference for an INDUCED hint (a gated, promoted-past-B9
+/// signal), preserves the hints' deterministic order, and de-duplicates so a
+/// route family is preferred once. The result feeds
+/// [`reorder_by_preference`](crate::apply_to_resolution) exactly like any other
+/// `preferred_routes` entry (an id OR a path prefix), so a learned hint reshapes
+/// the live turn's routing — never a caller-supplied hint.
+#[must_use]
+pub fn route_preferences_from_hints(hints: &[RoutingHint]) -> Vec<String> {
+    let mut preferences: Vec<String> = Vec::new();
+    for hint in hints {
+        if !is_induced_type(&hint.derived_type) {
+            continue;
+        }
+        // Strip the `inducted:` namespace, then take the route-prefix segment
+        // before the first `--` separator (the induction edge-type grammar).
+        let body = hint
+            .derived_type
+            .strip_prefix("inducted:")
+            .unwrap_or(&hint.derived_type);
+        let prefix = body.split("--").next().unwrap_or(body).trim();
+        if prefix.is_empty() {
+            continue;
+        }
+        let preference = prefix.to_string();
+        if !preferences.contains(&preference) {
+            preferences.push(preference);
+        }
+    }
+    preferences
+}
+
 /// The walk-forward usefulness report across one learning epoch (W4.4).
 ///
 /// Captures the replay metric *before* the epoch (no learned rule) and *after*
@@ -112,23 +150,84 @@ impl UsefulnessReport {
     }
 }
 
+/// The walk-forward usefulness harness (W4.4) — a public, NON-test eval entry
+/// point.
+///
+/// Replays `learned_rule` over the checked-in `splits` BEFORE the learning epoch
+/// (an equivalent rule that can never fire, modelling "the partner had not
+/// learned the rule yet" — predictions empty, realized outcomes all missed) and
+/// AFTER (the promoted rule, which now predicts the realized outcome), then
+/// reports the metric delta as a [`UsefulnessReport`]. [`UsefulnessReport::improved`]
+/// is the W4 done-condition: usefulness rose because the partner learned a rule
+/// that correctly predicts realized outcomes it previously could not.
+///
+/// This lives behind the `eval-harness` feature so the offline `tdw-eval-runner`
+/// replay dependency stays out of `tdw-partner`'s default (leaf) build. It is the
+/// honest "public non-test eval entry point" the W4.4 metric is computed through:
+/// the gated daemon's eval loop (or a benchmark gate) calls it, rather than the
+/// metric living only inside a unit test.
+///
+/// # Panics
+///
+/// Panics if `learned_rule` is not a [`tdw_infer::InferRule::DeriveEdge`] (the
+/// harness drives edge-deriving rules) or if a replay fails to run over the
+/// provided splits.
+#[cfg(feature = "eval-harness")]
+#[must_use]
+pub fn walk_forward_usefulness(
+    learned_rule: &tdw_infer::InferRule,
+    edges: &[tdw_core::GraphEdge],
+    splits: &[tdw_eval_runner::replay_eval::ReplaySplit],
+) -> UsefulnessReport {
+    use tdw_eval_runner::replay_eval::run_replay_eval;
+    use tdw_eval_runner::retrieval_eval::DriftKey;
+    use tdw_infer::{EdgePattern, InferRule};
+
+    // "Before": a rule that derives the SAME outcome type but can never fire (it
+    // consumes a relation absent from the corpus), modelling "the partner had not
+    // learned the rule yet" — predictions are empty, so the realized outcomes are
+    // all missed (recall 0).
+    let InferRule::DeriveEdge { derived_type, .. } = learned_rule else {
+        panic!("walk-forward harness drives DeriveEdge rules");
+    };
+    let unlearned = InferRule::DeriveEdge {
+        rule_id: "baseline-unlearned".to_string(),
+        stratum: 0,
+        when: vec![EdgePattern {
+            rel: "never_present_relation".to_string(),
+        }],
+        derived_type: derived_type.clone(),
+    };
+
+    let before = run_replay_eval(&unlearned, edges, splits, DriftKey::default())
+        .expect("before replay runs");
+    let after = run_replay_eval(learned_rule, edges, splits, DriftKey::default())
+        .expect("after replay runs");
+
+    UsefulnessReport {
+        precision_before: before.mean_precision,
+        recall_before: before.mean_recall,
+        precision_after: after.mean_precision,
+        recall_after: after.mean_recall,
+        support: after.total_support,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tdw_core::{GraphEdge, Provenance};
-    use tdw_eval_runner::replay_eval::{ReplaySplit, run_replay_eval};
     use tdw_eval_runner::retrieval_eval::DriftKey;
     use tdw_induction::induction::InductionEngine;
-    use tdw_infer::{EdgePattern, InferRule};
     use tdw_patterns::{PatternIndex, PatternRecord};
 
-    fn ingest_edge(from: &str, rel: &str, to: &str, valid_from: &str) -> GraphEdge {
-        GraphEdge {
+    #[cfg(feature = "eval-harness")]
+    fn ingest_edge(from: &str, rel: &str, to: &str, valid_from: &str) -> tdw_core::GraphEdge {
+        tdw_core::GraphEdge {
             from: from.to_string(),
             to: to.to_string(),
             rel: rel.to_string(),
             props: serde_json::Value::Null,
-            provenance: Provenance::Ingest {
+            provenance: tdw_core::Provenance::Ingest {
                 source: "test".to_string(),
             },
             valid_from: Some(valid_from.to_string()),
@@ -204,48 +303,61 @@ mod tests {
         );
     }
 
-    // ── W4.4: walk-forward eval proves rising usefulness ─────────────────────
+    // ── W4.3: gated routing hints bridge to learned route preferences ────────
 
-    /// The walk-forward harness: replay a rule before (empty rule set → no
-    /// prediction) and after (promoted rule → predicts the realized outcome) a
-    /// learning epoch, over checked-in splits, and report the metric delta.
-    fn walk_forward_usefulness(
-        learned_rule: &InferRule,
-        edges: &[GraphEdge],
-        splits: &[ReplaySplit],
-    ) -> UsefulnessReport {
-        // "Before": a rule that derives the SAME outcome type but can never fire
-        // (it consumes a relation absent from the corpus), modelling "the partner
-        // had not learned the rule yet" — predictions are empty, so the realized
-        // outcomes are all missed (recall 0).
-        let InferRule::DeriveEdge { derived_type, .. } = learned_rule else {
-            unreachable!("walk-forward harness drives DeriveEdge rules");
-        };
-        let unlearned = InferRule::DeriveEdge {
-            rule_id: "baseline-unlearned".to_string(),
-            stratum: 0,
-            when: vec![EdgePattern {
-                rel: "never_present_relation".to_string(),
-            }],
-            derived_type: derived_type.clone(),
-        };
-
-        let before = run_replay_eval(&unlearned, edges, splits, DriftKey::default())
-            .expect("before replay runs");
-        let after = run_replay_eval(learned_rule, edges, splits, DriftKey::default())
-            .expect("after replay runs");
-
-        UsefulnessReport {
-            precision_before: before.mean_precision,
-            recall_before: before.mean_recall,
-            precision_after: after.mean_precision,
-            recall_after: after.mean_recall,
-            support: after.total_support,
-        }
+    #[test]
+    fn induced_hints_map_to_de_duplicated_route_preferences() {
+        // Two induced hints under the same route family + one non-induced hint.
+        // The bridge surfaces the route-prefix segment of each INDUCED hint once,
+        // in order, and drops the non-induced hint — the gated signal that feeds
+        // reorder_by_preference on a live turn.
+        let hints = vec![
+            RoutingHint {
+                rule_id: "r1".to_string(),
+                derived_type: "inducted:equity/profile--listed_on".to_string(),
+            },
+            RoutingHint {
+                rule_id: "r2".to_string(),
+                derived_type: "inducted:equity/profile--supplier_of".to_string(),
+            },
+            RoutingHint {
+                rule_id: "r3".to_string(),
+                derived_type: "inducted:news/headlines--mentions".to_string(),
+            },
+            // A non-induced derived type is NOT a gated learning signal.
+            RoutingHint {
+                rule_id: "r4".to_string(),
+                derived_type: "exposed_to".to_string(),
+            },
+        ];
+        let preferences = route_preferences_from_hints(&hints);
+        assert_eq!(
+            preferences,
+            vec!["equity/profile".to_string(), "news/headlines".to_string()],
+            "induced route families surface once, in order; non-induced dropped"
+        );
     }
 
     #[test]
+    fn no_induced_hints_yields_no_preferences() {
+        let hints = vec![RoutingHint {
+            rule_id: "r1".to_string(),
+            derived_type: "exposed_to".to_string(),
+        }];
+        assert!(
+            route_preferences_from_hints(&hints).is_empty(),
+            "a non-induced hint contributes no route preference"
+        );
+    }
+
+    // ── W4.4: walk-forward eval proves rising usefulness ─────────────────────
+
+    #[cfg(feature = "eval-harness")]
+    #[test]
     fn walk_forward_shows_rising_usefulness_across_a_learning_epoch() {
+        use tdw_eval_runner::replay_eval::ReplaySplit;
+        use tdw_infer::{EdgePattern, InferRule};
+
         // The rule the partner learns: A -supplier_of-> B -listed_on-> X
         // ⇒ A -exposed_to-> X. At the split, both input edges are active; in the
         // forward window the exposed_to outcome materializes — so the learned
