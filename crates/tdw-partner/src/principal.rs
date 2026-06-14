@@ -1,4 +1,4 @@
-//! The shared persona / memory / trust seam (`finx-partner` §6).
+//! The shared persona / memory / trust seam (the FinX Partner design §6).
 //!
 //! [`Principal`] is the one identity per session that every surface (MCP,
 //! Workspace, CLI) establishes once and threads through [`crate::PartnerCore`].
@@ -21,7 +21,7 @@ use tdw_taxonomy::Adaptivity;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TrustContext {
     /// The agent's learning authority — the input to the write-back gate
-    /// (`finx-partner` §3). The [`crate::ProposalQueue`] refuses writes below
+    /// (the FinX Partner design §3). The [`crate::ProposalQueue`] refuses writes below
     /// [`Adaptivity::Learning`], so a `None`/`Configured` principal can read and
     /// answer but never mutate the graph.
     pub adaptivity: Adaptivity,
@@ -39,7 +39,7 @@ impl Default for TrustContext {
     }
 }
 
-/// The one identity per partner session (`finx-partner` §6).
+/// The one identity per partner session (the FinX Partner design §6).
 ///
 /// Built once per session and consumed by every surface. The transport that
 /// *establishes* it differs (MCP auth / Workspace token / CLI env) but the
@@ -96,7 +96,7 @@ impl Principal {
     }
 }
 
-/// The surface-agnostic citation a turn emits (`finx-partner` §1.2).
+/// The surface-agnostic citation a turn emits (the FinX Partner design §1.2).
 ///
 /// Carries the data route ids and knowledge-graph node ids that backed the
 /// answer plus the point-in-time `as_of`. An adapter renders this to its wire

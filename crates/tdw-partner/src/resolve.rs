@@ -1,4 +1,4 @@
-//! Route resolution bounded by the catalog (`finx-partner` §1.3 step 1, §1.4).
+//! Route resolution bounded by the catalog (the FinX Partner design §1.3 step 1, §1.4).
 //!
 //! This is the **anti-over-engineering line**: route resolution is LLM
 //! tool-selection *bounded by [`tdw_endpoint_catalog::catalog`]* plus the
@@ -14,7 +14,7 @@ use tdw_llm::{ChatMessage, ChatRequest, LanguageModel, MessageRole};
 /// The knowledge verbs the resolver may select alongside catalog data routes.
 ///
 /// These are the read-side `tdw.kg.*` tools Partner Core composes for the
-/// memory-context step (`finx-partner` §1.3 step 2). They are not catalog routes
+/// memory-context step (the FinX Partner design §1.3 step 2). They are not catalog routes
 /// (so `is_valid_route` does not apply); the resolver guards them against this
 /// fixed set instead.
 pub const KNOWLEDGE_VERBS: &[&str] = &["tdw.kg.search", "tdw.kg.answer", "tdw.kg.why"];

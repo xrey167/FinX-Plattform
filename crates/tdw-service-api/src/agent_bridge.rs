@@ -4,7 +4,7 @@
 //! This is the *caller-side* of the agent-protocol transport seam:
 //! `tdw-app-server` defines the [`AgentBridgeHandler`] trait but does not depend
 //! on this crate; here we implement it on a thin [`AgentBridgeState`] that holds
-//! a [`PartnerCore`] (the ONE shared front door, `finx-partner` §1) and delegates
+//! a [`PartnerCore`] (the ONE shared front door, the FinX Partner design §1) and delegates
 //! the whole copilot turn to [`PartnerCore::answer_workspace`].
 //!
 //! This is the partner-system **W2.7** swap — the highest-leverage move in W2.

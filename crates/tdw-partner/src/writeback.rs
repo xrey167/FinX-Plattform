@@ -1,4 +1,4 @@
-//! The write-back step (`finx-partner` §1.3 step 5, §3).
+//! The write-back step (the FinX Partner design §1.3 step 5, §3).
 //!
 //! Every turn writes back *autonomously within the gate*: an episodic memory of
 //! the turn, candidate finding(s), a feedback hook, and any knowledge-graph
@@ -8,7 +8,7 @@
 //! `tdw.kg.finding` / `tdw.kg.feedback` handlers by the surface adapters; here
 //! we own the proposal submission so the gate lives in exactly one place.
 //!
-//! Audit-only autonomy (`finx-partner` directive 2): the proposal is *submitted*
+//! Audit-only autonomy (the FinX Partner design directive 2): the proposal is *submitted*
 //! through the gate; it does not block on a human. The gate itself
 //! ([`ProposalQueue::submit`] refusing below [`Adaptivity::Learning`]) plus
 //! reversibility (`ProposalKind::Forget`) are the safety net.
@@ -25,7 +25,7 @@ use crate::principal::Principal;
 /// Submit a knowledge-graph mutation through the write-back gate.
 ///
 /// This is the single seam that enforces "no behavior change reaches the graph
-/// except past the gate" (`finx-partner` §3). It threads the principal's
+/// except past the gate" (the FinX Partner design §3). It threads the principal's
 /// [`Adaptivity`] into [`ProposalQueue::submit`], which **refuses** the write
 /// when the adaptivity is below [`Adaptivity::Learning`] — the assertion the
 /// W2.5 gate test pins.
