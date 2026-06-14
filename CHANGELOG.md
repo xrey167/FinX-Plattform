@@ -14,6 +14,68 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-14
+
+The **OpenBB command-parity release.** Closes the real OpenBB command-breadth
+gap (Phase 4, 11 waves, PRs #419–#428). The endpoint catalog grows from 131 to
+**216 routes / 185 provider candidates** — **169 `Fetch` routes (up from 84)** +
+47 `Compute` routes — with full parity on the keyless / free-key provider
+surface. Remaining OpenBB commands require paid keys or have no public API and
+are documented deferrals. MINOR release — backward-compatible additions, no
+breaks. See [`docs/release/v1.5.0-notes.md`](docs/release/v1.5.0-notes.md) and
+the P4 roll-up in [`docs/roadmap/openbb-gap-matrix.md`](docs/roadmap/openbb-gap-matrix.md).
+
+### Added
+
+- **equity fundamentals breadth (P4W1, #419):** balance/income/cash growth,
+  metrics, ratios, dividends, historical EPS/splits, employee count, ESG,
+  filings, management + compensation, revenue per segment/geography, earnings
+  transcripts (FMP) → standardized `tdw-domain` models.
+- **equity discovery/estimates/ownership (P4W2, #420):** search, market
+  snapshots, historical market cap, calendar/splits, compare/company_facts
+  (SEC), discovery/filings + latest_financial_reports, estimates breadth,
+  ownership (insider/institutional/government_trades) (FMP + SEC).
+- **yfinance discovery + ETF cluster (P4W3, #421):** four predefined-screen
+  discovery routes; etf search/info/historical/sectors/countries/
+  equity_exposure/nport_disclosure (FMP + SEC N-PORT + Yahoo).
+- **economy breadth (P4W4, #422):** OECD SDMX (CLI, house/share price indices,
+  retail prices, GDP forecast, interest rates), Fed/BLS surveys (SLOOS + four
+  regional Fed surveys), central-bank holdings, primary-dealer positioning/fails,
+  FOMC documents (OECD + FRED + Federal Reserve + BLS + EconDB).
+- **fixedincome FRED fill (P4W5, #423):** Svensson yield curve (2y/5y/10y), HQM
+  corporate spot (2y/5y/30y), AMERIBOR, EFFR forecast, TCM-EFFR spreads.
+- **index/currency/crypto/commodity breadth (P4W6, #424; P4W11, #428):** index
+  search/available/constituents/sp500_multiples (Shiller CAPE, NASDAQ),
+  currency search/snapshots, crypto search, commodity spot price.
+- **derivatives futures + SEC regulator utilities (P4W7+W8, #425):** Deribit
+  futures instruments + info; SEC EDGAR symbol_map, filing_headers,
+  institutions_search, SIC search, schema_files, RSS litigation.
+- **famafrench portfolio returns + imf_utils discovery (P4W9, #427):** Ken
+  French breakpoints + US/regional/country portfolio returns + international
+  index returns; IMF SDMX dataflow-discovery helpers.
+- **FINRA shorts/dark-pool (P4W10, #426):** equity/shorts/short_interest,
+  equity/darkpool/otc.
+- New keyless/free-key providers wired into routes: OECD, IMF discovery, Ken
+  French Data Library, FINRA — plus deep FMP/FRED/Federal-Reserve/BLS/EconDB/
+  SEC/CBOE/NASDAQ/Deribit expansion.
+
+### Changed
+
+- **Scoreboard truth-up (P4W11, #428):** `docs/roadmap/openbb-gap-matrix.md`
+  (P4 roll-up + per-row Status) and `docs/products/openbb-parity.md` refreshed
+  so every OpenBB command reads as done (with its route) or deferred-with-reason;
+  the Part 2 implementation-layer rows are marked as a superseded historical
+  planning record.
+
+### Fixed
+
+- Gemini-code-assist review findings folded forward each wave: SEC company_facts
+  single-pass deserialization (avoids an intermediate `serde_json::Value` on
+  10–20 MB filings, #421); OECD `limit` semantics now keep the most-recent N
+  observations (#423); SEC `form_type` path-fallback + in-loop allocation
+  hoisting (#426); FMP transcript error variant + executive empty-string
+  filtering (#420); CBOE / Ken French allocation and readability fixes.
+
 ## [1.4.0] - 2026-06-13
 
 The **intelligent-knowledge release.** Bundles every change merged to `main`

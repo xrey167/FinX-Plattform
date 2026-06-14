@@ -278,6 +278,24 @@ providers — a business decision, not an engineering gap.
 
 ## Part 2 — Implementation Layers (dependency-ordered, leaves first)
 
+> **⚠️ Historical planning section — superseded by the P1–P4 roll-ups above.**
+> The L1–L5 rows below are the *original* dependency-ordered work-breakdown
+> authored before P1. They are retained as a planning record; their per-row
+> `todo`/`done` Status column is **stale** and is **not** the authoritative
+> coverage scoreboard. Most are now **done**: the L1 core abstractions
+> (result envelope, standard `tdw-domain` models, `provider=` resolution),
+> the L2 provider expansions (FMP fundamentals/discovery/estimates/ownership,
+> FRED/Fed/OECD/BLS macro, yahoo discovery+ETF, cboe/nasdaq/eia/ecb breadth),
+> the L3 new provider crates (cftc, famafrench, imf, econdb), and the L4/L5
+> analytics + platform surfaces (technical/quantitative/econometrics Compute
+> routes, REST/OpenAPI/MCP/CLI/Python-SDK/Workspace) all shipped across
+> P1–P4. For the **true, current coverage** read the **Part 1 gap matrix**
+> and the **P1/P2/P3/P4 roll-ups**, which are kept in sync with the catalog
+> (`xtask catalog-check` / `openapi-check`). Genuinely-unbuilt rows here are
+> only those matching the deferred-with-reason set (paid keys:
+> intrinio/benzinga-premium/tiingo; no public API: stockgrid/finviz/wsj/biztoc;
+> uscongress new keyed crate; USDA-FAS PSD).
+
 Sizing: **S** ≈ ≤1 day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks. Each row is one `/batch` task.
 
 ### L1 — Core abstractions (must land first; everything else depends on these)
