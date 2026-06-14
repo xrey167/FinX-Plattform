@@ -2114,6 +2114,44 @@
         "title": "OptionContract",
         "type": "object"
       },
+      "OtcMarketVolume": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A weekly OTC / dark-pool market-volume record.\n\nStandardizes `equity/darkpool/otc` (FINRA weekly OTC transparency / ATS &\nnon-ATS summary). One row = one market participant's weekly aggregate over-\nthe-counter trading: the total share quantity and trade count it reported for\nthe trade-report week.",
+        "properties": {
+          "market_participant_identifier": {
+            "description": "FINRA market-participant identifier (MPID).",
+            "minLength": 1,
+            "type": "string"
+          },
+          "total_share_quantity": {
+            "description": "Total share quantity the participant reported for the week.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "total_trade_count": {
+            "description": "Total trade count the participant reported for the week.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trade_report_date": {
+            "description": "Trade-report week start date, in `YYYY-MM-DD` form.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "trade_report_date",
+          "market_participant_identifier"
+        ],
+        "title": "OtcMarketVolume",
+        "type": "object"
+      },
       "OwnershipRecord": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "An ownership / insider / institutional-holding record.\n\nStandardizes the `equity/ownership/*` cluster: `insider_trading`,\n`institutional`, `major_holders`, `share_statistics`, `form_13f`, and\n`government_trades`. The `kind` field discriminates the record type; most fields\nare optional since each ownership endpoint reports a different subset.",
@@ -2681,6 +2719,82 @@
           "series_id"
         ],
         "title": "SeriesSearchResult",
+        "type": "object"
+      },
+      "ShortInterest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A reported short-interest record.\n\nStandardizes `equity/shorts/short_interest` (FINRA consolidated short\ninterest). One row = one issuer's bi-monthly short-interest report: the\ncurrent and previous settlement-cycle short-interest counts, the percent\nchange between them, the average daily share volume, and the days-to-cover\nratio. `current_short_interest`/`previous_short_interest`/\n`avg_daily_share_volume` are share counts; `percent_change` and\n`days_to_cover` are ratios as reported by FINRA.",
+        "properties": {
+          "avg_daily_share_volume": {
+            "description": "Average daily share volume over the cycle.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "current_short_interest": {
+            "description": "Reported short interest for the current settlement cycle (share count).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "days_to_cover": {
+            "description": "Days-to-cover (short interest divided by average daily volume).",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "issuer_name": {
+            "description": "Issuer / company name.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "market_class_code": {
+            "description": "FINRA market-class code (e.g. `\"G\"`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "percent_change": {
+            "description": "Percent change in short interest versus the previous cycle.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "previous_short_interest": {
+            "description": "Reported short interest for the previous settlement cycle (share count).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "settlement_date": {
+            "description": "Settlement date the cycle reports for, in `YYYY-MM-DD` form.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "symbol": {
+            "description": "Ticker symbol the record concerns.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "issuer_name",
+          "symbol"
+        ],
+        "title": "ShortInterest",
         "type": "object"
       },
       "SicCode": {
@@ -8377,6 +8491,115 @@
         ]
       }
     },
+    "/api/v1/equity/darkpool/otc": {
+      "get": {
+        "operationId": "equity_darkpool_otc",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtcMarketVolume"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Weekly OTC / dark-pool market-volume summary, FINRA-backed (keyless).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
     "/api/v1/equity/discovery/active": {
       "get": {
         "operationId": "equity_discovery_active",
@@ -13277,6 +13500,115 @@
           }
         },
         "summary": "SEC fails-to-deliver records for an equity symbol (keyless).",
+        "tags": [
+          "equity"
+        ]
+      }
+    },
+    "/api/v1/equity/shorts/short_interest": {
+      "get": {
+        "operationId": "equity_shorts_short_interest",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortInterest"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Reported consolidated short interest for equities, FINRA-backed (keyless).",
         "tags": [
           "equity"
         ]

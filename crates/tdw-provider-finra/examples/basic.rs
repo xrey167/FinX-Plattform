@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("decoded {} FINRA short-interest row(s):", rows.len());
     for row in &rows {
         println!(
-            "  {} ({}) short={} days_to_cover={}",
+            "  {} ({:?}) short={:?} days_to_cover={:?}",
             row.symbol, row.settlement_date, row.current_short_interest, row.days_to_cover
         );
     }

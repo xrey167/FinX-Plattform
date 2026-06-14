@@ -10,9 +10,9 @@ pub use models::{
     EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FilingFile,
     FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint, FuturesInstrument,
     HistoricalMarketCap, KeyExecutive, KeyMetrics, LitigationRelease, MacroSeries, NewsArticle,
-    OptionContract, OwnershipRecord, PricePerformance, RateObservation, Ratios, RevenueSegment,
-    ScreenerRow, SecInstitution, SeriesSearchResult, SicCode, StatementKind, SymbolMapping,
-    TreasuryAuction, TreasuryPrice, YieldCurvePoint,
+    OptionContract, OtcMarketVolume, OwnershipRecord, PricePerformance, RateObservation, Ratios,
+    RevenueSegment, ScreenerRow, SecInstitution, SeriesSearchResult, ShortInterest, SicCode,
+    StatementKind, SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };
 
 use schemars::JsonSchema;

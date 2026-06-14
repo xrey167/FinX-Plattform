@@ -6,8 +6,8 @@ use tdw_domain::{
     CalendarEvent, CompanyFacts, CompanyFiling, CompanyProfile, CorporateAction,
     EarningsTranscript, EmployeeCount, EquityHistoricalData, EsgScore, Estimate,
     ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument, KeyExecutive,
-    KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios, RevenueSegment,
-    ScreenerRow,
+    KeyMetrics, OtcMarketVolume, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
+    RevenueSegment, ScreenerRow, ShortInterest,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -37,6 +37,13 @@ const EQUITY_OWNERSHIP_FORM_13F: &[ProviderCandidate] =
 /// Keyless SEC candidate for fails-to-deliver records (gap-matrix item **L2.6**).
 const EQUITY_SHORTS_FAILS_TO_DELIVER: &[ProviderCandidate] =
     &[ProviderCandidate::new("sec", "fails_to_deliver")];
+
+/// Keyless FINRA candidates (openbb-parity **P4W10**). Each endpoint key matches
+/// the FINRA fetcher's `ENDPOINT` const and runtime dispatch key (a short key,
+/// not the `'/'→'_'` route form), kept in sync by a conformance test.
+const EQUITY_SHORTS_SHORT_INTEREST: &[ProviderCandidate] =
+    &[ProviderCandidate::new("finra", "short_interest")];
+const EQUITY_DARKPOOL_OTC: &[ProviderCandidate] = &[ProviderCandidate::new("finra", "otc_summary")];
 // Keyless Yahoo expansion (gap-matrix item L2.4). Each route's single candidate
 // endpoint key matches the Yahoo fetcher's `ENDPOINT` const, which is also the
 // runtime fetch/ingest dispatch-table key; a conformance test in tdw-service-api
@@ -292,6 +299,14 @@ fn historical_market_cap() -> Schema {
     schema_for!(HistoricalMarketCap)
 }
 
+fn short_interest() -> Schema {
+    schema_for!(ShortInterest)
+}
+
+fn otc_market_volume() -> Schema {
+    schema_for!(OtcMarketVolume)
+}
+
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
 /// every route in this router except `equity/price/historical`).
 fn flat_entry(
@@ -453,7 +468,31 @@ pub fn entries() -> Vec<CatalogEntry> {
     entries.extend(p4w1_entries());
     entries.extend(p4w2_entries());
     entries.extend(p4w3_entries());
+    entries.extend(p4w10_entries());
     entries
+}
+
+/// Keyless FINRA shorts / dark-pool entries (openbb-parity **P4W10**): reported
+/// short interest and the weekly OTC market-volume summary. Split out of
+/// [`entries`] to keep each function compact; appended in declaration order.
+/// Keyless (FINRA only).
+fn p4w10_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/shorts/short_interest",
+            short_interest,
+            EQUITY_SHORTS_SHORT_INTEREST,
+            "raw.short_interest",
+            "Reported consolidated short interest for equities, FINRA-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/darkpool/otc",
+            otc_market_volume,
+            EQUITY_DARKPOOL_OTC,
+            "raw.otc_market_volume",
+            "Weekly OTC / dark-pool market-volume summary, FINRA-backed (keyless).",
+        ),
+    ]
 }
 
 /// yfinance discovery-screener entries (openbb-parity P4W3): the four predefined
