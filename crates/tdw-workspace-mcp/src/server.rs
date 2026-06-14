@@ -304,10 +304,14 @@ impl WorkspaceServer {
             .into_iter()
             .find(|w| w.id == widget_id)
             .ok_or_else(|| ToolFailure::Execution(format!("unknown widget id: {widget_id}")))?;
-        // The slash-route the widget id projects from; its catalog entry carries
-        // the canonical request params JSON schema.
-        let route = widget_id.replace('_', "/");
-        let params_schema = tdw_endpoint_catalog::lookup(&route)
+        // The catalog entry whose route projects to this widget id carries the
+        // canonical request params JSON schema. Match on the derived id (route
+        // with `'/'` -> `'_'`) rather than inverting `'_'` -> `'/'`, which would
+        // wrongly split routes whose segments contain underscores (e.g.
+        // `equity/market_snapshots`).
+        let params_schema = tdw_endpoint_catalog::catalog()
+            .into_iter()
+            .find(|entry| entry.route.replace('/', "_") == widget_id)
             .map(|entry| serde_json::to_value((entry.params_schema)()).unwrap_or(Value::Null));
         let params = serde_json::to_value(&widget.params).unwrap_or(Value::Null);
         Ok(json!({
@@ -641,17 +645,22 @@ fn required_placement(args: &Map<String, Value>) -> Result<Placement, ToolFailur
 /// MCP's `run_stdio_json_rpc`. Returns a process exit code.
 #[must_use]
 pub fn run_stdio_json_rpc() -> i32 {
-    use std::io::BufRead;
+    use std::io::{BufRead, Write};
 
     let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout().lock();
     let mut server = WorkspaceServer::new();
     for line in stdin.lock().lines() {
         match line {
             Ok(line) if line.trim().is_empty() => {}
             Ok(line) => {
                 for message in server.handle_line(&line) {
-                    println!("{message}");
+                    let _ = writeln!(stdout, "{message}");
                 }
+                // Flush each turn: stdout is block-buffered when the process is
+                // spawned as a subprocess, so an MCP client would otherwise hang
+                // waiting for buffered responses.
+                let _ = stdout.flush();
             }
             Err(error) => {
                 eprintln!("tdw-workspace-mcp JSON-RPC read error: {error}");
@@ -850,6 +859,41 @@ mod tests {
         );
         assert_eq!(response["result"]["isError"], json!(false));
         assert_eq!(response["result"]["structuredContent"]["id"], json!(widget));
+    }
+
+    /// A real catalog widget whose route has an underscore *inside* a segment
+    /// (e.g. `equity/market_snapshots`), so its id (`equity_market_snapshots`)
+    /// cannot be recovered by naively replacing `_` with `/`. Returns `None` if
+    /// the catalog happens to carry no such route.
+    fn an_underscore_segment_widget_id() -> Option<String> {
+        tdw_endpoint_catalog::catalog()
+            .into_iter()
+            .find(|entry| entry.route.split('/').any(|seg| seg.contains('_')))
+            .map(|entry| entry.route.replace('/', "_"))
+            .filter(|id| tdw_widgets::catalog_widgets().iter().any(|w| w.id == *id))
+    }
+
+    #[test]
+    fn widget_schema_resolves_underscore_segment_routes() {
+        // Regression (Gemini #450 HIGH): a route with an underscore inside a
+        // segment must still resolve its params schema. Matching the derived id
+        // (route -> `_`) is correct; inverting `_` -> `/` would split the segment
+        // and yield a null params schema.
+        let Some(widget) = an_underscore_segment_widget_id() else {
+            return; // no underscore-segment route in this catalog build.
+        };
+        let mut server = initialized();
+        let response = call(
+            &mut server,
+            2,
+            "tdw.workspace.widget.schema",
+            &json!({ "widget_id": widget }),
+        );
+        assert_eq!(response["result"]["isError"], json!(false));
+        assert!(
+            !response["result"]["structuredContent"]["paramsSchema"].is_null(),
+            "underscore-segment route {widget} must resolve a non-null params schema"
+        );
     }
 
     #[test]
