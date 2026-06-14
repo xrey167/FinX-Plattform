@@ -1,6 +1,42 @@
 {
   "components": {
     "schemas": {
+      "BillTextUrl": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single downloadable text version of a US Congress bill.\n\nStandardizes the `uscongress/bill_text_urls` route (congress.gov public API\nbill `/text` endpoint). One row = one (text version, format) pair: a bill\ntext version (e.g. \"Introduced in House\") is published in several formats\n(Formatted Text, PDF, XML), each with its own URL.",
+        "properties": {
+          "date": {
+            "description": "Date the text version was published (`YYYY-MM-DD`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format_type": {
+            "description": "Format label, e.g. `\"Formatted Text\"`, `\"PDF\"`, `\"XML\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "url": {
+            "description": "Download URL for this text version in this format.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "version_type": {
+            "description": "Text-version label, e.g. `\"Introduced in House\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "format_type",
+          "url"
+        ],
+        "title": "BillTextUrl",
+        "type": "object"
+      },
       "Breakpoint": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "A single portfolio-formation breakpoint observation from the Ken French Data\nLibrary.\n\nStandardizes `economy/factors/famafrench/breakpoints`. The breakpoint files\nare wide tables: a leading date column, an optional count column, then the\npercentile breakpoint columns (e.g. the size or book-to-market deciles). Each\nwide cell becomes one long row: one (date, breakpoint) observation. `value`\nis [`Option`] so blank / sentinel cells map to absent. Breakpoint values are\nthe source's native units (the library publishes them as levels, not\npercent), so the fetcher carries them through unscaled.",
@@ -446,6 +482,98 @@
           "market_cap_millions"
         ],
         "title": "CompanyProfile",
+        "type": "object"
+      },
+      "CongressBill": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "A single US Congress legislative bill record.\n\nStandardizes the `uscongress/{bills,bill_info}` routes (congress.gov public\nAPI). One row = one bill. The list endpoint (`uscongress/bills`) fills the\nheader fields; the detail endpoint (`uscongress/bill_info`) additionally\nfills `sponsor` and `policy_area`. Every field beyond the bill identity\n(`congress`/`bill_type`/`bill_number`) is [`Option`] since the list and\ndetail responses report different subsets.",
+        "properties": {
+          "bill_number": {
+            "description": "Bill number within the (congress, type), e.g. `\"3076\"`.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "bill_type": {
+            "description": "Bill type, e.g. `\"hr\"`, `\"s\"`, `\"hjres\"` (lowercased).",
+            "minLength": 1,
+            "type": "string"
+          },
+          "congress": {
+            "description": "Congress number, e.g. `118`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "introduced_date": {
+            "description": "Date the bill was introduced (`YYYY-MM-DD`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_action": {
+            "description": "Text of the latest action recorded on the bill.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latest_action_date": {
+            "description": "Date of the latest action (`YYYY-MM-DD`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin_chamber": {
+            "description": "Originating chamber, e.g. `\"House\"` or `\"Senate\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "policy_area": {
+            "description": "Policy-area label (detail endpoint only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sponsor": {
+            "description": "Lead sponsor's full name (detail endpoint only).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Bill title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "update_date": {
+            "description": "Last-updated date reported by the API (`YYYY-MM-DD`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "description": "congress.gov API URL for the bill resource.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "congress",
+          "bill_type",
+          "bill_number"
+        ],
+        "title": "CongressBill",
         "type": "object"
       },
       "CorporateAction": {
@@ -21743,6 +21871,333 @@
         "summary": "Map SEC CIKs to ticker symbols via company_tickers.json (keyless).",
         "tags": [
           "regulators"
+        ]
+      }
+    },
+    "/api/v1/uscongress/bill_info": {
+      "get": {
+        "operationId": "uscongress_bill_info",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CongressBill"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Detailed metadata for a single US Congress bill (congress.gov, free key).",
+        "tags": [
+          "uscongress"
+        ]
+      }
+    },
+    "/api/v1/uscongress/bill_text_urls": {
+      "get": {
+        "operationId": "uscongress_bill_text_urls",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillTextUrl"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "Downloadable text-version URLs for a US Congress bill (congress.gov, free key).",
+        "tags": [
+          "uscongress"
+        ]
+      }
+    },
+    "/api/v1/uscongress/bills": {
+      "get": {
+        "operationId": "uscongress_bills",
+        "parameters": [
+          {
+            "description": "Inclusive upper date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive upper date bound, if the caller supplied one."
+            }
+          },
+          {
+            "description": "Bar / observation frequency (defaults to one day).",
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/$defs/Interval",
+              "default": "1d",
+              "description": "Bar / observation frequency (defaults to one day)."
+            }
+          },
+          {
+            "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Caller-requested row cap, bounded by [`MAX_LIMIT`].",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Reporting cadence for fundamentals-style endpoints, if relevant.",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Period"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Reporting cadence for fundamentals-style endpoints, if relevant."
+            }
+          },
+          {
+            "description": "Inclusive lower date bound, if the caller supplied one.",
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inclusive lower date bound, if the caller supplied one."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CongressBill"
+                }
+              }
+            },
+            "description": "Standardized result envelope."
+          },
+          "400": {
+            "description": "Unknown route or invalid query parameters."
+          },
+          "404": {
+            "description": "Path is not a catalog route."
+          },
+          "502": {
+            "description": "Every candidate provider failed."
+          }
+        },
+        "summary": "List US Congress bills for a congress and bill type (congress.gov, free key).",
+        "tags": [
+          "uscongress"
         ]
       }
     }
