@@ -340,6 +340,64 @@ pub struct CommitmentOfTraders {
     pub nonreportable_short: Option<f64>,
 }
 
+/// A single US Congress legislative bill record.
+///
+/// Standardizes the `uscongress/{bills,bill_info}` routes (congress.gov public
+/// API). One row = one bill. The list endpoint (`uscongress/bills`) fills the
+/// header fields; the detail endpoint (`uscongress/bill_info`) additionally
+/// fills `sponsor` and `policy_area`. Every field beyond the bill identity
+/// (`congress`/`bill_type`/`bill_number`) is [`Option`] since the list and
+/// detail responses report different subsets.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct CongressBill {
+    /// Congress number, e.g. `118`.
+    pub congress: u32,
+    /// Bill type, e.g. `"hr"`, `"s"`, `"hjres"` (lowercased).
+    #[validate(length(min = 1))]
+    pub bill_type: String,
+    /// Bill number within the (congress, type), e.g. `"3076"`.
+    #[validate(length(min = 1))]
+    pub bill_number: String,
+    /// Bill title.
+    pub title: Option<String>,
+    /// Originating chamber, e.g. `"House"` or `"Senate"`.
+    pub origin_chamber: Option<String>,
+    /// Date the bill was introduced (`YYYY-MM-DD`).
+    pub introduced_date: Option<String>,
+    /// Text of the latest action recorded on the bill.
+    pub latest_action: Option<String>,
+    /// Date of the latest action (`YYYY-MM-DD`).
+    pub latest_action_date: Option<String>,
+    /// Last-updated date reported by the API (`YYYY-MM-DD`).
+    pub update_date: Option<String>,
+    /// Lead sponsor's full name (detail endpoint only).
+    pub sponsor: Option<String>,
+    /// Policy-area label (detail endpoint only).
+    pub policy_area: Option<String>,
+    /// congress.gov API URL for the bill resource.
+    pub url: Option<String>,
+}
+
+/// A single downloadable text version of a US Congress bill.
+///
+/// Standardizes the `uscongress/bill_text_urls` route (congress.gov public API
+/// bill `/text` endpoint). One row = one (text version, format) pair: a bill
+/// text version (e.g. "Introduced in House") is published in several formats
+/// (Formatted Text, PDF, XML), each with its own URL.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct BillTextUrl {
+    /// Text-version label, e.g. `"Introduced in House"`.
+    pub version_type: Option<String>,
+    /// Date the text version was published (`YYYY-MM-DD`).
+    pub date: Option<String>,
+    /// Format label, e.g. `"Formatted Text"`, `"PDF"`, `"XML"`.
+    #[validate(length(min = 1))]
+    pub format_type: String,
+    /// Download URL for this text version in this format.
+    #[validate(length(min = 1))]
+    pub url: String,
+}
+
 /// A single research-factor return observation.
 ///
 /// Standardizes the Ken French Data Library research factors

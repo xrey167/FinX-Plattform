@@ -133,6 +133,8 @@ use tdw_provider_benzinga::{
 };
 #[cfg(feature = "provider-binance-http")]
 use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
+#[cfg(feature = "provider-biztoc")]
+use tdw_provider_biztoc::BiztocWorldNewsFetcher;
 #[cfg(feature = "provider-bls")]
 use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
 #[cfg(feature = "provider-cboe")]
@@ -146,6 +148,10 @@ use tdw_provider_ccdata::CCDataHttpFetcher;
 use tdw_provider_cftc::{CftcHttpCotFetcher, CftcHttpCotSearchFetcher};
 #[cfg(feature = "provider-coingecko")]
 use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
+#[cfg(feature = "provider-congress-gov")]
+use tdw_provider_congress_gov::{
+    CongressGovBillInfoFetcher, CongressGovBillTextFetcher, CongressGovBillsFetcher,
+};
 #[cfg(feature = "provider-databento")]
 use tdw_provider_databento::{DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher};
 #[cfg(feature = "provider-deribit")]
@@ -338,6 +344,9 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(BenzingaWorldNewsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaEarningsHttpFetcher::registry_entry())?;
+    // BizToc world-news leg of news/world, normalized → NewsArticle (P4W12).
+    #[cfg(feature = "provider-biztoc")]
+    registry.register(BiztocWorldNewsFetcher::registry_entry())?;
     #[cfg(feature = "provider-bls")]
     registry.register(BlsHttpTimeSeriesFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
@@ -358,6 +367,13 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CftcHttpCotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cftc")]
     registry.register(CftcHttpCotSearchFetcher::registry_entry())?;
+    // Catalog-facing congress.gov US legislative fetchers (OpenBB-parity P4W12).
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillInfoFetcher::registry_entry())?;
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillTextFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
@@ -744,6 +760,9 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // BenzingaEarningsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "earnings") => dispatch!(BenzingaEarningsHttpFetcher::default()),
+        // BiztocWorldNewsFetcher (news/world leg, normalized → NewsArticle)
+        #[cfg(feature = "provider-biztoc")]
+        ("biztoc", "news_world") => dispatch!(BiztocWorldNewsFetcher::default()),
         // BlsHttpTimeSeriesFetcher
         #[cfg(feature = "provider-bls")]
         ("bls", "timeseries_data") => dispatch!(BlsHttpTimeSeriesFetcher::default()),
@@ -760,6 +779,19 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         #[cfg(feature = "provider-cftc")]
         ("cftc", "regulators_cftc_cot_search") => {
             dispatch!(CftcHttpCotSearchFetcher::default())
+        }
+        // CongressGovBillsFetcher (uscongress/bills)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bills") => dispatch!(CongressGovBillsFetcher::default()),
+        // CongressGovBillInfoFetcher (uscongress/bill_info)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bill_info") => {
+            dispatch!(CongressGovBillInfoFetcher::default())
+        }
+        // CongressGovBillTextFetcher (uscongress/bill_text_urls)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bill_text_urls") => {
+            dispatch!(CongressGovBillTextFetcher::default())
         }
         // CCDataHttpFetcher
         #[cfg(feature = "provider-ccdata")]
@@ -1023,6 +1055,14 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
         target!("benzinga", "news_company");
         target!("benzinga", "news_world");
         target!("benzinga", "earnings");
+    }
+    #[cfg(feature = "provider-biztoc")]
+    target!("biztoc", "news_world");
+    #[cfg(feature = "provider-congress-gov")]
+    {
+        target!("congress-gov", "uscongress_bills");
+        target!("congress-gov", "uscongress_bill_info");
+        target!("congress-gov", "uscongress_bill_text_urls");
     }
     #[cfg(feature = "provider-bls")]
     target!("bls", "timeseries_data");
@@ -2204,8 +2244,10 @@ mod tests {
         feature = "provider-alpaca",
         feature = "provider-alpha-vantage",
         feature = "provider-benzinga",
+        feature = "provider-biztoc",
         feature = "provider-bls",
         feature = "provider-cboe",
+        feature = "provider-congress-gov",
         feature = "provider-ccdata",
         feature = "provider-coingecko",
         feature = "provider-databento",

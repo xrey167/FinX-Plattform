@@ -115,9 +115,14 @@ provider-alpha-vantage = [
     "tdw-provider-alpha-vantage/http",
 ]
 provider-benzinga = ["dep:tdw-provider-benzinga", "tdw-provider-benzinga/http"]
+provider-biztoc = ["dep:tdw-provider-biztoc", "tdw-provider-biztoc/http"]
 provider-bls = ["dep:tdw-provider-bls", "tdw-provider-bls/http"]
 provider-cboe = ["dep:tdw-provider-cboe", "tdw-provider-cboe/http"]
 provider-cftc = ["dep:tdw-provider-cftc", "tdw-provider-cftc/http"]
+provider-congress-gov = [
+    "dep:tdw-provider-congress-gov",
+    "tdw-provider-congress-gov/http",
+]
 provider-ccdata = ["dep:tdw-provider-ccdata", "tdw-provider-ccdata/http"]
 provider-coingecko = ["dep:tdw-provider-coingecko", "tdw-provider-coingecko/http"]
 provider-databento = ["dep:tdw-provider-databento", "tdw-provider-databento/http"]
@@ -224,9 +229,11 @@ all-http-providers = [
     "provider-alpaca",
     "provider-alpha-vantage",
     "provider-benzinga",
+    "provider-biztoc",
     "provider-bls",
     "provider-cboe",
     "provider-cftc",
+    "provider-congress-gov",
     "provider-ccdata",
     "provider-coingecko",
     "provider-databento",
@@ -312,10 +319,12 @@ tdw-provider-akshare = { path = "../tdw-provider-akshare", optional = true }
 tdw-provider-alpaca = { path = "../tdw-provider-alpaca", optional = true }
 tdw-provider-alpha-vantage = { path = "../tdw-provider-alpha-vantage", optional = true }
 tdw-provider-benzinga = { path = "../tdw-provider-benzinga", optional = true }
+tdw-provider-biztoc = { path = "../tdw-provider-biztoc", optional = true }
 tdw-provider-binance = { path = "../tdw-provider-binance" }
 tdw-provider-bls = { path = "../tdw-provider-bls", optional = true }
 tdw-provider-cboe = { path = "../tdw-provider-cboe", optional = true }
 tdw-provider-cftc = { path = "../tdw-provider-cftc", optional = true }
+tdw-provider-congress-gov = { path = "../tdw-provider-congress-gov", optional = true }
 tdw-provider-ccdata = { path = "../tdw-provider-ccdata", optional = true }
 tdw-provider-coingecko = { path = "../tdw-provider-coingecko", optional = true }
 tdw-provider-databento = { path = "../tdw-provider-databento", optional = true }
