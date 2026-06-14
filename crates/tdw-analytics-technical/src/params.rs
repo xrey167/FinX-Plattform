@@ -362,6 +362,103 @@ impl Default for SupertrendParams {
     }
 }
 
+/// Empty parameter struct for the no-knob indicators (the `DeMark` TD-Setup
+/// count, whose comparison lookback of four bars is fixed by definition).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoParams {}
+
+/// Clenow volatility-adjusted-momentum parameters: the regression lookback
+/// window (in bars).
+///
+/// Clenow's *Stocks on the Move* uses a 90-trading-day window by default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClenowParams {
+    /// Lookback window for the log-price/time regression.
+    #[serde(default = "d90")]
+    pub period: usize,
+}
+
+const fn d90() -> usize {
+    90
+}
+
+impl Default for ClenowParams {
+    fn default() -> Self {
+        Self { period: 90 }
+    }
+}
+
+/// Volatility-cones parameters: the lower and upper realized-volatility quantiles
+/// to report across a fixed ladder of horizon windows.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ConesParams {
+    /// Lower realized-volatility quantile (fraction in `[0, 1]`).
+    #[serde(default = "f0_25")]
+    pub lower_q: f64,
+    /// Upper realized-volatility quantile (fraction in `[0, 1]`).
+    #[serde(default = "f0_75")]
+    pub upper_q: f64,
+}
+
+const fn f0_25() -> f64 {
+    0.25
+}
+const fn f0_75() -> f64 {
+    0.75
+}
+
+impl Default for ConesParams {
+    fn default() -> Self {
+        Self {
+            lower_q: 0.25,
+            upper_q: 0.75,
+        }
+    }
+}
+
+/// Fibonacci-retracement parameters: the lookback window over which the swing
+/// high and low are taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FibParams {
+    /// Lookback window for the swing high/low (in bars). `0` uses the whole
+    /// series.
+    #[serde(default = "d120")]
+    pub period: usize,
+}
+
+const fn d120() -> usize {
+    120
+}
+
+impl Default for FibParams {
+    fn default() -> Self {
+        Self { period: 120 }
+    }
+}
+
+/// Relative Rotation Graph (RRG) parameters: the benchmark close series the asset
+/// is measured against and the smoothing window for the RS-Ratio / RS-Momentum.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RrgParams {
+    /// Benchmark close series, positionally aligned with the asset bars. The
+    /// relative-strength line is `asset_close / benchmark_close`.
+    #[serde(default)]
+    pub benchmark: Vec<f64>,
+    /// Smoothing window (in bars) for the RS-Ratio mean/standard-deviation
+    /// normalisation and the RS-Momentum rate of change.
+    #[serde(default = "d14")]
+    pub length: usize,
+}
+
+impl Default for RrgParams {
+    fn default() -> Self {
+        Self {
+            benchmark: Vec::new(),
+            length: 14,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

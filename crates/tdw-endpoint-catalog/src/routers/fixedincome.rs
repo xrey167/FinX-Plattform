@@ -121,6 +121,30 @@ const MORTGAGE_30Y: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_mortgage_indices_30y_fixed",
 )];
+const MORTGAGE_15Y: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_mortgage_indices_15y_fixed",
+)];
+const CORP_ICE_BOFA: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_ice_bofa",
+)];
+const CORP_MOODY_AAA: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_moody_aaa",
+)];
+const CORP_MOODY_BAA: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_corporate_moody_baa",
+)];
+const BOND_INDICES_IG: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_bond_indices_us_corporate_ig",
+)];
+const BOND_INDICES_HY_OAS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "fixedincome_bond_indices_us_high_yield_oas",
+)];
 const GOV_YIELD_CURVE: &[ProviderCandidate] = &[ProviderCandidate::new(
     "fred",
     "fixedincome_government_yield_curve",
@@ -339,6 +363,36 @@ const RATE_ROWS: &[RateRow] = &[
         "fixedincome/mortgage_indices/30y_fixed",
         MORTGAGE_30Y,
         "30-Year fixed-rate mortgage average, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/mortgage_indices/15y_fixed",
+        MORTGAGE_15Y,
+        "15-Year fixed-rate mortgage average, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/ice_bofa",
+        CORP_ICE_BOFA,
+        "ICE BofA US Corporate Index effective yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/moody/aaa",
+        CORP_MOODY_AAA,
+        "Moody's Seasoned Aaa corporate bond yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/corporate/moody/baa",
+        CORP_MOODY_BAA,
+        "Moody's Seasoned Baa corporate bond yield, FRED-backed rate observation.",
+    ),
+    (
+        "fixedincome/bond_indices/us_corporate_ig",
+        BOND_INDICES_IG,
+        "ICE BofA US Corporate (investment-grade) index option-adjusted spread, FRED-backed.",
+    ),
+    (
+        "fixedincome/bond_indices/us_high_yield_oas",
+        BOND_INDICES_HY_OAS,
+        "ICE BofA US High Yield index option-adjusted spread, FRED-backed rate observation.",
     ),
 ];
 

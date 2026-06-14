@@ -22,13 +22,16 @@ use serde::Deserialize;
 use serde_json::Value;
 use tdw_core::Error;
 
+use tdw_analytics_econometrics::diagnostics::augmented_dickey_fuller;
 use tdw_analytics_quant::metrics::{
-    capm, expected_shortfall, jarque_bera, kurtosis, max_drawdown, omega_ratio, sharpe_ratio, skew,
-    sortino_ratio, value_at_risk, volatility,
+    capm, expected_shortfall, jarque_bera, kurtosis, max_drawdown, normality, omega_ratio,
+    sharpe_ratio, skew, sortino_ratio, summary, value_at_risk, volatility,
 };
 use tdw_analytics_quant::params::{
-    CapmParams, OmegaParams, SharpeParams, SortinoParams, VarParams, VolatilityParams,
+    CapmParams, OmegaParams, QuantileParams, SharpeParams, SortinoParams, UnitRootTestParams,
+    VarParams, VolatilityParams,
 };
+use tdw_analytics_quant::stats::{mean, percentile, std_dev, variance};
 
 /// A quantitative compute implementation: parse the route's typed params from
 /// `params`, run the metric over the returns `values`, and serialize the single
@@ -58,6 +61,15 @@ pub fn compute_registry() -> BTreeMap<&'static str, ComputeFn> {
     );
     registry.insert("quantitative/capm", compute_capm);
     registry.insert("quantitative/jarque_bera", compute_jarque_bera);
+    registry.insert("quantitative/summary", compute_summary);
+    registry.insert("quantitative/normality", compute_normality);
+    registry.insert("quantitative/unitroot_test", compute_unitroot_test);
+    registry.insert("quantitative/stats/mean", compute_stats_mean);
+    registry.insert("quantitative/stats/variance", compute_stats_variance);
+    registry.insert("quantitative/stats/stdev", compute_stats_stdev);
+    registry.insert("quantitative/stats/skew", compute_stats_skew);
+    registry.insert("quantitative/stats/kurtosis", compute_stats_kurtosis);
+    registry.insert("quantitative/stats/quantile", compute_stats_quantile);
     registry
 }
 
@@ -230,6 +242,49 @@ fn compute_expected_shortfall(values: &[f64], params: &Value) -> Result<Value, E
 
 fn compute_jarque_bera(values: &[f64], _params: &Value) -> Result<Value, Error> {
     to_value(&jarque_bera(values))
+}
+
+fn compute_summary(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&summary(values))
+}
+
+fn compute_normality(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&normality(values))
+}
+
+/// Augmented Dickey-Fuller unit-root test over the supplied value series. The
+/// series is the raw level series (not returns); the augmentation lag order is
+/// read from `params.lags`.
+fn compute_unitroot_test(values: &[f64], params: &Value) -> Result<Value, Error> {
+    let p: UnitRootTestParams = parse_params(params)?;
+    let result = augmented_dickey_fuller(values, p.lags)
+        .map_err(|e| Error::InvalidQuery(format!("quantitative compute: unitroot_test: {e}")))?;
+    to_value(&result)
+}
+
+fn compute_stats_mean(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&mean(values))
+}
+
+fn compute_stats_variance(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&variance(values))
+}
+
+fn compute_stats_stdev(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&std_dev(values))
+}
+
+fn compute_stats_skew(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&skew(values))
+}
+
+fn compute_stats_kurtosis(values: &[f64], _params: &Value) -> Result<Value, Error> {
+    to_value(&kurtosis(values))
+}
+
+fn compute_stats_quantile(values: &[f64], params: &Value) -> Result<Value, Error> {
+    let p: QuantileParams = parse_params(params)?;
+    to_value(&percentile(values, p.quantile).unwrap_or(0.0))
 }
 
 /// CAPM needs the benchmark series inline in `params.benchmark`; it is a

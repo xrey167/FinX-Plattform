@@ -25,10 +25,15 @@ use tdw_core::Error;
 
 use tdw_analytics_econometrics::cointegration::engle_granger;
 use tdw_analytics_econometrics::correlation::{correlation_matrix, vif};
+use tdw_analytics_econometrics::diagnostics::breusch_godfrey;
 use tdw_analytics_econometrics::granger::granger_causality;
-use tdw_analytics_econometrics::ols::{design_from_columns, ols};
+use tdw_analytics_econometrics::ols::{
+    AutocorrelationResult, OlsCoefficients, design_from_columns, ols,
+};
+use tdw_analytics_econometrics::panel;
 use tdw_analytics_econometrics::params::{
-    CointegrationParams, ColumnsParams, GrangerParams, OlsParams,
+    CointegrationParams, ColumnsParams, GrangerParams, OlsParams, PanelParams,
+    ResidualAutocorrelationParams,
 };
 
 /// An econometrics compute implementation: parse the route's typed params from
@@ -47,6 +52,28 @@ pub fn compute_registry() -> BTreeMap<&'static str, ComputeFn> {
     registry.insert("econometrics/vif", compute_vif);
     registry.insert("econometrics/granger_causality", compute_granger);
     registry.insert("econometrics/cointegration", compute_cointegration);
+    registry.insert("econometrics/ols_regression", compute_ols_regression);
+    registry.insert(
+        "econometrics/ols_regression_summary",
+        compute_ols_regression_summary,
+    );
+    registry.insert("econometrics/autocorrelation", compute_autocorrelation);
+    registry.insert(
+        "econometrics/residual_autocorrelation",
+        compute_residual_autocorrelation,
+    );
+    registry.insert("econometrics/panel_pooled", compute_panel_pooled);
+    registry.insert("econometrics/panel_fixed", compute_panel_fixed);
+    registry.insert("econometrics/panel_between", compute_panel_between);
+    registry.insert(
+        "econometrics/panel_first_difference",
+        compute_panel_first_difference,
+    );
+    registry.insert(
+        "econometrics/panel_random_effects",
+        compute_panel_random_effects,
+    );
+    registry.insert("econometrics/panel_fmac", compute_panel_fmac);
     registry
 }
 
@@ -125,6 +152,74 @@ fn compute_granger(params: &Value) -> Result<Vec<Value>, Error> {
 fn compute_cointegration(params: &Value) -> Result<Vec<Value>, Error> {
     let p: CointegrationParams = parse_params(params)?;
     let result = engle_granger(&p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+/// Fit OLS and return the coefficient table only (`ols_regression`).
+fn compute_ols_regression(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: OlsParams = parse_params(params)?;
+    let design = design_from_columns(&p.x, p.intercept).map_err(|e| map_econ_err(&e))?;
+    let summary = ols(&p.y, &design).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&OlsCoefficients::from(&summary))?])
+}
+
+/// Fit OLS and return the full summary (`ols_regression_summary`).
+fn compute_ols_regression_summary(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: OlsParams = parse_params(params)?;
+    let design = design_from_columns(&p.x, p.intercept).map_err(|e| map_econ_err(&e))?;
+    let summary = ols(&p.y, &design).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&summary)?])
+}
+
+/// Fit OLS and return the Durbin-Watson autocorrelation view (`autocorrelation`).
+fn compute_autocorrelation(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: OlsParams = parse_params(params)?;
+    let design = design_from_columns(&p.x, p.intercept).map_err(|e| map_econ_err(&e))?;
+    let summary = ols(&p.y, &design).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&AutocorrelationResult::from(&summary))?])
+}
+
+/// Breusch-Godfrey residual-autocorrelation LM test (`residual_autocorrelation`).
+fn compute_residual_autocorrelation(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: ResidualAutocorrelationParams = parse_params(params)?;
+    let result = breusch_godfrey(&p.y, &p.x, p.intercept, p.lags).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_pooled(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result = panel::pooled_ols(&p.entity, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_fixed(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result = panel::fixed_effects(&p.entity, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_between(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result = panel::between(&p.entity, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_first_difference(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result = panel::first_difference(&p.entity, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_random_effects(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result = panel::random_effects(&p.entity, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
+    Ok(vec![to_value(&result)?])
+}
+
+fn compute_panel_fmac(params: &Value) -> Result<Vec<Value>, Error> {
+    let p: PanelParams = parse_params(params)?;
+    let result =
+        panel::fama_macbeth(&p.entity, &p.time, &p.y, &p.x).map_err(|e| map_econ_err(&e))?;
     Ok(vec![to_value(&result)?])
 }
 

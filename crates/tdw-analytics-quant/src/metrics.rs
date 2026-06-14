@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::params::{
     CapmParams, OmegaParams, SharpeParams, SortinoParams, VarParams, VolatilityParams,
 };
-use crate::stats::{excess_kurtosis, mean, percentile, skewness, std_dev};
+use crate::stats::{excess_kurtosis, mean, percentile, skewness, std_dev, variance};
 use crate::{QuantError, Result};
 
 #[allow(clippy::cast_precision_loss)]
@@ -280,6 +280,86 @@ pub fn capm(returns: &[f64], benchmark: &[f64], params: CapmParams) -> Result<Ca
     Ok(CapmRow { alpha, beta })
 }
 
+/// Descriptive-summary row over a value series: the count, central tendency,
+/// dispersion, shape, and order-statistic extremes/quartiles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SummaryRow {
+    /// Number of observations.
+    pub count: usize,
+    /// Arithmetic mean.
+    pub mean: f64,
+    /// Unbiased (`n − 1`) sample standard deviation.
+    pub std: f64,
+    /// Unbiased (`n − 1`) sample variance.
+    pub variance: f64,
+    /// Adjusted Fisher-Pearson sample skewness.
+    pub skew: f64,
+    /// Bias-corrected sample excess kurtosis (normal ⇒ ≈ 0).
+    pub kurtosis: f64,
+    /// Minimum observation (`0.0` for an empty series).
+    pub min: f64,
+    /// Lower quartile (25th percentile).
+    pub p25: f64,
+    /// Median (50th percentile).
+    pub median: f64,
+    /// Upper quartile (75th percentile).
+    pub p75: f64,
+    /// Maximum observation (`0.0` for an empty series).
+    pub max: f64,
+}
+
+/// One normality-test row: the shape moments plus the Jarque-Bera statistic and
+/// its χ²₂ p-value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NormalityRow {
+    /// Adjusted Fisher-Pearson sample skewness (`0` under normality).
+    pub skew: f64,
+    /// Bias-corrected sample excess kurtosis (`0` under normality).
+    pub kurtosis: f64,
+    /// Jarque-Bera statistic `JB = (n/6)·(S² + K²/4)`.
+    pub jarque_bera: f64,
+    /// Upper-tail χ²₂ p-value of the Jarque-Bera statistic (`p = exp(−JB/2)`);
+    /// small values reject normality.
+    pub jarque_bera_p_value: f64,
+}
+
+/// Descriptive summary statistics of a value series.
+///
+/// Reports the count, mean, sample standard deviation and variance, skewness and
+/// excess kurtosis, and the five-number-summary order statistics (min, 25th,
+/// median, 75th, max) via the type-7 linear-interpolation quantile. An empty
+/// series yields an all-zero row with `count = 0`.
+#[must_use]
+pub fn summary(values: &[f64]) -> SummaryRow {
+    SummaryRow {
+        count: values.len(),
+        mean: mean(values),
+        std: std_dev(values),
+        variance: variance(values),
+        skew: skewness(values),
+        kurtosis: excess_kurtosis(values),
+        min: percentile(values, 0.0).unwrap_or(0.0),
+        p25: percentile(values, 0.25).unwrap_or(0.0),
+        median: percentile(values, 0.5).unwrap_or(0.0),
+        p75: percentile(values, 0.75).unwrap_or(0.0),
+        max: percentile(values, 1.0).unwrap_or(0.0),
+    }
+}
+
+/// Normality diagnostics of a value series: the skewness and excess kurtosis
+/// (both `0` under normality) together with the Jarque-Bera statistic and its
+/// χ²₂ p-value (see [`jarque_bera`]).
+#[must_use]
+pub fn normality(values: &[f64]) -> NormalityRow {
+    let jb = jarque_bera(values);
+    NormalityRow {
+        skew: skewness(values),
+        kurtosis: excess_kurtosis(values),
+        jarque_bera: jb.statistic,
+        jarque_bera_p_value: jb.p_value,
+    }
+}
+
 /// Jarque-Bera normality statistic and its χ²₂ p-value (Jarque & Bera 1980).
 ///
 /// `JB = (n/6)·(S² + K²/4)` where `S` is the sample skewness and `K` the sample
@@ -307,8 +387,8 @@ pub fn jarque_bera(returns: &[f64]) -> JarqueBeraRow {
 #[cfg(test)]
 mod tests {
     use super::{
-        capm, expected_shortfall, jarque_bera, max_drawdown, omega_ratio, sharpe_ratio, skew,
-        sortino_ratio, value_at_risk, volatility,
+        capm, expected_shortfall, jarque_bera, max_drawdown, normality, omega_ratio, sharpe_ratio,
+        skew, sortino_ratio, summary, value_at_risk, volatility,
     };
     use crate::params::{
         CapmParams, OmegaParams, SharpeParams, SortinoParams, VarParams, VolatilityParams,
@@ -457,6 +537,51 @@ mod tests {
     #[test]
     fn skew_of_symmetric_returns_is_zero() {
         assert!(skew(&golden()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn summary_matches_hand_values() {
+        // [2,4,6,8]: mean 5; sample variance ((9+1+1+9)/3)=20/3; std=√(20/3).
+        //   min 2, max 8; median (type-7) of [2,4,6,8] at 0.5 ⇒ rank 1.5 ⇒ 5.0.
+        //   p25 ⇒ rank 0.75 ⇒ between idx0(2),idx1(4) frac .75 ⇒ 3.5.
+        //   p75 ⇒ rank 2.25 ⇒ between idx2(6),idx3(8) frac .25 ⇒ 6.5.
+        let s = summary(&[2.0, 4.0, 6.0, 8.0]);
+        assert_eq!(s.count, 4);
+        assert!((s.mean - 5.0).abs() < 1e-12, "mean {}", s.mean);
+        assert!(
+            (s.variance - 20.0 / 3.0).abs() < 1e-12,
+            "var {}",
+            s.variance
+        );
+        assert!(
+            (s.std - (20.0_f64 / 3.0).sqrt()).abs() < 1e-12,
+            "std {}",
+            s.std
+        );
+        assert!((s.min - 2.0).abs() < 1e-12);
+        assert!((s.max - 8.0).abs() < 1e-12);
+        assert!((s.median - 5.0).abs() < 1e-12, "median {}", s.median);
+        assert!((s.p25 - 3.5).abs() < 1e-12, "p25 {}", s.p25);
+        assert!((s.p75 - 6.5).abs() < 1e-12, "p75 {}", s.p75);
+    }
+
+    #[test]
+    fn summary_empty_series_is_zeroed() {
+        let s = summary(&[]);
+        assert_eq!(s.count, 0);
+        assert!(s.mean.abs() < 1e-12 && s.min.abs() < 1e-12 && s.max.abs() < 1e-12);
+    }
+
+    #[test]
+    fn normality_carries_jarque_bera_and_moments() {
+        // The symmetric golden series has zero skew, and the JB fields match the
+        // standalone jarque_bera() output exactly.
+        let row = normality(&golden());
+        let jb = jarque_bera(&golden());
+        assert!(row.skew.abs() < 1e-12, "skew {}", row.skew);
+        assert!((row.jarque_bera - jb.statistic).abs() < 1e-12);
+        assert!((row.jarque_bera_p_value - jb.p_value).abs() < 1e-12);
+        assert!((0.0..=1.0).contains(&row.jarque_bera_p_value));
     }
 
     #[test]

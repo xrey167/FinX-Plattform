@@ -1822,6 +1822,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_finra_fetch_bindings(&mut table);
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
+    // G002: Intrinio keyed options/fundamentals/estimates cluster.
+    #[cfg(feature = "provider-intrinio")]
+    insert_intrinio_fetch_bindings(&mut table);
     // OpenBB-parity P4W12: congress.gov US legislative routes.
     #[cfg(feature = "provider-congress-gov")]
     insert_congress_gov_fetch_bindings(&mut table);
@@ -2086,6 +2089,37 @@ fn insert_cftc_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     );
 }
 
+/// Build a [`FetchBinding`] for an Intrinio catalog-backed fetcher that resolves
+/// a fixed `OpenBB`-style `command` to its Intrinio route. The command is
+/// injected into the caller's params before the shared fetcher runs, so one
+/// fetcher type serves its route while the dispatch key stays per-command.
+/// Mirrors [`cftc_command_fetch_binding`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn intrinio_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_intrinio::IntrinioQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
 /// Build a [`FetchBinding`] for a congress.gov catalog-backed fetcher that
 /// injects a fixed `uscongress/*` `command` into the caller's params before the
 /// shared fetcher runs (the caller still supplies `congress`/`bill_type`/
@@ -2114,6 +2148,78 @@ where
             })
         }),
     }
+}
+
+/// Register the Intrinio keyed fetch bindings into `table`, keyed by each
+/// route-derived endpoint key (`<route with '/'→'_'>`), matching the catalog
+/// candidates. Each binding injects its route's `command`. Mirrors
+/// [`insert_cftc_fetch_bindings`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn insert_intrinio_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("intrinio", "equity_fundamental_historical_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpHistoricalAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/historical_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_latest_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpLatestAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/latest_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_search_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpSearchAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/search_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_reported_financials"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpReportedFinancialsFetcher,
+            tdw_domain::FinancialStatement,
+        >("equity/fundamental/reported_financials"),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_pe"),
+        intrinio_command_fetch_binding::<crate::IntrinioHttpForwardPeFetcher, tdw_domain::Estimate>(
+            "equity/estimates/forward_pe",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_sales"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpForwardSalesFetcher,
+            tdw_domain::Estimate,
+        >("equity/estimates/forward_sales"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_unusual"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsUnusualFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/unusual"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_snapshots"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsSnapshotsFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/snapshots"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_surface"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsSurfaceFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/surface"),
+    );
 }
 
 /// Register the congress.gov catalog fetch bindings (OpenBB-parity **P4W12**),
@@ -3555,6 +3661,9 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     insert_finra_ingest_bindings(&mut table);
     #[cfg(feature = "provider-cftc")]
     insert_cftc_ingest_bindings(&mut table);
+    // G002: Intrinio keyed options/fundamentals/estimates cluster.
+    #[cfg(feature = "provider-intrinio")]
+    insert_intrinio_ingest_bindings(&mut table);
     #[cfg(feature = "provider-congress-gov")]
     insert_congress_gov_ingest_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
@@ -4402,6 +4511,38 @@ fn insert_cftc_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Build an [`IngestBinding`] for an Intrinio catalog-backed fetcher that injects
+/// a fixed `command` before fetching one batch and persisting it. Mirrors
+/// [`cftc_command_ingest_binding`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn intrinio_command_ingest_binding<F, D>(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_intrinio::IntrinioQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
 /// Build an [`IngestBinding`] for a congress.gov catalog-backed fetcher that
 /// injects a fixed `uscongress/*` `command` before fetching one batch and
 /// persisting it. Mirrors [`cftc_command_ingest_binding`].
@@ -4432,6 +4573,89 @@ where
             },
         ),
     }
+}
+
+/// Register the Intrinio keyed ingest bindings, mirroring the fetch path
+/// (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn insert_intrinio_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("intrinio", "equity_fundamental_historical_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpHistoricalAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/historical_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_latest_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpLatestAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/latest_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_search_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpSearchAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/search_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_reported_financials"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpReportedFinancialsFetcher,
+            tdw_domain::FinancialStatement,
+        >(
+            "equity/fundamental/reported_financials",
+            "raw.financial_statement",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_pe"),
+        intrinio_command_ingest_binding::<crate::IntrinioHttpForwardPeFetcher, tdw_domain::Estimate>(
+            "equity/estimates/forward_pe",
+            "raw.estimate",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_sales"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpForwardSalesFetcher,
+            tdw_domain::Estimate,
+        >("equity/estimates/forward_sales", "raw.estimate"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_unusual"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsUnusualFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/unusual", "raw.option_contract"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_snapshots"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsSnapshotsFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/snapshots", "raw.option_contract"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_surface"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsSurfaceFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/surface", "raw.option_contract"),
+    );
 }
 
 /// Register the congress.gov ingest bindings (OpenBB-parity **P4W12**),
@@ -4790,16 +5014,19 @@ fn service_tool_registry() -> ToolRegistry {
     registry
 }
 
-/// Map a Compute-tool name to its catalog route by swapping the first `.` for
-/// `/`, but only for the analytics namespaces (`technical`, `quantitative`,
-/// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
+/// Map a Compute-tool name to its catalog route by swapping `.` separators back
+/// to `/`, but only for the analytics namespaces (`technical`, `quantitative`,
+/// `econometrics`, `portfolio`). Returns `None` for any other tool name (e.g.
+/// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`) round-trip:
+/// the tool name `quantitative.stats.mean` maps back by restoring every inner
+/// separator after the namespace.
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
     if matches!(
         namespace,
         "technical" | "quantitative" | "econometrics" | "portfolio"
     ) {
-        Some(format!("{namespace}/{member}"))
+        Some(format!("{namespace}/{}", member.replace('.', "/")))
     } else {
         None
     }
@@ -4807,9 +5034,10 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
 
 /// Register one [`RegisteredTool`] per analytics Compute catalog route.
 ///
-/// The tool name is the route with the namespace separator `/` swapped for `.`
+/// The tool name is the route with every separator `/` swapped for `.`
 /// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
-/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`,
+/// `quantitative.sharpe_ratio`, `quantitative/stats/mean` →
+/// `quantitative.stats.mean`, `econometrics/ols` → `econometrics.ols`,
 /// `portfolio/drawdown` → `portfolio.drawdown`), so
 /// `Op::ToolCall` and the MCP tool list expose every metric for free with the
 /// route's own param/model JSON schemas attached. Driving this from
@@ -4821,7 +5049,7 @@ fn register_compute_tools(registry: &mut ToolRegistry) {
         if entry.kind != tdw_endpoint_catalog::EndpointKind::Compute {
             continue;
         }
-        let name = entry.route.replacen('/', ".", 1);
+        let name = entry.route.replace('/', ".");
         let input_schema = serde_json::to_value((entry.params_schema)())
             .unwrap_or_else(|_| json!({ "type": "object" }));
         let output_schema =
@@ -6085,6 +6313,51 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "cftc candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ Intrinio `ENDPOINTS` sync (openbb-parity total wave **G002**):
+    /// every standardized Intrinio command has a catalog route whose `intrinio`
+    /// candidate endpoint (the route's `'/'→'_'` form, equal to the endpoint's
+    /// `endpoint` key) is dispatchable in both tables under `provider-intrinio`.
+    #[cfg(feature = "provider-intrinio")]
+    #[test]
+    fn intrinio_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_intrinio::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("intrinio command {} has no catalog route", endpoint.command)
+            });
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "intrinio")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no intrinio candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, endpoint.endpoint,
+                "intrinio candidate endpoint for route {} must equal the ENDPOINTS key",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "intrinio candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "intrinio candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command

@@ -5,14 +5,15 @@ pub mod models;
 
 pub use envelope::{ResultEnvelope, ResultExtra, Warning};
 pub use models::{
-    BillTextUrl, Breakpoint, CalendarEvent, CommitmentOfTraders, CommodityReportRow, CompanyFacts,
-    CompanyFiling, CongressBill, CurrencySnapshot, EarningsTranscript, EmployeeCount, EsgScore,
-    Estimate, EtfCountryWeight, EtfEquityExposure, EtfHolding, EtfInfo, EtfSectorWeight,
-    ExecutiveCompensation, FactorReturn, FilingFile, FilingHeader, FinancialStatement,
-    FomcDocument, FuturesCurvePoint, FuturesInstrument, HistoricalMarketCap, ImfDiscoveryRecord,
-    IndexConstituent, IndexSector, KeyExecutive, KeyMetrics, LitigationRelease, MacroSeries,
-    NewsArticle, OptionContract, OtcMarketVolume, OwnershipRecord, PortfolioReturn,
-    PricePerformance, RateObservation, Ratios, RevenueSegment, ScreenerRow, SecFilingHtml,
+    BillTextUrl, Breakpoint, CalendarEvent, CommitmentOfTraders, CommodityReportRow,
+    CompanyAttribute, CompanyFacts, CompanyFiling, CongressBill, CurrencySnapshot,
+    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
+    EtfHolding, EtfInfo, EtfSectorWeight, ExecutiveCompensation, FactorReturn, FilingFile,
+    FilingHeader, FinancialStatement, FomcDocument, FuturesCurvePoint, FuturesInstrument,
+    HistoricalMarketCap, ImfDiscoveryRecord, IndexConstituent, IndexSector, KeyExecutive,
+    KeyMetrics, LitigationRelease, MacroSeries, NewsArticle, OptionContract, OtcMarketVolume,
+    OwnershipRecord, PortfolioReturn, PricePerformance, RateObservation, Ratios, RevenueSegment,
+    ScreenerRow, SecFilingHtml,
     SecInstitution, SeriesSearchResult, ShortInterest, SicCode, Sp500Multiple, StatementKind,
     SymbolMapping, TreasuryAuction, TreasuryPrice, YieldCurvePoint,
 };

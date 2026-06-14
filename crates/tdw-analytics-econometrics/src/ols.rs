@@ -64,6 +64,47 @@ pub struct OlsSummary {
     pub residual_dof: usize,
 }
 
+/// A coefficients-only OLS view.
+///
+/// The `ols_regression` route returns just the estimated coefficient table
+/// (estimate / std error / t-stat), without the model-level `R²` / `F` /
+/// Durbin-Watson diagnostics the summary carries.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OlsCoefficients {
+    /// Estimated coefficients in design-column order (intercept first when the
+    /// caller prepends a constant column).
+    pub coefficients: Vec<Coefficient>,
+}
+
+impl From<&OlsSummary> for OlsCoefficients {
+    fn from(summary: &OlsSummary) -> Self {
+        Self {
+            coefficients: summary.coefficients.clone(),
+        }
+    }
+}
+
+/// The Durbin-Watson autocorrelation view of an OLS fit: the DW statistic plus
+/// the residual degrees of freedom it was computed over (the `autocorrelation`
+/// route's output).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AutocorrelationResult {
+    /// Durbin-Watson statistic in `[0, 4]`; `≈ 2` indicates no first-order
+    /// residual autocorrelation, `< 2` positive and `> 2` negative.
+    pub durbin_watson: f64,
+    /// Residual degrees of freedom `n − k` of the underlying regression.
+    pub residual_dof: usize,
+}
+
+impl From<&OlsSummary> for AutocorrelationResult {
+    fn from(summary: &OlsSummary) -> Self {
+        Self {
+            durbin_watson: summary.durbin_watson,
+            residual_dof: summary.residual_dof,
+        }
+    }
+}
+
 /// Fit `y = X β + ε` by ordinary least squares and return the summary.
 ///
 /// `design` is the row-major design matrix `X` (the caller includes an intercept
