@@ -3534,31 +3534,27 @@ fn yahoo_screener_ingest_binding(scr_ids: &'static str, table: &'static str) -> 
     }
 }
 
-/// The registry-driven ingest dispatch table for this build.
-///
-/// Each `(provider, endpoint)` key mirrors a feature-enabled `Fetcher`
-/// registered in [`crate::default_registry`]; the value binds it to its bronze
-/// landing table. Only fetchers with a canonical bronze table are listed —
-/// `EquityHistoricalData` → `raw.equity_historical`, `MarketDataBar` →
-/// `raw.market_data_bar` — so each landing write stays JSONEachRow-coherent with
-/// its destination schema. The offline-default build registers exactly the two
-/// fixture equity fetchers, keeping ingest network-free without any features.
-fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBinding> {
-    let mut table: BTreeMap<(&'static str, &'static str), IngestBinding> = BTreeMap::new();
-    // Offline fixture fetchers — always available.
-    table.insert(
-        ("fileset", "equity_historical"),
-        binding::<FilesetEquityHistoricalFetcher, _, _>("raw.equity_historical"),
-    );
-    table.insert(
-        ("yahoo", "equity_historical"),
-        binding::<SelectedYahooEquityHistoricalFetcher, _, _>("raw.equity_historical"),
-    );
-    #[cfg(feature = "provider-yahoo-http")]
-    insert_yahoo_ingest_bindings(&mut table);
-    // Feature-enabled `MarketDataBar` (canonical OHLC bar) fetchers land in the
-    // shared bronze bar table. Each arm mirrors a `provider-*` feature wired into
-    // `default_registry`.
+/// Register the feature-enabled `MarketDataBar` (canonical OHLC bar) ingest
+/// bindings, each landing in the shared `raw.market_data_bar` bronze table. Every
+/// arm mirrors a `provider-*` feature wired into `default_registry`. Extracted
+/// from [`ingest_dispatch_table`] so that function stays within the
+/// `too_many_lines` budget. Gated on the union of the bar-provider features so
+/// the offline-default build (which registers no bar fetchers) omits it entirely.
+#[cfg(any(
+    feature = "provider-akshare",
+    feature = "provider-alpaca",
+    feature = "provider-alpha-vantage",
+    feature = "provider-ccdata",
+    feature = "provider-coingecko",
+    feature = "provider-databento",
+    feature = "provider-fmp",
+    feature = "provider-polygon",
+    feature = "provider-sec",
+    feature = "provider-tiingo",
+))]
+fn insert_market_data_bar_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
     #[cfg(feature = "provider-akshare")]
     table.insert(
         ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
@@ -3609,6 +3605,43 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
         ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
         binding::<crate::TiingoHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
     );
+}
+
+/// The registry-driven ingest dispatch table for this build.
+///
+/// Each `(provider, endpoint)` key mirrors a feature-enabled `Fetcher`
+/// registered in [`crate::default_registry`]; the value binds it to its bronze
+/// landing table. Only fetchers with a canonical bronze table are listed —
+/// `EquityHistoricalData` → `raw.equity_historical`, `MarketDataBar` →
+/// `raw.market_data_bar` — so each landing write stays JSONEachRow-coherent with
+/// its destination schema. The offline-default build registers exactly the two
+/// fixture equity fetchers, keeping ingest network-free without any features.
+fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBinding> {
+    let mut table: BTreeMap<(&'static str, &'static str), IngestBinding> = BTreeMap::new();
+    // Offline fixture fetchers — always available.
+    table.insert(
+        ("fileset", "equity_historical"),
+        binding::<FilesetEquityHistoricalFetcher, _, _>("raw.equity_historical"),
+    );
+    table.insert(
+        ("yahoo", "equity_historical"),
+        binding::<SelectedYahooEquityHistoricalFetcher, _, _>("raw.equity_historical"),
+    );
+    #[cfg(feature = "provider-yahoo-http")]
+    insert_yahoo_ingest_bindings(&mut table);
+    #[cfg(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    ))]
+    insert_market_data_bar_ingest_bindings(&mut table);
     #[cfg(feature = "provider-fred")]
     insert_fred_ingest_bindings(&mut table);
     #[cfg(feature = "provider-sec")]
