@@ -1,0 +1,47 @@
+# tdw-workspace-mcp: the Workspace CONTROL-PLANE MCP server
+# (openbb-ecosystem-p1 G006 — the workspace-mcp-equivalent).
+#
+# Distinct from the DATA MCP (`tdw-mcp`, which serves financial data and read-only
+# widget-catalog tools). This crate is the WRITE/control surface: an MCP server
+# whose tools mutate a `WorkspaceState` dashboard/layout document that conforms to
+# the `apps.json` shape and is validated against the `tdw-widgets` widget catalog
+# (you cannot place a widget id absent from the catalog, and grid placement must
+# fit the bounded grid without overlap). The produced layout serializes to the
+# `apps.json` shape so it is a valid Workspace app.
+#
+# Pure-Rust, zero heavy deps: a plain `std` blocking stdio JSON-RPC loop (the same
+# minimal serve pattern `tdw-mcp` uses), `serde`/`serde_json` for the wire and the
+# document, and the in-workspace `tdw-widgets` (catalog + `apps.json` types) and
+# `tdw-endpoint-catalog` (per-route params schema) for validation. No network, no
+# async runtime, no system libraries.
+[package]
+name = "tdw-workspace-mcp"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+# No runnable doc examples in this crate; skip the empty rustdoc doctest harness
+# to keep warm `cargo test` time down. A real doc example added later is SILENTLY
+# skipped until this line is removed.
+doctest = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The widget catalog (available ids + projected params) and the `apps.json`
+# document types (App/Tab/grid LayoutItem) the control plane mutates and emits.
+tdw-widgets = { workspace = true }
+# Per-route request params schema, for `tdw.workspace.widget.schema` — the same
+# catalog every widget id resolves back to.
+tdw-endpoint-catalog = { workspace = true }
+
+[[bin]]
+# The control-plane server binary: serves the `tdw.workspace.*` tools over a
+# blocking stdio JSON-RPC loop, mirroring how `tdw-mcp` serves.
+name = "tdw-workspace-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
