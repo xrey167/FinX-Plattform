@@ -292,6 +292,7 @@ tdw-analytics-technical = { workspace = true }
 tdw-analytics-quant = { workspace = true }
 tdw-analytics-econometrics = { workspace = true }
 tdw-analytics-portfolio = { workspace = true }
+tdw-quant-options = { workspace = true }
 tdw-charting = { workspace = true }
 tdw-cdc = { path = "../tdw-cdc" }
 tdw-config = { workspace = true }

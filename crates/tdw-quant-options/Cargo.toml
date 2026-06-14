@@ -1,0 +1,32 @@
+# tdw-quant-options: pure-Rust, offline, deterministic option-pricing math.
+#
+# Lib-only, no async, no I/O, no global RNG. Hand-rolled implementations of the
+# standard textbook option-pricing models over caller-supplied contract inputs
+# (spot, strike, rate, dividend yield, volatility, time-to-expiry): the
+# Black-Scholes-Merton closed form and its analytic greeks, a robust
+# implied-volatility solver (Newton-Raphson with a bisection fallback), the
+# Cox-Ross-Rubinstein binomial tree (European and American exercise), and a
+# seeded Monte-Carlo GBM pricer with antithetic variates. Every formula is
+# public textbook math (Black & Scholes 1973; Merton 1973; Cox, Ross &
+# Rubinstein 1979; Boyle 1977 for Monte-Carlo) cited in each module's docs; no
+# reference implementation was consulted. The normal CDF is a hand-rolled
+# rational approximation (Abramowitz & Stegun 7.1.26 erf), so no new numeric
+# dependency (`statrs`/`libm`) is pulled in. The Monte-Carlo path generator uses
+# a hand-rolled SplitMix64/xoshiro deterministic RNG seeded by a caller param, so
+# pricing is reproducible from a seed and uses no wall-clock or global RNG.
+[package]
+name = "tdw-quant-options"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tdw-domain = { workspace = true }
+
+[lints]
+workspace = true

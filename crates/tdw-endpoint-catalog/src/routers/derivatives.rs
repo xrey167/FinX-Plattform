@@ -11,6 +11,9 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{EquityHistoricalData, FuturesCurvePoint, FuturesInstrument, OptionContract};
+use tdw_quant_options::params::{
+    BinomialParams, BlackScholesParams, Greeks, ImpliedVolParams, MonteCarloParams, MonteCarloPrice,
+};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -73,9 +76,60 @@ fn futures_instrument() -> Schema {
     schema_for!(FuturesInstrument)
 }
 
-/// The `derivatives` namespace's catalog entries, in declaration order.
+// --- Computed option-pricing routes (eco G001). -----------------------------
+// The `derivatives/pricing/*` routes are `EndpointKind::Compute` derivations
+// over caller-supplied contract inputs (spot/strike/rate/vol/time/...), with no
+// provider candidates. Their params/model schemas come from the pure-Rust
+// `tdw-quant-options` crate so the catalog and the runtime compute share one
+// schema definition (mirroring the `quantitative/*` analytics routes).
+
+fn black_scholes_params() -> Schema {
+    schema_for!(BlackScholesParams)
+}
+fn implied_vol_params() -> Schema {
+    schema_for!(ImpliedVolParams)
+}
+fn binomial_params() -> Schema {
+    schema_for!(BinomialParams)
+}
+fn monte_carlo_params() -> Schema {
+    schema_for!(MonteCarloParams)
+}
+fn scalar_model() -> Schema {
+    schema_for!(f64)
+}
+fn greeks_model() -> Schema {
+    schema_for!(Greeks)
+}
+fn monte_carlo_model() -> Schema {
+    schema_for!(MonteCarloPrice)
+}
+
+/// Construct one `derivatives/pricing/*` Compute entry with no provider
+/// candidates. Pricing routes summarize the contract into a single figure / row,
+/// so they are not chartable.
+const fn compute_pricing_entry(
+    route: &'static str,
+    params_schema: fn() -> Schema,
+    model: fn() -> Schema,
+    doc: &'static str,
+) -> CatalogEntry {
+    CatalogEntry {
+        route,
+        kind: EndpointKind::Compute,
+        params_schema,
+        model,
+        candidates: &[],
+        bronze_table: None,
+        doc,
+        chartable: false,
+    }
+}
+
+/// The `derivatives` namespace's catalog entries, in declaration order: the
+/// provider-backed Fetch routes followed by the computed `pricing/*` routes.
 pub fn entries() -> Vec<CatalogEntry> {
-    vec![
+    let mut fetch = vec![
         CatalogEntry {
             route: "derivatives/options/chains",
             kind: EndpointKind::Fetch,
@@ -160,5 +214,44 @@ pub fn entries() -> Vec<CatalogEntry> {
                   (keyed).",
             chartable: false,
         },
+    ];
+    fetch.extend(pricing_entries());
+    fetch
+}
+
+/// The computed `derivatives/pricing/*` Compute entries (eco G001), in
+/// declaration order. Split out of [`entries`] so each list stays short.
+fn pricing_entries() -> Vec<CatalogEntry> {
+    vec![
+        compute_pricing_entry(
+            "derivatives/pricing/black_scholes",
+            black_scholes_params,
+            scalar_model,
+            "Black-Scholes-Merton European call/put price (with dividend yield).",
+        ),
+        compute_pricing_entry(
+            "derivatives/pricing/greeks",
+            black_scholes_params,
+            greeks_model,
+            "Analytic Black-Scholes greeks: delta, gamma, theta, vega, rho.",
+        ),
+        compute_pricing_entry(
+            "derivatives/pricing/implied_volatility",
+            implied_vol_params,
+            scalar_model,
+            "Implied volatility inverted from a market price (Newton-Raphson + bisection).",
+        ),
+        compute_pricing_entry(
+            "derivatives/pricing/binomial",
+            binomial_params,
+            scalar_model,
+            "Cox-Ross-Rubinstein binomial-tree price (European or American exercise).",
+        ),
+        compute_pricing_entry(
+            "derivatives/pricing/monte_carlo",
+            monte_carlo_params,
+            monte_carlo_model,
+            "Seeded Monte-Carlo GBM European price with antithetic variates and standard error.",
+        ),
     ]
 }
