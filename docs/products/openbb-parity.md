@@ -13,12 +13,13 @@ the OpenAPI document, the Workspace widgets, the MCP tools, the Python SDK, and
 the warehouse ingest paths all stay in lock-step with a single typed source of
 truth.
 
-As of **2026-06-14** (after P4's data-breadth closeout), the catalog exposes
-**216 routes / 185 provider candidates** (`xtask catalog-check` green): **169
-`Fetch` routes** + **47 `technical/`, `quantitative/`, `econometrics/`,
-`portfolio/` `Compute` routes**. The generated OpenAPI 3.1 document carries
-**169 paths / 56 schemas** (`xtask openapi-check` green). On top of P1–P3, P4
-filled the standardized-data surface across all 17 routers: FMP equity
+As of **2026-06-14** (after P4's data-breadth closeout, incl. the P4W12
+congress.gov + biztoc close-out), the catalog exposes **219 routes / 189
+provider candidates** (`xtask catalog-check` green): **172 `Fetch` routes** +
+**47 `technical/`, `quantitative/`, `econometrics/`, `portfolio/` `Compute`
+routes**. The generated OpenAPI 3.1 document carries **172 paths / 58 schemas**
+(`xtask openapi-check` green). On top of P1–P3, P4 filled the standardized-data
+surface across all 18 routers: FMP equity
 fundamentals/discovery/estimates/ownership breadth (P4W1/W2), Yahoo discovery +
 the ETF cluster (P4W3), economy breadth via OECD SDMX + FRED/Fed/BLS/EconDB
 (P4W4), the fixedincome FRED fill incl. Svensson & HQM (P4W5),
@@ -26,16 +27,21 @@ index/currency/crypto/commodity breadth (P4W6), derivatives futures + SEC
 regulator utilities (P4W7/W8), Ken French portfolio-formation + IMF SDMX
 discovery (P4W9), FINRA shorts/darkpool (P4W10), and the index/currency
 remainder — `index/constituents`, `index/sp500_multiples`, `currency/snapshots`
-(P4W11). The per-wave detail, the per-router before/after, and the deferred
+(P4W11), and the **congress.gov `uscongress/*` cluster + biztoc `news/world`
+leg** (P4W12). The per-wave detail, the per-router before/after, and the deferred
 backlog (each with a documented decision) live in the
 [gap matrix](../roadmap/openbb-gap-matrix.md).
 
 **Honest parity statement.** FinX has **full parity on the keyless / free-key
 surface** (Yahoo, FRED, SEC, US-Treasury, Federal-Reserve, ECB, CBOE, EIA, IMF,
-EconDB, OECD, NASDAQ, FINRA, CFTC, Ken-French, plus FMP on a free key). The
-remaining gap is **paid-key** (intrinio options, trading-economics calendar,
-benzinga/tiingo premium) or **no-public-API** (stockgrid / wsj / finviz / biztoc
-/ TMX index-sectors) providers — a **business decision, not an engineering gap**.
+EconDB, OECD, NASDAQ, FINRA, CFTC, Ken-French, congress.gov, biztoc, plus FMP on
+a free key). The remaining gap is **paid-key** (intrinio options — paid feed, no
+free tier; trading-economics calendar; benzinga/tiingo premium) or
+**no-public-API** providers — **stockgrid** (short_volume: no documented public
+API, undocumented internal endpoint; verified via OpenBB issue #503), **wsj**
+(etf discovery: no documented public JSON API, undocumented internal endpoint),
+**finviz** (screener/groups: HTML-scrape only, no official API, ToS-sensitive),
+and TMX index-sectors — a **business decision, not an engineering gap**.
 
 ---
 
@@ -43,7 +49,7 @@ benzinga/tiingo premium) or **no-public-API** (stockgrid / wsj / finviz / biztoc
 
 | Capability | OpenBB | FinX equivalent | Pointer |
 |---|---|---|---|
-| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 216 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
+| Standardized endpoint catalog | `@router.command` over `openbb-core` | `tdw-endpoint-catalog` — 219 routes, `CatalogEntry { route, kind, params_schema, model, candidates, … }` | [gap matrix](../roadmap/openbb-gap-matrix.md) |
 | REST API | auto-generated FastAPI, `/docs` | catalog-derived `GET /api/v1/{route...}` → policy-guarded `Op::FetchData` → `ResultEnvelope` | [rest-api.md](./rest-api.md) |
 | OpenAPI spec | FastAPI-generated | programmatic OpenAPI 3.1 at `GET /openapi.json`, checked in + drift-gated (`openapi-sync`/`openapi-check`) | [rest-api.md](./rest-api.md), [`docs/schemas/openapi.json`](../schemas/openapi.json) |
 | Provider interchange | `provider=` selects a source | ordered candidates per route; no `provider=` → declaration-order fallback with a `provider_fallback` warning; explicit `provider=` never falls back | [rest-api.md](./rest-api.md) |

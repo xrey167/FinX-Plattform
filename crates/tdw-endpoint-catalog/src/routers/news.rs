@@ -15,7 +15,12 @@ use tdw_domain::NewsArticle;
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
 const NEWS_COMPANY: &[ProviderCandidate] = &[ProviderCandidate::new("benzinga", "news_company")];
-const NEWS_WORLD: &[ProviderCandidate] = &[ProviderCandidate::new("benzinga", "news_world")];
+// `news/world` carries the benzinga leg plus the BizToc aggregator leg (P4W12);
+// both normalize to `NewsArticle`. Declaration order is fallback preference.
+const NEWS_WORLD: &[ProviderCandidate] = &[
+    ProviderCandidate::new("benzinga", "news_world"),
+    ProviderCandidate::new("biztoc", "news_world"),
+];
 
 fn standard_params() -> Schema {
     schema_for!(StandardParams)

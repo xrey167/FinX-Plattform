@@ -1788,6 +1788,9 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     // G002: Intrinio keyed options/fundamentals/estimates cluster.
     #[cfg(feature = "provider-intrinio")]
     insert_intrinio_fetch_bindings(&mut table);
+    // OpenBB-parity P4W12: congress.gov US legislative routes.
+    #[cfg(feature = "provider-congress-gov")]
+    insert_congress_gov_fetch_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
     insert_imf_fetch_bindings(&mut table);
     #[cfg(feature = "provider-econdb")]
@@ -1813,29 +1816,38 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_fmp_fundamentals_fetch_bindings(&mut table);
     #[cfg(feature = "provider-fmp")]
     insert_fmp_completion_fetch_bindings(&mut table);
-    // P2W7: Benzinga normalized news cluster (news/company, news/world).
-    #[cfg(feature = "provider-benzinga")]
-    insert_benzinga_news_fetch_bindings(&mut table);
+    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
+    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+    insert_news_fetch_bindings(&mut table);
     table
 }
 
-/// Register the Benzinga normalized-news fetch bindings (P2W7), keyed by each
-/// fetcher's `ENDPOINT` const — the same key its catalog candidate declares.
-/// Both serve [`tdw_domain::NewsArticle`]. Mirrors
-/// [`insert_benzinga_news_ingest_bindings`] so the fetch and ingest paths stay
-/// in lockstep; a conformance test keeps these keys and the catalog candidates
-/// in sync.
-#[cfg(feature = "provider-benzinga")]
-fn insert_benzinga_news_fetch_bindings(
-    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
-) {
+/// Register the normalized news-cluster fetch bindings, keyed by each fetcher's
+/// `ENDPOINT` const — the same key its catalog candidate declares. Covers the
+/// Benzinga company/world legs (P2W7) and the BizToc `news/world` leg (P4W12);
+/// every leg serves [`tdw_domain::NewsArticle`] and is feature-gated
+/// independently. Extracted from [`fetch_dispatch_table`] so that function stays
+/// within the `too_many_lines` budget. Mirrors [`insert_news_ingest_bindings`];
+/// a conformance test keeps these keys and the catalog candidates in sync. Only
+/// compiled when a news provider feature is enabled, so it never has an empty
+/// body.
+#[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+fn insert_news_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    #[cfg(feature = "provider-benzinga")]
+    {
+        table.insert(
+            ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+            fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
+        );
+        table.insert(
+            ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+            fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+        );
+    }
+    #[cfg(feature = "provider-biztoc")]
     table.insert(
-        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
-    );
-    table.insert(
-        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+        ("biztoc", crate::BiztocWorldNewsFetcher::ENDPOINT),
+        fetch_binding::<crate::BiztocWorldNewsFetcher, _, _>(),
     );
 }
 
@@ -2056,6 +2068,36 @@ where
     }
 }
 
+/// Build a [`FetchBinding`] for a congress.gov catalog-backed fetcher that
+/// injects a fixed `uscongress/*` `command` into the caller's params before the
+/// shared fetcher runs (the caller still supplies `congress`/`bill_type`/
+/// `bill_number`). Mirrors [`cftc_command_fetch_binding`].
+#[cfg(feature = "provider-congress-gov")]
+fn congress_gov_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_congress_gov::CongressBillQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
 /// Register the Intrinio keyed fetch bindings into `table`, keyed by each
 /// route-derived endpoint key (`<route with '/'→'_'>`), matching the catalog
 /// candidates. Each binding injects its route's `command`. Mirrors
@@ -2125,6 +2167,37 @@ fn insert_intrinio_fetch_bindings(
             crate::IntrinioHttpOptionsSurfaceFetcher,
             tdw_domain::OptionContract,
         >("derivatives/options/surface"),
+    );
+}
+
+/// Register the congress.gov catalog fetch bindings (OpenBB-parity **P4W12**),
+/// keyed by each route's `'/'→'_'` endpoint key — the same key its catalog
+/// candidate declares. Each binding injects its route's `command`. Mirrors
+/// [`insert_cftc_fetch_bindings`].
+#[cfg(feature = "provider-congress-gov")]
+fn insert_congress_gov_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("congress-gov", "uscongress_bills"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillsFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bills"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_info"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillInfoFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bill_info"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_text_urls"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillTextFetcher,
+            tdw_domain::BillTextUrl,
+        >("uscongress/bill_text_urls"),
     );
 }
 
@@ -3551,6 +3624,8 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     // G002: Intrinio keyed options/fundamentals/estimates cluster.
     #[cfg(feature = "provider-intrinio")]
     insert_intrinio_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-congress-gov")]
+    insert_congress_gov_ingest_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
     insert_imf_ingest_bindings(&mut table);
     #[cfg(feature = "provider-econdb")]
@@ -3578,29 +3653,37 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     // discovery, screener).
     #[cfg(feature = "provider-fmp")]
     insert_fmp_completion_ingest_bindings(&mut table);
-    // P2W7: Benzinga normalized news cluster (news/company, news/world).
-    #[cfg(feature = "provider-benzinga")]
-    insert_benzinga_news_ingest_bindings(&mut table);
+    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
+    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+    insert_news_ingest_bindings(&mut table);
     table
 }
 
-/// Register the Benzinga normalized-news ingest bindings (P2W7), keyed by each
-/// fetcher's `ENDPOINT` const and bound to the shared `raw.news_article` bronze
-/// landing table. Mirrors [`insert_benzinga_news_fetch_bindings`] so the fetch
-/// and ingest paths stay in lockstep. The bronze table itself is provisioned by
-/// the later warehouse story (W10); registering the binding now keeps every
-/// catalog candidate dispatchable.
-#[cfg(feature = "provider-benzinga")]
-fn insert_benzinga_news_ingest_bindings(
-    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
-) {
+/// Register the normalized news-cluster ingest bindings, keyed by each fetcher's
+/// `ENDPOINT` const and bound to the shared `raw.news_article` bronze landing
+/// table. Covers the Benzinga company/world legs (P2W7) and the BizToc
+/// `news/world` leg (P4W12); each is feature-gated independently so any subset
+/// of the news providers stays dispatchable. Extracted from
+/// [`ingest_dispatch_table`] so that function stays within the `too_many_lines`
+/// budget. Mirrors [`insert_news_fetch_bindings`]. Only compiled when a news
+/// provider feature is enabled, so it never has an empty body.
+#[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+fn insert_news_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    #[cfg(feature = "provider-benzinga")]
+    {
+        table.insert(
+            ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+            binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
+        );
+        table.insert(
+            ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+            binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+        );
+    }
+    #[cfg(feature = "provider-biztoc")]
     table.insert(
-        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
-        binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
-    );
-    table.insert(
-        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
-        binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+        ("biztoc", crate::BiztocWorldNewsFetcher::ENDPOINT),
+        binding::<crate::BiztocWorldNewsFetcher, _, _>("raw.news_article"),
     );
 }
 
@@ -4318,6 +4401,38 @@ where
     }
 }
 
+/// Build an [`IngestBinding`] for a congress.gov catalog-backed fetcher that
+/// injects a fixed `uscongress/*` `command` before fetching one batch and
+/// persisting it. Mirrors [`cftc_command_ingest_binding`].
+#[cfg(feature = "provider-congress-gov")]
+fn congress_gov_command_ingest_binding<F, D>(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_congress_gov::CongressBillQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
 /// Register the Intrinio keyed ingest bindings, mirroring the fetch path
 /// (openbb-parity total wave G002).
 #[cfg(feature = "provider-intrinio")]
@@ -4398,6 +4513,37 @@ fn insert_intrinio_ingest_bindings(
             crate::IntrinioHttpOptionsSurfaceFetcher,
             tdw_domain::OptionContract,
         >("derivatives/options/surface", "raw.option_contract"),
+    );
+}
+
+/// Register the congress.gov ingest bindings (OpenBB-parity **P4W12**),
+/// mirroring the fetch path. The bronze tables are provisioned by the later
+/// warehouse story; registering the bindings now keeps every catalog candidate
+/// dispatchable.
+#[cfg(feature = "provider-congress-gov")]
+fn insert_congress_gov_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("congress-gov", "uscongress_bills"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillsFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bills", "raw.congress_bill"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_info"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillInfoFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bill_info", "raw.congress_bill"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_text_urls"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillTextFetcher,
+            tdw_domain::BillTextUrl,
+        >("uscongress/bill_text_urls", "raw.bill_text_url"),
     );
 }
 
@@ -6066,6 +6212,55 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "intrinio candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ congress.gov `ENDPOINTS` sync (OpenBB-parity **P4W12**): every
+    /// standardized `uscongress` command has a catalog route whose
+    /// `congress-gov` candidate endpoint is the route's `'/'→'_'` form and is
+    /// dispatchable in both tables under `provider-congress-gov`.
+    #[cfg(feature = "provider-congress-gov")]
+    #[test]
+    fn congress_gov_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_congress_gov::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!(
+                    "congress-gov command {} has no catalog route",
+                    endpoint.command
+                )
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "congress-gov")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no congress-gov candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "congress-gov candidate endpoint for {} must be its '/'→'_' form",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "congress-gov candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "congress-gov candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command
