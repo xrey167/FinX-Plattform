@@ -5730,8 +5730,9 @@ mod tests {
             .unwrap_or_else(|error| panic!("outbox lock: {error}"));
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn serve_binds_ephemeral_port_submits_via_loopback_then_shuts_down() {
+        use std::net::SocketAddr;
         use std::time::Duration;
         use tdw_app_client::{DaemonClient, DaemonClientConfig};
 
@@ -5756,33 +5757,53 @@ mod tests {
         );
         assert!(backend.submission_handle().is_some());
 
-        // A loopback client submits a Shutdown op and must observe a terminal
-        // event. `serve` returns after binding, but the spawned accept loop can
-        // still be a few scheduler ticks behind on loaded CI runners.
+        // The op we submit below is `Op::Shutdown`, which is DESTRUCTIVE — it
+        // tears the daemon down — so it must be submitted exactly ONCE. A retry
+        // loop around the submit (the previous shape) flaked: if the first submit
+        // triggered shutdown but its response was lost in the teardown race
+        // (wider under llvm-cov instrumentation), every retry hit a now-closed
+        // listener and reported `Connection refused` until the deadline.
+        //
+        // `serve` binds+listens synchronously before returning (see
+        // `server::bind_tcp`), so the port is already accepting; but on a loaded
+        // CI runner the spawned accept loop can be a few scheduler ticks behind.
+        // Confirm readiness with a cheap, NON-destructive TCP connect (safe to
+        // retry — the daemon accepts the probe, reads EOF, and drops it) BEFORE
+        // the single destructive submit.
+        let socket_addr: SocketAddr = addr.parse().expect("bound addr parses");
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        let submission = loop {
-            let client_addr = addr.clone();
-            let attempt = tokio::task::spawn_blocking(move || {
+        loop {
+            let connected = tokio::task::spawn_blocking(move || {
+                std::net::TcpStream::connect_timeout(&socket_addr, Duration::from_secs(1)).is_ok()
+            })
+            .await
+            .expect("connect-probe join");
+            if connected {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the daemon's loopback listener never accepted a connection"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // The listener is accepting: submit the destructive Shutdown op exactly
+        // once and require a terminal Completed event.
+        let client_addr = addr.clone();
+        let submission = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || {
                 let client = DaemonClient::new(
                     DaemonClientConfig::tcp(client_addr).with_timeout(Duration::from_secs(5)),
                 );
                 client.submit_and_wait(&make_envelope(Op::Shutdown))
-            });
-            match tokio::time::timeout(Duration::from_secs(6), attempt)
-                .await
-                .expect("loopback submit must not hang")
-                .expect("spawn_blocking join")
-            {
-                Ok(submission) => break submission,
-                Err(error) => {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "loopback submission should reach the in-process daemon: {error}"
-                    );
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            }
-        };
+            }),
+        )
+        .await
+        .expect("loopback submit must not hang")
+        .expect("spawn_blocking join")
+        .expect("loopback Shutdown submission should reach the in-process daemon");
         assert!(
             submission
                 .events
