@@ -186,6 +186,70 @@ fn rejects_wrong_audience() {
 }
 
 #[test]
+fn rejects_token_missing_aud_claim() {
+    // Audience binding must require the `aud` claim to be PRESENT. A correctly
+    // signed token that simply omits `aud` must be rejected — `jsonwebtoken`
+    // only checks `aud` when the claim exists unless it is in
+    // `required_spec_claims`, so without that a no-`aud` token would bypass
+    // audience binding for any expected audience.
+    #[derive(Serialize)]
+    struct NoAud {
+        sub: String,
+        iss: String,
+        roles: Vec<String>,
+        exp: i64,
+        nbf: i64,
+        iat: i64,
+    }
+    let base = now();
+    let no_aud = NoAud {
+        sub: "svc:prod".to_string(),
+        iss: ISSUER.to_string(),
+        roles: vec!["analyst".to_string()],
+        exp: base + 3600,
+        nbf: base - 10,
+        iat: base,
+    };
+    let token = encode(&header(Algorithm::RS256, "rsa-1"), &no_aud, &rsa_key()).expect("mint");
+    assert_eq!(
+        verify_jwt(&token, &[rsa_verifying_key()], ISSUER, AUDIENCE),
+        Err(VerifyError::MissingClaim)
+    );
+}
+
+#[test]
+fn rejects_token_missing_iss_claim() {
+    // A signed token that omits `iss` must be rejected. Unlike `aud` (which has
+    // a serde default and so needed `aud` added to required_spec_claims), `iss`
+    // is a required non-`Option` field on the claims struct, so a missing `iss`
+    // fails deserialization and surfaces as `MalformedToken`. Either way it is
+    // rejected — issuer binding cannot be bypassed by omitting the claim.
+    #[derive(Serialize)]
+    struct NoIss {
+        sub: String,
+        aud: String,
+        roles: Vec<String>,
+        exp: i64,
+        nbf: i64,
+        iat: i64,
+    }
+    let base = now();
+    let no_iss = NoIss {
+        sub: "svc:prod".to_string(),
+        aud: AUDIENCE.to_string(),
+        roles: vec!["analyst".to_string()],
+        exp: base + 3600,
+        nbf: base - 10,
+        iat: base,
+    };
+    let token = encode(&header(Algorithm::RS256, "rsa-1"), &no_iss, &rsa_key()).expect("mint");
+    assert_eq!(
+        verify_jwt(&token, &[rsa_verifying_key()], ISSUER, AUDIENCE),
+        Err(VerifyError::MalformedToken)
+    );
+}
+
+#[test]
 fn rejects_wrong_issuer() {
     let token = mint(
         Algorithm::RS256,
