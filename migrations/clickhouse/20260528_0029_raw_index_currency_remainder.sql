@@ -20,7 +20,7 @@
 -- member) pair from an FMP index-constituent list. The descriptive columns are
 -- Nullable since FMP reports a variable subset per index.
 create table if not exists raw.index_constituent (
-  index LowCardinality(String),
+  `index` LowCardinality(String),
   symbol String,
   name Nullable(String),
   sector LowCardinality(Nullable(String)),
@@ -30,7 +30,7 @@ create table if not exists raw.index_constituent (
   ingested_at DateTime64(3, 'UTC') default now64(3) codec(DoubleDelta, ZSTD)
 ) engine = MergeTree
 partition by toYYYYMM(toDate(ingested_at))
-order by (index, symbol)
+order by (`index`, symbol)
 settings non_replicated_deduplication_window = 1000;
 
 -- raw.sp500_multiple mirrors tdw_domain::Sp500Multiple: one (metric, date)
