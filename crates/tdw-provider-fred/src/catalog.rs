@@ -173,6 +173,68 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         maturity: "",
         currency: "USD",
     },
+    // -- economy: survey / price breadth (OpenBB-parity P4W4) ---------------
+    FredEndpoint {
+        command: "economy/retail_prices",
+        series_id: "MRTSSM44000USS",
+        model: FredModel::Macro,
+        title: "Advance Retail Sales: Retail and Food Services, Total",
+        frequency: "monthly",
+        unit: "usd",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "economy/survey/sloos",
+        series_id: "DRTSCILM",
+        model: FredModel::Macro,
+        title: "Net Percentage of Banks Tightening Standards for C&I Loans",
+        frequency: "quarterly",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "economy/survey/economic_conditions_chicago",
+        series_id: "CFNAI",
+        model: FredModel::Macro,
+        title: "Chicago Fed National Activity Index",
+        frequency: "monthly",
+        unit: "index",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "economy/survey/manufacturing_outlook_ny",
+        series_id: "GACDISA066MSFRBNY",
+        model: FredModel::Macro,
+        title: "Empire State Manufacturing Survey: General Business Conditions",
+        frequency: "monthly",
+        unit: "index",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "economy/survey/manufacturing_outlook_texas",
+        series_id: "BACTSAMFRBDAL",
+        model: FredModel::Macro,
+        title: "Texas Manufacturing Outlook Survey: General Business Activity",
+        frequency: "monthly",
+        unit: "index",
+        maturity: "",
+        currency: "USD",
+    },
+    // -- commodity: spot prices (MacroSeries) -------------------------------
+    FredEndpoint {
+        command: "commodity/price/spot",
+        series_id: "DCOILWTICO",
+        model: FredModel::Macro,
+        title: "Crude Oil Prices: West Texas Intermediate (WTI), Cushing, Oklahoma",
+        frequency: "daily",
+        unit: "usd_per_barrel",
+        maturity: "",
+        currency: "USD",
+    },
     // -- fixedincome: policy / reference rates (RateObservation) -------------
     FredEndpoint {
         command: "fixedincome/rate/sofr",
@@ -254,6 +316,36 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         maturity: "overnight",
         currency: "USD",
     },
+    FredEndpoint {
+        command: "fixedincome/rate/ameribor",
+        series_id: "AMERIBOR",
+        model: FredModel::Rate,
+        title: "Overnight Unsecured AMERIBOR Benchmark Interest Rate",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "overnight",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/rate/effr_forecast",
+        series_id: "FEDTARMD",
+        model: FredModel::Rate,
+        title: "FOMC Summary of Economic Projections for the Fed Funds Rate, Median",
+        frequency: "annual",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/rate/effr_forecast/long_run",
+        series_id: "FEDTARMDLR",
+        model: FredModel::Rate,
+        title: "Longer Run FOMC Projection for the Fed Funds Rate, Median",
+        frequency: "annual",
+        unit: "percent",
+        maturity: "long_run",
+        currency: "USD",
+    },
     // -- fixedincome/government: Treasury constant-maturity rates ------------
     FredEndpoint {
         command: "fixedincome/government/treasury_rates/3m",
@@ -305,6 +397,37 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         maturity: "10y",
         currency: "USD",
     },
+    // -- fixedincome/government: Svensson (GSW) fitted zero-coupon curve -----
+    FredEndpoint {
+        command: "fixedincome/government/svensson_yield_curve/2y",
+        series_id: "SVENY02",
+        model: FredModel::Rate,
+        title: "Fitted Yield on a 2-Year Zero Coupon Bond (Svensson/GSW)",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "2y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/government/svensson_yield_curve/5y",
+        series_id: "SVENY05",
+        model: FredModel::Rate,
+        title: "Fitted Yield on a 5-Year Zero Coupon Bond (Svensson/GSW)",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "5y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/government/svensson_yield_curve/10y",
+        series_id: "SVENY10",
+        model: FredModel::Rate,
+        title: "Fitted Yield on a 10-Year Zero Coupon Bond (Svensson/GSW)",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "10y",
+        currency: "USD",
+    },
     // -- fixedincome/spreads: Treasury constant-maturity spreads ------------
     FredEndpoint {
         command: "fixedincome/spreads/tcm/10y2y",
@@ -336,6 +459,26 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         maturity: "3m",
         currency: "USD",
     },
+    FredEndpoint {
+        command: "fixedincome/spreads/tcm_effr/1y",
+        series_id: "T1YFF",
+        model: FredModel::Rate,
+        title: "1-Year Treasury Constant Maturity minus Federal Funds Rate",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "1y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/spreads/tcm_effr/10y",
+        series_id: "T10YFF",
+        model: FredModel::Rate,
+        title: "10-Year Treasury Constant Maturity minus Federal Funds Rate",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "10y",
+        currency: "USD",
+    },
     // -- fixedincome/corporate: HQM spot rates ------------------------------
     FredEndpoint {
         command: "fixedincome/corporate/spot_rates/10y",
@@ -345,6 +488,37 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         frequency: "monthly",
         unit: "percent",
         maturity: "10y",
+        currency: "USD",
+    },
+    // -- fixedincome/corporate: HQM corporate yield curve -------------------
+    FredEndpoint {
+        command: "fixedincome/corporate/hqm/2y",
+        series_id: "HQMCB2YR",
+        model: FredModel::Rate,
+        title: "High Quality Market (HQM) Corporate Bond Spot Rate, 2-Year",
+        frequency: "monthly",
+        unit: "percent",
+        maturity: "2y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/corporate/hqm/5y",
+        series_id: "HQMCB5YR",
+        model: FredModel::Rate,
+        title: "High Quality Market (HQM) Corporate Bond Spot Rate, 5-Year",
+        frequency: "monthly",
+        unit: "percent",
+        maturity: "5y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/corporate/hqm/30y",
+        series_id: "HQMCB30YR",
+        model: FredModel::Rate,
+        title: "High Quality Market (HQM) Corporate Bond Spot Rate, 30-Year",
+        frequency: "monthly",
+        unit: "percent",
+        maturity: "30y",
         currency: "USD",
     },
     FredEndpoint {
@@ -376,6 +550,67 @@ pub const ENDPOINTS: &[FredEndpoint] = &[
         frequency: "weekly",
         unit: "percent",
         maturity: "30y",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/mortgage_indices/15y_fixed",
+        series_id: "MORTGAGE15US",
+        model: FredModel::Rate,
+        title: "15-Year Fixed Rate Mortgage Average in the United States",
+        frequency: "weekly",
+        unit: "percent",
+        maturity: "15y",
+        currency: "USD",
+    },
+    // -- fixedincome/corporate: ICE BofA + Moody's corporate yields (G003a) --
+    FredEndpoint {
+        command: "fixedincome/corporate/ice_bofa",
+        series_id: "BAMLC0A0CMEY",
+        model: FredModel::Rate,
+        title: "ICE BofA US Corporate Index Effective Yield",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/corporate/moody/aaa",
+        series_id: "DAAA",
+        model: FredModel::Rate,
+        title: "Moody's Seasoned Aaa Corporate Bond Yield",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/corporate/moody/baa",
+        series_id: "DBAA",
+        model: FredModel::Rate,
+        title: "Moody's Seasoned Baa Corporate Bond Yield",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/bond_indices/us_corporate_ig",
+        series_id: "BAMLC0A0CM",
+        model: FredModel::Rate,
+        title: "ICE BofA US Corporate Index Option-Adjusted Spread",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "",
+        currency: "USD",
+    },
+    FredEndpoint {
+        command: "fixedincome/bond_indices/us_high_yield_oas",
+        series_id: "BAMLH0A0HYM2",
+        model: FredModel::Rate,
+        title: "ICE BofA US High Yield Index Option-Adjusted Spread",
+        frequency: "daily",
+        unit: "percent",
+        maturity: "",
         currency: "USD",
     },
 ];
@@ -490,6 +725,31 @@ mod tests {
         }
         let spread = resolve("fixedincome/spreads/tcm/10y2y").expect("spread must resolve");
         assert_eq!(spread.maturity_opt(), Some("10y-2y"));
+    }
+
+    #[test]
+    fn p4w5_fixedincome_fill_commands_resolve() {
+        // P4W5 net-new FRED-backed fixedincome routes: each must resolve to its
+        // public FRED series id and standardize onto RateObservation.
+        let cases: &[(&str, &str)] = &[
+            ("fixedincome/rate/ameribor", "AMERIBOR"),
+            ("fixedincome/rate/effr_forecast", "FEDTARMD"),
+            ("fixedincome/rate/effr_forecast/long_run", "FEDTARMDLR"),
+            ("fixedincome/government/svensson_yield_curve/2y", "SVENY02"),
+            ("fixedincome/government/svensson_yield_curve/5y", "SVENY05"),
+            ("fixedincome/government/svensson_yield_curve/10y", "SVENY10"),
+            ("fixedincome/spreads/tcm_effr/1y", "T1YFF"),
+            ("fixedincome/spreads/tcm_effr/10y", "T10YFF"),
+            ("fixedincome/corporate/hqm/2y", "HQMCB2YR"),
+            ("fixedincome/corporate/hqm/5y", "HQMCB5YR"),
+            ("fixedincome/corporate/hqm/30y", "HQMCB30YR"),
+        ];
+        for (command, series_id) in cases {
+            let entry =
+                resolve(command).unwrap_or_else(|| panic!("{command} must resolve in catalog"));
+            assert_eq!(entry.series_id, *series_id, "series id for {command}");
+            assert_eq!(entry.model, FredModel::Rate, "model for {command}");
+        }
     }
 
     #[test]

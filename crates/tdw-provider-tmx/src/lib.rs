@@ -17,7 +17,7 @@
 pub mod http_fetcher;
 
 #[cfg(feature = "http")]
-pub use http_fetcher::{TmxHttpBatchQuoteFetcher, TmxHttpQuoteFetcher};
+pub use http_fetcher::{TmxHttpBatchQuoteFetcher, TmxHttpIndexSectorsFetcher, TmxHttpQuoteFetcher};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,75 @@ impl TmxQuoteQuery {
             .and_then(Value::as_str)
             .ok_or(TmxError::MissingField { field: "symbol" })?;
         let symbol = validate_symbol(raw)?;
+        Ok(Self { symbol })
+    }
+}
+
+/// Validate and normalise a TMX index symbol (e.g. `"^TSX"`, `"^TXCX"`).
+///
+/// Index symbols allow a leading `^` in addition to the equity character set.
+/// A missing leading `^` is added so the query always carries the TMX index
+/// form.
+///
+/// # Errors
+///
+/// Returns [`TmxError::InvalidSymbol`] when the symbol is empty, too long, or
+/// contains a character outside `^ A-Z 0-9 .`.
+pub fn validate_index_symbol(raw: &str) -> Result<String, TmxError> {
+    let upper = raw.trim().to_uppercase();
+    if upper.is_empty() {
+        return Err(TmxError::InvalidSymbol {
+            symbol: raw.to_string(),
+            reason: "index symbol must not be empty",
+        });
+    }
+    if upper.len() > 12 {
+        return Err(TmxError::InvalidSymbol {
+            symbol: raw.to_string(),
+            reason: "index symbol must be at most 12 characters",
+        });
+    }
+    for ch in upper.chars() {
+        if !ch.is_ascii_uppercase() && !ch.is_ascii_digit() && ch != '.' && ch != '^' {
+            return Err(TmxError::InvalidSymbol {
+                symbol: raw.to_string(),
+                reason: "index symbol contains an invalid character",
+            });
+        }
+    }
+    Ok(if upper.starts_with('^') {
+        upper
+    } else {
+        format!("^{upper}")
+    })
+}
+
+/// Query parameters for a TMX index sector breakdown (`index/sectors`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TmxIndexSectorsQuery {
+    /// TMX index symbol (e.g. `"^TSX"`), normalised to carry a leading `^`.
+    pub symbol: String,
+}
+
+impl TmxIndexSectorsQuery {
+    /// Validate raw caller params and construct a [`TmxIndexSectorsQuery`].
+    ///
+    /// Accepts either `symbol` or `index`; defaults to the S&P/TSX Composite
+    /// (`^TSX`) when neither is supplied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TmxError`] when the supplied symbol fails index-symbol
+    /// validation.
+    pub fn from_params(params: &Value) -> Result<Self, TmxError> {
+        let raw = params
+            .get("symbol")
+            .or_else(|| params.get("index"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("^TSX");
+        let symbol = validate_index_symbol(raw)?;
         Ok(Self { symbol })
     }
 }
@@ -295,6 +364,23 @@ mod tests {
     use super::*;
 
     // ── symbol validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn index_sectors_query_normalises_and_defaults() {
+        // Caret added when missing, default applied when absent.
+        let q = TmxIndexSectorsQuery::from_params(&serde_json::json!({ "symbol": "tsx" }))
+            .expect("valid");
+        assert_eq!(q.symbol, "^TSX");
+        let defaulted =
+            TmxIndexSectorsQuery::from_params(&serde_json::json!({})).expect("default applies");
+        assert_eq!(defaulted.symbol, "^TSX");
+        let kept = TmxIndexSectorsQuery::from_params(&serde_json::json!({ "index": "^TXCX" }))
+            .expect("valid");
+        assert_eq!(kept.symbol, "^TXCX");
+        assert!(
+            TmxIndexSectorsQuery::from_params(&serde_json::json!({ "symbol": "TSX?x=1" })).is_err()
+        );
+    }
 
     #[test]
     fn validate_symbol_accepts_clean_tickers() {

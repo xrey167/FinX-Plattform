@@ -17,9 +17,10 @@
 use std::io::{Cursor, Read};
 
 use tdw_core::http_support::prelude::*;
-use tdw_domain::FactorReturn;
+use tdw_domain::{Breakpoint, FactorReturn, PortfolioReturn};
 
-use crate::{BASE_URL, FamaFrenchQuery, parse_factor_table};
+use crate::portfolio::{self, PortfolioKind};
+use crate::{BASE_URL, FamaFrenchPortfolioQuery, FamaFrenchQuery, parse_factor_table};
 
 const USER_AGENT: &str = "tdw-provider-famafrench/0.1 (contact@finx.example)";
 
@@ -110,5 +111,126 @@ impl Fetcher<FamaFrenchQuery, FactorReturn> for FamaFrenchHttpFetcher {
         let csv = unzip_member(&raw, query.dataset().csv_member, "famafrench")?;
         parse_factor_table(&csv)
             .map_err(|error| Error::Provider(format!("famafrench parse: {error}")))
+    }
+}
+
+/// Download a portfolio / breakpoint ZIP archive for `query`, returning its raw
+/// bytes. Shared by the portfolio and breakpoint fetchers, which differ only in
+/// how they normalize the inner wide CSV table.
+async fn fetch_portfolio_zip(base_url: &str, query: &FamaFrenchPortfolioQuery) -> Result<Bytes> {
+    let endpoint = format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        query.dataset().zip_file
+    );
+    let client = tdw_core::http_support::build_client(USER_AGENT, "famafrench http client build")?;
+    let response = client
+        .get(&endpoint)
+        .send()
+        .await
+        .map_err(|error| Error::Provider(format!("famafrench fetch zip: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "famafrench fetch zip returned {status}: {body}"
+        )));
+    }
+    response
+        .bytes()
+        .await
+        .map_err(|error| Error::Provider(format!("famafrench read zip body: {error}")))
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Ken French portfolio-formation returns fetcher (OpenBB-parity
+    /// **P4W9**).
+    ///
+    /// Standardizes the `economy/factors/famafrench/{us,regional,country}_portfolio_returns`
+    /// and `economy/factors/famafrench/international_index_returns` routes to
+    /// long-format [`tdw_domain::PortfolioReturn`] rows by downloading the
+    /// resolved dataset's ZIP archive and parsing the inner wide CSV table.
+    pub FamaFrenchPortfolioHttpFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FamaFrenchPortfolioQuery, PortfolioReturn> for FamaFrenchPortfolioHttpFetcher {
+    const PROVIDER: &'static str = "famafrench";
+    const ENDPOINT: &'static str = "economy_factors_famafrench_portfolio";
+
+    fn transform_query(params: Value) -> Result<FamaFrenchPortfolioQuery> {
+        FamaFrenchPortfolioQuery::from_value(&params)
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FamaFrenchPortfolioQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        fetch_portfolio_zip(self.base_url(), query).await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FamaFrenchPortfolioQuery,
+        raw: Bytes,
+    ) -> Result<Vec<PortfolioReturn>> {
+        let dataset = query.dataset();
+        let csv = unzip_member(&raw, dataset.csv_member, "famafrench portfolio")?;
+        Ok(portfolio::parse_wide_table(&csv, PortfolioKind::Return)
+            .into_iter()
+            .map(|cell| PortfolioReturn {
+                date: cell.date,
+                portfolio: cell.label,
+                value: cell.value,
+            })
+            .collect())
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production Ken French portfolio-formation breakpoints fetcher
+    /// (OpenBB-parity **P4W9**).
+    ///
+    /// Standardizes `economy/factors/famafrench/breakpoints` to long-format
+    /// [`tdw_domain::Breakpoint`] rows. Breakpoint levels carry through unscaled
+    /// (the source publishes them as levels, not percent).
+    pub FamaFrenchBreakpointsHttpFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FamaFrenchPortfolioQuery, Breakpoint> for FamaFrenchBreakpointsHttpFetcher {
+    const PROVIDER: &'static str = "famafrench";
+    const ENDPOINT: &'static str = "economy_factors_famafrench_breakpoints";
+
+    fn transform_query(params: Value) -> Result<FamaFrenchPortfolioQuery> {
+        FamaFrenchPortfolioQuery::from_value(&params)
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FamaFrenchPortfolioQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        fetch_portfolio_zip(self.base_url(), query).await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FamaFrenchPortfolioQuery,
+        raw: Bytes,
+    ) -> Result<Vec<Breakpoint>> {
+        let dataset = query.dataset();
+        let csv = unzip_member(&raw, dataset.csv_member, "famafrench breakpoints")?;
+        Ok(portfolio::parse_wide_table(&csv, PortfolioKind::Breakpoint)
+            .into_iter()
+            .map(|cell| Breakpoint {
+                date: cell.date,
+                breakpoint: cell.label,
+                value: cell.value,
+            })
+            .collect())
     }
 }

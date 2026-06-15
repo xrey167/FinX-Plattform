@@ -13,10 +13,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tdw_core::http_support::prelude::*;
-use tdw_domain::{EtfHolding, MarketDataBar, OwnershipRecord, SymbolMapping, TimeGranularity};
+use tdw_domain::{
+    CompanyFacts, CompanyFiling, EtfHolding, FilingFile, FilingHeader, LitigationRelease,
+    MarketDataBar, OwnershipRecord, SecFilingHtml, SecInstitution, SicCode, SymbolMapping,
+    TimeGranularity,
+};
 use tokio::time::sleep;
 
-use crate::{BASE_URL, SecCikMapQuery, SecFilingsQuery, SecHistoricalQuery};
+use crate::{
+    BASE_URL, SecAccessionQuery, SecCikMapQuery, SecFilingsQuery, SecHistoricalQuery,
+    SecHtmlUrlQuery, SecSearchQuery,
+};
 
 /// Public host for the keyless `company_tickers.json` ticker↔CIK directory.
 ///
@@ -30,6 +37,22 @@ const USER_AGENT: &str = "tdw-provider-sec/0.1 (contact@finx.example)";
 /// SEC EDGAR enforces a soft 10 req/sec ceiling; we sleep 100 ms after each
 /// request to stay comfortably below it.
 const RATE_LIMIT_DELAY: Duration = Duration::from_millis(100);
+
+/// Allocation-free, ASCII case-insensitive substring test: is `needle` a
+/// substring of `haystack`, ignoring ASCII case? Used by the SEC search routes,
+/// which scan thousands of `company_tickers.json` / SIC entries per query — a
+/// per-item `to_ascii_lowercase()` would allocate a fresh `String` for every
+/// row. An empty `needle` matches (mirrors `str::contains("")`).
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
 
 // ── Filings fetcher ───────────────────────────────────────────────────────────
 
@@ -349,6 +372,336 @@ impl Fetcher<SecHistoricalQuery, MarketDataBar> for SecXbrlHttpFetcher {
             });
         }
 
+        Ok(rows)
+    }
+}
+
+// ── XBRL company-facts fetcher → CompanyFacts (equity/compare/company_facts) ──
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC EDGAR XBRL company-facts fetcher, normalized to
+    /// [`tdw_domain::CompanyFacts`].
+    ///
+    /// Calls `GET /api/xbrl/companyfacts/CIK{cik_padded_10digits}.json` and
+    /// flattens the `us-gaap` / `dei` taxonomy fact tree into one
+    /// [`CompanyFacts`] row per (concept, unit, fact). Standardizes
+    /// `equity/compare/company_facts`.
+    pub SecCompanyFactsHttpFetcher,
+    BASE_URL
+);
+
+/// Wire shape for `GET /api/xbrl/companyfacts/CIK*.json` (full taxonomy tree).
+#[derive(Deserialize)]
+struct SecCompanyFactsEnvelope {
+    #[serde(default)]
+    cik: Option<u64>,
+    #[serde(rename = "entityName", default)]
+    entity_name: Option<String>,
+    #[serde(default)]
+    facts: Option<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, SecConceptFacts>>,
+    >,
+}
+
+#[derive(Deserialize)]
+struct SecConceptFacts {
+    #[serde(default)]
+    units: Option<std::collections::BTreeMap<String, Vec<SecCompanyFact>>>,
+}
+
+#[derive(Deserialize)]
+struct SecCompanyFact {
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    val: Option<f64>,
+    #[serde(default)]
+    fy: Option<i32>,
+    #[serde(default)]
+    fp: Option<String>,
+    #[serde(default)]
+    form: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFacts> for SecCompanyFactsHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "company_facts";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/api/xbrl/companyfacts/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec company_facts extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec company_facts returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec company_facts read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFacts>> {
+        let envelope: SecCompanyFactsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec company_facts parse_json: {e}")))?;
+        let cik = envelope
+            .cik
+            .map_or_else(|| query.cik.clone(), |c| c.to_string());
+        let entity_name = envelope.entity_name;
+        let mut rows = Vec::new();
+        let Some(taxonomies) = envelope.facts else {
+            return Ok(rows);
+        };
+        for (taxonomy, concepts) in taxonomies {
+            for (concept, parsed) in concepts {
+                let Some(units) = parsed.units else { continue };
+                for (unit, facts) in units {
+                    for fact in facts {
+                        rows.push(CompanyFacts {
+                            cik: cik.clone(),
+                            entity_name: entity_name.clone(),
+                            taxonomy: taxonomy.clone(),
+                            concept: concept.clone(),
+                            unit: Some(unit.clone()),
+                            end: fact.end,
+                            fiscal_year: fact.fy,
+                            fiscal_period: fact.fp,
+                            form: fact.form,
+                            value: fact.val,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(rows)
+    }
+}
+
+// ── Latest financial reports fetcher (equity/discovery/latest_financial_reports) ─
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC latest-financial-reports fetcher, normalized to
+    /// [`tdw_domain::CompanyFiling`].
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` and selects the
+    /// periodic financial-report filings (10-K / 10-Q / 20-F / 40-F), emitting one
+    /// [`CompanyFiling`] per report (the filer CIK is carried in `symbol`).
+    /// Standardizes `equity/discovery/latest_financial_reports`.
+    pub SecLatestFinancialReportsHttpFetcher,
+    BASE_URL
+);
+
+/// SEC form types that carry periodic financial statements.
+const FINANCIAL_REPORT_FORMS: &[&str] = &["10-K", "10-Q", "20-F", "40-F"];
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFiling> for SecLatestFinancialReportsHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "latest_financial_reports";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client.get(&url).send().await.map_err(|e| {
+            Error::Provider(format!("sec latest_financial_reports extract_data: {e}"))
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec latest_financial_reports returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec latest_financial_reports read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFiling>> {
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw).map_err(|e| {
+            Error::Provider(format!("sec latest_financial_reports parse_json: {e}"))
+        })?;
+        let cik = envelope.cik.clone().map_or_else(
+            || query.cik.clone(),
+            |c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            },
+        );
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .unwrap_or(SecRecentFilings {
+                accession_number: Vec::new(),
+                form: Vec::new(),
+                filing_date: Vec::new(),
+            });
+        let len = recent.accession_number.len();
+        let mut rows = Vec::new();
+        for i in 0..len {
+            let form = recent.form.get(i).cloned().unwrap_or_default();
+            let is_financial = FINANCIAL_REPORT_FORMS
+                .iter()
+                .any(|f| form.eq_ignore_ascii_case(f));
+            if !is_financial {
+                continue;
+            }
+            rows.push(CompanyFiling {
+                symbol: cik.clone(),
+                form_type: form,
+                filing_date: recent.filing_date.get(i).cloned(),
+                accepted_date: None,
+                cik: Some(cik.clone()),
+                link: recent.accession_number.get(i).cloned(),
+                final_link: None,
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ── N-PORT disclosure index fetcher (etf/nport_disclosure) ────────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC N-PORT disclosure-index fetcher, normalized to
+    /// [`tdw_domain::CompanyFiling`].
+    ///
+    /// Calls `GET /submissions/CIK{cik_padded_10digits}.json` and selects the fund
+    /// portfolio-disclosure filings (`NPORT-P` / `NPORT-EX`), emitting one
+    /// [`CompanyFiling`] per disclosure (the filer CIK is carried in `symbol`).
+    /// This is the filing-level disclosure index — distinct from `etf/holdings`,
+    /// which parses an individual N-PORT filing's portfolio XML into per-holding
+    /// rows. Standardizes `etf/nport_disclosure`.
+    pub SecNportDisclosureHttpFetcher,
+    BASE_URL
+);
+
+/// SEC form types that carry fund portfolio (N-PORT) disclosures.
+const NPORT_DISCLOSURE_FORMS: &[&str] = &["NPORT-P", "NPORT-EX"];
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, CompanyFiling> for SecNportDisclosureHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "nport_disclosure";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec nport_disclosure returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(&self, query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<CompanyFiling>> {
+        let envelope: SecSubmissionsEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec nport_disclosure parse_json: {e}")))?;
+        let cik = envelope.cik.clone().map_or_else(
+            || query.cik.clone(),
+            |c| {
+                let trimmed = c.trim_start_matches('0');
+                if trimmed.is_empty() {
+                    "0".to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            },
+        );
+        let recent = envelope
+            .filings
+            .and_then(|f| f.recent)
+            .unwrap_or(SecRecentFilings {
+                accession_number: Vec::new(),
+                form: Vec::new(),
+                filing_date: Vec::new(),
+            });
+        let len = recent.accession_number.len();
+        let mut rows = Vec::new();
+        for i in 0..len {
+            let form = recent.form.get(i).cloned().unwrap_or_default();
+            let is_nport = NPORT_DISCLOSURE_FORMS
+                .iter()
+                .any(|f| form.eq_ignore_ascii_case(f));
+            if !is_nport {
+                continue;
+            }
+            rows.push(CompanyFiling {
+                symbol: cik.clone(),
+                form_type: form,
+                filing_date: recent.filing_date.get(i).cloned(),
+                accepted_date: None,
+                cik: Some(cik.clone()),
+                link: recent.accession_number.get(i).cloned(),
+                final_link: None,
+            });
+        }
         Ok(rows)
     }
 }
@@ -851,6 +1204,762 @@ impl Fetcher<SecFilingsQuery, EtfHolding> for SecEtfHoldingsHttpFetcher {
     }
 }
 
+// ── CIK → ticker symbol map fetcher (regulators/sec/symbol_map) ───────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC `company_tickers.json` CIK→ticker map fetcher.
+    ///
+    /// Shares the same keyless `company_tickers.json` source as the cik_map
+    /// fetcher but is registered under its own `symbol_map` endpoint key so the
+    /// CIK→ticker direction has a distinct catalog route. Standardizes
+    /// `regulators/sec/symbol_map` to [`tdw_domain::SymbolMapping`] rows.
+    pub SecSymbolMapHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecCikMapQuery, SymbolMapping> for SecSymbolMapHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "symbol_map";
+
+    fn transform_query(_params: Value) -> Result<SecCikMapQuery> {
+        Ok(SecCikMapQuery::new())
+    }
+
+    async fn extract_data(&self, _query: &SecCikMapQuery, _creds: &Credentials) -> Result<Bytes> {
+        fetch_company_tickers(self.base_url()).await
+    }
+
+    fn transform_data(&self, _query: &SecCikMapQuery, raw: Bytes) -> Result<Vec<SymbolMapping>> {
+        parse_company_tickers(&raw)
+    }
+}
+
+// ── Institution-name search fetcher (regulators/sec/institutions_search) ──────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC institutions-search fetcher.
+    ///
+    /// Filters the keyless `company_tickers.json` directory by a name needle,
+    /// emitting one [`tdw_domain::SecInstitution`] per match. Standardizes
+    /// `regulators/sec/institutions_search`.
+    pub SecInstitutionsSearchHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecSearchQuery, SecInstitution> for SecInstitutionsSearchHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "institutions_search";
+
+    fn transform_query(params: Value) -> Result<SecSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        Ok(SecSearchQuery::new(query))
+    }
+
+    async fn extract_data(&self, _query: &SecSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        fetch_company_tickers(self.base_url()).await
+    }
+
+    fn transform_data(&self, query: &SecSearchQuery, raw: Bytes) -> Result<Vec<SecInstitution>> {
+        let map: std::collections::BTreeMap<String, SecCompanyTicker> =
+            serde_json::from_slice(&raw)
+                .map_err(|e| Error::Provider(format!("sec institutions_search parse_json: {e}")))?;
+        let needle = query.query.trim();
+        let mut rows = Vec::new();
+        for entry in map.into_values() {
+            let Some(cik) = entry.cik_str else { continue };
+            let Some(name) = entry.title else { continue };
+            if name.trim().is_empty() {
+                continue;
+            }
+            if !needle.is_empty() && !contains_ascii_case_insensitive(&name, needle) {
+                continue;
+            }
+            rows.push(SecInstitution {
+                cik: cik.to_string(),
+                name: name.trim().to_string(),
+                symbol: entry
+                    .ticker
+                    .filter(|t| !t.trim().is_empty())
+                    .map(|t| t.trim().to_ascii_uppercase()),
+            });
+        }
+        Ok(rows)
+    }
+}
+
+// ── SIC industry-code search fetcher (regulators/sec/sic_search) ──────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC SIC-code search fetcher.
+    ///
+    /// Filters the SEC-published Standard Industrial Classification (SIC) code
+    /// list (an embedded static table — the list is a small, stable public
+    /// reference with no JSON API) by a query needle matched against the code or
+    /// description. Standardizes `regulators/sec/sic_search`.
+    pub SecSicSearchHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecSearchQuery, SicCode> for SecSicSearchHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "sic_search";
+
+    fn transform_query(params: Value) -> Result<SecSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        Ok(SecSearchQuery::new(query))
+    }
+
+    async fn extract_data(&self, _query: &SecSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        // The SIC list is an embedded static reference (no SEC JSON API), so no
+        // network call is made: `transform_data` filters the embedded table
+        // directly. Returning empty bytes keeps the fetcher offline-deterministic
+        // and keyless while satisfying the `Fetcher` extract→transform contract.
+        Ok(Bytes::new())
+    }
+
+    fn transform_data(&self, query: &SecSearchQuery, _raw: Bytes) -> Result<Vec<SicCode>> {
+        let needle = query.query.trim();
+        Ok(crate::sic::SIC_CODES
+            .iter()
+            .filter(|e| {
+                needle.is_empty()
+                    || contains_ascii_case_insensitive(e.code, needle)
+                    || contains_ascii_case_insensitive(e.description, needle)
+            })
+            .map(|e| SicCode {
+                code: e.code.to_string(),
+                description: e.description.to_string(),
+                office: e.office.map(str::to_string),
+            })
+            .collect())
+    }
+}
+
+// ── Filing index helpers + header / schema-file fetchers ──────────────────────
+
+/// Wire shape of the EDGAR `{accession}-index.json` document.
+#[derive(Deserialize)]
+struct SecFilingIndexEnvelope {
+    #[serde(default)]
+    directory: Option<SecFilingDirectory>,
+}
+
+#[derive(Deserialize)]
+struct SecFilingDirectory {
+    #[serde(default)]
+    item: Vec<SecFilingItem>,
+}
+
+#[derive(Deserialize)]
+struct SecFilingItem {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "type", default)]
+    item_type: Option<String>,
+    #[serde(default)]
+    size: Option<serde_json::Value>,
+    #[serde(rename = "last-modified", default)]
+    last_modified: Option<String>,
+}
+
+/// Build the EDGAR filing-index URL for a (cik, accession) pair. The archive
+/// path uses the unpadded CIK and the dash-stripped accession number.
+fn filing_index_url(base_url: &str, query: &SecAccessionQuery) -> String {
+    let cik_unpadded = query.cik.trim_start_matches('0');
+    let cik_unpadded = if cik_unpadded.is_empty() {
+        "0"
+    } else {
+        cik_unpadded
+    };
+    format!(
+        "{}/Archives/edgar/data/{cik_unpadded}/{}/index.json",
+        base_url.trim_end_matches('/'),
+        query.accession_nodash(),
+    )
+}
+
+/// Shared GET for an EDGAR filing-index JSON document.
+async fn fetch_filing_index(base_url: &str, query: &SecAccessionQuery) -> Result<Bytes> {
+    let url = filing_index_url(base_url, query);
+    let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| Error::Provider(format!("sec filing index extract_data: {e}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "sec filing index returned {status}: {body}"
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| Error::Provider(format!("sec filing index read body: {e}")))?;
+    sleep(RATE_LIMIT_DELAY).await;
+    Ok(bytes)
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC filing-header fetcher.
+    ///
+    /// Reads the EDGAR `{accession}/index.json` header block and emits one
+    /// [`tdw_domain::FilingHeader`] row. Standardizes
+    /// `regulators/sec/filing_headers`. The www.sec.gov archive hosts the index.
+    pub SecFilingHeadersHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecAccessionQuery, FilingHeader> for SecFilingHeadersHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "filing_headers";
+
+    fn transform_query(params: Value) -> Result<SecAccessionQuery> {
+        accession_query_from_params(&params)
+    }
+
+    async fn extract_data(&self, query: &SecAccessionQuery, _creds: &Credentials) -> Result<Bytes> {
+        fetch_filing_index(self.base_url(), query).await
+    }
+
+    fn transform_data(&self, query: &SecAccessionQuery, raw: Bytes) -> Result<Vec<FilingHeader>> {
+        // EDGAR index.json carries metadata in the top-level object alongside
+        // `directory`. We extract the header anchors that the index reliably
+        // reports; richer header fields live in the filing's SGML header, which
+        // is out of scope for this keyless index-backed route.
+        let value: Value = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec filing_headers parse_json: {e}")))?;
+        Ok(vec![FilingHeader {
+            cik: query.cik.clone(),
+            accession_number: query.accession.clone(),
+            // `directory.name` is the archive directory PATH (e.g.
+            // `/Archives/edgar/data/...`), not a SEC form type. When the index
+            // omits `formType`, leave the field `None` rather than populating it
+            // with a path that no consumer can interpret as a form type.
+            form_type: value
+                .get("formType")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            filing_date: value
+                .get("filingDate")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            period_of_report: value
+                .get("periodOfReport")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            description: value
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        }])
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC schema/data-file list fetcher.
+    ///
+    /// Reads the EDGAR `{accession}/index.json` `directory.item[]` array and
+    /// emits one [`tdw_domain::FilingFile`] per document/schema file in the
+    /// filing. Standardizes `regulators/sec/schema_files`.
+    pub SecSchemaFilesHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecAccessionQuery, FilingFile> for SecSchemaFilesHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "schema_files";
+
+    fn transform_query(params: Value) -> Result<SecAccessionQuery> {
+        accession_query_from_params(&params)
+    }
+
+    async fn extract_data(&self, query: &SecAccessionQuery, _creds: &Credentials) -> Result<Bytes> {
+        fetch_filing_index(self.base_url(), query).await
+    }
+
+    fn transform_data(&self, _query: &SecAccessionQuery, raw: Bytes) -> Result<Vec<FilingFile>> {
+        let envelope: SecFilingIndexEnvelope = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("sec schema_files parse_json: {e}")))?;
+        let items = envelope.directory.map(|d| d.item).unwrap_or_default();
+        Ok(items
+            .into_iter()
+            .filter_map(|item| {
+                let name = item.name?;
+                if name.trim().is_empty() {
+                    return None;
+                }
+                // EDGAR reports `size` as either a number or a numeric string.
+                let size = item.size.and_then(|s| match s {
+                    Value::Number(n) => n.as_u64(),
+                    Value::String(s) => s.trim().parse::<u64>().ok(),
+                    _ => None,
+                });
+                Some(FilingFile {
+                    name: name.trim().to_string(),
+                    file_type: item.item_type.filter(|t| !t.trim().is_empty()),
+                    size,
+                    last_modified: item.last_modified.filter(|t| !t.trim().is_empty()),
+                })
+            })
+            .collect())
+    }
+}
+
+/// Parse a `(cik, accession)` accession query from request params, accepting
+/// either an explicit `accession` field or an `accession_number` alias.
+fn accession_query_from_params(params: &Value) -> Result<SecAccessionQuery> {
+    let cik = params
+        .get("cik")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+    let accession = params
+        .get("accession")
+        .or_else(|| params.get("accession_number"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::InvalidQuery("sec accession must be a string".to_string()))?;
+    SecAccessionQuery::new(cik, accession).map_err(|e| Error::InvalidQuery(e.to_string()))
+}
+
+// ── Litigation-releases RSS fetcher (regulators/sec/rss_litigation) ───────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC litigation-releases RSS fetcher.
+    ///
+    /// Reads the public SEC litigation RSS feed and emits one
+    /// [`tdw_domain::LitigationRelease`] per `<item>`. Standardizes
+    /// `regulators/sec/rss_litigation`. A dependency-free tag scan parses the
+    /// flat RSS item fields (matching the crate's no-extra-deps stance).
+    pub SecRssLitigationHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecCikMapQuery, LitigationRelease> for SecRssLitigationHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "rss_litigation";
+
+    fn transform_query(_params: Value) -> Result<SecCikMapQuery> {
+        Ok(SecCikMapQuery::new())
+    }
+
+    async fn extract_data(&self, _query: &SecCikMapQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/rss/litigation/litigation.xml",
+            self.base_url().trim_end_matches('/'),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec rss_litigation extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec rss_litigation returned {status}: {body}"
+            )));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec rss_litigation read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(bytes)
+    }
+
+    fn transform_data(
+        &self,
+        _query: &SecCikMapQuery,
+        raw: Bytes,
+    ) -> Result<Vec<LitigationRelease>> {
+        let xml = String::from_utf8_lossy(&raw);
+        Ok(parse_rss_items(&xml))
+    }
+}
+
+/// Extract the trimmed text of the first `<tag>…</tag>` in `xml`, unwrapping a
+/// surrounding `<![CDATA[…]]>` block when present. Returns `None` when absent or
+/// empty. Dependency-free linear scan, sufficient for the flat RSS item fields.
+fn rss_tag_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    let mut text = xml[start..end].trim();
+    if let Some(stripped) = text.strip_prefix("<![CDATA[") {
+        text = stripped.strip_suffix("]]>").unwrap_or(stripped);
+    }
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// Parse the `<item>` blocks of an RSS feed into litigation-release rows.
+fn parse_rss_items(xml: &str) -> Vec<LitigationRelease> {
+    let open = "<item>";
+    let close = "</item>";
+    let mut rows = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(rel_start) = xml[cursor..].find(open) {
+        let start = cursor + rel_start + open.len();
+        let Some(rel_end) = xml[start..].find(close) else {
+            break;
+        };
+        let block = &xml[start..start + rel_end];
+        cursor = start + rel_end + close.len();
+
+        let (Some(title), Some(link)) = (rss_tag_text(block, "title"), rss_tag_text(block, "link"))
+        else {
+            continue;
+        };
+        rows.push(LitigationRelease {
+            title,
+            link,
+            published: rss_tag_text(block, "pubDate"),
+            summary: rss_tag_text(block, "description"),
+        });
+    }
+    rows
+}
+
+// ── Shared company_tickers.json helpers ───────────────────────────────────────
+
+/// Shared GET for the keyless `company_tickers.json` directory.
+async fn fetch_company_tickers(base_url: &str) -> Result<Bytes> {
+    let url = format!(
+        "{}/files/company_tickers.json",
+        base_url.trim_end_matches('/'),
+    );
+    let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| Error::Provider(format!("sec company_tickers extract_data: {e}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Provider(format!(
+            "sec company_tickers returned {status}: {body}"
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| Error::Provider(format!("sec company_tickers read body: {e}")))?;
+    sleep(RATE_LIMIT_DELAY).await;
+    Ok(bytes)
+}
+
+/// Parse `company_tickers.json` (an object keyed by integer-as-string indices)
+/// into [`SymbolMapping`] rows.
+fn parse_company_tickers(raw: &Bytes) -> Result<Vec<SymbolMapping>> {
+    let map: std::collections::BTreeMap<String, SecCompanyTicker> = serde_json::from_slice(raw)
+        .map_err(|e| Error::Provider(format!("sec company_tickers parse_json: {e}")))?;
+    let mut rows = Vec::with_capacity(map.len());
+    for entry in map.into_values() {
+        let (Some(cik), Some(symbol)) = (entry.cik_str, entry.ticker) else {
+            continue;
+        };
+        if symbol.trim().is_empty() {
+            continue;
+        }
+        rows.push(SymbolMapping {
+            symbol: symbol.trim().to_ascii_uppercase(),
+            cik: cik.to_string(),
+            name: entry.title,
+        });
+    }
+    Ok(rows)
+}
+
+// ── Filing-HTML retrieval fetcher (regulators/sec/htm_file) ───────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC filing-HTML retrieval fetcher.
+    ///
+    /// Retrieves an HTML document from the EDGAR archive by its absolute
+    /// `https://*.sec.gov/...` URL and wraps it in a single
+    /// [`tdw_domain::SecFilingHtml`] row (the raw HTML body plus its byte
+    /// length and reported content type). Standardizes
+    /// `regulators/sec/htm_file`. The URL host is validated to a `sec.gov`
+    /// domain in [`SecHtmlUrlQuery::new`].
+    pub SecHtmFileHttpFetcher,
+    WWW_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecHtmlUrlQuery, SecFilingHtml> for SecHtmFileHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "htm_file";
+
+    fn transform_query(params: Value) -> Result<SecHtmlUrlQuery> {
+        let url = params
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec url must be a string".to_string()))?;
+        SecHtmlUrlQuery::new(url).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecHtmlUrlQuery, _creds: &Credentials) -> Result<Bytes> {
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client
+            .get(&query.url)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("sec htm_file extract_data: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec htm_file returned {status}: {body}"
+            )));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("sec htm_file read body: {e}")))?;
+        sleep(RATE_LIMIT_DELAY).await;
+        // Stash the content type in a sentinel header line so transform_data can
+        // recover it without a second wire type; transform_data strips it.
+        Ok(prepend_content_type(content_type.as_deref(), bytes))
+    }
+
+    fn transform_data(&self, query: &SecHtmlUrlQuery, raw: Bytes) -> Result<Vec<SecFilingHtml>> {
+        let (content_type, body) = split_content_type(&raw);
+        let content = String::from_utf8_lossy(body).into_owned();
+        Ok(vec![SecFilingHtml {
+            url: query.url.clone(),
+            content_length: content.len() as u64,
+            content,
+            content_type,
+        }])
+    }
+}
+
+/// Sentinel prefix used to carry the response `Content-Type` from `extract_data`
+/// into `transform_data` (the `Fetcher` contract only passes raw bytes between
+/// the two). Chosen so it cannot collide with an HTML document body.
+const CONTENT_TYPE_SENTINEL: &[u8] = b"\x00tdw-content-type:";
+
+/// Prefix `body` with the sentinel content-type line, when known.
+fn prepend_content_type(content_type: Option<&str>, body: Bytes) -> Bytes {
+    let Some(content_type) = content_type else {
+        return body;
+    };
+    let mut out =
+        Vec::with_capacity(CONTENT_TYPE_SENTINEL.len() + content_type.len() + 1 + body.len());
+    out.extend_from_slice(CONTENT_TYPE_SENTINEL);
+    out.extend_from_slice(content_type.as_bytes());
+    out.push(b'\n');
+    out.extend_from_slice(&body);
+    Bytes::from(out)
+}
+
+/// Split a sentinel-prefixed buffer back into `(content_type, body)`. Buffers
+/// without the sentinel are returned verbatim with no content type.
+fn split_content_type(raw: &[u8]) -> (Option<String>, &[u8]) {
+    let Some(rest) = raw.strip_prefix(CONTENT_TYPE_SENTINEL) else {
+        return (None, raw);
+    };
+    match rest.iter().position(|&b| b == b'\n') {
+        Some(idx) => {
+            let content_type = String::from_utf8_lossy(&rest[..idx]).into_owned();
+            (Some(content_type), &rest[idx + 1..])
+        }
+        None => (None, raw),
+    }
+}
+
+// ── MD&A section fetcher (equity/fundamental/management_discussion_analysis) ──
+
+tdw_core::provider_fetcher_struct!(
+    /// Production SEC Management-Discussion-&-Analysis fetcher.
+    ///
+    /// Locates the most recent `10-K` filing for a CIK from the submissions
+    /// index, fetches that filing's primary-document HTML, and wraps it in a
+    /// single [`tdw_domain::SecFilingHtml`] row carrying the document that
+    /// contains the MD&A section. Standardizes
+    /// `equity/fundamental/management_discussion_analysis`. Returning the filing
+    /// document (rather than attempting a fragile in-document section split) is
+    /// the keyless, deterministic contract; downstream consumers extract the
+    /// MD&A item from the returned HTML.
+    pub SecManagementDiscussionAnalysisHttpFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<SecFilingsQuery, SecFilingHtml> for SecManagementDiscussionAnalysisHttpFetcher {
+    const PROVIDER: &'static str = "sec";
+    const ENDPOINT: &'static str = "management_discussion_analysis";
+
+    fn transform_query(params: Value) -> Result<SecFilingsQuery> {
+        let cik = params
+            .get("cik")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("sec cik must be a string".to_string()))?;
+        SecFilingsQuery::new(cik).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &SecFilingsQuery, _creds: &Credentials) -> Result<Bytes> {
+        let submissions_url = format!(
+            "{}/submissions/CIK{}.json",
+            self.base_url().trim_end_matches('/'),
+            query.padded_cik(),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "sec http client build")?;
+        let response = client.get(&submissions_url).send().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis submissions: {e}"
+            ))
+        })?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis submissions returned {status}: {body}"
+            )));
+        }
+        let submissions = response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read submissions: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+
+        let envelope: SecSubmissionsEnvelope =
+            serde_json::from_slice(&submissions).map_err(|e| {
+                Error::Provider(format!(
+                    "sec management_discussion_analysis parse submissions: {e}"
+                ))
+            })?;
+        let recent = envelope.filings.and_then(|f| f.recent).ok_or_else(|| {
+            Error::Provider("sec management_discussion_analysis: no recent filings".to_string())
+        })?;
+        let ten_k_index = recent
+            .form
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case("10-K"))
+            .ok_or_else(|| {
+                Error::Provider(
+                    "sec management_discussion_analysis: no 10-K filing found".to_string(),
+                )
+            })?;
+        let accession = recent.accession_number.get(ten_k_index).ok_or_else(|| {
+            Error::Provider(
+                "sec management_discussion_analysis: 10-K accession missing".to_string(),
+            )
+        })?;
+        let accession_nodash = accession.replace('-', "");
+        let cik_unpadded = query.cik.trim_start_matches('0');
+        let cik_unpadded = if cik_unpadded.is_empty() {
+            "0"
+        } else {
+            cik_unpadded
+        };
+        // Fetch the filing index to locate the primary HTML document.
+        let index_url = format!(
+            "{WWW_BASE_URL}/Archives/edgar/data/{cik_unpadded}/{accession_nodash}/index.json",
+        );
+        let index_response = client.get(&index_url).send().await.map_err(|e| {
+            Error::Provider(format!("sec management_discussion_analysis index: {e}"))
+        })?;
+        if !index_response.status().is_success() {
+            let status = index_response.status();
+            let body = index_response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis index returned {status}: {body}"
+            )));
+        }
+        let index_bytes = index_response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read index: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+        let index: SecFilingIndexEnvelope = serde_json::from_slice(&index_bytes).map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis parse index: {e}"
+            ))
+        })?;
+        let primary = index
+            .directory
+            .map(|d| d.item)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|item| item.name)
+            .find(|name| {
+                let lower = name.to_ascii_lowercase();
+                (lower.ends_with(".htm") || lower.ends_with(".html")) && !lower.contains("index")
+            })
+            .ok_or_else(|| {
+                Error::Provider(
+                    "sec management_discussion_analysis: no primary HTML document in filing"
+                        .to_string(),
+                )
+            })?;
+        let doc_url = format!(
+            "{WWW_BASE_URL}/Archives/edgar/data/{cik_unpadded}/{accession_nodash}/{primary}",
+        );
+        let doc_response = client.get(&doc_url).send().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis primary_doc: {e}"
+            ))
+        })?;
+        if !doc_response.status().is_success() {
+            let status = doc_response.status();
+            let body = doc_response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "sec management_discussion_analysis primary_doc returned {status}: {body}"
+            )));
+        }
+        let html = doc_response.bytes().await.map_err(|e| {
+            Error::Provider(format!(
+                "sec management_discussion_analysis read primary_doc: {e}"
+            ))
+        })?;
+        sleep(RATE_LIMIT_DELAY).await;
+        Ok(prepend_content_type(Some(&doc_url), html))
+    }
+
+    fn transform_data(&self, _query: &SecFilingsQuery, raw: Bytes) -> Result<Vec<SecFilingHtml>> {
+        // `extract_data` stashes the resolved document URL in the sentinel line.
+        let (url, body) = split_content_type(&raw);
+        let content = String::from_utf8_lossy(body).into_owned();
+        Ok(vec![SecFilingHtml {
+            url: url.unwrap_or_default(),
+            content_length: content.len() as u64,
+            content,
+            content_type: Some("text/html".to_string()),
+        }])
+    }
+}
+
 // ── Inline unit tests for transform_data (no network) ────────────────────────
 
 #[cfg(test)]
@@ -975,5 +2084,163 @@ mod tests {
     #[test]
     fn transform_query_xbrl_rejects_missing_symbol() {
         assert!(SecXbrlHttpFetcher::transform_query(serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn transform_data_company_facts_flattens_taxonomy_tree() {
+        let fetcher = SecCompanyFactsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": 320_193,
+                "entityName": "Apple Inc.",
+                "facts": {
+                    "us-gaap": {
+                        "Revenues": {
+                            "label": "Revenues",
+                            "units": {
+                                "USD": [
+                                    {"end": "2024-09-28", "val": 391_035_000_000.0_f64,
+                                     "fy": 2024, "fp": "FY", "form": "10-K"},
+                                    {"end": "2023-09-30", "val": 383_285_000_000.0_f64,
+                                     "fy": 2023, "fp": "FY", "form": "10-K"}
+                                ]
+                            }
+                        }
+                    },
+                    "dei": {
+                        "EntityCommonStockSharesOutstanding": {
+                            "units": {
+                                "shares": [
+                                    {"end": "2024-10-18", "val": 15_115_823_000.0_f64,
+                                     "fy": 2024, "fp": "FY", "form": "10-K"}
+                                ]
+                            }
+                        },
+                        // A concept with no `units` key must be skipped cleanly by
+                        // the single-pass typed deserializer (no `Value` round-trip).
+                        "EntityRegistrantName": {
+                            "label": "Entity Registrant Name"
+                        }
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 3, "rows={rows:#?}");
+        assert!(
+            !rows.iter().any(|r| r.concept == "EntityRegistrantName"),
+            "concept without units must be skipped",
+        );
+        let revenue = rows
+            .iter()
+            .find(|r| r.concept == "Revenues" && r.end.as_deref() == Some("2024-09-28"))
+            .expect("revenue fact present");
+        assert_eq!(revenue.cik, "320193");
+        assert_eq!(revenue.taxonomy, "us-gaap");
+        assert_eq!(revenue.unit.as_deref(), Some("USD"));
+        assert_eq!(revenue.fiscal_year, Some(2024));
+        assert_eq!(revenue.form.as_deref(), Some("10-K"));
+        assert!((revenue.value.unwrap_or_default() - 391_035_000_000.0).abs() < 1.0);
+        assert!(rows.iter().any(|r| r.taxonomy == "dei"));
+    }
+
+    #[test]
+    fn transform_data_company_facts_empty_when_no_facts() {
+        let fetcher = SecCompanyFactsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({"cik": 320_193, "entityName": "Apple Inc."})
+                .to_string()
+                .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("empty facts must not error");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn transform_data_latest_financial_reports_filters_to_periodic_forms() {
+        let fetcher = SecLatestFinancialReportsHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": "320193",
+                "name": "Apple Inc.",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000320193-24-000123", "0000320193-24-000099",
+                                            "0000320193-24-000050"],
+                        "form": ["10-K", "8-K", "10-Q"],
+                        "filingDate": ["2024-11-01", "2024-10-15", "2024-08-01"]
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 2, "only 10-K and 10-Q kept: {rows:#?}");
+        assert!(
+            rows.iter()
+                .all(|r| r.form_type == "10-K" || r.form_type == "10-Q")
+        );
+        assert_eq!(rows[0].symbol, "320193");
+        assert_eq!(rows[0].cik.as_deref(), Some("320193"));
+    }
+
+    #[test]
+    fn transform_query_company_facts_requires_cik() {
+        assert!(SecCompanyFactsHttpFetcher::transform_query(serde_json::json!({})).is_err());
+        let q = SecCompanyFactsHttpFetcher::transform_query(serde_json::json!({"cik": "320193"}))
+            .expect("valid cik");
+        assert_eq!(q.padded_cik(), "0000320193");
+    }
+
+    #[test]
+    fn transform_data_nport_disclosure_filters_to_nport_forms() {
+        let fetcher = SecNportDisclosureHttpFetcher::default();
+        let query = filings_query();
+        let raw = Bytes::from(
+            serde_json::json!({
+                "cik": "884394",
+                "name": "SPDR S&P 500 ETF Trust",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000884394-24-000010", "0000884394-24-000008",
+                                            "0000884394-24-000005"],
+                        "form": ["NPORT-P", "8-K", "NPORT-EX"],
+                        "filingDate": ["2024-11-01", "2024-10-15", "2024-08-01"]
+                    }
+                }
+            })
+            .to_string()
+            .into_bytes(),
+        );
+        let rows = fetcher
+            .transform_data(&query, raw)
+            .expect("transform_data must succeed");
+        assert_eq!(rows.len(), 2, "only NPORT-P and NPORT-EX kept: {rows:#?}");
+        assert!(
+            rows.iter()
+                .all(|r| r.form_type == "NPORT-P" || r.form_type == "NPORT-EX")
+        );
+        assert_eq!(rows[0].cik.as_deref(), Some("884394"));
+    }
+
+    #[test]
+    fn transform_query_nport_disclosure_requires_cik() {
+        assert!(SecNportDisclosureHttpFetcher::transform_query(serde_json::json!({})).is_err());
+        let q =
+            SecNportDisclosureHttpFetcher::transform_query(serde_json::json!({"cik": "884394"}))
+                .expect("valid cik");
+        assert_eq!(q.padded_cik(), "0000884394");
     }
 }

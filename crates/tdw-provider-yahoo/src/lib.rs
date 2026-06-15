@@ -6,7 +6,8 @@ pub mod http_fetcher;
 #[cfg(feature = "http")]
 pub use http_fetcher::{
     YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpEquityHistoricalFetcher,
-    YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpEtfInfoFetcher, YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher,
+    YahooHttpOptionsChainFetcher, YahooHttpPredefinedScreenerFetcher,
     YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
     YahooHttpShareStatisticsFetcher,
 };
@@ -74,6 +75,64 @@ fn normalize_yahoo_symbol(symbol: &str) -> Result<String> {
         ));
     }
     Ok(symbol.to_ascii_uppercase())
+}
+
+/// Query for a Yahoo predefined (saved) discovery screen.
+///
+/// `scr_ids` is the Yahoo predefined-screener id (e.g. `aggressive_small_caps`),
+/// injected per dispatch binding; `count` caps the returned row count. The id is
+/// validated against the known character set so it cannot inject extra query
+/// parameters into the screener URL.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct YahooScreenerQuery {
+    /// Yahoo predefined-screener id.
+    pub scr_ids: String,
+    /// Maximum number of rows to request.
+    pub count: u32,
+}
+
+impl YahooScreenerQuery {
+    /// Default page size when the caller does not specify a `count`/`limit`.
+    const DEFAULT_COUNT: u32 = 25;
+
+    /// Parse a `{ "scr_ids": "...", "count": N }` payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidQuery`] when `scr_ids` is missing, not a string,
+    /// empty, or contains characters outside `[A-Za-z0-9_]`.
+    pub fn from_value(params: &Value) -> Result<Self> {
+        let scr_ids = params
+            .get("scr_ids")
+            .or_else(|| params.get("scrIds"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("yahoo scr_ids must be a string".to_string()))?
+            .trim();
+        if scr_ids.is_empty() {
+            return Err(Error::InvalidQuery(
+                "yahoo scr_ids must not be empty".to_string(),
+            ));
+        }
+        if !scr_ids
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(Error::InvalidQuery(
+                "yahoo scr_ids contains unsupported characters".to_string(),
+            ));
+        }
+        let count = params
+            .get("count")
+            .or_else(|| params.get("limit"))
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(Self::DEFAULT_COUNT);
+        Ok(Self {
+            scr_ids: scr_ids.to_string(),
+            count,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default)]

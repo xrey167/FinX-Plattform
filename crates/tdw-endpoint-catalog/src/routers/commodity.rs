@@ -12,9 +12,19 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::CommodityReportRow;
+use tdw_domain::{CommodityReportRow, MacroSeries};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
+
+/// FRED-backed candidate for `commodity/price/spot`.
+///
+/// Maps onto the standardized FRED endpoint catalog (a single public FRED series
+/// per spot price; the WTI crude benchmark `DCOILWTICO` is the default). The
+/// dispatch key is the route's `'/'→'_'` form, matching the runtime FRED
+/// projection and the catalog ↔ provider conformance test; the fetch/ingest
+/// bindings are derived automatically from the provider's `ENDPOINTS` table.
+const COMMODITY_PRICE_SPOT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fred", "commodity_price_spot")];
 
 /// EIA-backed candidate for the petroleum status report.
 const COMMODITY_PETROLEUM_STATUS_REPORT: &[ProviderCandidate] = &[ProviderCandidate::new(
@@ -35,9 +45,23 @@ fn commodity_report_row() -> Schema {
     schema_for!(CommodityReportRow)
 }
 
+fn macro_series() -> Schema {
+    schema_for!(MacroSeries)
+}
+
 /// The `commodity` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
     vec![
+        CatalogEntry {
+            route: "commodity/price/spot",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: macro_series,
+            candidates: COMMODITY_PRICE_SPOT,
+            bronze_table: Some("raw.macro_series"),
+            doc: "Spot commodity price series (WTI crude default), FRED-backed.",
+            chartable: true,
+        },
         CatalogEntry {
             route: "commodity/petroleum_status_report",
             kind: EndpointKind::Fetch,

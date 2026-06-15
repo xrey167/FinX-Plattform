@@ -56,7 +56,10 @@ use crate::{
     SelectedYahooEquityHistoricalFetcher, ServiceEndpoint, enforce_request_path_with_backend,
     mask_json_response,
 };
-use crate::{econometrics_compute, portfolio_compute, quant_compute, technical_compute};
+use crate::{
+    econometrics_compute, forecast_compute, options_compute, portfolio_compute, quant_compute,
+    technical_compute,
+};
 
 #[async_trait]
 impl Dispatcher for AppState {
@@ -573,6 +576,16 @@ async fn dispatch_compute(
     if portfolio_compute::owns_route(route) {
         return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
             portfolio_compute::run_compute(route, params)
+        });
+    }
+    if options_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            options_compute::run_compute(route, params)
+        });
+    }
+    if forecast_compute::owns_route(route) {
+        return dispatch_params_only_compute(route, params, policy, evidence, |route, params| {
+            forecast_compute::run_compute(route, params)
         });
     }
 
@@ -1113,7 +1126,9 @@ fn insert_ecb_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
 /// `ENDPOINT` const.
 #[cfg(feature = "provider-cboe")]
 fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
-    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    use crate::{
+        CboeHttpIndexDirectoryFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    };
     table.insert(
         ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
         fetch_binding::<CboeHttpIndexSnapshotFetcher, _, _>(),
@@ -1121,6 +1136,33 @@ fn insert_cboe_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     table.insert(
         ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
         fetch_binding::<CboeHttpOptionsChainFetcher, _, _>(),
+    );
+    // OpenBB-parity P4W6: one index-directory fetcher serves both
+    // `index/available` and `index/search` (shared candidate, like
+    // `polygon/aggregates`).
+    table.insert(
+        ("cboe", CboeHttpIndexDirectoryFetcher::ENDPOINT),
+        fetch_binding::<CboeHttpIndexDirectoryFetcher, _, _>(),
+    );
+}
+
+/// Register the keyless Deribit futures-instrument fetch bindings (OpenBB-parity
+/// P4W7): `derivatives/futures/instruments` and `derivatives/futures/info`. Each
+/// is keyed by the catalog-facing fetcher's `ENDPOINT` const, mirroring the
+/// Deribit candidates declared in the endpoint catalog. Mirrors
+/// [`insert_deribit_ingest_bindings`] so the fetch and ingest paths stay in
+/// lockstep; a conformance test keeps these keys and the catalog candidates in
+/// sync.
+#[cfg(feature = "provider-deribit")]
+fn insert_deribit_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    use crate::{DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher};
+    table.insert(
+        ("deribit", DeribitHttpFuturesInstrumentsFetcher::ENDPOINT),
+        fetch_binding::<DeribitHttpFuturesInstrumentsFetcher, _, _>(),
+    );
+    table.insert(
+        ("deribit", DeribitHttpFuturesInfoFetcher::ENDPOINT),
+        fetch_binding::<DeribitHttpFuturesInfoFetcher, _, _>(),
     );
 }
 
@@ -1212,6 +1254,35 @@ fn insert_nasdaq_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str
         ("nasdaq", "equity_calendar_ipo"),
         nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Ipo.as_query_str()),
     );
+    // OpenBB-parity total G003c: equity/calendar/events reuses the shared
+    // calendar fetcher with the `events` discriminator injected per binding.
+    table.insert(
+        ("nasdaq", "equity_calendar_events"),
+        nasdaq_calendar_fetch_binding(NasdaqCalendarKind::Events.as_query_str()),
+    );
+    // OpenBB-parity P4W11: index/sp500_multiples (Shiller CAPE & friends).
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
+        fetch_binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>(),
+    );
+    // OpenBB-parity total G003c: equity/discovery/top_retail (keyless feed).
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpTopRetailFetcher::ENDPOINT),
+        fetch_binding::<crate::NasdaqHttpTopRetailFetcher, _, _>(),
+    );
+}
+
+/// Register the TMX catalog fetch bindings (OpenBB-parity total G003c): the
+/// public index sector-weight breakdown, keyed by the fetcher's `ENDPOINT`
+/// const — the same key its catalog candidate declares. Mirrors
+/// [`insert_tmx_ingest_bindings`]; a conformance test keeps these keys and the
+/// catalog candidates in sync.
+#[cfg(feature = "provider-tmx")]
+fn insert_tmx_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("tmx", crate::TmxHttpIndexSectorsFetcher::ENDPOINT),
+        fetch_binding::<crate::TmxHttpIndexSectorsFetcher, _, _>(),
+    );
 }
 
 /// Register the keyless Yahoo expansion fetch bindings (gap-matrix item L2.4),
@@ -1263,6 +1334,59 @@ fn insert_yahoo_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str)
         ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
         fetch_binding::<YahooHttpFuturesCurveFetcher, _, _>(),
     );
+    // ETF info (openbb-parity P4W3): keyless Yahoo quoteSummary fundProfile.
+    table.insert(
+        ("yahoo", crate::YahooHttpEtfInfoFetcher::ENDPOINT),
+        fetch_binding::<crate::YahooHttpEtfInfoFetcher, _, _>(),
+    );
+    // yfinance discovery screeners (openbb-parity P4W3): one shared predefined
+    // -screener fetcher; the screen id is injected per dispatch binding, so each
+    // route gets a distinct `discovery_<screen>` key (the FMP-discovery pattern).
+    for (key, scr_ids) in YAHOO_DISCOVERY_SCREENS {
+        table.insert(("yahoo", key), yahoo_screener_fetch_binding(scr_ids));
+    }
+}
+
+/// The yfinance predefined-screener routes (openbb-parity P4W3): the dispatch
+/// endpoint key paired with the Yahoo `scrIds` it injects. Shared by the fetch
+/// and ingest binding registrations so they cannot drift.
+#[cfg(feature = "provider-yahoo-http")]
+const YAHOO_DISCOVERY_SCREENS: &[(&str, &str)] = &[
+    ("discovery_aggressive_small_caps", "aggressive_small_caps"),
+    ("discovery_growth_tech", "growth_technology_stocks"),
+    ("discovery_undervalued_growth", "undervalued_growth_stocks"),
+    ("discovery_undervalued_large_caps", "undervalued_large_caps"),
+];
+
+/// Build a [`FetchBinding`] for the Yahoo predefined-screener fetcher that injects
+/// a fixed `scr_ids` screen id into the caller's params, so one fetcher type
+/// serves all four discovery-screen routes while the dispatch key stays
+/// per-screen. Mirrors [`fmp_discovery_fetch_binding`].
+#[cfg(feature = "provider-yahoo-http")]
+fn yahoo_screener_fetch_binding(scr_ids: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("scr_ids".to_string(), Value::String(scr_ids.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(
+                        &crate::YahooHttpPredefinedScreenerFetcher::default(),
+                        params,
+                    )
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
 }
 
 /// Build a [`FetchBinding`] for the FMP financial-statement fetcher that injects
@@ -1282,6 +1406,66 @@ fn fmp_statement_fetch_binding(statement: &'static str) -> FetchBinding {
             Box::pin(async move {
                 let object = runner
                     .run(&crate::FmpHttpStatementFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for the FMP financial-statement fetcher that injects
+/// a fixed `statement` discriminator AND `growth=true` into the caller's params,
+/// so the shared statement fetcher serves the `*_growth` routes while the
+/// dispatch key stays per-statement. Mirrors [`fmp_statement_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_growth_fetch_binding(statement: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert(
+                    "statement".to_string(),
+                    Value::String(statement.to_string()),
+                );
+                map.insert("growth".to_string(), Value::Bool(true));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpStatementFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for the FMP revenue-segmentation fetcher that injects
+/// a fixed `structure` discriminator (product / geography) into the caller's
+/// params, so one fetcher type serves both segmentation routes while the dispatch
+/// key stays per-kind. Mirrors [`fmp_discovery_fetch_binding`].
+#[cfg(feature = "provider-fmp")]
+fn fmp_revenue_segment_fetch_binding(kind: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("structure".to_string(), Value::String(kind.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FmpHttpRevenueSegmentFetcher::default(), params)
                     .await?;
                 let mut records = Vec::with_capacity(object.rows.len());
                 for row in &object.rows {
@@ -1330,6 +1514,142 @@ fn insert_fmp_fundamentals_fetch_bindings(
     table.insert(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpProfileFetcher, _, _>(),
+    );
+    insert_fmp_p4w1_fetch_bindings(table);
+}
+
+/// Register the FMP equity/fundamental breadth fetch bindings (openbb-parity
+/// P4W1), keyed by each route's catalog candidate endpoint. The three
+/// statement-growth routes reuse the statement fetcher (`growth=true` injected);
+/// the two revenue-segment routes reuse one fetcher (the `structure`
+/// discriminator injected); the rest are their own fetchers keyed by their
+/// `ENDPOINT` const. Historical EPS reuses the existing FMP earnings fetcher.
+/// Mirrors [`insert_fmp_p4w1_ingest_bindings`] so the fetch and ingest paths stay
+/// in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w1_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_balance_growth"),
+        fmp_statement_growth_fetch_binding("balance"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_income_growth"),
+        fmp_statement_growth_fetch_binding("income"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash_growth"),
+        fmp_statement_growth_fetch_binding("cashflow"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_product"),
+        fmp_revenue_segment_fetch_binding("product"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_geography"),
+        fmp_revenue_segment_fetch_binding("geography"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyExecutivesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpKeyExecutivesFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpExecutiveCompensationFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpExecutiveCompensationFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpTranscriptFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpTranscriptFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEsgScoreFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEsgScoreFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEmployeeCountFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEmployeeCountFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpFilingsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpFilingsFetcher, _, _>(),
+    );
+    // equity/fundamental/historical_eps reuses the existing FMP earnings fetcher,
+    // already registered by insert_fmp_completion_fetch_bindings under the same
+    // ("fmp", "historical_eps") key — no extra binding needed here.
+    insert_fmp_p4w2_fetch_bindings(table);
+}
+
+/// Insert the FMP equity discovery/estimates/ownership breadth fetch bindings
+/// (openbb-parity P4W2): search, historical market cap, split calendar, the
+/// latest-filings feed, and the insider / institutional / government-trade
+/// ownership records. Each is its own FMP fetcher keyed by its `ENDPOINT` const.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w2_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpSearchFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSearchFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalMarketCapFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpHistoricalMarketCapFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitCalendarFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpSplitCalendarFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpLatestFilingsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpLatestFilingsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInsiderTradingFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpInsiderTradingFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInstitutionalOwnershipFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpInstitutionalOwnershipFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>(),
+    );
+    insert_fmp_etf_fetch_bindings(table);
+}
+
+/// Register the FMP ETF-cluster fetch bindings (openbb-parity P4W3): ETF search,
+/// info, sector / country weightings, price performance, and equity exposure.
+/// Each is its own FMP fetcher keyed by its `ENDPOINT` const. Mirrors
+/// [`insert_fmp_etf_ingest_bindings`] so the fetch and ingest paths stay in
+/// lockstep. (etf/historical reuses the already-registered `equity_historical`
+/// FMP fetcher; etf/holdings is SEC-backed.)
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_etf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSearchFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfSearchFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfInfoFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfInfoFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSectorsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfSectorsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfCountriesFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfCountriesFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfPricePerformanceFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfPricePerformanceFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfEquityExposureFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpEtfEquityExposureFetcher, _, _>(),
     );
 }
 
@@ -1415,6 +1735,28 @@ fn insert_fmp_completion_fetch_bindings(
         ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
         fetch_binding::<crate::FmpHttpScreenerFetcher, _, _>(),
     );
+    // OpenBB-parity P4W11: index/constituents + currency/snapshots.
+    table.insert(
+        ("fmp", crate::FmpHttpIndexConstituentsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpIndexConstituentsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>(),
+    );
+    // OpenBB-parity total G003c: major holders, market snapshots, forward EBITDA.
+    table.insert(
+        ("fmp", crate::FmpHttpMajorHoldersFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpMajorHoldersFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpMarketSnapshotsFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpMarketSnapshotsFetcher, _, _>(),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpForwardEbitdaFetcher::ENDPOINT),
+        fetch_binding::<crate::FmpHttpForwardEbitdaFetcher, _, _>(),
+    );
 }
 
 /// The no-persist fetch dispatch table for this build.
@@ -1487,16 +1829,24 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     #[cfg(feature = "provider-government-us")]
     insert_government_us_fetch_bindings(&mut table);
     #[cfg(feature = "provider-famafrench")]
-    table.insert(
-        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
-    );
+    insert_famafrench_fetch_bindings(&mut table);
+    // OpenBB-parity P4W10: keyless FINRA shorts / dark-pool routes.
+    #[cfg(feature = "provider-finra")]
+    insert_finra_fetch_bindings(&mut table);
     #[cfg(feature = "provider-cftc")]
     insert_cftc_fetch_bindings(&mut table);
+    // G002: Intrinio keyed options/fundamentals/estimates cluster.
+    #[cfg(feature = "provider-intrinio")]
+    insert_intrinio_fetch_bindings(&mut table);
+    // OpenBB-parity P4W12: congress.gov US legislative routes.
+    #[cfg(feature = "provider-congress-gov")]
+    insert_congress_gov_fetch_bindings(&mut table);
     #[cfg(feature = "provider-imf")]
     insert_imf_fetch_bindings(&mut table);
     #[cfg(feature = "provider-econdb")]
     insert_econdb_fetch_bindings(&mut table);
+    #[cfg(feature = "provider-oecd")]
+    insert_oecd_fetch_bindings(&mut table);
     #[cfg(feature = "provider-federal-reserve")]
     insert_federal_reserve_fetch_bindings(&mut table);
     // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
@@ -1504,38 +1854,69 @@ fn fetch_dispatch_table() -> BTreeMap<(&'static str, &'static str), FetchBinding
     insert_ecb_fetch_bindings(&mut table);
     #[cfg(feature = "provider-cboe")]
     insert_cboe_fetch_bindings(&mut table);
+    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
+    #[cfg(feature = "provider-deribit")]
+    insert_deribit_fetch_bindings(&mut table);
     #[cfg(feature = "provider-eia")]
     insert_eia_fetch_bindings(&mut table);
     #[cfg(feature = "provider-nasdaq")]
     insert_nasdaq_fetch_bindings(&mut table);
+    // OpenBB-parity total G003c: TMX index/sectors.
+    #[cfg(feature = "provider-tmx")]
+    insert_tmx_fetch_bindings(&mut table);
     // G011: FMP keyed-provider fundamentals breadth.
     #[cfg(feature = "provider-fmp")]
     insert_fmp_fundamentals_fetch_bindings(&mut table);
     #[cfg(feature = "provider-fmp")]
     insert_fmp_completion_fetch_bindings(&mut table);
-    // P2W7: Benzinga normalized news cluster (news/company, news/world).
-    #[cfg(feature = "provider-benzinga")]
-    insert_benzinga_news_fetch_bindings(&mut table);
+    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
+    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+    insert_news_fetch_bindings(&mut table);
     table
 }
 
-/// Register the Benzinga normalized-news fetch bindings (P2W7), keyed by each
-/// fetcher's `ENDPOINT` const — the same key its catalog candidate declares.
-/// Both serve [`tdw_domain::NewsArticle`]. Mirrors
-/// [`insert_benzinga_news_ingest_bindings`] so the fetch and ingest paths stay
-/// in lockstep; a conformance test keeps these keys and the catalog candidates
-/// in sync.
-#[cfg(feature = "provider-benzinga")]
-fn insert_benzinga_news_fetch_bindings(
-    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
-) {
+/// Register the normalized news-cluster fetch bindings, keyed by each fetcher's
+/// `ENDPOINT` const — the same key its catalog candidate declares. Covers the
+/// Benzinga company/world legs (P2W7) and the BizToc `news/world` leg (P4W12);
+/// every leg serves [`tdw_domain::NewsArticle`] and is feature-gated
+/// independently. Extracted from [`fetch_dispatch_table`] so that function stays
+/// within the `too_many_lines` budget. Mirrors [`insert_news_ingest_bindings`];
+/// a conformance test keeps these keys and the catalog candidates in sync. Only
+/// compiled when a news provider feature is enabled, so it never has an empty
+/// body.
+#[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+fn insert_news_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    #[cfg(feature = "provider-benzinga")]
+    {
+        table.insert(
+            ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+            fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
+        );
+        table.insert(
+            ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+            fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+        );
+    }
+    #[cfg(feature = "provider-biztoc")]
     table.insert(
-        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>(),
+        ("biztoc", crate::BiztocWorldNewsFetcher::ENDPOINT),
+        fetch_binding::<crate::BiztocWorldNewsFetcher, _, _>(),
+    );
+}
+
+/// Register the keyless FINRA shorts / dark-pool fetch bindings (openbb-parity
+/// **P4W10**), keyed by each fetcher's `ENDPOINT` const — the same key its
+/// catalog candidate declares. A conformance test keeps these keys and the
+/// catalog candidates in sync. Mirrors [`insert_finra_ingest_bindings`].
+#[cfg(feature = "provider-finra")]
+fn insert_finra_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    table.insert(
+        ("finra", crate::FinraShortInterestHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FinraShortInterestHttpFetcher, _, _>(),
     );
     table.insert(
-        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
-        fetch_binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>(),
+        ("finra", crate::FinraOtcSummaryHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FinraOtcSummaryHttpFetcher, _, _>(),
     );
 }
 
@@ -1562,6 +1943,59 @@ fn insert_sec_government_fetch_bindings(
     table.insert(
         ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
         fetch_binding::<crate::SecEtfHoldingsHttpFetcher, _, _>(),
+    );
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    table.insert(
+        ("sec", crate::SecCompanyFactsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecCompanyFactsHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>(),
+    );
+    // ETF cluster (openbb-parity P4W3): the keyless N-PORT disclosure index.
+    table.insert(
+        ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecNportDisclosureHttpFetcher, _, _>(),
+    );
+    // Regulator utilities (openbb-parity P4W8): symbol_map, institutions_search,
+    // sic_search, filing_headers, schema_files, rss_litigation.
+    table.insert(
+        ("sec", crate::SecSymbolMapHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSymbolMapHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecInstitutionsSearchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecInstitutionsSearchHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecSicSearchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSicSearchHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecFilingHeadersHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecFilingHeadersHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecSchemaFilesHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecSchemaFilesHttpFetcher, _, _>(),
+    );
+    table.insert(
+        ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecRssLitigationHttpFetcher, _, _>(),
+    );
+    // OpenBB-parity total G003c: keyless filing-HTML retrieval + MD&A document.
+    table.insert(
+        ("sec", crate::SecHtmFileHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::SecHtmFileHttpFetcher, _, _>(),
+    );
+    table.insert(
+        (
+            "sec",
+            crate::SecManagementDiscussionAnalysisHttpFetcher::ENDPOINT,
+        ),
+        fetch_binding::<crate::SecManagementDiscussionAnalysisHttpFetcher, _, _>(),
     );
 }
 
@@ -1668,6 +2102,170 @@ fn insert_cftc_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str),
     );
 }
 
+/// Build a [`FetchBinding`] for an Intrinio catalog-backed fetcher that resolves
+/// a fixed `OpenBB`-style `command` to its Intrinio route. The command is
+/// injected into the caller's params before the shared fetcher runs, so one
+/// fetcher type serves its route while the dispatch key stays per-command.
+/// Mirrors [`cftc_command_fetch_binding`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn intrinio_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_intrinio::IntrinioQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for a congress.gov catalog-backed fetcher that
+/// injects a fixed `uscongress/*` `command` into the caller's params before the
+/// shared fetcher runs (the caller still supplies `congress`/`bill_type`/
+/// `bill_number`). Mirrors [`cftc_command_fetch_binding`].
+#[cfg(feature = "provider-congress-gov")]
+fn congress_gov_command_fetch_binding<F, D>(command: &'static str) -> FetchBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_congress_gov::CongressBillQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner.run(&F::default(), params).await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the Intrinio keyed fetch bindings into `table`, keyed by each
+/// route-derived endpoint key (`<route with '/'→'_'>`), matching the catalog
+/// candidates. Each binding injects its route's `command`. Mirrors
+/// [`insert_cftc_fetch_bindings`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn insert_intrinio_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("intrinio", "equity_fundamental_historical_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpHistoricalAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/historical_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_latest_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpLatestAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/latest_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_search_attributes"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpSearchAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >("equity/fundamental/search_attributes"),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_reported_financials"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpReportedFinancialsFetcher,
+            tdw_domain::FinancialStatement,
+        >("equity/fundamental/reported_financials"),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_pe"),
+        intrinio_command_fetch_binding::<crate::IntrinioHttpForwardPeFetcher, tdw_domain::Estimate>(
+            "equity/estimates/forward_pe",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_sales"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpForwardSalesFetcher,
+            tdw_domain::Estimate,
+        >("equity/estimates/forward_sales"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_unusual"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsUnusualFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/unusual"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_snapshots"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsSnapshotsFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/snapshots"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_surface"),
+        intrinio_command_fetch_binding::<
+            crate::IntrinioHttpOptionsSurfaceFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/surface"),
+    );
+}
+
+/// Register the congress.gov catalog fetch bindings (OpenBB-parity **P4W12**),
+/// keyed by each route's `'/'→'_'` endpoint key — the same key its catalog
+/// candidate declares. Each binding injects its route's `command`. Mirrors
+/// [`insert_cftc_fetch_bindings`].
+#[cfg(feature = "provider-congress-gov")]
+fn insert_congress_gov_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("congress-gov", "uscongress_bills"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillsFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bills"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_info"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillInfoFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bill_info"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_text_urls"),
+        congress_gov_command_fetch_binding::<
+            crate::CongressGovBillTextFetcher,
+            tdw_domain::BillTextUrl,
+        >("uscongress/bill_text_urls"),
+    );
+}
+
 /// Build a [`FetchBinding`] for an IMF catalog-backed fetcher that resolves a
 /// fixed `economy/imf/*` `command` to its SDMX database. The command is injected
 /// into the caller's params before the shared fetcher runs, so one fetcher type
@@ -1709,6 +2307,22 @@ fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
         };
         table.insert(key, imf_command_fetch_binding(endpoint.command));
     }
+    // OpenBB-parity P4W9: imf_utils/* SDMX discovery fetch.
+    insert_imf_utils_fetch_bindings(table);
+}
+
+/// Register the keyless Ken French fetch bindings: the single research-factor
+/// route plus the OpenBB-parity **P4W9** portfolio-formation / breakpoint
+/// routes. Mirrors [`insert_famafrench_ingest_bindings`] on the fetch path.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    table.insert(
+        ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
+        fetch_binding::<crate::FamaFrenchHttpFetcher, _, _>(),
+    );
+    insert_famafrench_portfolio_fetch_bindings(table);
 }
 
 /// Resolve an IMF `economy/imf/*` `command` to the `'static` `(provider,
@@ -1717,6 +2331,149 @@ fn insert_imf_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), 
 /// conformance test catches. Mirrors [`fred_catalog_key`].
 #[cfg(feature = "provider-imf")]
 fn imf_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "imf")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
+/// Serialize a batch of fetched rows into the `Vec<Value>` shape a
+/// [`FetchBinding`] returns. Shared by the OpenBB-parity **P4W9** command-injecting
+/// bindings (famafrench portfolio / breakpoints, imf_utils discovery).
+#[cfg(any(feature = "provider-famafrench", feature = "provider-imf"))]
+fn rows_to_records<T: serde::Serialize>(rows: &[T]) -> Result<Vec<Value>> {
+    let mut records = Vec::with_capacity(rows.len());
+    for row in rows {
+        records.push(
+            serde_json::to_value(row)
+                .map_err(|e| Error::Provider(format!("fetch record serialize: {e}")))?,
+        );
+    }
+    Ok(records)
+}
+
+/// Build a [`FetchBinding`] for the shared Ken French portfolio fetcher that
+/// injects a fixed `economy/factors/famafrench/*` `command` before the fetcher
+/// runs, so one fetcher type serves every portfolio-return route. Mirrors
+/// [`imf_command_fetch_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_portfolio_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FamaFrenchPortfolioHttpFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Build a [`FetchBinding`] for the Ken French breakpoints fetcher that injects
+/// the fixed `economy/factors/famafrench/breakpoints` `command` before the
+/// fetcher runs. Mirrors [`famafrench_portfolio_fetch_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_breakpoints_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::FamaFrenchBreakpointsHttpFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Register the Ken French portfolio-formation fetch bindings (OpenBB-parity
+/// **P4W9**), keyed by the route-derived endpoint key resolved through the
+/// catalog so the dispatch key never drifts from the candidate. The breakpoints
+/// route binds the breakpoints fetcher; the four return routes share the
+/// portfolio fetcher. Mirrors [`insert_imf_fetch_bindings`].
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_portfolio_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    for dataset in tdw_provider_famafrench::portfolio::DATASETS {
+        let Some(key) = famafrench_catalog_key(dataset.command) else {
+            continue;
+        };
+        let binding = match dataset.kind {
+            tdw_provider_famafrench::PortfolioKind::Breakpoint => {
+                famafrench_breakpoints_fetch_binding(dataset.command)
+            }
+            tdw_provider_famafrench::PortfolioKind::Return => {
+                famafrench_portfolio_fetch_binding(dataset.command)
+            }
+        };
+        table.insert(key, binding);
+    }
+}
+
+/// Resolve a Ken French portfolio `command` to the `'static` `(provider,
+/// endpoint)` dispatch key declared for it in the endpoint catalog. Returns
+/// `None` only if a portfolio command is missing its catalog route — a bug the
+/// conformance test catches. Mirrors [`imf_catalog_key`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "famafrench")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
+/// Build a [`FetchBinding`] for the shared IMF discovery fetcher that injects a
+/// fixed `imf_utils/*` `command` before the fetcher runs, so one fetcher type
+/// serves every discovery route. Mirrors [`imf_command_fetch_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::ImfUtilsHttpDiscoveryFetcher::default(), params)
+                    .await?;
+                rows_to_records(&object.rows)
+            })
+        }),
+    }
+}
+
+/// Register the IMF SDMX discovery (`imf_utils/*`) fetch bindings (OpenBB-parity
+/// **P4W9**), keyed by the route-derived endpoint key resolved through the
+/// catalog. Mirrors [`insert_imf_fetch_bindings`].
+#[cfg(feature = "provider-imf")]
+fn insert_imf_utils_fetch_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>,
+) {
+    for endpoint in tdw_provider_imf::IMF_UTILS_ENDPOINTS {
+        let Some(key) = imf_utils_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, imf_utils_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an `imf_utils/*` `command` to the `'static` `(provider, endpoint)`
+/// dispatch key declared for it in the endpoint catalog. Mirrors
+/// [`imf_catalog_key`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
     let route = tdw_endpoint_catalog::lookup(command)?;
     route
         .candidates
@@ -1781,6 +2538,62 @@ fn econdb_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
         .map(|candidate| (candidate.provider, candidate.endpoint))
 }
 
+/// Build a [`FetchBinding`] for the OECD catalog-backed macro fetcher that injects
+/// the fixed `economy/*` `command` into the caller's params before the shared
+/// fetcher runs (the caller may override the per-request dimension `filter`).
+/// Mirrors [`econdb_command_fetch_binding`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_command_fetch_binding(command: &'static str) -> FetchBinding {
+    FetchBinding {
+        run: Box::new(move |runner: &CommandRunner, mut params: Value| {
+            if let Value::Object(map) = &mut params {
+                map.insert("command".to_string(), Value::String(command.to_string()));
+            }
+            Box::pin(async move {
+                let object = runner
+                    .run(&crate::OecdHttpMacroSeriesFetcher::default(), params)
+                    .await?;
+                let mut records = Vec::with_capacity(object.rows.len());
+                for row in &object.rows {
+                    records
+                        .push(serde_json::to_value(row).map_err(|e| {
+                            Error::Provider(format!("fetch record serialize: {e}"))
+                        })?);
+                }
+                Ok(records)
+            })
+        }),
+    }
+}
+
+/// Register the OECD catalog fetch bindings (OpenBB-parity **P4W4**) into
+/// `table`, keyed by the route-derived endpoint key (`<route with '/'→'_'>`)
+/// resolved through the catalog so the dispatch key never drifts from the
+/// candidate. Each binding injects its route's `command`.
+#[cfg(feature = "provider-oecd")]
+fn insert_oecd_fetch_bindings(table: &mut BTreeMap<(&'static str, &'static str), FetchBinding>) {
+    for endpoint in tdw_provider_oecd::ENDPOINTS {
+        let Some(key) = oecd_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(key, oecd_command_fetch_binding(endpoint.command));
+    }
+}
+
+/// Resolve an OECD `economy/*` `command` to the `'static` `(provider, endpoint)`
+/// dispatch key declared for it in the endpoint catalog. Returns `None` only if
+/// an OECD command is missing its catalog route — a bug the conformance test
+/// catches. Mirrors [`econdb_catalog_key`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_catalog_key(command: &str) -> Option<(&'static str, &'static str)> {
+    let route = tdw_endpoint_catalog::lookup(command)?;
+    route
+        .candidates
+        .iter()
+        .find(|candidate| candidate.provider == "oecd")
+        .map(|candidate| (candidate.provider, candidate.endpoint))
+}
+
 /// Build a [`FetchBinding`] for a Federal Reserve catalog-backed fetcher that
 /// resolves a fixed `OpenBB` `command` to its series/document set. The command
 /// is injected into the caller's params before the shared fetcher runs, so one
@@ -1838,6 +2651,31 @@ fn insert_federal_reserve_fetch_bindings(
         ("federal_reserve", "regulators_fed_fomc_documents"),
         fed_command_fetch_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
             "regulators/fed/fomc_documents",
+        ),
+    );
+    // OpenBB-parity P4W4: SOMA holdings + primary-dealer + economy-namespaced FOMC.
+    table.insert(
+        ("federal_reserve", "economy_central_bank_holdings"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/central_bank_holdings",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_positioning"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_positioning",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_fails"),
+        fed_command_fetch_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_fails",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_fomc_documents"),
+        fed_command_fetch_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "economy/fomc_documents",
         ),
     );
 }
@@ -2518,7 +3356,9 @@ fn insert_ecb_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str),
 /// and the options chain in `raw.option_contract`.
 #[cfg(feature = "provider-cboe")]
 fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
-    use crate::{CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher};
+    use crate::{
+        CboeHttpIndexDirectoryFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
+    };
     table.insert(
         ("cboe", CboeHttpIndexSnapshotFetcher::ENDPOINT),
         binding::<CboeHttpIndexSnapshotFetcher, _, _>("raw.price_quote"),
@@ -2526,6 +3366,31 @@ fn insert_cboe_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     table.insert(
         ("cboe", CboeHttpOptionsChainFetcher::ENDPOINT),
         binding::<CboeHttpOptionsChainFetcher, _, _>("raw.option_contract"),
+    );
+    // OpenBB-parity P4W6: the index directory lands as `Instrument` rows in the
+    // shared `raw.instrument` bronze table (the same table `equity/search` uses).
+    table.insert(
+        ("cboe", CboeHttpIndexDirectoryFetcher::ENDPOINT),
+        binding::<CboeHttpIndexDirectoryFetcher, _, _>("raw.instrument"),
+    );
+}
+
+/// Register the keyless Deribit futures-instrument ingest bindings (OpenBB-parity
+/// P4W7), keyed identically to [`insert_deribit_fetch_bindings`]. Both land
+/// [`tdw_domain::FuturesInstrument`] rows in the shared `raw.futures_instrument`
+/// bronze table.
+#[cfg(feature = "provider-deribit")]
+fn insert_deribit_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    use crate::{DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher};
+    table.insert(
+        ("deribit", DeribitHttpFuturesInstrumentsFetcher::ENDPOINT),
+        binding::<DeribitHttpFuturesInstrumentsFetcher, _, _>("raw.futures_instrument"),
+    );
+    table.insert(
+        ("deribit", DeribitHttpFuturesInfoFetcher::ENDPOINT),
+        binding::<DeribitHttpFuturesInfoFetcher, _, _>("raw.futures_instrument"),
     );
 }
 
@@ -2633,6 +3498,35 @@ fn insert_nasdaq_ingest_bindings(
             "raw.calendar_event",
         ),
     );
+    // OpenBB-parity total G003c: equity/calendar/events lands CalendarEvent rows.
+    table.insert(
+        ("nasdaq", "equity_calendar_events"),
+        nasdaq_calendar_ingest_binding(
+            NasdaqCalendarKind::Events.as_query_str(),
+            "raw.calendar_event",
+        ),
+    );
+    // OpenBB-parity P4W11: index/sp500_multiples lands as Sp500Multiple rows.
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpSp500MultiplesFetcher::ENDPOINT),
+        binding::<crate::NasdaqHttpSp500MultiplesFetcher, _, _>("raw.sp500_multiple"),
+    );
+    // OpenBB-parity total G003c: equity/discovery/top_retail lands ScreenerRow rows.
+    table.insert(
+        ("nasdaq", crate::NasdaqHttpTopRetailFetcher::ENDPOINT),
+        binding::<crate::NasdaqHttpTopRetailFetcher, _, _>("raw.screener_row"),
+    );
+}
+
+/// Register the TMX catalog ingest bindings (OpenBB-parity total G003c), keyed
+/// identically to [`insert_tmx_fetch_bindings`] and bound to the
+/// `raw.index_sector` bronze table.
+#[cfg(feature = "provider-tmx")]
+fn insert_tmx_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    table.insert(
+        ("tmx", crate::TmxHttpIndexSectorsFetcher::ENDPOINT),
+        binding::<crate::TmxHttpIndexSectorsFetcher, _, _>("raw.index_sector"),
+    );
 }
 
 /// Register the keyless Yahoo expansion ingest bindings (gap-matrix item L2.4),
@@ -2684,6 +3578,49 @@ fn insert_yahoo_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str
         ("yahoo", YahooHttpFuturesCurveFetcher::ENDPOINT),
         binding::<YahooHttpFuturesCurveFetcher, _, _>("raw.futures_curve_point"),
     );
+    // ETF info (openbb-parity P4W3): keyless Yahoo quoteSummary fundProfile.
+    table.insert(
+        ("yahoo", crate::YahooHttpEtfInfoFetcher::ENDPOINT),
+        binding::<crate::YahooHttpEtfInfoFetcher, _, _>("raw.etf_info"),
+    );
+    // yfinance discovery screeners (openbb-parity P4W3): one shared fetcher; the
+    // screen id is injected per binding, keyed identically to the fetch path.
+    for (key, scr_ids) in YAHOO_DISCOVERY_SCREENS {
+        table.insert(
+            ("yahoo", key),
+            yahoo_screener_ingest_binding(scr_ids, "raw.screener_row"),
+        );
+    }
+}
+
+/// Build an [`IngestBinding`] for the Yahoo predefined-screener fetcher that
+/// injects a fixed `scr_ids` screen id before fetching one batch and persisting
+/// it into `table`. Mirrors [`yahoo_screener_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-yahoo-http")]
+fn yahoo_screener_ingest_binding(scr_ids: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("scr_ids".to_string(), Value::String(scr_ids.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(
+                            &crate::YahooHttpPredefinedScreenerFetcher::default(),
+                            params,
+                        )
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
 }
 
 /// The registry-driven ingest dispatch table for this build.
@@ -2709,8 +3646,96 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
     #[cfg(feature = "provider-yahoo-http")]
     insert_yahoo_ingest_bindings(&mut table);
     // Feature-enabled `MarketDataBar` (canonical OHLC bar) fetchers land in the
-    // shared bronze bar table. Each arm mirrors a `provider-*` feature wired into
-    // `default_registry`.
+    // shared bronze bar table. Extracted into a helper so this function stays
+    // within the `too_many_lines` budget. Only called when at least one bar
+    // provider is enabled, so the helper never has an empty/const-eligible body.
+    #[cfg(any(
+        feature = "provider-akshare",
+        feature = "provider-alpaca",
+        feature = "provider-alpha-vantage",
+        feature = "provider-ccdata",
+        feature = "provider-coingecko",
+        feature = "provider-databento",
+        feature = "provider-fmp",
+        feature = "provider-polygon",
+        feature = "provider-sec",
+        feature = "provider-tiingo",
+    ))]
+    insert_market_data_bar_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-fred")]
+    insert_fred_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-sec")]
+    insert_sec_government_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-government-us")]
+    insert_government_us_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-famafrench")]
+    insert_famafrench_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-finra")]
+    insert_finra_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cftc")]
+    insert_cftc_ingest_bindings(&mut table);
+    // G002: Intrinio keyed options/fundamentals/estimates cluster.
+    #[cfg(feature = "provider-intrinio")]
+    insert_intrinio_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-congress-gov")]
+    insert_congress_gov_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-imf")]
+    insert_imf_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-econdb")]
+    insert_econdb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-oecd")]
+    insert_oecd_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-federal-reserve")]
+    insert_federal_reserve_ingest_bindings(&mut table);
+    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
+    #[cfg(feature = "provider-ecb")]
+    insert_ecb_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-cboe")]
+    insert_cboe_ingest_bindings(&mut table);
+    // OpenBB-parity P4W7: keyless Deribit futures-instrument routes.
+    #[cfg(feature = "provider-deribit")]
+    insert_deribit_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-eia")]
+    insert_eia_ingest_bindings(&mut table);
+    #[cfg(feature = "provider-nasdaq")]
+    insert_nasdaq_ingest_bindings(&mut table);
+    // OpenBB-parity total G003c: TMX index/sectors.
+    #[cfg(feature = "provider-tmx")]
+    insert_tmx_ingest_bindings(&mut table);
+    // G011: FMP keyed-provider fundamentals breadth.
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_fundamentals_ingest_bindings(&mut table);
+    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
+    // discovery, screener).
+    #[cfg(feature = "provider-fmp")]
+    insert_fmp_completion_ingest_bindings(&mut table);
+    // P2W7 / P4W12: Benzinga + BizToc normalized news cluster.
+    #[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+    insert_news_ingest_bindings(&mut table);
+    table
+}
+
+/// Register the feature-enabled canonical-OHLC-bar (`MarketDataBar`) ingest
+/// bindings into `table`, each bound to the shared `raw.market_data_bar` bronze
+/// table. Each arm mirrors a `provider-*` feature wired into
+/// [`crate::default_registry`]. Extracted from [`ingest_dispatch_table`] so that
+/// function stays within the `too_many_lines` budget. Compiled (and called) only
+/// when at least one bar provider is enabled, so the body is never empty.
+#[cfg(any(
+    feature = "provider-akshare",
+    feature = "provider-alpaca",
+    feature = "provider-alpha-vantage",
+    feature = "provider-ccdata",
+    feature = "provider-coingecko",
+    feature = "provider-databento",
+    feature = "provider-fmp",
+    feature = "provider-polygon",
+    feature = "provider-sec",
+    feature = "provider-tiingo",
+))]
+fn insert_market_data_bar_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
     #[cfg(feature = "provider-akshare")]
     table.insert(
         ("akshare", crate::AkShareHttpFetcher::ENDPOINT),
@@ -2761,65 +3786,198 @@ fn ingest_dispatch_table() -> BTreeMap<(&'static str, &'static str), IngestBindi
         ("tiingo", crate::TiingoHttpHistoricalFetcher::ENDPOINT),
         binding::<crate::TiingoHttpHistoricalFetcher, _, _>("raw.market_data_bar"),
     );
-    #[cfg(feature = "provider-fred")]
-    insert_fred_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-sec")]
-    insert_sec_government_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-government-us")]
-    insert_government_us_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-famafrench")]
+}
+
+/// Register the normalized news-cluster ingest bindings, keyed by each fetcher's
+/// `ENDPOINT` const and bound to the shared `raw.news_article` bronze landing
+/// table. Covers the Benzinga company/world legs (P2W7) and the BizToc
+/// `news/world` leg (P4W12); each is feature-gated independently so any subset
+/// of the news providers stays dispatchable. Extracted from
+/// [`ingest_dispatch_table`] so that function stays within the `too_many_lines`
+/// budget. Mirrors [`insert_news_fetch_bindings`]. Only compiled when a news
+/// provider feature is enabled, so it never has an empty body.
+#[cfg(any(feature = "provider-benzinga", feature = "provider-biztoc"))]
+fn insert_news_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    #[cfg(feature = "provider-benzinga")]
+    {
+        table.insert(
+            ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
+            binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
+        );
+        table.insert(
+            ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
+            binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
+        );
+    }
+    #[cfg(feature = "provider-biztoc")]
+    table.insert(
+        ("biztoc", crate::BiztocWorldNewsFetcher::ENDPOINT),
+        binding::<crate::BiztocWorldNewsFetcher, _, _>("raw.news_article"),
+    );
+}
+
+/// Register the keyless FINRA shorts / dark-pool ingest bindings (openbb-parity
+/// **P4W10**), keyed by each fetcher's `ENDPOINT` const and bound to its bronze
+/// landing table. Mirrors [`insert_finra_fetch_bindings`] so the fetch and
+/// ingest paths stay in lockstep; a conformance test keeps these keys and the
+/// catalog candidates in sync. The bronze tables are provisioned by the
+/// warehouse story; registering the binding now keeps every catalog candidate
+/// dispatchable.
+#[cfg(feature = "provider-finra")]
+fn insert_finra_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    table.insert(
+        ("finra", crate::FinraShortInterestHttpFetcher::ENDPOINT),
+        binding::<crate::FinraShortInterestHttpFetcher, _, _>("raw.short_interest"),
+    );
+    table.insert(
+        ("finra", crate::FinraOtcSummaryHttpFetcher::ENDPOINT),
+        binding::<crate::FinraOtcSummaryHttpFetcher, _, _>("raw.otc_market_volume"),
+    );
+}
+
+/// Register the keyless Ken French Data Library ingest binding (OpenBB-parity
+/// **P2W6**), keyed by the fetcher's `ENDPOINT` const and bound to the
+/// `raw.factor_return` bronze table. Extracted from [`ingest_dispatch_table`] so
+/// that function stays within the `too_many_lines` budget.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
     table.insert(
         ("famafrench", crate::FamaFrenchHttpFetcher::ENDPOINT),
         binding::<crate::FamaFrenchHttpFetcher, _, _>("raw.factor_return"),
     );
-    #[cfg(feature = "provider-cftc")]
-    insert_cftc_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-imf")]
-    insert_imf_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-econdb")]
-    insert_econdb_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-federal-reserve")]
-    insert_federal_reserve_ingest_bindings(&mut table);
-    // G004 part 2: ECB / CBOE / EIA / NASDAQ catalog projection.
-    #[cfg(feature = "provider-ecb")]
-    insert_ecb_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-cboe")]
-    insert_cboe_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-eia")]
-    insert_eia_ingest_bindings(&mut table);
-    #[cfg(feature = "provider-nasdaq")]
-    insert_nasdaq_ingest_bindings(&mut table);
-    // G011: FMP keyed-provider fundamentals breadth.
-    #[cfg(feature = "provider-fmp")]
-    insert_fmp_fundamentals_ingest_bindings(&mut table);
-    // P2W2: FMP fundamentals completion (corporate actions, EPS, peers,
-    // discovery, screener).
-    #[cfg(feature = "provider-fmp")]
-    insert_fmp_completion_ingest_bindings(&mut table);
-    // P2W7: Benzinga normalized news cluster (news/company, news/world).
-    #[cfg(feature = "provider-benzinga")]
-    insert_benzinga_news_ingest_bindings(&mut table);
-    table
+    // OpenBB-parity P4W9: portfolio-formation / breakpoint ingest.
+    insert_famafrench_portfolio_ingest_bindings(table);
 }
 
-/// Register the Benzinga normalized-news ingest bindings (P2W7), keyed by each
-/// fetcher's `ENDPOINT` const and bound to the shared `raw.news_article` bronze
-/// landing table. Mirrors [`insert_benzinga_news_fetch_bindings`] so the fetch
-/// and ingest paths stay in lockstep. The bronze table itself is provisioned by
-/// the later warehouse story (W10); registering the binding now keeps every
-/// catalog candidate dispatchable.
-#[cfg(feature = "provider-benzinga")]
-fn insert_benzinga_news_ingest_bindings(
+/// Build an [`IngestBinding`] for the shared Ken French portfolio fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it to its
+/// bronze landing table. Mirrors [`imf_command_ingest_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_portfolio_ingest_binding(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FamaFrenchPortfolioHttpFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Build an [`IngestBinding`] for the Ken French breakpoints fetcher that injects
+/// the fixed breakpoints `command` before fetching one batch and persisting it.
+/// Mirrors [`famafrench_portfolio_ingest_binding`].
+#[cfg(feature = "provider-famafrench")]
+fn famafrench_breakpoints_ingest_binding(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FamaFrenchBreakpointsHttpFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the Ken French portfolio-formation ingest bindings (OpenBB-parity
+/// **P4W9**), mirroring [`insert_famafrench_portfolio_fetch_bindings`] so the
+/// fetch and ingest paths stay in lockstep. The bronze tables are provisioned by
+/// the warehouse migration.
+#[cfg(feature = "provider-famafrench")]
+fn insert_famafrench_portfolio_ingest_bindings(
     table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
 ) {
-    table.insert(
-        ("benzinga", crate::BenzingaCompanyNewsHttpFetcher::ENDPOINT),
-        binding::<crate::BenzingaCompanyNewsHttpFetcher, _, _>("raw.news_article"),
-    );
-    table.insert(
-        ("benzinga", crate::BenzingaWorldNewsHttpFetcher::ENDPOINT),
-        binding::<crate::BenzingaWorldNewsHttpFetcher, _, _>("raw.news_article"),
-    );
+    for dataset in tdw_provider_famafrench::portfolio::DATASETS {
+        let Some(key) = famafrench_catalog_key(dataset.command) else {
+            continue;
+        };
+        let binding = match dataset.kind {
+            tdw_provider_famafrench::PortfolioKind::Breakpoint => {
+                famafrench_breakpoints_ingest_binding(dataset.command, "raw.breakpoint")
+            }
+            tdw_provider_famafrench::PortfolioKind::Return => {
+                famafrench_portfolio_ingest_binding(dataset.command, "raw.portfolio_return")
+            }
+        };
+        table.insert(key, binding);
+    }
+}
+
+/// Build an [`IngestBinding`] for the shared IMF discovery fetcher that injects a
+/// fixed `imf_utils/*` `command` before fetching one batch and persisting it to
+/// the `raw.imf_discovery_record` bronze table. Mirrors
+/// [`imf_command_ingest_binding`].
+#[cfg(feature = "provider-imf")]
+fn imf_utils_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::ImfUtilsHttpDiscoveryFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the IMF SDMX discovery (`imf_utils/*`) ingest bindings (OpenBB-parity
+/// **P4W9**), mirroring [`insert_imf_utils_fetch_bindings`].
+#[cfg(feature = "provider-imf")]
+fn insert_imf_utils_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    for endpoint in tdw_provider_imf::IMF_UTILS_ENDPOINTS {
+        let Some(key) = imf_utils_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            imf_utils_ingest_binding(endpoint.command, "raw.imf_discovery_record"),
+        );
+    }
 }
 
 /// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
@@ -2884,6 +4042,200 @@ fn insert_fmp_fundamentals_ingest_bindings(
     table.insert(
         ("fmp", crate::FmpHttpProfileFetcher::ENDPOINT),
         binding::<crate::FmpHttpProfileFetcher, _, _>("raw.company_profile"),
+    );
+    insert_fmp_p4w1_ingest_bindings(table);
+}
+
+/// Build an [`IngestBinding`] for the FMP financial-statement fetcher that
+/// injects a fixed `statement` discriminator AND `growth=true` before fetching
+/// one batch and persisting it. Mirrors [`fmp_statement_growth_fetch_binding`] on
+/// the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_statement_growth_ingest_binding(
+    statement: &'static str,
+    table: &'static str,
+) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert(
+                        "statement".to_string(),
+                        Value::String(statement.to_string()),
+                    );
+                    map.insert("growth".to_string(), Value::Bool(true));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpStatementFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Build an [`IngestBinding`] for the FMP revenue-segmentation fetcher that
+/// injects a fixed `structure` discriminator (product / geography) before
+/// fetching one batch and persisting it. Mirrors
+/// [`fmp_revenue_segment_fetch_binding`] on the ingest path.
+#[cfg(feature = "provider-fmp")]
+fn fmp_revenue_segment_ingest_binding(kind: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("structure".to_string(), Value::String(kind.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::FmpHttpRevenueSegmentFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the FMP equity/fundamental breadth ingest bindings (openbb-parity
+/// P4W1), keyed by each route's catalog candidate endpoint and bound to its
+/// bronze landing table. Mirrors [`insert_fmp_p4w1_fetch_bindings`] so the fetch
+/// and ingest paths stay in lockstep. The bronze tables are provisioned by the
+/// later warehouse story; registering the binding now keeps every catalog
+/// candidate dispatchable. Historical EPS reuses the existing FMP earnings
+/// binding under the shared `("fmp", "historical_eps")` key.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w1_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", "financial_statement_balance_growth"),
+        fmp_statement_growth_ingest_binding("balance", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_income_growth"),
+        fmp_statement_growth_ingest_binding("income", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "financial_statement_cash_growth"),
+        fmp_statement_growth_ingest_binding("cashflow", "raw.financial_statement"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_product"),
+        fmp_revenue_segment_ingest_binding("product", "raw.revenue_segment"),
+    );
+    table.insert(
+        ("fmp", "revenue_segment_geography"),
+        fmp_revenue_segment_ingest_binding("geography", "raw.revenue_segment"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpKeyExecutivesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpKeyExecutivesFetcher, _, _>("raw.key_executive"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpExecutiveCompensationFetcher::ENDPOINT),
+        binding::<crate::FmpHttpExecutiveCompensationFetcher, _, _>("raw.executive_compensation"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpTranscriptFetcher::ENDPOINT),
+        binding::<crate::FmpHttpTranscriptFetcher, _, _>("raw.earnings_transcript"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEsgScoreFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEsgScoreFetcher, _, _>("raw.esg_score"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEmployeeCountFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEmployeeCountFetcher, _, _>("raw.employee_count"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpFilingsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpFilingsFetcher, _, _>("raw.company_filing"),
+    );
+    insert_fmp_p4w2_ingest_bindings(table);
+}
+
+/// Register the FMP equity discovery/estimates/ownership breadth ingest bindings
+/// (openbb-parity P4W2), keyed by each route's catalog candidate endpoint and
+/// bound to its bronze landing table. Mirrors [`insert_fmp_p4w2_fetch_bindings`]
+/// so the fetch and ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_p4w2_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpSearchFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSearchFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpHistoricalMarketCapFetcher::ENDPOINT),
+        binding::<crate::FmpHttpHistoricalMarketCapFetcher, _, _>("raw.historical_market_cap"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpSplitCalendarFetcher::ENDPOINT),
+        binding::<crate::FmpHttpSplitCalendarFetcher, _, _>("raw.calendar_event"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpLatestFilingsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpLatestFilingsFetcher, _, _>("raw.company_filing"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInsiderTradingFetcher::ENDPOINT),
+        binding::<crate::FmpHttpInsiderTradingFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpInstitutionalOwnershipFetcher::ENDPOINT),
+        binding::<crate::FmpHttpInstitutionalOwnershipFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpGovernmentTradesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpGovernmentTradesFetcher, _, _>("raw.ownership_record"),
+    );
+    insert_fmp_etf_ingest_bindings(table);
+}
+
+/// Register the FMP ETF-cluster ingest bindings (openbb-parity P4W3), keyed
+/// identically to [`insert_fmp_etf_fetch_bindings`] and bound to each route's
+/// bronze landing table so the fetch and ingest paths stay in lockstep.
+#[cfg(feature = "provider-fmp")]
+fn insert_fmp_etf_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSearchFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfSearchFetcher, _, _>("raw.instrument"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfInfoFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfInfoFetcher, _, _>("raw.etf_info"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfSectorsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfSectorsFetcher, _, _>("raw.etf_sector_weight"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfCountriesFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfCountriesFetcher, _, _>("raw.etf_country_weight"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfPricePerformanceFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfPricePerformanceFetcher, _, _>("raw.price_performance"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpEtfEquityExposureFetcher::ENDPOINT),
+        binding::<crate::FmpHttpEtfEquityExposureFetcher, _, _>("raw.etf_equity_exposure"),
     );
 }
 
@@ -2966,6 +4318,28 @@ fn insert_fmp_completion_ingest_bindings(
         ("fmp", crate::FmpHttpScreenerFetcher::ENDPOINT),
         binding::<crate::FmpHttpScreenerFetcher, _, _>("raw.screener_row"),
     );
+    // OpenBB-parity P4W11: index/constituents + currency/snapshots.
+    table.insert(
+        ("fmp", crate::FmpHttpIndexConstituentsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpIndexConstituentsFetcher, _, _>("raw.index_constituent"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpCurrencySnapshotsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpCurrencySnapshotsFetcher, _, _>("raw.currency_snapshot"),
+    );
+    // OpenBB-parity total G003c: major holders, market snapshots, forward EBITDA.
+    table.insert(
+        ("fmp", crate::FmpHttpMajorHoldersFetcher::ENDPOINT),
+        binding::<crate::FmpHttpMajorHoldersFetcher, _, _>("raw.ownership_record"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpMarketSnapshotsFetcher::ENDPOINT),
+        binding::<crate::FmpHttpMarketSnapshotsFetcher, _, _>("raw.price_quote"),
+    );
+    table.insert(
+        ("fmp", crate::FmpHttpForwardEbitdaFetcher::ENDPOINT),
+        binding::<crate::FmpHttpForwardEbitdaFetcher, _, _>("raw.estimate"),
+    );
 }
 
 /// Register the keyless-government-wave SEC catalog ingest bindings, mirroring
@@ -2990,6 +4364,60 @@ fn insert_sec_government_ingest_bindings(
     table.insert(
         ("sec", crate::SecEtfHoldingsHttpFetcher::ENDPOINT),
         binding::<crate::SecEtfHoldingsHttpFetcher, _, _>("raw.etf_holding"),
+    );
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    table.insert(
+        ("sec", crate::SecCompanyFactsHttpFetcher::ENDPOINT),
+        binding::<crate::SecCompanyFactsHttpFetcher, _, _>("raw.company_facts"),
+    );
+    table.insert(
+        ("sec", crate::SecLatestFinancialReportsHttpFetcher::ENDPOINT),
+        binding::<crate::SecLatestFinancialReportsHttpFetcher, _, _>("raw.company_filing"),
+    );
+    // ETF cluster (openbb-parity P4W3): the keyless N-PORT disclosure index.
+    table.insert(
+        ("sec", crate::SecNportDisclosureHttpFetcher::ENDPOINT),
+        binding::<crate::SecNportDisclosureHttpFetcher, _, _>("raw.company_filing"),
+    );
+    // Regulator utilities (openbb-parity P4W8): each lands its standardized
+    // model in the matching bronze table declared by the catalog route.
+    table.insert(
+        ("sec", crate::SecSymbolMapHttpFetcher::ENDPOINT),
+        binding::<crate::SecSymbolMapHttpFetcher, _, _>("raw.symbol_mapping"),
+    );
+    table.insert(
+        ("sec", crate::SecInstitutionsSearchHttpFetcher::ENDPOINT),
+        binding::<crate::SecInstitutionsSearchHttpFetcher, _, _>("raw.sec_institution"),
+    );
+    table.insert(
+        ("sec", crate::SecSicSearchHttpFetcher::ENDPOINT),
+        binding::<crate::SecSicSearchHttpFetcher, _, _>("raw.sic_code"),
+    );
+    table.insert(
+        ("sec", crate::SecFilingHeadersHttpFetcher::ENDPOINT),
+        binding::<crate::SecFilingHeadersHttpFetcher, _, _>("raw.filing_header"),
+    );
+    table.insert(
+        ("sec", crate::SecSchemaFilesHttpFetcher::ENDPOINT),
+        binding::<crate::SecSchemaFilesHttpFetcher, _, _>("raw.filing_file"),
+    );
+    table.insert(
+        ("sec", crate::SecRssLitigationHttpFetcher::ENDPOINT),
+        binding::<crate::SecRssLitigationHttpFetcher, _, _>("raw.litigation_release"),
+    );
+    // OpenBB-parity total G003c: filing-HTML retrieval + MD&A document both land
+    // the standardized SecFilingHtml row in the shared bronze table.
+    table.insert(
+        ("sec", crate::SecHtmFileHttpFetcher::ENDPOINT),
+        binding::<crate::SecHtmFileHttpFetcher, _, _>("raw.sec_filing_html"),
+    );
+    table.insert(
+        (
+            "sec",
+            crate::SecManagementDiscussionAnalysisHttpFetcher::ENDPOINT,
+        ),
+        binding::<crate::SecManagementDiscussionAnalysisHttpFetcher, _, _>("raw.sec_filing_html"),
     );
 }
 
@@ -3096,6 +4524,184 @@ fn insert_cftc_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str)
     );
 }
 
+/// Build an [`IngestBinding`] for an Intrinio catalog-backed fetcher that injects
+/// a fixed `command` before fetching one batch and persisting it. Mirrors
+/// [`cftc_command_ingest_binding`] (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn intrinio_command_ingest_binding<F, D>(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_intrinio::IntrinioQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Build an [`IngestBinding`] for a congress.gov catalog-backed fetcher that
+/// injects a fixed `uscongress/*` `command` before fetching one batch and
+/// persisting it. Mirrors [`cftc_command_ingest_binding`].
+#[cfg(feature = "provider-congress-gov")]
+fn congress_gov_command_ingest_binding<F, D>(
+    command: &'static str,
+    table: &'static str,
+) -> IngestBinding
+where
+    F: tdw_core::Fetcher<tdw_provider_congress_gov::CongressBillQuery, D> + Default,
+    D: tdw_core::DataModel,
+{
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner.run(&F::default(), params).await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the Intrinio keyed ingest bindings, mirroring the fetch path
+/// (openbb-parity total wave G002).
+#[cfg(feature = "provider-intrinio")]
+fn insert_intrinio_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("intrinio", "equity_fundamental_historical_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpHistoricalAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/historical_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_latest_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpLatestAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/latest_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_search_attributes"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpSearchAttributesFetcher,
+            tdw_domain::CompanyAttribute,
+        >(
+            "equity/fundamental/search_attributes",
+            "raw.company_attribute",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_fundamental_reported_financials"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpReportedFinancialsFetcher,
+            tdw_domain::FinancialStatement,
+        >(
+            "equity/fundamental/reported_financials",
+            "raw.financial_statement",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_pe"),
+        intrinio_command_ingest_binding::<crate::IntrinioHttpForwardPeFetcher, tdw_domain::Estimate>(
+            "equity/estimates/forward_pe",
+            "raw.estimate",
+        ),
+    );
+    table.insert(
+        ("intrinio", "equity_estimates_forward_sales"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpForwardSalesFetcher,
+            tdw_domain::Estimate,
+        >("equity/estimates/forward_sales", "raw.estimate"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_unusual"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsUnusualFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/unusual", "raw.option_contract"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_snapshots"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsSnapshotsFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/snapshots", "raw.option_contract"),
+    );
+    table.insert(
+        ("intrinio", "derivatives_options_surface"),
+        intrinio_command_ingest_binding::<
+            crate::IntrinioHttpOptionsSurfaceFetcher,
+            tdw_domain::OptionContract,
+        >("derivatives/options/surface", "raw.option_contract"),
+    );
+}
+
+/// Register the congress.gov ingest bindings (OpenBB-parity **P4W12**),
+/// mirroring the fetch path. The bronze tables are provisioned by the later
+/// warehouse story; registering the bindings now keeps every catalog candidate
+/// dispatchable.
+#[cfg(feature = "provider-congress-gov")]
+fn insert_congress_gov_ingest_bindings(
+    table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>,
+) {
+    table.insert(
+        ("congress-gov", "uscongress_bills"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillsFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bills", "raw.congress_bill"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_info"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillInfoFetcher,
+            tdw_domain::CongressBill,
+        >("uscongress/bill_info", "raw.congress_bill"),
+    );
+    table.insert(
+        ("congress-gov", "uscongress_bill_text_urls"),
+        congress_gov_command_ingest_binding::<
+            crate::CongressGovBillTextFetcher,
+            tdw_domain::BillTextUrl,
+        >("uscongress/bill_text_urls", "raw.bill_text_url"),
+    );
+}
+
 /// Build an [`IngestBinding`] for an IMF catalog-backed fetcher that injects a
 /// fixed `command` before fetching one batch and persisting it to the shared
 /// `raw.macro_series` bronze table. Mirrors [`cftc_command_ingest_binding`].
@@ -3135,6 +4741,8 @@ fn insert_imf_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str),
             imf_command_ingest_binding(endpoint.command, "raw.macro_series"),
         );
     }
+    // OpenBB-parity P4W9: imf_utils/* SDMX discovery ingest.
+    insert_imf_utils_ingest_bindings(table);
 }
 
 /// Build an [`IngestBinding`] for the `EconDB` catalog-backed fetcher that injects
@@ -3176,6 +4784,47 @@ fn insert_econdb_ingest_bindings(
         table.insert(
             key,
             econdb_command_ingest_binding(endpoint.command, "raw.macro_series"),
+        );
+    }
+}
+
+/// Build an [`IngestBinding`] for the OECD catalog-backed macro fetcher that
+/// injects a fixed `command` before fetching one batch and persisting it to the
+/// shared `raw.macro_series` bronze table. Mirrors [`econdb_command_ingest_binding`].
+#[cfg(feature = "provider-oecd")]
+fn oecd_command_ingest_binding(command: &'static str, table: &'static str) -> IngestBinding {
+    IngestBinding {
+        table,
+        run: Box::new(
+            move |state: &AppState,
+                  runner: &CommandRunner,
+                  mut params: Value,
+                  table: &'static str,
+                  token: String| {
+                if let Value::Object(map) = &mut params {
+                    map.insert("command".to_string(), Value::String(command.to_string()));
+                }
+                Box::pin(async move {
+                    let object = runner
+                        .run(&crate::OecdHttpMacroSeriesFetcher::default(), params)
+                        .await?;
+                    persist_batch(state, table, &token, &object).await
+                })
+            },
+        ),
+    }
+}
+
+/// Register the OECD ingest bindings, mirroring the fetch path.
+#[cfg(feature = "provider-oecd")]
+fn insert_oecd_ingest_bindings(table: &mut BTreeMap<(&'static str, &'static str), IngestBinding>) {
+    for endpoint in tdw_provider_oecd::ENDPOINTS {
+        let Some(key) = oecd_catalog_key(endpoint.command) else {
+            continue;
+        };
+        table.insert(
+            key,
+            oecd_command_ingest_binding(endpoint.command, "raw.macro_series"),
         );
     }
 }
@@ -3231,6 +4880,35 @@ fn insert_federal_reserve_ingest_bindings(
         ("federal_reserve", "regulators_fed_fomc_documents"),
         fed_command_ingest_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
             "regulators/fed/fomc_documents",
+            "raw.fomc_document",
+        ),
+    );
+    // OpenBB-parity P4W4: SOMA holdings + primary-dealer + economy-namespaced FOMC.
+    table.insert(
+        ("federal_reserve", "economy_central_bank_holdings"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/central_bank_holdings",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_positioning"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_positioning",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_primary_dealer_fails"),
+        fed_command_ingest_binding::<crate::FedMacroSeriesHttpFetcher, tdw_domain::MacroSeries>(
+            "economy/primary_dealer_fails",
+            "raw.macro_series",
+        ),
+    );
+    table.insert(
+        ("federal_reserve", "economy_fomc_documents"),
+        fed_command_ingest_binding::<crate::FedFomcDocumentsHttpFetcher, tdw_domain::FomcDocument>(
+            "economy/fomc_documents",
             "raw.fomc_document",
         ),
     );
@@ -3349,16 +5027,24 @@ fn service_tool_registry() -> ToolRegistry {
     registry
 }
 
-/// Map a Compute-tool name to its catalog route by swapping the first `.` for
-/// `/`, but only for the analytics namespaces (`technical`, `quantitative`,
-/// `econometrics`). Returns `None` for any other tool name (e.g. `udf.run`).
+/// Map a Compute-tool name to its catalog route by swapping `.` separators back
+/// to `/`, but only for the compute namespaces (`technical`, `quantitative`,
+/// `econometrics`, `forecast`, `portfolio`, and the `derivatives/pricing/*`
+/// option-pricing routes under `derivatives`). Returns `None` for any other tool
+/// name (e.g.
+/// `udf.run`). Multi-segment routes (e.g. `quantitative/stats/mean`,
+/// `derivatives/pricing/black_scholes`) round-trip: the tool name
+/// `quantitative.stats.mean` maps back by restoring every inner separator after
+/// the namespace. Only Compute routes are registered as tools, so a `derivatives`
+/// *fetch* route (e.g. `derivatives/options/chains`) is never a registered tool
+/// name and so never reaches this mapping.
 fn compute_tool_route(tool_name: &str) -> Option<String> {
     let (namespace, member) = tool_name.split_once('.')?;
     if matches!(
         namespace,
-        "technical" | "quantitative" | "econometrics" | "portfolio"
+        "technical" | "quantitative" | "econometrics" | "forecast" | "portfolio" | "derivatives"
     ) {
-        Some(format!("{namespace}/{member}"))
+        Some(format!("{namespace}/{}", member.replace('.', "/")))
     } else {
         None
     }
@@ -3366,9 +5052,10 @@ fn compute_tool_route(tool_name: &str) -> Option<String> {
 
 /// Register one [`RegisteredTool`] per analytics Compute catalog route.
 ///
-/// The tool name is the route with the namespace separator `/` swapped for `.`
+/// The tool name is the route with every separator `/` swapped for `.`
 /// (`technical/sma` → `technical.sma`, `quantitative/sharpe_ratio` →
-/// `quantitative.sharpe_ratio`, `econometrics/ols` → `econometrics.ols`,
+/// `quantitative.sharpe_ratio`, `quantitative/stats/mean` →
+/// `quantitative.stats.mean`, `econometrics/ols` → `econometrics.ols`,
 /// `portfolio/drawdown` → `portfolio.drawdown`), so
 /// `Op::ToolCall` and the MCP tool list expose every metric for free with the
 /// route's own param/model JSON schemas attached. Driving this from
@@ -3380,7 +5067,7 @@ fn register_compute_tools(registry: &mut ToolRegistry) {
         if entry.kind != tdw_endpoint_catalog::EndpointKind::Compute {
             continue;
         }
-        let name = entry.route.replacen('/', ".", 1);
+        let name = entry.route.replace('/', ".");
         let input_schema = serde_json::to_value((entry.params_schema)())
             .unwrap_or_else(|_| json!({ "type": "object" }));
         let output_schema =
@@ -4310,6 +5997,16 @@ mod tests {
                     portfolio_compute::compute_registry().contains_key(route.as_str()),
                     "portfolio compute route {route} has no registered implementation"
                 );
+            } else if options_compute::owns_route(route) {
+                assert!(
+                    options_compute::compute_registry().contains_key(route.as_str()),
+                    "option-pricing compute route {route} has no registered implementation"
+                );
+            } else if forecast_compute::owns_route(route) {
+                assert!(
+                    forecast_compute::compute_registry().contains_key(route.as_str()),
+                    "forecast compute route {route} has no registered implementation"
+                );
             } else {
                 let result = technical_compute::run_compute(route, &bars, &json!({}));
                 assert!(
@@ -4528,6 +6225,50 @@ mod tests {
         }
     }
 
+    /// Catalog ↔ FINRA `ENDPOINTS` sync (openbb-parity **P4W10**): every
+    /// standardized FINRA command (`equity/shorts/short_interest`,
+    /// `equity/darkpool/otc`) has a catalog route whose `finra` candidate
+    /// endpoint equals the provider's declared dispatch key and is registered in
+    /// both the fetch and ingest dispatch tables under `provider-finra`. Mirrors
+    /// `sec_catalog_routes_match_provider_endpoints`.
+    #[cfg(feature = "provider-finra")]
+    #[test]
+    fn finra_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_finra::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("FINRA command {} has no catalog route", endpoint.command)
+            });
+            let finra = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "finra")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no finra candidate", endpoint.command)
+                });
+            assert_eq!(
+                finra.endpoint, endpoint.endpoint,
+                "catalog route {} finra endpoint key drifted from the provider table",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(finra.provider, finra.endpoint)),
+                "FINRA candidate {}/{} for route {} is not in the fetch dispatch table",
+                finra.provider,
+                finra.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(finra.provider, finra.endpoint)),
+                "FINRA candidate {}/{} for route {} is not in the ingest dispatch table",
+                finra.provider,
+                finra.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
     /// Catalog ↔ US-Treasury `ENDPOINTS` sync (gap-matrix **L3.2**): every
     /// standardized FiscalData command has a catalog route whose `government_us`
     /// candidate endpoint is dispatchable in both tables under
@@ -4600,6 +6341,100 @@ mod tests {
             assert!(
                 ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
                 "cftc candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ Intrinio `ENDPOINTS` sync (openbb-parity total wave **G002**):
+    /// every standardized Intrinio command has a catalog route whose `intrinio`
+    /// candidate endpoint (the route's `'/'→'_'` form, equal to the endpoint's
+    /// `endpoint` key) is dispatchable in both tables under `provider-intrinio`.
+    #[cfg(feature = "provider-intrinio")]
+    #[test]
+    fn intrinio_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_intrinio::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("intrinio command {} has no catalog route", endpoint.command)
+            });
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "intrinio")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no intrinio candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, endpoint.endpoint,
+                "intrinio candidate endpoint for route {} must equal the ENDPOINTS key",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "intrinio candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "intrinio candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
+    /// Catalog ↔ congress.gov `ENDPOINTS` sync (OpenBB-parity **P4W12**): every
+    /// standardized `uscongress` command has a catalog route whose
+    /// `congress-gov` candidate endpoint is the route's `'/'→'_'` form and is
+    /// dispatchable in both tables under `provider-congress-gov`.
+    #[cfg(feature = "provider-congress-gov")]
+    #[test]
+    fn congress_gov_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_congress_gov::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!(
+                    "congress-gov command {} has no catalog route",
+                    endpoint.command
+                )
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "congress-gov")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "catalog route {} has no congress-gov candidate",
+                        endpoint.command
+                    )
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "congress-gov candidate endpoint for {} must be its '/'→'_' form",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "congress-gov candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "congress-gov candidate {}/{} for route {} is not in the ingest table",
                 candidate.provider,
                 candidate.endpoint,
                 endpoint.command
@@ -4790,6 +6625,49 @@ mod tests {
         }
     }
 
+    /// Catalog <-> OECD `ENDPOINTS` sync (OpenBB-parity **P4W4**): every
+    /// standardized OECD command has a catalog route whose `oecd` candidate
+    /// endpoint is the route's `'/'→'_'` form and is dispatchable in both tables
+    /// under `provider-oecd`. Mirrors `econdb_catalog_routes_match_provider_endpoints`.
+    #[cfg(feature = "provider-oecd")]
+    #[test]
+    fn oecd_catalog_routes_match_provider_endpoints() {
+        let fetch_table = fetch_dispatch_table();
+        let ingest_table = ingest_dispatch_table();
+        for endpoint in tdw_provider_oecd::ENDPOINTS {
+            let entry = tdw_endpoint_catalog::lookup(endpoint.command).unwrap_or_else(|| {
+                panic!("oecd command {} has no catalog route", endpoint.command)
+            });
+            let expected = tdw_endpoint_catalog::endpoint_key_for_route(endpoint.command);
+            let candidate = entry
+                .candidates
+                .iter()
+                .find(|c| c.provider == "oecd")
+                .unwrap_or_else(|| {
+                    panic!("catalog route {} has no oecd candidate", endpoint.command)
+                });
+            assert_eq!(
+                candidate.endpoint, expected,
+                "catalog route {} oecd endpoint key drifted",
+                endpoint.command
+            );
+            assert!(
+                fetch_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "oecd candidate {}/{} for route {} is not in the fetch table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+            assert!(
+                ingest_table.contains_key(&(candidate.provider, candidate.endpoint)),
+                "oecd candidate {}/{} for route {} is not in the ingest table",
+                candidate.provider,
+                candidate.endpoint,
+                endpoint.command
+            );
+        }
+    }
+
     /// Catalog <-> Yahoo expansion sync (gap-matrix L2.4): every Yahoo-backed
     /// catalog candidate has a fetch and an ingest dispatch binding under the
     /// `provider-yahoo-http` build, and each binding key matches the candidate's
@@ -4873,11 +6751,15 @@ mod tests {
             ("ecb", "reference_rates"),
             ("cboe", "index_snapshots"),
             ("cboe", "options_chains"),
+            // OpenBB-parity P4W6: index/available + index/search share this key.
+            ("cboe", "index_directory"),
             ("eia", "commodity_petroleum_status_report"),
             ("eia", "commodity_short_term_energy_outlook"),
             ("nasdaq", "equity_calendar_dividends"),
             ("nasdaq", "equity_calendar_earnings"),
             ("nasdaq", "equity_calendar_ipo"),
+            // OpenBB-parity P4W11: index/sp500_multiples (Data Link MULTPL).
+            ("nasdaq", "sp500_multiples"),
         ];
         const PROVIDERS: &[&str] = &["ecb", "cboe", "eia", "nasdaq"];
 
@@ -4979,6 +6861,125 @@ mod tests {
             assert!(
                 covered.contains(key),
                 "G011 FMP endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
+            );
+        }
+    }
+
+    /// Catalog <-> FMP equity/fundamental breadth sync (openbb-parity P4W1): every
+    /// P4W1 FMP candidate has both a fetch and an ingest binding, and each is
+    /// referenced by a catalog route. The growth routes reuse the statement
+    /// fetcher and the segment routes reuse one fetcher (the discriminator is
+    /// injected per binding), each under a distinct dispatch key.
+    #[cfg(feature = "provider-fmp")]
+    #[test]
+    fn fmp_p4w1_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        const EXPECTED: &[(&str, &str)] = &[
+            ("fmp", "financial_statement_balance_growth"),
+            ("fmp", "financial_statement_income_growth"),
+            ("fmp", "financial_statement_cash_growth"),
+            ("fmp", "historical_eps"),
+            ("fmp", "employee_count"),
+            ("fmp", "esg_score"),
+            ("fmp", "filings"),
+            ("fmp", "key_executives"),
+            ("fmp", "executive_compensation"),
+            ("fmp", "revenue_segment_product"),
+            ("fmp", "revenue_segment_geography"),
+            ("fmp", "transcript"),
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                let key = (candidate.provider, candidate.endpoint);
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no fetch binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} fmp candidate {} has no ingest binding",
+                    entry.route,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "P4W1 FMP endpoint {}/{} is not referenced by any catalog route",
+                key.0,
+                key.1
+            );
+        }
+    }
+
+    /// Catalog <-> P4W2 breadth sync (openbb-parity P4W2): every FMP/SEC
+    /// discovery/estimates/ownership candidate added in this wave must have both a
+    /// fetch and an ingest binding, and must be referenced by a catalog route.
+    #[test]
+    #[cfg(all(feature = "provider-fmp", feature = "provider-sec"))]
+    fn p4w2_catalog_candidates_are_dispatchable() {
+        use std::collections::BTreeSet;
+
+        const EXPECTED: &[(&str, &str)] = &[
+            ("fmp", "search"),
+            ("fmp", "historical_market_cap"),
+            ("fmp", "split_calendar"),
+            ("fmp", "latest_filings"),
+            ("fmp", "insider_trading"),
+            ("fmp", "institutional_ownership"),
+            ("fmp", "government_trades"),
+            ("sec", "company_facts"),
+            ("sec", "latest_financial_reports"),
+        ];
+
+        let fetch_keys: BTreeSet<(&str, &str)> = fetch_dispatch_table().into_keys().collect();
+        let ingest_keys: BTreeSet<(&str, &str)> = ingest_dispatch_pairs().into_iter().collect();
+
+        let mut covered = BTreeSet::new();
+        for entry in tdw_endpoint_catalog::catalog() {
+            for candidate in entry.candidates {
+                let key = (candidate.provider, candidate.endpoint);
+                if !EXPECTED.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    fetch_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no fetch binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                assert!(
+                    ingest_keys.contains(&key),
+                    "catalog route {} candidate {}/{} has no ingest binding",
+                    entry.route,
+                    candidate.provider,
+                    candidate.endpoint
+                );
+                covered.insert(key);
+            }
+        }
+
+        for key in EXPECTED {
+            assert!(
+                covered.contains(key),
+                "P4W2 endpoint {}/{} is not referenced by any catalog route",
                 key.0,
                 key.1
             );

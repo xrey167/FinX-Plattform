@@ -45,7 +45,10 @@ pub mod request;
 
 pub use decision::needs_widget_data;
 pub use drive::{Answer, answer};
-pub use event::{ChartType, Citation, ReasoningStatus, SseEvent, WidgetDataRequest};
-pub use manifest::{AgentEndpoints, AgentEntry, AgentFeatures, default_agent_id, default_manifest};
+pub use event::{ChartType, Citation, ReasoningStatus, SourceInfo, SseEvent, WidgetDataRequest};
+pub use manifest::{
+    AgentEndpoints, AgentEntry, AgentFeature, AgentFeatures, default_agent_id,
+    default_configurable_features, default_manifest,
+};
 pub use prompt::{DEFAULT_MAX_OUTPUT_TOKENS, assemble_chat_request, assemble_default};
-pub use request::{Message, MessageRole, QueryRequest, Widget, Widgets};
+pub use request::{ContextFile, Message, MessageRole, QueryRequest, Widget, Widgets};

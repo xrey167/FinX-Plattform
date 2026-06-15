@@ -26,10 +26,12 @@ mod dispatcher;
 mod econometrics_compute;
 mod event_sink;
 pub mod fetch_policy;
+mod forecast_compute;
 #[cfg(feature = "functions")]
 pub mod function_enqueue;
 #[cfg(feature = "workspace-route")]
 mod knowledge_graph;
+mod options_compute;
 mod policy;
 mod portfolio_compute;
 mod provider_resolve;
@@ -133,12 +135,14 @@ use tdw_provider_benzinga::{
 };
 #[cfg(feature = "provider-binance-http")]
 use tdw_provider_binance::BinanceHttpTickerPriceFetcher;
+#[cfg(feature = "provider-biztoc")]
+use tdw_provider_biztoc::BiztocWorldNewsFetcher;
 #[cfg(feature = "provider-bls")]
 use tdw_provider_bls::BlsHttpTimeSeriesFetcher;
 #[cfg(feature = "provider-cboe")]
 use tdw_provider_cboe::{
-    CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher, CboeHttpOptionsChainFetcher,
-    CboeHttpOptionsFetcher,
+    CboeHttpIndexDirectoryFetcher, CboeHttpIndexFetcher, CboeHttpIndexSnapshotFetcher,
+    CboeHttpOptionsChainFetcher, CboeHttpOptionsFetcher,
 };
 #[cfg(feature = "provider-ccdata")]
 use tdw_provider_ccdata::CCDataHttpFetcher;
@@ -146,11 +150,16 @@ use tdw_provider_ccdata::CCDataHttpFetcher;
 use tdw_provider_cftc::{CftcHttpCotFetcher, CftcHttpCotSearchFetcher};
 #[cfg(feature = "provider-coingecko")]
 use tdw_provider_coingecko::CoinGeckoHttpOhlcFetcher;
+#[cfg(feature = "provider-congress-gov")]
+use tdw_provider_congress_gov::{
+    CongressGovBillInfoFetcher, CongressGovBillTextFetcher, CongressGovBillsFetcher,
+};
 #[cfg(feature = "provider-databento")]
 use tdw_provider_databento::{DatabentoHttpTimeseriesFetcher, DatabentoMetadataFetcher};
 #[cfg(feature = "provider-deribit")]
 use tdw_provider_deribit::{
-    DeribitHttpFundingFetcher, DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
+    DeribitHttpFundingFetcher, DeribitHttpFuturesInfoFetcher, DeribitHttpFuturesInstrumentsFetcher,
+    DeribitHttpInstrumentsFetcher, DeribitHttpOrderBookFetcher,
 };
 #[cfg(feature = "provider-ecb")]
 use tdw_provider_ecb::{EcbHttpDataFetcher, EcbHttpReferenceRatesFetcher};
@@ -161,7 +170,9 @@ use tdw_provider_eia::{
     EiaHttpNaturalGasFetcher, EiaHttpReportFetcher, EiaHttpSpotPriceFetcher, EiaReport,
 };
 #[cfg(feature = "provider-famafrench")]
-use tdw_provider_famafrench::FamaFrenchHttpFetcher;
+use tdw_provider_famafrench::{
+    FamaFrenchBreakpointsHttpFetcher, FamaFrenchHttpFetcher, FamaFrenchPortfolioHttpFetcher,
+};
 #[cfg(feature = "provider-federal-reserve")]
 use tdw_provider_federal_reserve::{FedFomcDocumentsHttpFetcher, FedMacroSeriesHttpFetcher};
 use tdw_provider_fileset::FilesetEquityHistoricalFetcher;
@@ -171,11 +182,20 @@ use tdw_provider_finnhub::{FinnhubHttpProfileFetcher, FinnhubHttpQuoteSnapshotFe
 use tdw_provider_finra::{FinraOtcSummaryHttpFetcher, FinraShortInterestHttpFetcher};
 #[cfg(feature = "provider-fmp")]
 use tdw_provider_fmp::{
-    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpCurrencySnapshotsFetcher, FmpHttpDiscoveryFetcher,
+    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher,
+    FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
+    FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
+    FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
+    FmpHttpForwardEbitdaFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
+    FmpHttpMajorHoldersFetcher, FmpHttpMarketSnapshotsFetcher, FmpHttpPeersFetcher,
+    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher,
+    FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 #[cfg(feature = "provider-fred")]
 use tdw_provider_fred::{
@@ -193,26 +213,39 @@ use tdw_provider_government_us::{
 #[cfg(feature = "provider-huggingface")]
 use tdw_provider_huggingface::HuggingFaceHttpTextGenerationFetcher;
 #[cfg(feature = "provider-imf")]
-use tdw_provider_imf::ImfHttpMacroSeriesFetcher;
+use tdw_provider_imf::{ImfHttpMacroSeriesFetcher, ImfUtilsHttpDiscoveryFetcher};
+#[cfg(feature = "provider-intrinio")]
+use tdw_provider_intrinio::{
+    IntrinioHttpForwardPeFetcher, IntrinioHttpForwardSalesFetcher,
+    IntrinioHttpHistoricalAttributesFetcher, IntrinioHttpLatestAttributesFetcher,
+    IntrinioHttpOptionsSnapshotsFetcher, IntrinioHttpOptionsSurfaceFetcher,
+    IntrinioHttpOptionsUnusualFetcher, IntrinioHttpReportedFinancialsFetcher,
+    IntrinioHttpSearchAttributesFetcher,
+};
 #[cfg(feature = "provider-nasdaq")]
 use tdw_provider_nasdaq::{
     NasdaqCalendarKind, NasdaqHttpCalendarFetcher, NasdaqHttpDatasetFetcher,
+    NasdaqHttpSp500MultiplesFetcher, NasdaqHttpTopRetailFetcher,
 };
 #[cfg(feature = "provider-oecd")]
-use tdw_provider_oecd::OecdHttpDataFetcher;
+use tdw_provider_oecd::{OecdHttpDataFetcher, OecdHttpMacroSeriesFetcher};
 #[cfg(feature = "provider-polygon")]
 use tdw_provider_polygon::PolygonHttpAggregatesFetcher;
 #[cfg(feature = "provider-sec")]
 use tdw_provider_sec::{
-    SecCikMapHttpFetcher, SecEtfHoldingsHttpFetcher, SecFailsToDeliverHttpFetcher,
-    SecFilingsHttpFetcher, SecForm13FHttpFetcher, SecXbrlHttpFetcher,
+    SecCikMapHttpFetcher, SecCompanyFactsHttpFetcher, SecEtfHoldingsHttpFetcher,
+    SecFailsToDeliverHttpFetcher, SecFilingHeadersHttpFetcher, SecFilingsHttpFetcher,
+    SecForm13FHttpFetcher, SecHtmFileHttpFetcher, SecInstitutionsSearchHttpFetcher,
+    SecLatestFinancialReportsHttpFetcher, SecManagementDiscussionAnalysisHttpFetcher,
+    SecNportDisclosureHttpFetcher, SecRssLitigationHttpFetcher, SecSchemaFilesHttpFetcher,
+    SecSicSearchHttpFetcher, SecSymbolMapHttpFetcher, SecXbrlHttpFetcher,
 };
 #[cfg(feature = "provider-seeking-alpha")]
 use tdw_provider_seeking_alpha::{SeekingAlphaArticlesHttpFetcher, SeekingAlphaRatingsHttpFetcher};
 #[cfg(feature = "provider-tiingo")]
 use tdw_provider_tiingo::{TiingoHttpHistoricalFetcher, TiingoHttpNewsFetcher};
 #[cfg(feature = "provider-tmx")]
-use tdw_provider_tmx::{TmxHttpBatchQuoteFetcher, TmxHttpQuoteFetcher};
+use tdw_provider_tmx::{TmxHttpBatchQuoteFetcher, TmxHttpIndexSectorsFetcher, TmxHttpQuoteFetcher};
 #[cfg(feature = "provider-tradier")]
 use tdw_provider_tradier::{TradierHttpOptionsFetcher, TradierHttpQuoteFetcher};
 #[cfg(feature = "provider-trading-economics")]
@@ -230,10 +263,10 @@ use tdw_provider_yahoo::YahooEquityHistoricalFetcher;
 use tdw_provider_yahoo::YahooHttpEquityHistoricalFetcher;
 #[cfg(feature = "provider-yahoo-http")]
 use tdw_provider_yahoo::{
-    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpFuturesCurveFetcher,
-    YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
-    YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher, YahooHttpQuoteFetcher,
-    YahooHttpShareStatisticsFetcher,
+    YahooHttpConsensusFetcher, YahooHttpDividendsFetcher, YahooHttpEtfInfoFetcher,
+    YahooHttpFuturesCurveFetcher, YahooHttpFuturesHistoricalFetcher, YahooHttpOptionsChainFetcher,
+    YahooHttpPredefinedScreenerFetcher, YahooHttpPricePerformanceFetcher, YahooHttpProfileFetcher,
+    YahooHttpQuoteFetcher, YahooHttpShareStatisticsFetcher,
 };
 use tdw_replay::ReplayEngine;
 use tdw_rollout::RolloutRecord;
@@ -295,6 +328,12 @@ pub fn default_registry() -> Result<ProviderRegistry> {
         registry.register(YahooHttpOptionsChainFetcher::registry_entry())?;
         registry.register(YahooHttpFuturesHistoricalFetcher::registry_entry())?;
         registry.register(YahooHttpFuturesCurveFetcher::registry_entry())?;
+        // ETF info + yfinance discovery screeners (openbb-parity P4W3). The
+        // predefined-screener fetcher registers once under its `ENDPOINT`; the
+        // four per-screen dispatch keys live only in the dispatch tables (the
+        // FMP-discovery pattern).
+        registry.register(YahooHttpEtfInfoFetcher::registry_entry())?;
+        registry.register(YahooHttpPredefinedScreenerFetcher::registry_entry())?;
     }
     registry.register(MockEquityStreamer::registry_entry())?;
     #[cfg(feature = "provider-adanos")]
@@ -317,6 +356,9 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(BenzingaWorldNewsHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-benzinga")]
     registry.register(BenzingaEarningsHttpFetcher::registry_entry())?;
+    // BizToc world-news leg of news/world, normalized → NewsArticle (P4W12).
+    #[cfg(feature = "provider-biztoc")]
+    registry.register(BiztocWorldNewsFetcher::registry_entry())?;
     #[cfg(feature = "provider-bls")]
     registry.register(BlsHttpTimeSeriesFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
@@ -328,11 +370,43 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(CboeHttpIndexSnapshotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cboe")]
     registry.register(CboeHttpOptionsChainFetcher::registry_entry())?;
+    // Catalog-facing CBOE index-directory fetcher (OpenBB-parity P4W6:
+    // index/available + index/search).
+    #[cfg(feature = "provider-cboe")]
+    registry.register(CboeHttpIndexDirectoryFetcher::registry_entry())?;
     // Catalog-facing CFTC Commitments-of-Traders fetchers (OpenBB-parity P2W5).
     #[cfg(feature = "provider-cftc")]
     registry.register(CftcHttpCotFetcher::registry_entry())?;
     #[cfg(feature = "provider-cftc")]
     registry.register(CftcHttpCotSearchFetcher::registry_entry())?;
+    // Catalog-facing Intrinio keyed fetchers (openbb-parity total wave G002):
+    // data-point attributes, as-reported financials, forward estimates, and the
+    // options unusual/snapshots/surface cluster.
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpHistoricalAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpLatestAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpSearchAttributesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpReportedFinancialsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpForwardPeFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpForwardSalesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsUnusualFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsSnapshotsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-intrinio")]
+    registry.register(IntrinioHttpOptionsSurfaceFetcher::registry_entry())?;
+    // Catalog-facing congress.gov US legislative fetchers (OpenBB-parity P4W12).
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillInfoFetcher::registry_entry())?;
+    #[cfg(feature = "provider-congress-gov")]
+    registry.register(CongressGovBillTextFetcher::registry_entry())?;
     #[cfg(feature = "provider-ccdata")]
     registry.register(CCDataHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-coingecko")]
@@ -347,6 +421,11 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(DeribitHttpOrderBookFetcher::registry_entry())?;
     #[cfg(feature = "provider-deribit")]
     registry.register(DeribitHttpFundingFetcher::registry_entry())?;
+    // OpenBB-parity P4W7: catalog-facing futures-instrument fetchers.
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpFuturesInstrumentsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-deribit")]
+    registry.register(DeribitHttpFuturesInfoFetcher::registry_entry())?;
     #[cfg(feature = "provider-ecb")]
     registry.register(EcbHttpDataFetcher::registry_entry())?;
     // Catalog-facing ECB reference-rates fetcher (G004 part 2).
@@ -400,6 +479,70 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(FmpHttpDiscoveryFetcher::registry_entry())?;
     #[cfg(feature = "provider-fmp")]
     registry.register(FmpHttpScreenerFetcher::registry_entry())?;
+    // FMP equity/fundamental breadth (openbb-parity P4W1): management / compensation /
+    // revenue segments / transcript / ESG / employee count / filings. The growth and
+    // revenue-segment routes reuse the statement and revenue-segment fetchers (the
+    // discriminator is injected per dispatch binding), so they need no extra registry
+    // entry beyond the base fetcher.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpKeyExecutivesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpExecutiveCompensationFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpRevenueSegmentFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpTranscriptFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEsgScoreFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEmployeeCountFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpFilingsFetcher::registry_entry())?;
+    // FMP equity discovery/estimates/ownership breadth (openbb-parity P4W2):
+    // search / historical market cap / split calendar / latest filings feed /
+    // insider / institutional / government trades.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpSearchFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpHistoricalMarketCapFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpSplitCalendarFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpLatestFilingsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpInsiderTradingFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpInstitutionalOwnershipFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpGovernmentTradesFetcher::registry_entry())?;
+    // OpenBB-parity total G003c: FMP major holders, full-exchange market
+    // snapshots, and the forward-EBITDA estimate.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpMajorHoldersFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpMarketSnapshotsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpForwardEbitdaFetcher::registry_entry())?;
+    // FMP ETF cluster (openbb-parity P4W3): search / info / sectors / countries /
+    // price performance / equity exposure.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfSearchFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfInfoFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfSectorsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfCountriesFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfPricePerformanceFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpEtfEquityExposureFetcher::registry_entry())?;
+    // FMP index/currency remainder (openbb-parity P4W11): index constituents +
+    // forex snapshot.
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpIndexConstituentsFetcher::registry_entry())?;
+    #[cfg(feature = "provider-fmp")]
+    registry.register(FmpHttpCurrencySnapshotsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
     registry.register(FredHttpSeriesObservationsFetcher::registry_entry())?;
     #[cfg(feature = "provider-fred")]
@@ -420,9 +563,18 @@ pub fn default_registry() -> Result<ProviderRegistry> {
     registry.register(GovUsTreasuryPricesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-famafrench")]
     registry.register(FamaFrenchHttpFetcher::registry_entry())?;
+    // Catalog-facing Ken French portfolio-formation / breakpoint fetchers
+    // (OpenBB-parity P4W9).
+    #[cfg(feature = "provider-famafrench")]
+    registry.register(FamaFrenchPortfolioHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-famafrench")]
+    registry.register(FamaFrenchBreakpointsHttpFetcher::registry_entry())?;
     // Catalog-facing IMF SDMX-JSON macro fetcher (OpenBB-parity P3W3).
     #[cfg(feature = "provider-imf")]
     registry.register(ImfHttpMacroSeriesFetcher::registry_entry())?;
+    // Catalog-facing IMF SDMX discovery fetcher (imf_utils/*, OpenBB-parity P4W9).
+    #[cfg(feature = "provider-imf")]
+    registry.register(ImfUtilsHttpDiscoveryFetcher::registry_entry())?;
     // Catalog-facing EconDB macro fetcher (OpenBB-parity P3W4).
     #[cfg(feature = "provider-econdb")]
     registry.register(EcondbHttpMacroSeriesFetcher::registry_entry())?;
@@ -470,8 +622,17 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     // Catalog-facing NASDAQ calendar fetcher (G004 part 2).
     #[cfg(feature = "provider-nasdaq")]
     registry.register(NasdaqHttpCalendarFetcher::registry_entry())?;
+    // Catalog-facing NASDAQ S&P 500 multiples fetcher (openbb-parity P4W11).
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpSp500MultiplesFetcher::registry_entry())?;
+    // Catalog-facing NASDAQ top-retail discovery fetcher (total-parity G003c).
+    #[cfg(feature = "provider-nasdaq")]
+    registry.register(NasdaqHttpTopRetailFetcher::registry_entry())?;
     #[cfg(feature = "provider-oecd")]
     registry.register(OecdHttpDataFetcher::registry_entry())?;
+    // Catalog-facing OECD SDMX-JSON macro fetcher (OpenBB-parity P4W4).
+    #[cfg(feature = "provider-oecd")]
+    registry.register(OecdHttpMacroSeriesFetcher::registry_entry())?;
     #[cfg(feature = "provider-polygon")]
     registry.register(PolygonHttpAggregatesFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
@@ -486,6 +647,33 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(SecFailsToDeliverHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-sec")]
     registry.register(SecEtfHoldingsHttpFetcher::registry_entry())?;
+    // SEC equity breadth (openbb-parity P4W2): XBRL company facts and the latest
+    // periodic financial reports.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecCompanyFactsHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecLatestFinancialReportsHttpFetcher::registry_entry())?;
+    // ETF cluster (openbb-parity P4W3): keyless SEC N-PORT disclosure index.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecNportDisclosureHttpFetcher::registry_entry())?;
+    // Regulator utilities (openbb-parity P4W8): keyless SEC EDGAR helpers.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSymbolMapHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecInstitutionsSearchHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSicSearchHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecFilingHeadersHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecSchemaFilesHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecRssLitigationHttpFetcher::registry_entry())?;
+    // OpenBB-parity total G003c: keyless SEC filing-HTML retrieval + MD&A.
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecHtmFileHttpFetcher::registry_entry())?;
+    #[cfg(feature = "provider-sec")]
+    registry.register(SecManagementDiscussionAnalysisHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
     registry.register(SeekingAlphaArticlesHttpFetcher::registry_entry())?;
     #[cfg(feature = "provider-seeking-alpha")]
@@ -498,6 +686,9 @@ fn register_extended_providers(registry: &mut ProviderRegistry) -> Result<()> {
     registry.register(TmxHttpQuoteFetcher::registry_entry())?;
     #[cfg(feature = "provider-tmx")]
     registry.register(TmxHttpBatchQuoteFetcher::registry_entry())?;
+    // Catalog-facing TMX index-sectors fetcher (total-parity G003c).
+    #[cfg(feature = "provider-tmx")]
+    registry.register(TmxHttpIndexSectorsFetcher::registry_entry())?;
     #[cfg(feature = "provider-tradier")]
     registry.register(TradierHttpQuoteFetcher::registry_entry())?;
     #[cfg(feature = "provider-tradier")]
@@ -621,6 +812,9 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         // BenzingaEarningsHttpFetcher
         #[cfg(feature = "provider-benzinga")]
         ("benzinga", "earnings") => dispatch!(BenzingaEarningsHttpFetcher::default()),
+        // BiztocWorldNewsFetcher (news/world leg, normalized → NewsArticle)
+        #[cfg(feature = "provider-biztoc")]
+        ("biztoc", "news_world") => dispatch!(BiztocWorldNewsFetcher::default()),
         // BlsHttpTimeSeriesFetcher
         #[cfg(feature = "provider-bls")]
         ("bls", "timeseries_data") => dispatch!(BlsHttpTimeSeriesFetcher::default()),
@@ -637,6 +831,19 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         #[cfg(feature = "provider-cftc")]
         ("cftc", "regulators_cftc_cot_search") => {
             dispatch!(CftcHttpCotSearchFetcher::default())
+        }
+        // CongressGovBillsFetcher (uscongress/bills)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bills") => dispatch!(CongressGovBillsFetcher::default()),
+        // CongressGovBillInfoFetcher (uscongress/bill_info)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bill_info") => {
+            dispatch!(CongressGovBillInfoFetcher::default())
+        }
+        // CongressGovBillTextFetcher (uscongress/bill_text_urls)
+        #[cfg(feature = "provider-congress-gov")]
+        ("congress-gov", "uscongress_bill_text_urls") => {
+            dispatch!(CongressGovBillTextFetcher::default())
         }
         // CCDataHttpFetcher
         #[cfg(feature = "provider-ccdata")]
@@ -755,6 +962,37 @@ pub fn fetch_provider_json(provider: &str, endpoint: &str, params: Value) -> Res
         ("famafrench", "economy_factors_famafrench") => {
             dispatch!(FamaFrenchHttpFetcher::default())
         }
+        // FamaFrenchPortfolioHttpFetcher — one fetcher per portfolio-return
+        // route (P4W9); the catalog `command` rides in `params` (injected by the
+        // dispatcher FetchBinding) so all four keys share one concrete fetcher.
+        #[cfg(feature = "provider-famafrench")]
+        (
+            "famafrench",
+            "economy_factors_famafrench_us_portfolio_returns"
+            | "economy_factors_famafrench_regional_portfolio_returns"
+            | "economy_factors_famafrench_country_portfolio_returns"
+            | "economy_factors_famafrench_international_index_returns",
+        ) => {
+            dispatch!(FamaFrenchPortfolioHttpFetcher::default())
+        }
+        // FamaFrenchBreakpointsHttpFetcher — the single breakpoints route (P4W9).
+        #[cfg(feature = "provider-famafrench")]
+        ("famafrench", "economy_factors_famafrench_breakpoints") => {
+            dispatch!(FamaFrenchBreakpointsHttpFetcher::default())
+        }
+        // ImfUtilsHttpDiscoveryFetcher — one fetcher per imf_utils/* discovery
+        // route (P4W9); the catalog `command` rides in `params` (injected by the
+        // dispatcher FetchBinding) so all four keys share one concrete fetcher.
+        #[cfg(feature = "provider-imf")]
+        (
+            "imf",
+            "imf_utils_list_dataflows"
+            | "imf_utils_list_tables"
+            | "imf_utils_get_dataflow_dimensions"
+            | "imf_utils_presentation_table",
+        ) => {
+            dispatch!(ImfUtilsHttpDiscoveryFetcher::default())
+        }
         // ImfHttpMacroSeriesFetcher — one fetcher per IMF SDMX database route;
         // the catalog `command` rides in `params` (injected by the dispatcher
         // FetchBinding) so all three keys share the same concrete fetcher.
@@ -869,6 +1107,14 @@ pub fn provider_fetch_targets() -> Vec<(String, String)> {
         target!("benzinga", "news_company");
         target!("benzinga", "news_world");
         target!("benzinga", "earnings");
+    }
+    #[cfg(feature = "provider-biztoc")]
+    target!("biztoc", "news_world");
+    #[cfg(feature = "provider-congress-gov")]
+    {
+        target!("congress-gov", "uscongress_bills");
+        target!("congress-gov", "uscongress_bill_info");
+        target!("congress-gov", "uscongress_bill_text_urls");
     }
     #[cfg(feature = "provider-bls")]
     target!("bls", "timeseries_data");
@@ -2050,8 +2296,10 @@ mod tests {
         feature = "provider-alpaca",
         feature = "provider-alpha-vantage",
         feature = "provider-benzinga",
+        feature = "provider-biztoc",
         feature = "provider-bls",
         feature = "provider-cboe",
+        feature = "provider-congress-gov",
         feature = "provider-ccdata",
         feature = "provider-coingecko",
         feature = "provider-databento",

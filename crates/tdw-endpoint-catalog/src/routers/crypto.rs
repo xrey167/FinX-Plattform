@@ -2,9 +2,19 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::MarketDataBar;
+use tdw_domain::{Instrument, MarketDataBar};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
+
+/// FMP-backed candidate for `crypto/search`.
+///
+/// Reuses the existing FMP `/search` fetcher (the `fmp/search` dispatch binding
+/// already registered for `equity/search`): FMP's symbol search spans equities,
+/// ETFs, FX, and crypto pairs, so the same keyword search serves crypto-pair
+/// discovery. No new fetcher or dispatch binding is added — this is a catalog
+/// projection of the existing `(fmp, search)` endpoint onto a second route, the
+/// established reuse pattern (mirrors the shared `polygon/aggregates` candidate).
+const CRYPTO_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "search")];
 
 /// Candidate order for `crypto/price/historical`.
 ///
@@ -30,16 +40,32 @@ fn model_schema() -> Schema {
     schema_for!(MarketDataBar)
 }
 
+fn instrument() -> Schema {
+    schema_for!(Instrument)
+}
+
 /// The `crypto` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
-    vec![CatalogEntry {
-        route: "crypto/price/historical",
-        kind: EndpointKind::Fetch,
-        params_schema,
-        model: model_schema,
-        candidates: CRYPTO_PRICE_HISTORICAL,
-        bronze_table: Some("raw.market_data_bar"),
-        doc: "Historical OHLCV bars for a crypto trading pair.",
-        chartable: true,
-    }]
+    vec![
+        CatalogEntry {
+            route: "crypto/price/historical",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: model_schema,
+            candidates: CRYPTO_PRICE_HISTORICAL,
+            bronze_table: Some("raw.market_data_bar"),
+            doc: "Historical OHLCV bars for a crypto trading pair.",
+            chartable: true,
+        },
+        CatalogEntry {
+            route: "crypto/search",
+            kind: EndpointKind::Fetch,
+            params_schema,
+            model: instrument,
+            candidates: CRYPTO_SEARCH,
+            bronze_table: Some("raw.instrument"),
+            doc: "Search available crypto pairs/symbols by name or fragment, FMP-backed.",
+            chartable: false,
+        },
+    ]
 }

@@ -33,6 +33,9 @@ pub(crate) mod knowledge_tools;
 pub mod knowledge_watchlist_tools;
 pub(crate) mod knowledge_write_tools;
 pub mod ops;
+pub(crate) mod partner_audit_tools;
+pub(crate) mod partner_brief_tools;
+pub(crate) mod partner_tools;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const DEFAULT_STREAMABLE_HTTP_BIND: &str = "127.0.0.1:8788";
@@ -244,6 +247,11 @@ pub struct McpServer {
     /// dates reuse the leading date component) so the format at every site is
     /// identical whether or not the override is set.
     now_override: Option<String>,
+    /// Optional Partner Core (partner-system W2.6). When attached, the single
+    /// `tdw.partner.ask` front-door tool is appended to `tools/list` and
+    /// dispatched in `tools/call`. `None` keeps the partner surface off — the
+    /// 49 lower-level `tdw.*` tools are unaffected either way.
+    partner: Option<std::sync::Arc<tdw_partner::PartnerCore>>,
 }
 
 impl Default for McpServer {
@@ -267,6 +275,7 @@ impl Default for McpServer {
             watchlist_store: None,
             question_store: None,
             now_override: None,
+            partner: None,
         }
     }
 }
@@ -298,6 +307,7 @@ impl McpServer {
             watchlist_store: None,
             question_store: None,
             now_override: None,
+            partner: None,
         }
     }
 
@@ -516,6 +526,19 @@ impl McpServer {
         self
     }
 
+    /// Attach a [`tdw_partner::PartnerCore`] (partner-system W2.6).
+    ///
+    /// When attached, the single `tdw.partner.ask` front-door tool is exposed via
+    /// `tools/list` and dispatched in `tools/call`. The adapter is thin: it maps
+    /// the request to [`tdw_partner::PartnerCore::turn`] and streams the
+    /// `PartnerEvent`s into the response. `None` keeps the partner surface off.
+    /// Consumes and returns `self` for builder use.
+    #[must_use]
+    pub fn with_partner(mut self, partner: Arc<tdw_partner::PartnerCore>) -> Self {
+        self.partner = Some(partner);
+        self
+    }
+
     /// Set (or replace) the attached `tdw-agent` [`Registry`] whose `tool` resources are
     /// exposed via `tools/list`.
     ///
@@ -688,6 +711,34 @@ impl McpServer {
         // (`set_registry`), so a plain concatenation preserves the built-in-wins ordering
         // and never emits duplicate descriptors. Empty when no registry is attached.
         descriptors.extend(self.registry_descriptors.iter().cloned());
+
+        // PROGRESSIVE DISCLOSURE (partner-system W6.3, partner §5): when a Partner
+        // Core is attached, the few high-value partner verbs LEAD `tools/list`
+        // (tdw.partner.ask / brief / audit / undo) so onboarding sees the
+        // "intelligent few" first; the other ~49 tdw.* tools stay registered and
+        // callable but follow as the discoverable surface. Prepending (not
+        // appending) is the disclosure — a client that renders the list in order
+        // meets `ask` before the tool-soup. Each partner descriptor also carries a
+        // `partnerPrimary: true` annotation so a client can feature them
+        // explicitly rather than rely on position alone.
+        if self.partner.is_some() {
+            let mut featured = vec![
+                partner_tools::descriptor(),
+                // The PROACTIVE brief tool (partner-system W3.6): tdw.partner.brief.
+                partner_brief_tools::descriptor(),
+                // The AUDIT & UNDO surface (partner-system W5.5): tdw.partner.audit
+                // renders the "what I did + why" feed and tdw.partner.undo describes
+                // the one-gesture reversal.
+                partner_audit_tools::audit_descriptor(),
+                partner_audit_tools::undo_descriptor(),
+            ];
+            for descriptor in &mut featured {
+                mark_partner_primary(descriptor);
+            }
+            // Prepend the featured verbs so they LEAD the catalog.
+            featured.extend(descriptors);
+            descriptors = featured;
+        }
         descriptors
     }
 
@@ -834,6 +885,10 @@ impl McpServer {
 
         let progress_token = progress_token(params);
 
+        if let Some(messages) = self.dispatch_partner_tool(id, name, &arguments) {
+            return messages;
+        }
+
         if let Some(messages) = self.dispatch_knowledge_tools(id, name, &arguments) {
             return messages;
         }
@@ -885,6 +940,63 @@ impl McpServer {
                 vec![success_message(id, &tool_error_result(&message))]
             }
         }
+    }
+
+    /// Dispatch the partner verbs (`tdw.partner.ask`, partner-system W2.6, and
+    /// `tdw.partner.brief`, partner-system W3.6).
+    ///
+    /// Returns `Some(messages)` when `name` is one of the partner verbs — a tool
+    /// error (never a protocol error) when no [`tdw_partner::PartnerCore`] is
+    /// attached, otherwise the verb's execute result. Returns `None` when `name`
+    /// is not a partner verb so the caller falls through to the knowledge /
+    /// registry / built-in dispatch paths.
+    fn dispatch_partner_tool(
+        &self,
+        id: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> Option<Vec<Value>> {
+        if !partner_tools::owns(name)
+            && !partner_brief_tools::owns(name)
+            && !partner_audit_tools::owns(name)
+        {
+            return None;
+        }
+        // Every partner verb is gated on a Partner Core being attached so the
+        // surface is off-by-default; a call with no core is a tool error.
+        let Some(partner) = self.partner.as_ref() else {
+            return Some(vec![success_message(
+                id,
+                &tool_error_result("partner surface not attached"),
+            )]);
+        };
+        let arguments_object = arguments.as_object().cloned().unwrap_or_default();
+        // tdw.partner.brief and the audit/undo verbs are pure projections over
+        // the gathered records (they do not drive a turn), so they do not consult
+        // the core handle; the core's presence is only the surface gate above.
+        let result = if partner_brief_tools::owns(name) {
+            partner_brief_tools::execute(&arguments_object)
+        } else if name == partner_audit_tools::AUDIT_TOOL_NAME {
+            partner_audit_tools::execute_audit(&arguments_object)
+        } else if name == partner_audit_tools::UNDO_TOOL_NAME {
+            partner_audit_tools::execute_undo(&arguments_object)
+        } else {
+            partner_tools::execute(partner, &arguments_object)
+        };
+        let messages = match result {
+            Ok(ToolExecution { structured, .. }) => {
+                vec![success_message(id, &tool_result(&structured))]
+            }
+            Err(ToolFailure::Execution(message)) => {
+                vec![success_message(id, &tool_error_result(&message))]
+            }
+            Err(ToolFailure::Protocol(problem)) => vec![error_message(
+                problem
+                    .with_id(id.clone())
+                    .with_data(json!({ "tool": name })),
+            )],
+        };
+        Some(messages)
     }
 
     /// Try every knowledge-tool dispatcher in order, returning the first match.
@@ -3695,6 +3807,16 @@ const DATA_MODE_DISCLOSURE: &str = "Market-data tools serve DETERMINISTIC OFFLIN
 
 fn tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {
     tool_with_annotations(name, title, description, input_schema, true, true)
+}
+
+/// Mark a descriptor as a PRIMARY partner verb for progressive disclosure
+/// (partner-system W6.3): set `annotations.partnerPrimary = true` so a client can
+/// feature the few high-value verbs (`ask`/`brief`/`audit`/`undo`) ahead of the
+/// discoverable tool surface, independent of list position.
+fn mark_partner_primary(descriptor: &mut ToolDescriptor) {
+    if let Value::Object(map) = &mut descriptor.annotations {
+        map.insert("partnerPrimary".to_string(), Value::Bool(true));
+    }
 }
 
 fn daemon_tool(name: &str, title: &str, description: &str, input_schema: Value) -> ToolDescriptor {

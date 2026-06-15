@@ -5,6 +5,7 @@ mod demo;
 mod export;
 mod ingest;
 mod params;
+mod partner;
 mod reindex;
 mod render;
 mod routine;
@@ -96,6 +97,14 @@ async fn main() -> Result<(), CliError> {
         .any(|pair| pair[0] == "kg" && pair[1] == "export")
     {
         return export::run(&args);
+    }
+
+    // partner {ask,brief,audit}: the Partner Core surfaces on the CLI
+    // (partner-system W2.8 / W3.6 / W5.5). All offline by default (no daemon),
+    // so they are dispatched ahead of the daemon connection. The routing lives in
+    // `partner::dispatch` so `main` stays slim.
+    if let Some(result) = partner::dispatch(&args).await {
+        return result;
     }
 
     // Determine daemon address (default TCP loopback matching tdw-service default).

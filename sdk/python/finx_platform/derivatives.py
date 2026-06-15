@@ -106,6 +106,90 @@ class DerivativesFuturesNamespace:
             params["chart"] = "true"
         return self._client.fetch("derivatives/futures/historical", params)
 
+    def info(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Futures instrument metadata for one instrument, Deribit-backed (keyless).
+
+        Route: ``derivatives/futures/info``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("derivatives/futures/info", params)
+
+    def instruments(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """List tradable futures instruments for a currency, Deribit-backed (keyless).
+
+        Route: ``derivatives/futures/instruments``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("derivatives/futures/instruments", params)
+
 class DerivativesOptionsNamespace:
     """Accessor for the ``derivatives/options`` route namespace."""
 
@@ -154,6 +238,328 @@ class DerivativesOptionsNamespace:
             params["provider"] = provider
         return self._client.fetch("derivatives/options/chains", params)
 
+    def snapshots(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Options market snapshots across the chain (quote / greeks), Intrinio-backed (keyed).
+
+        Route: ``derivatives/options/snapshots``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("derivatives/options/snapshots", params)
+
+    def surface(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Implied-volatility surface inputs over the options chain (per-contract IV / greeks); the surface solver is a documented follow-up. Intrinio-backed (keyed).
+
+        Route: ``derivatives/options/surface``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("derivatives/options/surface", params)
+
+    def unusual(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Unusual options activity (block / sweep trades) for a symbol, Intrinio-backed (keyed).
+
+        Route: ``derivatives/options/unusual``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("derivatives/options/unusual", params)
+
+class DerivativesPricingNamespace:
+    """Accessor for the ``derivatives/pricing`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def binomial(
+        self,
+        rate: float,
+        spot: float,
+        strike: float,
+        time_to_expiry: float,
+        volatility: float,
+        *,
+        dividend_yield: float | None = None,
+        exercise: str | None = None,
+        option_type: str | None = None,
+        steps: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Cox-Ross-Rubinstein binomial-tree price (European or American exercise).
+
+        Route: ``derivatives/pricing/binomial``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            dividend_yield: Continuously compounded annual dividend yield (`q`), as a decimal.
+            exercise: European or American exercise.
+            option_type: Call or put.
+            rate: Continuously compounded annual risk-free rate (`r`), as a decimal.
+            spot: Current price of the underlying (`S`). Must be `> 0`.
+            steps: Number of tree time steps (`N`). Must be `>= 1`; more steps converge to the Black-Scholes value for the European case. Defaults to `100`.
+            strike: Strike price (`K`). Must be `> 0`.
+            time_to_expiry: Time to expiry in years (`T`). Must be `> 0`.
+            volatility: Annualized volatility (`sigma`), as a decimal. Must be `> 0`.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'derivatives/pricing/binomial' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def black_scholes(
+        self,
+        rate: float,
+        spot: float,
+        strike: float,
+        time_to_expiry: float,
+        volatility: float,
+        *,
+        dividend_yield: float | None = None,
+        option_type: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Black-Scholes-Merton European call/put price (with dividend yield).
+
+        Route: ``derivatives/pricing/black_scholes``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            dividend_yield: Continuously compounded annual dividend yield (`q`), as a decimal.
+            option_type: Call or put.
+            rate: Continuously compounded annual risk-free rate (`r`), as a decimal.
+            spot: Current price of the underlying (`S`). Must be `> 0`.
+            strike: Strike price (`K`). Must be `> 0`.
+            time_to_expiry: Time to expiry in years (`T`). Must be `> 0`.
+            volatility: Annualized volatility (`sigma`), as a decimal. Must be `> 0`.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'derivatives/pricing/black_scholes' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def greeks(
+        self,
+        rate: float,
+        spot: float,
+        strike: float,
+        time_to_expiry: float,
+        volatility: float,
+        *,
+        dividend_yield: float | None = None,
+        option_type: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Analytic Black-Scholes greeks: delta, gamma, theta, vega, rho.
+
+        Route: ``derivatives/pricing/greeks``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            dividend_yield: Continuously compounded annual dividend yield (`q`), as a decimal.
+            option_type: Call or put.
+            rate: Continuously compounded annual risk-free rate (`r`), as a decimal.
+            spot: Current price of the underlying (`S`). Must be `> 0`.
+            strike: Strike price (`K`). Must be `> 0`.
+            time_to_expiry: Time to expiry in years (`T`). Must be `> 0`.
+            volatility: Annualized volatility (`sigma`), as a decimal. Must be `> 0`.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'derivatives/pricing/greeks' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def implied_volatility(
+        self,
+        market_price: float,
+        rate: float,
+        spot: float,
+        strike: float,
+        time_to_expiry: float,
+        *,
+        dividend_yield: float | None = None,
+        option_type: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Implied volatility inverted from a market price (Newton-Raphson + bisection).
+
+        Route: ``derivatives/pricing/implied_volatility``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            dividend_yield: Continuously compounded annual dividend yield (`q`), as a decimal.
+            market_price: Observed market price of the option to invert for volatility.
+            option_type: Call or put.
+            rate: Continuously compounded annual risk-free rate (`r`), as a decimal.
+            spot: Current price of the underlying (`S`). Must be `> 0`.
+            strike: Strike price (`K`). Must be `> 0`.
+            time_to_expiry: Time to expiry in years (`T`). Must be `> 0`.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'derivatives/pricing/implied_volatility' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
+    def monte_carlo(
+        self,
+        rate: float,
+        spot: float,
+        strike: float,
+        time_to_expiry: float,
+        volatility: float,
+        *,
+        antithetic: bool | None = None,
+        dividend_yield: float | None = None,
+        option_type: str | None = None,
+        paths: int | None = None,
+        seed: int | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Seeded Monte-Carlo GBM European price with antithetic variates and standard error.
+
+        Route: ``derivatives/pricing/monte_carlo``.
+
+        This is a compute route, not served by the REST surface; calling it raises
+        ``NotImplementedError``.
+
+        Args:
+            antithetic: Whether to use antithetic variates (each standard-normal draw `z` is paired with `-z`), reducing variance. Defaults to `true`.
+            dividend_yield: Continuously compounded annual dividend yield (`q`), as a decimal.
+            option_type: Call or put.
+            paths: Number of simulated terminal prices (`paths`). Must be `>= 1`. Defaults to `10_000`.
+            rate: Continuously compounded annual risk-free rate (`r`), as a decimal.
+            seed: Deterministic RNG seed: the same seed reproduces the same price exactly. Defaults to `42`.
+            spot: Current price of the underlying (`S`). Must be `> 0`.
+            strike: Strike price (`K`). Must be `> 0`.
+            time_to_expiry: Time to expiry in years (`T`). Must be `> 0`.
+            volatility: Annualized volatility (`sigma`), as a decimal. Must be `> 0`.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        raise NotImplementedError(
+            "compute route 'derivatives/pricing/monte_carlo' is not exposed over REST; "
+            "use the MCP tool surface or the daemon Op::FetchData compute path"
+        )
+
 class DerivativesNamespace:
     """Accessor for the ``derivatives`` route namespace."""
 
@@ -161,5 +567,6 @@ class DerivativesNamespace:
         self._client = client
         self.futures = DerivativesFuturesNamespace(client)
         self.options = DerivativesOptionsNamespace(client)
+        self.pricing = DerivativesPricingNamespace(client)
 
     # (no terminal routes at this namespace level)

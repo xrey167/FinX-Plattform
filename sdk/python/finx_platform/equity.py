@@ -98,6 +98,48 @@ class EquityCalendarNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/calendar/earnings", params)
 
+    def events(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Upcoming corporate-events calendar, NASDAQ-backed (keyless).
+
+        Route: ``equity/calendar/events``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/calendar/events", params)
+
     def ipo(
         self,
         *,
@@ -140,11 +182,95 @@ class EquityCalendarNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/calendar/ipo", params)
 
+    def splits(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Upcoming stock-split calendar (split factor, date), FMP-backed.
+
+        Route: ``equity/calendar/splits``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/calendar/splits", params)
+
 class EquityCompareNamespace:
     """Accessor for the ``equity/compare`` route namespace."""
 
     def __init__(self, client: Client) -> None:
         self._client = client
+
+    def company_facts(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Reported XBRL company facts (concept values per period), SEC-backed (keyless).
+
+        Route: ``equity/compare/company_facts``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/compare/company_facts", params)
 
     def peers(
         self,
@@ -187,6 +313,54 @@ class EquityCompareNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/compare/peers", params)
+
+class EquityDarkpoolNamespace:
+    """Accessor for the ``equity/darkpool`` route namespace."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def otc(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Weekly OTC / dark-pool market-volume summary, FINRA-backed (keyless).
+
+        Route: ``equity/darkpool/otc``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/darkpool/otc", params)
 
 class EquityDiscoveryNamespace:
     """Accessor for the ``equity/discovery`` route namespace."""
@@ -236,6 +410,90 @@ class EquityDiscoveryNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/discovery/active", params)
 
+    def aggressive_small_caps(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Aggressive small-cap discovery screen (high earnings growth), Yahoo-backed (keyless).
+
+        Route: ``equity/discovery/aggressive_small_caps``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/aggressive_small_caps", params)
+
+    def filings(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Latest SEC filings reported to EDGAR (cross-issuer feed), FMP-backed.
+
+        Route: ``equity/discovery/filings``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/filings", params)
+
     def gainers(
         self,
         *,
@@ -278,6 +536,90 @@ class EquityDiscoveryNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/discovery/gainers", params)
 
+    def growth_tech(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Growth technology-stocks discovery screen, Yahoo-backed (keyless).
+
+        Route: ``equity/discovery/growth_tech``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/growth_tech", params)
+
+    def latest_financial_reports(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Latest periodic financial reports (10-K/10-Q) for a filer, SEC-backed (keyless).
+
+        Route: ``equity/discovery/latest_financial_reports``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/latest_financial_reports", params)
+
     def losers(
         self,
         *,
@@ -319,6 +661,132 @@ class EquityDiscoveryNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/discovery/losers", params)
+
+    def top_retail(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Top retail-traded equities discovery feed, NASDAQ-backed (keyless).
+
+        Route: ``equity/discovery/top_retail``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/top_retail", params)
+
+    def undervalued_growth(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Undervalued growth-stocks discovery screen, Yahoo-backed (keyless).
+
+        Route: ``equity/discovery/undervalued_growth``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/undervalued_growth", params)
+
+    def undervalued_large_caps(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Undervalued large-cap discovery screen, Yahoo-backed (keyless).
+
+        Route: ``equity/discovery/undervalued_large_caps``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/discovery/undervalued_large_caps", params)
 
 class EquityEstimatesNamespace:
     """Accessor for the ``equity/estimates`` route namespace."""
@@ -409,6 +877,132 @@ class EquityEstimatesNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/estimates/forward", params)
+
+    def forward_ebitda(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Forward EBITDA analyst estimates per period for a symbol, FMP-backed.
+
+        Route: ``equity/estimates/forward_ebitda``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/estimates/forward_ebitda", params)
+
+    def forward_pe(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Forward price-to-earnings analyst estimates per period, Intrinio-backed (keyed).
+
+        Route: ``equity/estimates/forward_pe``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/estimates/forward_pe", params)
+
+    def forward_sales(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Forward sales analyst estimates per period, Intrinio-backed (keyed).
+
+        Route: ``equity/estimates/forward_sales``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/estimates/forward_sales", params)
 
     def historical_eps(
         self,
@@ -542,6 +1136,48 @@ class EquityFundamentalNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/balance", params)
 
+    def balance_growth(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Balance-sheet growth rates per period, FMP-backed.
+
+        Route: ``equity/fundamental/balance_growth``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/balance_growth", params)
+
     def cash(
         self,
         *,
@@ -583,6 +1219,48 @@ class EquityFundamentalNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/cash", params)
+
+    def cash_growth(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Cash-flow growth rates per period, FMP-backed.
+
+        Route: ``equity/fundamental/cash_growth``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/cash_growth", params)
 
     def dividends(
         self,
@@ -626,6 +1304,216 @@ class EquityFundamentalNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/dividends", params)
 
+    def employee_count(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Historical employee headcount per filing for a symbol, FMP-backed.
+
+        Route: ``equity/fundamental/employee_count``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/employee_count", params)
+
+    def esg_score(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Environmental/social/governance pillar and overall scores, FMP-backed.
+
+        Route: ``equity/fundamental/esg_score``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/esg_score", params)
+
+    def filings(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Company SEC-filings index (form type, dates, links), FMP-backed.
+
+        Route: ``equity/fundamental/filings``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/filings", params)
+
+    def historical_attributes(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Historical time series for a standardized data-point tag of a company, Intrinio-backed (keyed).
+
+        Route: ``equity/fundamental/historical_attributes``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/historical_attributes", params)
+
+    def historical_eps(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Historical reported vs estimated EPS per period for a symbol, FMP-backed.
+
+        Route: ``equity/fundamental/historical_eps``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/historical_eps", params)
+
     def income(
         self,
         *,
@@ -667,6 +1555,216 @@ class EquityFundamentalNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/income", params)
+
+    def income_growth(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Income-statement growth rates per period, FMP-backed.
+
+        Route: ``equity/fundamental/income_growth``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/income_growth", params)
+
+    def latest_attributes(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Latest value of a standardized data-point tag for a company, Intrinio-backed (keyed).
+
+        Route: ``equity/fundamental/latest_attributes``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/latest_attributes", params)
+
+    def management(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Executive/management team (name, title, pay) for a symbol, FMP-backed.
+
+        Route: ``equity/fundamental/management``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/management", params)
+
+    def management_compensation(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Executive compensation per officer and fiscal year, FMP-backed.
+
+        Route: ``equity/fundamental/management_compensation``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/management_compensation", params)
+
+    def management_discussion_analysis(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Management Discussion & Analysis document from the latest 10-K, SEC-backed (keyless).
+
+        Route: ``equity/fundamental/management_discussion_analysis``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/management_discussion_analysis", params)
 
     def metrics(
         self,
@@ -752,6 +1850,174 @@ class EquityFundamentalNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/ratios", params)
 
+    def reported_financials(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """As-reported financial statement line items for a fundamental, Intrinio-backed (keyed).
+
+        Route: ``equity/fundamental/reported_financials``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/reported_financials", params)
+
+    def revenue_per_geography(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Revenue broken down by geographic region per period, FMP-backed.
+
+        Route: ``equity/fundamental/revenue_per_geography``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/revenue_per_geography", params)
+
+    def revenue_per_segment(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Revenue broken down by business product segment per period, FMP-backed.
+
+        Route: ``equity/fundamental/revenue_per_segment``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/revenue_per_segment", params)
+
+    def search_attributes(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Search the standardized data-point tag dictionary, Intrinio-backed (keyed).
+
+        Route: ``equity/fundamental/search_attributes``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/search_attributes", params)
+
     def splits(
         self,
         *,
@@ -793,6 +2059,48 @@ class EquityFundamentalNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/fundamental/splits", params)
+
+    def transcript(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Earnings-call transcript for a fiscal quarter, FMP-backed.
+
+        Route: ``equity/fundamental/transcript``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/fundamental/transcript", params)
 
 class EquityOwnershipNamespace:
     """Accessor for the ``equity/ownership`` route namespace."""
@@ -841,6 +2149,174 @@ class EquityOwnershipNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/ownership/form_13f", params)
+
+    def government_trades(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Government official (congressional) trades for a symbol, FMP-backed.
+
+        Route: ``equity/ownership/government_trades``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/ownership/government_trades", params)
+
+    def insider_trading(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Insider (management/board) trading activity for a symbol, FMP-backed.
+
+        Route: ``equity/ownership/insider_trading``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/ownership/insider_trading", params)
+
+    def institutional(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Institutional holders and ownership over time for a symbol, FMP-backed.
+
+        Route: ``equity/ownership/institutional``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/ownership/institutional", params)
+
+    def major_holders(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Major institutional holders of a company, FMP-backed.
+
+        Route: ``equity/ownership/major_holders``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/ownership/major_holders", params)
 
     def share_statistics(
         self,
@@ -1068,6 +2544,48 @@ class EquityShortsNamespace:
             params["provider"] = provider
         return self._client.fetch("equity/shorts/fails_to_deliver", params)
 
+    def short_interest(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Reported consolidated short interest for equities, FINRA-backed (keyless).
+
+        Route: ``equity/shorts/short_interest``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/shorts/short_interest", params)
+
 class EquityNamespace:
     """Accessor for the ``equity`` route namespace."""
 
@@ -1075,12 +2593,97 @@ class EquityNamespace:
         self._client = client
         self.calendar = EquityCalendarNamespace(client)
         self.compare = EquityCompareNamespace(client)
+        self.darkpool = EquityDarkpoolNamespace(client)
         self.discovery = EquityDiscoveryNamespace(client)
         self.estimates = EquityEstimatesNamespace(client)
         self.fundamental = EquityFundamentalNamespace(client)
         self.ownership = EquityOwnershipNamespace(client)
         self.price = EquityPriceNamespace(client)
         self.shorts = EquityShortsNamespace(client)
+
+    def historical_market_cap(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Historical market-capitalization time series for a symbol, FMP-backed.
+
+        Route: ``equity/historical_market_cap``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/historical_market_cap", params)
+
+    def market_snapshots(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Full-exchange market snapshot (per-symbol last-price quotes), FMP-backed.
+
+        Route: ``equity/market_snapshots``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/market_snapshots", params)
 
     def profile(
         self,
@@ -1165,3 +2768,45 @@ class EquityNamespace:
         if provider is not None:
             params["provider"] = provider
         return self._client.fetch("equity/screener", params)
+
+    def search(
+        self,
+        *,
+        end_date: str | None = None,
+        interval: str | None = None,
+        limit: int | None = None,
+        period: str | None = None,
+        start_date: str | None = None,
+        provider: str | None = None,
+        **kwargs: object,
+    ) -> FinXObject:
+        """Ticker/company search by name or symbol fragment, FMP-backed.
+
+        Route: ``equity/search``.
+
+        Args:
+            end_date: Inclusive upper date bound, if the caller supplied one.
+            interval: Bar / observation frequency (defaults to one day).
+            limit: Caller-requested row cap, bounded by [`MAX_LIMIT`].
+            period: Reporting cadence for fundamentals-style endpoints, if relevant.
+            start_date: Inclusive lower date bound, if the caller supplied one.
+            provider: Explicit provider key; ``None`` uses the catalog fallback order.
+            **kwargs: Provider-specific arguments (e.g. ``symbol``) threaded to the query.
+
+        Returns:
+            A :class:`FinXObject` wrapping the result envelope.
+        """
+        params: dict[str, object] = dict(kwargs)
+        if end_date is not None:
+            params["end_date"] = end_date
+        if interval is not None:
+            params["interval"] = interval
+        if limit is not None:
+            params["limit"] = limit
+        if period is not None:
+            params["period"] = period
+        if start_date is not None:
+            params["start_date"] = start_date
+        if provider is not None:
+            params["provider"] = provider
+        return self._client.fetch("equity/search", params)

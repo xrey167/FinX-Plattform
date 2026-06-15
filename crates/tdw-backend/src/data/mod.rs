@@ -3055,8 +3055,7 @@ async fn run_self_tune_cycle(
 
     // Step 1 — fail-closed: no eval cases ⇒ no change.
     if fixture.cases.is_empty() {
-        let mut guard = log.lock().await;
-        guard.record(
+        log.lock().await.record(
             TunableParam::RrfK,
             TuneOutcome::NoEvalData {
                 reason: "golden-split fixture has no eval cases".to_string(),
@@ -3148,6 +3147,7 @@ async fn run_self_tune_cycle(
 /// inline `run_self_tune_cycle` on each due slot, injecting the wall-clock `now`
 /// at fire time. The same golden-split fixture the K-L3 scheduled eval uses is
 /// the gate's eval data.
+#[allow(clippy::too_many_lines)] // single-logical-unit spawn fn; splitting would obscure the linear setup→spawn flow
 fn spawn_self_tuning_worker(
     cfg: &SelfTuneConfig,
     evals_cfg: &EvalsConfig,
@@ -3164,32 +3164,27 @@ fn spawn_self_tuning_worker(
         return None;
     }
     // The seam must be wired (from_config builds these iff enabled).
-    let (log, handle) = match (log, handle) {
-        (Some(log), Some(handle)) => (log, handle),
-        _ => {
-            eprintln!(
-                "[tdw] NOTICE: K-R3 self-tuning enabled but the handle/log seam \
-                 is absent — worker not spawned."
-            );
-            return None;
-        }
+    let (Some(log), Some(handle)) = (log, handle) else {
+        eprintln!(
+            "[tdw] NOTICE: K-R3 self-tuning enabled but the handle/log seam \
+             is absent — worker not spawned."
+        );
+        return None;
     };
     // Fail-closed: a self-tuner with no golden split has no eval data and must
     // not run at all.
-    let split_id = match evals_cfg.split_id.as_deref().filter(|s| !s.is_empty()) {
-        Some(s) => s.to_string(),
-        None => {
-            eprintln!(
-                "[tdw] NOTICE: K-R3 self-tuning enabled but knowledge.evals.split_id \
-                 is unconfigured — no golden split to gate against; worker not spawned \
-                 (fail-closed)."
-            );
-            return None;
-        }
+    let split_id = if let Some(s) = evals_cfg.split_id.as_deref().filter(|s| !s.is_empty()) {
+        s.to_string()
+    } else {
+        eprintln!(
+            "[tdw] NOTICE: K-R3 self-tuning enabled but knowledge.evals.split_id \
+             is unconfigured — no golden split to gate against; worker not spawned \
+             (fail-closed)."
+        );
+        return None;
     };
     let fixture_path = evals_config_to_runner(evals_cfg)
         .split_fixture_path
-        .clone()
         .unwrap_or_else(|| default_fixture_path(&split_id));
 
     let clamp =
@@ -3245,7 +3240,7 @@ fn spawn_self_tuning_worker(
                 continue;
             }
 
-            let now_ts = chrono::Utc::now().to_rfc3339();
+            let now_rfc3339 = chrono::Utc::now().to_rfc3339();
             // Fail-closed on fixture load error: record NoEvalData, change nothing.
             let fixture = match load_golden_split(&fixture_path) {
                 Ok(f) => f,
@@ -3254,11 +3249,10 @@ fn spawn_self_tuning_worker(
                         "[tdw] K-R3 self-tuning: fixture load error \
                          (split={split_id}): {load_err}"
                     );
-                    let mut guard = log.lock().await;
-                    guard.record(
+                    log.lock().await.record(
                         tdw_knowledge::self_tune::TunableParam::RrfK,
                         tdw_knowledge::self_tune::TuneOutcome::NoEvalData { reason: load_err },
-                        &now_ts,
+                        &now_rfc3339,
                     );
                     continue;
                 }
@@ -3274,7 +3268,7 @@ fn spawn_self_tuning_worker(
                     clamp,
                     margin,
                     cycle,
-                    now: &now_ts,
+                    now: &now_rfc3339,
                 },
             )
             .await
@@ -3287,13 +3281,12 @@ fn spawn_self_tuning_worker(
                 }
                 Err(error) => {
                     eprintln!("[tdw] K-R3 self-tuning cycle failed (split={split_id}): {error}");
-                    let mut guard = log.lock().await;
-                    guard.record(
+                    log.lock().await.record(
                         tdw_knowledge::self_tune::TunableParam::RrfK,
                         tdw_knowledge::self_tune::TuneOutcome::NoEvalData {
                             reason: format!("eval error: {error}"),
                         },
-                        &now_ts,
+                        &now_rfc3339,
                     );
                 }
             }
@@ -7133,6 +7126,7 @@ mod tests {
     /// (b) No eval data (zero cases) → FAIL-CLOSED: the live RRF k handle is left
     /// UNCHANGED and the audit records `NoEvalData` (not applied).
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: cell owner must outlive guard block intentionally
     async fn self_tune_no_eval_data_leaves_params_unchanged() {
         let handle = tdw_retrieve::RrfKHandle::new(60.0);
         let log = Arc::new(tokio::sync::Mutex::new(
@@ -7171,6 +7165,7 @@ mod tests {
     /// candidate (margin 0.0), the candidate is APPLIED to the live handle and
     /// the audit truthfully records old→new with gated provenance.
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: cell owner must outlive guard block intentionally
     async fn self_tune_applies_and_audits_an_accepted_delta() {
         let handle = tdw_retrieve::RrfKHandle::new(60.0);
         let log = Arc::new(tokio::sync::Mutex::new(
@@ -7219,6 +7214,7 @@ mod tests {
     /// unchanged and the audit records a truthful NO-OP (regression/no-gain
     /// guard).
     #[tokio::test]
+    #[allow(clippy::significant_drop_tightening)] // test: cell owner must outlive guard block intentionally
     async fn self_tune_rejects_when_no_improvement_beyond_margin() {
         let handle = tdw_retrieve::RrfKHandle::new(60.0);
         let log = Arc::new(tokio::sync::Mutex::new(

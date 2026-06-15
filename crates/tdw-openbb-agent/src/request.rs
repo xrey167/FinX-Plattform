@@ -9,7 +9,8 @@
 //! cited in [`crate`].
 //!
 //! Doc source: <https://docs.openbb.co/workspace/copilots> (the `QueryRequest`
-//! schema — `messages`, `widgets.primary` / `widgets.secondary`, `urls`).
+//! schema — `messages`, `widgets.primary` / `widgets.secondary`, `urls`,
+//! `context` file/PDF items, and `workspace_options` feature values).
 
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +129,52 @@ pub struct Widgets {
     pub secondary: Vec<Widget>,
 }
 
+/// One file/PDF context item the user attached to the query (gap #12, examples
+/// 35/36).
+///
+/// Workspace can attach uploaded documents beyond plain `urls`. This bridge does
+/// **not** embed a native PDF parser (that would be a heavy dependency for a
+/// pure mapping crate); instead it models the **pre-extracted text** the
+/// frontend/upload pipeline already produces, plus the document metadata needed
+/// to cite it by page. A context item with extracted `content` is fed to the
+/// model as grounded context and can be cited with a page-anchored
+/// [`SourceInfo`](crate::SourceInfo); an item without `content` is named but not
+/// quoted (the honest boundary — see the crate docs).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ContextFile {
+    /// The document name (a file name or title) used in citations.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The MIME/content type when known (e.g. `"application/pdf"`).
+    #[serde(rename = "type", default)]
+    pub content_type: Option<String>,
+    /// The pre-extracted text of the document, if the upload pipeline supplied
+    /// it. Absent for an item the bridge can name but not quote.
+    #[serde(default)]
+    pub content: Option<String>,
+    /// The 1-based page number this item's `content` was extracted from, for a
+    /// page-anchored citation of a paginated document.
+    #[serde(default)]
+    pub page: Option<u32>,
+}
+
+impl ContextFile {
+    /// A short human label for the file (its `name`, else `"document"`).
+    #[must_use]
+    pub fn label(&self) -> &str {
+        self.name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("document")
+    }
+
+    /// The extracted text of this item, when present and non-empty.
+    #[must_use]
+    pub fn grounded_text(&self) -> Option<&str> {
+        self.content.as_deref().filter(|text| !text.is_empty())
+    }
+}
+
 /// A Workspace copilot `POST /v1/query` request body.
 ///
 /// Tolerant by construction: optional fields default and unknown fields are
@@ -144,6 +191,17 @@ pub struct QueryRequest {
     /// Any URLs the user attached for context.
     #[serde(default)]
     pub urls: Vec<String>,
+    /// Any file/PDF context items the user attached (gap #12). Accepts either
+    /// `context` or `files` as the wire key (both appear in `openbb-ai`
+    /// payloads); pre-extracted text is fed as grounded context.
+    #[serde(default, alias = "files")]
+    pub context: Vec<ContextFile>,
+    /// The values Workspace supplies for the agent's configurable features
+    /// (gap #14): `web-search`, `deep-research`, `model`, `agent-name`, and any
+    /// custom toggle/text/select. Kept as a raw object so a new feature key
+    /// threads through without a schema change.
+    #[serde(default)]
+    pub workspace_options: serde_json::Value,
     /// The caller's IANA timezone, when supplied.
     #[serde(default)]
     pub timezone: Option<String>,
@@ -168,6 +226,33 @@ impl QueryRequest {
         self.messages
             .iter()
             .any(|message| message.role == MessageRole::Tool)
+    }
+
+    /// Read a boolean toggle from `workspace_options` (e.g. `web-search`,
+    /// `deep-research`). Returns `false` when the key is absent or not a bool.
+    #[must_use]
+    pub fn option_flag(&self, key: &str) -> bool {
+        self.workspace_options
+            .get(key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Read a string option from `workspace_options` (e.g. the selected `model`
+    /// or the configured `agent-name`). Returns `None` when absent or empty.
+    #[must_use]
+    pub fn option_str(&self, key: &str) -> Option<&str> {
+        self.workspace_options
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+    }
+
+    /// The context files that carry pre-extracted, citable text.
+    pub fn grounded_context(&self) -> impl Iterator<Item = &ContextFile> {
+        self.context
+            .iter()
+            .filter(|file| file.grounded_text().is_some())
     }
 }
 
@@ -249,6 +334,43 @@ mod tests {
             ..Widget::default()
         };
         assert_eq!(only_widget_id.id(), Some("w"));
+    }
+
+    #[test]
+    fn parses_context_files_and_workspace_options() {
+        let raw = r#"{
+            "messages": [{"role": "human", "content": "summarize the filing"}],
+            "context": [
+                {"name": "10-K.pdf", "type": "application/pdf", "content": "Revenue grew 12%.", "page": 5},
+                {"name": "empty.pdf"}
+            ],
+            "workspace_options": {"web-search": true, "model": "claude", "agent-name": "Scout"}
+        }"#;
+        let request: QueryRequest = serde_json::from_str(raw).expect("parses");
+        assert_eq!(request.context.len(), 2);
+        assert_eq!(request.context[0].label(), "10-K.pdf");
+        assert_eq!(
+            request.context[0].grounded_text(),
+            Some("Revenue grew 12%.")
+        );
+        assert_eq!(request.context[0].page, Some(5));
+        // The second item is named but not quotable.
+        assert_eq!(request.context[1].grounded_text(), None);
+        assert_eq!(request.grounded_context().count(), 1);
+        // workspace_options reads.
+        assert!(request.option_flag("web-search"));
+        assert!(!request.option_flag("deep-research"));
+        assert_eq!(request.option_str("model"), Some("claude"));
+        assert_eq!(request.option_str("agent-name"), Some("Scout"));
+        assert_eq!(request.option_str("missing"), None);
+    }
+
+    #[test]
+    fn accepts_files_alias_for_context() {
+        let raw = r#"{"messages": [], "files": [{"name": "a.pdf", "content": "x"}]}"#;
+        let request: QueryRequest = serde_json::from_str(raw).expect("parses");
+        assert_eq!(request.context.len(), 1);
+        assert_eq!(request.context[0].label(), "a.pdf");
     }
 
     #[test]

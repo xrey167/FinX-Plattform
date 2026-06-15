@@ -117,10 +117,13 @@ pub fn catalog() -> Vec<CatalogEntry> {
     entries.extend(routers::commodity::entries());
     entries.extend(routers::news::entries());
     entries.extend(routers::regulators::entries());
+    entries.extend(routers::uscongress::entries());
     entries.extend(routers::technical::entries());
     entries.extend(routers::quantitative::entries());
     entries.extend(routers::econometrics::entries());
+    entries.extend(routers::forecast::entries());
     entries.extend(routers::portfolio::entries());
+    entries.extend(routers::imf_utils::entries());
     entries
 }
 

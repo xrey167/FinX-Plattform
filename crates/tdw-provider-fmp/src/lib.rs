@@ -5,11 +5,20 @@ pub mod http_fetcher;
 
 #[cfg(feature = "http")]
 pub use http_fetcher::{
-    FmpHttpAnalystEstimatesFetcher, FmpHttpDiscoveryFetcher, FmpHttpDividendsFetcher,
-    FmpHttpEarningsFetcher, FmpHttpHistoricalFetcher, FmpHttpIncomeFetcher,
-    FmpHttpKeyMetricsFetcher, FmpHttpPeersFetcher, FmpHttpPriceTargetFetcher,
-    FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher, FmpHttpRatiosFetcher,
-    FmpHttpScreenerFetcher, FmpHttpSplitsFetcher, FmpHttpStatementFetcher,
+    FmpHttpAnalystEstimatesFetcher, FmpHttpCurrencySnapshotsFetcher, FmpHttpDiscoveryFetcher,
+    FmpHttpDividendsFetcher, FmpHttpEarningsFetcher, FmpHttpEmployeeCountFetcher,
+    FmpHttpEsgScoreFetcher, FmpHttpEtfCountriesFetcher, FmpHttpEtfEquityExposureFetcher,
+    FmpHttpEtfInfoFetcher, FmpHttpEtfPricePerformanceFetcher, FmpHttpEtfSearchFetcher,
+    FmpHttpEtfSectorsFetcher, FmpHttpExecutiveCompensationFetcher, FmpHttpFilingsFetcher,
+    FmpHttpForwardEbitdaFetcher, FmpHttpGovernmentTradesFetcher, FmpHttpHistoricalFetcher,
+    FmpHttpHistoricalMarketCapFetcher, FmpHttpIncomeFetcher, FmpHttpIndexConstituentsFetcher,
+    FmpHttpInsiderTradingFetcher, FmpHttpInstitutionalOwnershipFetcher,
+    FmpHttpKeyExecutivesFetcher, FmpHttpKeyMetricsFetcher, FmpHttpLatestFilingsFetcher,
+    FmpHttpMajorHoldersFetcher, FmpHttpMarketSnapshotsFetcher, FmpHttpPeersFetcher,
+    FmpHttpPriceTargetFetcher, FmpHttpProfileFetcher, FmpHttpQuoteSnapshotFetcher,
+    FmpHttpRatiosFetcher, FmpHttpRevenueSegmentFetcher, FmpHttpScreenerFetcher,
+    FmpHttpSearchFetcher, FmpHttpSplitCalendarFetcher, FmpHttpSplitsFetcher,
+    FmpHttpStatementFetcher, FmpHttpTranscriptFetcher,
 };
 
 use schemars::JsonSchema;
@@ -218,6 +227,56 @@ impl FmpSymbolQuery {
     }
 }
 
+/// Query for the FMP index-constituents endpoint (`/{index}_constituent`).
+///
+/// FMP publishes a constituent list per major index under a fixed path segment:
+/// `sp500_constituent`, `nasdaq_constituent`, `dowjones_constituent`. The query
+/// carries the validated index handle (the leading `{index}` path segment); an
+/// unknown / missing handle defaults to `sp500`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpIndexConstituentQuery {
+    /// Index handle / path segment, e.g. `"sp500"`, `"nasdaq"`, `"dowjones"`.
+    pub index: String,
+}
+
+impl FmpIndexConstituentQuery {
+    /// Construct a query from an optional index handle, defaulting to `sp500`
+    /// and normalizing the three supported aliases.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        let index = match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("nasdaq" | "nasdaq100" | "ndx") => "nasdaq",
+            Some("dowjones" | "dow" | "djia" | "dji") => "dowjones",
+            _ => "sp500",
+        };
+        Self {
+            index: index.to_string(),
+        }
+    }
+}
+
+/// Query for the FMP forex snapshot endpoint (`/fx`).
+///
+/// The `/fx` endpoint returns the full set of FX-pair quotes and takes no path
+/// or filter parameter; an optional `symbol` keeps only matching pairs
+/// client-side so callers can narrow to one pair without a second request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpFxSnapshotQuery {
+    /// Optional `BASE/QUOTE` (or `BASEQUOTE`) filter; empty = every pair.
+    #[serde(default)]
+    pub symbol: String,
+}
+
+impl FmpFxSnapshotQuery {
+    /// Construct a snapshot query from an optional pair filter.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        Self {
+            symbol: value.unwrap_or_default().trim().to_ascii_uppercase(),
+        }
+    }
+}
+
 /// Direction of the FMP stock-market discovery endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -280,14 +339,250 @@ pub struct FmpScreenerQuery {
     pub limit: Option<u32>,
 }
 
+/// Query for the per-symbol fundamentals endpoints that also take a `limit`
+/// (employee-count, SEC filings).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpSymbolLimitQuery {
+    pub symbol: String,
+    pub limit: u32,
+}
+
+impl FmpSymbolLimitQuery {
+    /// Construct a validated symbol+limit query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(symbol: &str, limit: u32) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            limit,
+        })
+    }
+}
+
+/// Which revenue-segmentation breakdown a [`FmpRevenueSegmentQuery`] requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FmpSegmentKind {
+    /// Revenue broken down by business product line.
+    Product,
+    /// Revenue broken down by geographic region.
+    Geography,
+}
+
+impl FmpSegmentKind {
+    /// Return the FMP `/v4` path segment for this breakdown.
+    #[must_use]
+    pub const fn as_path_segment(self) -> &'static str {
+        match self {
+            Self::Product => "revenue-product-segmentation",
+            Self::Geography => "revenue-geographic-segmentation",
+        }
+    }
+
+    /// Return the [`tdw_domain::RevenueSegment`] `kind` discriminator.
+    #[must_use]
+    pub const fn as_kind(self) -> &'static str {
+        match self {
+            Self::Product => "product",
+            Self::Geography => "geography",
+        }
+    }
+
+    /// Parse a segment kind, defaulting unknown/missing to product.
+    #[must_use]
+    pub fn from_param(value: Option<&str>) -> Self {
+        match value {
+            Some("geography" | "geographic") => Self::Geography,
+            _ => Self::Product,
+        }
+    }
+}
+
+/// Query for the revenue-segmentation endpoints (product / geography).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpRevenueSegmentQuery {
+    pub symbol: String,
+    pub kind: FmpSegmentKind,
+    pub period: FmpPeriod,
+}
+
+impl FmpRevenueSegmentQuery {
+    /// Construct a validated revenue-segmentation query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol.
+    pub fn new(symbol: &str, kind: FmpSegmentKind, period: FmpPeriod) -> Result<Self> {
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            kind,
+            period,
+        })
+    }
+}
+
+/// Query for the earnings-call-transcript endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpTranscriptQuery {
+    pub symbol: String,
+    pub year: u32,
+    pub quarter: u32,
+}
+
+impl FmpTranscriptQuery {
+    /// Construct a validated transcript query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptySymbol`] / [`FmpError::InvalidSymbol`] on a bad
+    /// symbol, or [`FmpError::InvalidTranscriptPeriod`] if `year` or `quarter` is
+    /// zero or `quarter` exceeds 4.
+    pub fn new(symbol: &str, year: u32, quarter: u32) -> Result<Self> {
+        if year == 0 || quarter == 0 || quarter > 4 {
+            return Err(FmpError::InvalidTranscriptPeriod);
+        }
+        Ok(Self {
+            symbol: normalize_symbol(symbol)?,
+            year,
+            quarter,
+        })
+    }
+}
+
+/// Query for the FMP ticker-search endpoint (`/search`).
+///
+/// `query` is a free-text name/symbol fragment; `limit` caps the result count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpSearchQuery {
+    pub query: String,
+    pub limit: u32,
+}
+
+impl FmpSearchQuery {
+    /// Construct a validated search query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::EmptyQuery`] if `query` is blank, or
+    /// [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub fn new(query: &str, limit: u32) -> Result<Self> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err(FmpError::EmptyQuery);
+        }
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self {
+            query: query.to_string(),
+            limit,
+        })
+    }
+}
+
+/// Query for the FMP date-range calendar endpoints (e.g. split calendar).
+///
+/// Both bounds are optional; an empty query returns the calendar's default
+/// window. Dates are validated to `YYYY-MM-DD` so they cannot inject extra query
+/// parameters.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpCalendarRangeQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+impl FmpCalendarRangeQuery {
+    /// Construct a validated date-range calendar query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidDate`] if either bound is present and not in
+    /// `YYYY-MM-DD` form.
+    pub fn new(from: Option<&str>, to: Option<&str>) -> Result<Self> {
+        Ok(Self {
+            from: from.map(normalize_date).transpose()?,
+            to: to.map(normalize_date).transpose()?,
+        })
+    }
+}
+
+/// Query for the symbol-free, limit-only FMP endpoints (e.g. the latest-filings
+/// RSS feed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpLimitQuery {
+    pub limit: u32,
+}
+
+impl FmpLimitQuery {
+    /// Construct a validated limit-only query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidLimit`] if `limit` is zero.
+    pub const fn new(limit: u32) -> Result<Self> {
+        if limit == 0 {
+            return Err(FmpError::InvalidLimit);
+        }
+        Ok(Self { limit })
+    }
+}
+
+/// Query for the FMP full-exchange market-snapshot endpoint
+/// (`/symbol/{exchange}`).
+///
+/// FMP publishes a full quote list per exchange handle (e.g. `NASDAQ`, `NYSE`,
+/// `AMEX`). The query carries the validated exchange handle (upper-cased,
+/// ASCII-alphanumeric); an unknown / missing handle defaults to `NASDAQ`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FmpMarketSnapshotQuery {
+    /// Exchange handle / path segment, e.g. `"NASDAQ"`, `"NYSE"`, `"AMEX"`.
+    pub exchange: String,
+}
+
+impl FmpMarketSnapshotQuery {
+    /// Construct a snapshot query from an optional exchange handle, defaulting to
+    /// `NASDAQ` and rejecting handles with non-alphanumeric characters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FmpError::InvalidSymbol`] if the handle contains characters
+    /// outside ASCII alphanumerics.
+    pub fn from_param(value: Option<&str>) -> Result<Self> {
+        let exchange = value.map(str::trim).filter(|v| !v.is_empty());
+        let exchange = match exchange {
+            Some(handle) => {
+                if !handle.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return Err(FmpError::InvalidSymbol);
+                }
+                handle.to_ascii_uppercase()
+            }
+            None => "NASDAQ".to_string(),
+        };
+        Ok(Self { exchange })
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FmpError {
     #[error("fmp symbol must not be empty")]
     EmptySymbol,
+    #[error("fmp search query must not be empty")]
+    EmptyQuery,
+    #[error("fmp date must be YYYY-MM-DD")]
+    InvalidDate,
     #[error("fmp symbol contains unsupported characters")]
     InvalidSymbol,
     #[error("fmp limit must be greater than zero")]
     InvalidLimit,
+    #[error("fmp transcript period must have a non-zero year and a quarter in 1..=4")]
+    InvalidTranscriptPeriod,
     #[error("fmp provider error: {0}")]
     Provider(String),
 }
@@ -304,6 +599,26 @@ fn normalize_symbol(symbol: &str) -> Result<String> {
         return Err(FmpError::InvalidSymbol);
     }
     Ok(symbol.to_ascii_uppercase())
+}
+
+/// Validate a `YYYY-MM-DD` date string, returning it unchanged on success.
+///
+/// Used by the date-range calendar queries so a caller-supplied bound cannot
+/// inject extra query parameters into the FMP request URL.
+fn normalize_date(date: &str) -> Result<String> {
+    let date = date.trim();
+    let bytes = date.as_bytes();
+    let valid = bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(idx, byte)| idx == 4 || idx == 7 || byte.is_ascii_digit());
+    if !valid {
+        return Err(FmpError::InvalidDate);
+    }
+    Ok(date.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +907,63 @@ mod tests {
     }
 
     #[test]
+    fn index_constituent_query_parses_aliases_with_sp500_default() {
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("sp500")).index,
+            "sp500"
+        );
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("NASDAQ")).index,
+            "nasdaq"
+        );
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("dow")).index,
+            "dowjones"
+        );
+        assert_eq!(FmpIndexConstituentQuery::from_param(None).index, "sp500");
+        assert_eq!(
+            FmpIndexConstituentQuery::from_param(Some("bogus")).index,
+            "sp500"
+        );
+    }
+
+    #[test]
+    fn market_snapshot_query_normalizes_exchange_with_nasdaq_default() {
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("nyse"))
+                .expect("valid")
+                .exchange,
+            "NYSE"
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(None)
+                .expect("default")
+                .exchange,
+            "NASDAQ"
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("  ")),
+            Ok(FmpMarketSnapshotQuery {
+                exchange: "NASDAQ".to_string()
+            })
+        );
+        assert_eq!(
+            FmpMarketSnapshotQuery::from_param(Some("NAS/DAQ")),
+            Err(FmpError::InvalidSymbol)
+        );
+    }
+
+    #[test]
+    fn fx_snapshot_query_normalizes_optional_filter() {
+        assert_eq!(FmpFxSnapshotQuery::from_param(None).symbol, "");
+        assert_eq!(
+            FmpFxSnapshotQuery::from_param(Some(" eur/usd ")).symbol,
+            "EUR/USD"
+        );
+        assert_eq!(FmpFxSnapshotQuery::default().symbol, "");
+    }
+
+    #[test]
     fn fmp_error_messages_are_descriptive() {
         assert!(FmpError::EmptySymbol.to_string().contains("empty"));
         assert!(FmpError::InvalidSymbol.to_string().contains("unsupported"));
@@ -601,9 +973,71 @@ mod tests {
                 .contains("greater than zero")
         );
         assert!(
+            FmpError::InvalidTranscriptPeriod
+                .to_string()
+                .contains("transcript period")
+        );
+        assert!(
             FmpError::Provider("timeout".to_string())
                 .to_string()
                 .contains("timeout")
+        );
+    }
+
+    #[test]
+    fn search_query_validates_query_and_limit() {
+        let q = FmpSearchQuery::new("  apple ", 10).unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.query, "apple");
+        assert_eq!(q.limit, 10);
+        assert_eq!(FmpSearchQuery::new("", 10), Err(FmpError::EmptyQuery));
+        assert_eq!(FmpSearchQuery::new("   ", 10), Err(FmpError::EmptyQuery));
+        assert_eq!(FmpSearchQuery::new("apple", 0), Err(FmpError::InvalidLimit));
+    }
+
+    #[test]
+    fn calendar_range_query_validates_dates() {
+        let q = FmpCalendarRangeQuery::new(Some("2024-01-01"), Some("2024-12-31"))
+            .unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.from.as_deref(), Some("2024-01-01"));
+        assert_eq!(q.to.as_deref(), Some("2024-12-31"));
+        assert!(FmpCalendarRangeQuery::new(None, None).is_ok());
+        assert_eq!(
+            FmpCalendarRangeQuery::new(Some("2024/01/01"), None),
+            Err(FmpError::InvalidDate)
+        );
+        assert_eq!(
+            FmpCalendarRangeQuery::new(None, Some("20241231")),
+            Err(FmpError::InvalidDate)
+        );
+    }
+
+    #[test]
+    fn limit_query_rejects_zero() {
+        let q = FmpLimitQuery::new(50).unwrap_or_else(|e| panic!("query: {e}"));
+        assert_eq!(q.limit, 50);
+        assert_eq!(FmpLimitQuery::new(0), Err(FmpError::InvalidLimit));
+    }
+
+    #[test]
+    fn transcript_query_validates_year_and_quarter() {
+        let q = FmpTranscriptQuery::new("aapl", 2024, 4)
+            .unwrap_or_else(|e| panic!("query should build: {e}"));
+        assert_eq!(q.symbol, "AAPL");
+        assert_eq!(q.year, 2024);
+        assert_eq!(q.quarter, 4);
+        // Invalid year/quarter yields the dedicated period variant, not the
+        // misleading row-limit error.
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 0, 1),
+            Err(FmpError::InvalidTranscriptPeriod)
+        );
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 2024, 0),
+            Err(FmpError::InvalidTranscriptPeriod)
+        );
+        assert_eq!(
+            FmpTranscriptQuery::new("AAPL", 2024, 5),
+            Err(FmpError::InvalidTranscriptPeriod)
         );
     }
 }

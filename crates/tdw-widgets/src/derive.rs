@@ -262,6 +262,13 @@ fn cell_data_type_for(schema: &Value) -> &'static str {
 /// `"percent"`, count/volume-ish fields as `"int"`, everything else unset.
 fn formatter_for(name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
+    // Date-like fields (e.g. `expiration`, `expiration_timestamp`, `*_date`)
+    // are never numeric formats. Guard them first so the `contains("ratio")`
+    // branch below does not false-match the "ratio" inside "expi*ratio*n" and
+    // render a date string as `NaN%`.
+    if lower.contains("date") || lower.contains("expiration") {
+        return None;
+    }
     if lower.contains("percent")
         || lower.contains("pct")
         || lower.ends_with("_change")
@@ -395,6 +402,16 @@ mod tests {
         assert_eq!(formatter_for("shares_outstanding").as_deref(), Some("int"));
         assert_eq!(formatter_for("dividend_yield").as_deref(), Some("percent"));
         assert_eq!(formatter_for("close"), None);
+    }
+
+    #[test]
+    fn date_like_fields_never_get_a_numeric_formatter() {
+        // `expi*ratio*n` must not false-match the `ratio` percent heuristic.
+        assert_eq!(formatter_for("expiration"), None);
+        assert_eq!(formatter_for("expiration_timestamp"), None);
+        assert_eq!(formatter_for("filing_date"), None);
+        // A genuine ratio field still formats as a percent.
+        assert_eq!(formatter_for("pe_ratio").as_deref(), Some("percent"));
     }
 
     #[test]

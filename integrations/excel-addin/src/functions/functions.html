@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>FinX Custom Functions</title>
+    <!--
+      Shared-runtime loader page for the FinX custom functions. Excel loads this
+      headless page to host FINX.GET / FINX.BYOD / FINX.ROUTES. It pulls the
+      Office.js library then the bundled functions runtime (built to
+      dist/functions.js by `npm run build`).
+    -->
+    <script
+      type="text/javascript"
+      src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"
+    ></script>
+    <script type="text/javascript" src="functions.js"></script>
+  </head>
+  <body></body>
+</html>

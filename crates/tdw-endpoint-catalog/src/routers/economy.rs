@@ -15,7 +15,9 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{FactorReturn, MacroSeries, SeriesSearchResult};
+use tdw_domain::{
+    Breakpoint, FactorReturn, FomcDocument, MacroSeries, PortfolioReturn, SeriesSearchResult,
+};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
@@ -53,6 +55,35 @@ const ECONOMY_FACTORS_FAMAFRENCH: &[ProviderCandidate] = &[ProviderCandidate::ne
     "famafrench",
     "economy_factors_famafrench",
 )];
+/// Keyless Ken French portfolio-formation candidates (OpenBB-parity **P4W9**).
+/// Each portfolio-return route binds its own `(famafrench, <route '/'→'_'>)`
+/// dispatch endpoint (the shared portfolio fetcher's `command` is injected per
+/// route, mirroring the IMF cluster); the breakpoints route binds its own
+/// endpoint. A conformance test keeps these keys and the dispatch bindings in
+/// sync. Mirrors the `famafrench` research-factor binding above.
+const ECONOMY_FACTORS_FAMAFRENCH_US_PORTFOLIO: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "famafrench",
+    "economy_factors_famafrench_us_portfolio_returns",
+)];
+const ECONOMY_FACTORS_FAMAFRENCH_REGIONAL_PORTFOLIO: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_regional_portfolio_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_COUNTRY_PORTFOLIO: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_country_portfolio_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_INTERNATIONAL_INDEX: &[ProviderCandidate] =
+    &[ProviderCandidate::new(
+        "famafrench",
+        "economy_factors_famafrench_international_index_returns",
+    )];
+const ECONOMY_FACTORS_FAMAFRENCH_BREAKPOINTS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "famafrench",
+    "economy_factors_famafrench_breakpoints",
+)];
 /// IMF SDMX-JSON candidates (OpenBB-parity **P3W3**) — international/cross-country
 /// macro series the US-centric FRED cluster does not cover. The endpoint key is
 /// the route's `'/'→'_'` form, matching `endpoint_key_for_route` and the
@@ -83,6 +114,62 @@ const ECONOMY_MONEY_MEASURES: &[ProviderCandidate] = &[ProviderCandidate::new(
     "federal_reserve",
     "economy_money_measures",
 )];
+/// OECD SDMX-JSON candidates (OpenBB-parity **P4W4**) — keyless cross-country
+/// macro series the US-centric FRED cluster does not cover. The endpoint key is
+/// the route's `'/'→'_'` form, matching `endpoint_key_for_route` and the
+/// `(provider="oecd", endpoint=…)` dispatch binding registered under
+/// `provider-oecd`.
+const ECONOMY_GDP_FORECAST: &[ProviderCandidate] =
+    &[ProviderCandidate::new("oecd", "economy_gdp_forecast")];
+const ECONOMY_INTEREST_RATES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("oecd", "economy_interest_rates")];
+const ECONOMY_CLI: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "oecd",
+    "economy_composite_leading_indicator",
+)];
+const ECONOMY_HOUSE_PRICE_INDEX: &[ProviderCandidate] =
+    &[ProviderCandidate::new("oecd", "economy_house_price_index")];
+const ECONOMY_SHARE_PRICE_INDEX: &[ProviderCandidate] =
+    &[ProviderCandidate::new("oecd", "economy_share_price_index")];
+/// Keyless Federal Reserve candidates (OpenBB-parity **P4W4**) — SOMA holdings
+/// and primary-dealer statistics from the public Fed data portals. The endpoint
+/// key is the route's `'/'→'_'` form, matching the `(provider="federal_reserve",
+/// endpoint=…)` dispatch binding registered under `provider-federal-reserve`.
+const ECONOMY_CENTRAL_BANK_HOLDINGS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "economy_central_bank_holdings",
+)];
+const ECONOMY_PRIMARY_DEALER_POSITIONING: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "economy_primary_dealer_positioning",
+)];
+const ECONOMY_PRIMARY_DEALER_FAILS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "economy_primary_dealer_fails",
+)];
+const ECONOMY_FOMC_DOCUMENTS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "federal_reserve",
+    "economy_fomc_documents",
+)];
+/// FRED-backed single-series candidates added in OpenBB-parity **P4W4** — survey
+/// and price series standardized to [`MacroSeries`], auto-bound by the FRED
+/// dispatch loop from `tdw-provider-fred`'s `ENDPOINTS`.
+const ECONOMY_RETAIL_PRICES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fred", "economy_retail_prices")];
+const ECONOMY_SURVEY_SLOOS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fred", "economy_survey_sloos")];
+const ECONOMY_SURVEY_CHICAGO: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "economy_survey_economic_conditions_chicago",
+)];
+const ECONOMY_SURVEY_NY: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "economy_survey_manufacturing_outlook_ny",
+)];
+const ECONOMY_SURVEY_TEXAS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fred",
+    "economy_survey_manufacturing_outlook_texas",
+)];
 
 fn standard_params() -> Schema {
     schema_for!(StandardParams)
@@ -98,6 +185,18 @@ fn series_search_result() -> Schema {
 
 fn factor_return() -> Schema {
     schema_for!(FactorReturn)
+}
+
+fn portfolio_return() -> Schema {
+    schema_for!(PortfolioReturn)
+}
+
+fn breakpoint() -> Schema {
+    schema_for!(Breakpoint)
+}
+
+fn fomc_document() -> Schema {
+    schema_for!(FomcDocument)
 }
 
 /// One FRED macro-series catalog entry (`economy/*` → [`MacroSeries`]).
@@ -120,7 +219,7 @@ fn macro_entry(
 
 /// The `economy` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
-    vec![
+    let mut entries = vec![
         macro_entry(
             "economy/cpi",
             ECONOMY_CPI,
@@ -217,5 +316,150 @@ pub fn entries() -> Vec<CatalogEntry> {
                   (3-factor / 5-factor / momentum, daily or monthly; keyless).",
             chartable: true,
         },
+    ];
+    entries.extend(p4w4_entries());
+    entries
+}
+
+/// The Ken French portfolio-formation breadth additions (OpenBB-parity
+/// **P4W9**): the four portfolio-return routes (US / regional / country /
+/// international index) standardized to [`PortfolioReturn`], plus the
+/// breakpoints route standardized to [`Breakpoint`]. All are keyless Ken French
+/// Data Library ZIP-of-CSV archives. Split from [`entries`] so neither function
+/// trips the `too_many_lines` lint.
+fn p4w9_famafrench_entries() -> Vec<CatalogEntry> {
+    let portfolio_entry =
+        |route: &'static str, candidates: &'static [ProviderCandidate], doc: &'static str| {
+            CatalogEntry {
+                route,
+                kind: EndpointKind::Fetch,
+                params_schema: standard_params,
+                model: portfolio_return,
+                candidates,
+                bronze_table: Some("raw.portfolio_return"),
+                doc,
+                chartable: true,
+            }
+        };
+    vec![
+        CatalogEntry {
+            route: "economy/factors/famafrench/breakpoints",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: breakpoint,
+            candidates: ECONOMY_FACTORS_FAMAFRENCH_BREAKPOINTS,
+            bronze_table: Some("raw.breakpoint"),
+            doc: "Ken French portfolio-formation breakpoints (size deciles, keyless).",
+            chartable: false,
+        },
+        portfolio_entry(
+            "economy/factors/famafrench/us_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_US_PORTFOLIO,
+            "Ken French US portfolios-formed returns (book-to-market, keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/regional_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_REGIONAL_PORTFOLIO,
+            "Ken French developed-markets regional portfolio returns (keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/country_portfolio_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_COUNTRY_PORTFOLIO,
+            "Ken French country (Japan) portfolio returns (keyless).",
+        ),
+        portfolio_entry(
+            "economy/factors/famafrench/international_index_returns",
+            ECONOMY_FACTORS_FAMAFRENCH_INTERNATIONAL_INDEX,
+            "Ken French developed-markets international index returns (keyless).",
+        ),
     ]
+}
+
+/// The `economy` namespace's OpenBB-parity **P4W4** breadth additions: the OECD
+/// SDMX-JSON cross-country macro cluster, the FRED single-series survey / price
+/// breadth, and the keyless Federal Reserve SOMA / primary-dealer routes. Split
+/// from [`entries`] so neither function trips the `too_many_lines` lint.
+fn p4w4_entries() -> Vec<CatalogEntry> {
+    let mut entries = vec![
+        // -- OECD SDMX-JSON keyless cross-country macro -----------------------
+        macro_entry(
+            "economy/gdp/forecast",
+            ECONOMY_GDP_FORECAST,
+            "OECD Economic Outlook real GDP forecast (SDMX-JSON, keyless).",
+        ),
+        macro_entry(
+            "economy/interest_rates",
+            ECONOMY_INTEREST_RATES,
+            "OECD Main Economic Indicators interest rates (SDMX-JSON, keyless).",
+        ),
+        macro_entry(
+            "economy/composite_leading_indicator",
+            ECONOMY_CLI,
+            "OECD Composite Leading Indicator (SDMX-JSON, keyless).",
+        ),
+        macro_entry(
+            "economy/house_price_index",
+            ECONOMY_HOUSE_PRICE_INDEX,
+            "OECD House Price Index (SDMX-JSON, keyless).",
+        ),
+        macro_entry(
+            "economy/share_price_index",
+            ECONOMY_SHARE_PRICE_INDEX,
+            "OECD share price index (SDMX-JSON, keyless).",
+        ),
+        // -- FRED single-series survey / price breadth ------------------------
+        macro_entry(
+            "economy/retail_prices",
+            ECONOMY_RETAIL_PRICES,
+            "Advance retail and food services sales, FRED-backed macro series.",
+        ),
+        macro_entry(
+            "economy/survey/sloos",
+            ECONOMY_SURVEY_SLOOS,
+            "Senior Loan Officer Opinion Survey net tightening (C&I loans), FRED-backed.",
+        ),
+        macro_entry(
+            "economy/survey/economic_conditions_chicago",
+            ECONOMY_SURVEY_CHICAGO,
+            "Chicago Fed National Activity Index, FRED-backed macro series.",
+        ),
+        macro_entry(
+            "economy/survey/manufacturing_outlook_ny",
+            ECONOMY_SURVEY_NY,
+            "Empire State Manufacturing Survey general business conditions, FRED-backed.",
+        ),
+        macro_entry(
+            "economy/survey/manufacturing_outlook_texas",
+            ECONOMY_SURVEY_TEXAS,
+            "Dallas Fed Texas Manufacturing Outlook general business activity, FRED-backed.",
+        ),
+        // -- Federal Reserve keyless SOMA / primary-dealer breadth ------------
+        macro_entry(
+            "economy/central_bank_holdings",
+            ECONOMY_CENTRAL_BANK_HOLDINGS,
+            "Federal Reserve SOMA securities holdings (keyless).",
+        ),
+        macro_entry(
+            "economy/primary_dealer_positioning",
+            ECONOMY_PRIMARY_DEALER_POSITIONING,
+            "FRBNY primary-dealer net positioning (keyless).",
+        ),
+        macro_entry(
+            "economy/primary_dealer_fails",
+            ECONOMY_PRIMARY_DEALER_FAILS,
+            "FRBNY primary-dealer settlement fails (keyless).",
+        ),
+        CatalogEntry {
+            route: "economy/fomc_documents",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: fomc_document,
+            candidates: ECONOMY_FOMC_DOCUMENTS,
+            bronze_table: Some("raw.fomc_document"),
+            doc: "FOMC meeting documents index (Federal Reserve, keyless).",
+            chartable: false,
+        },
+    ];
+    entries.extend(p4w9_famafrench_entries());
+    entries
 }

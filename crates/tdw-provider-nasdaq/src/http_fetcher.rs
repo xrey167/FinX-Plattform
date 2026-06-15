@@ -184,6 +184,8 @@ pub enum NasdaqCalendarKind {
     Earnings,
     /// IPO calendar (`equity/calendar/ipo`).
     Ipo,
+    /// Corporate-events calendar (`equity/calendar/events`).
+    Events,
 }
 
 impl NasdaqCalendarKind {
@@ -193,6 +195,7 @@ impl NasdaqCalendarKind {
             Self::Dividends => "dividend",
             Self::Earnings => "earnings",
             Self::Ipo => "ipo",
+            Self::Events => "event",
         }
     }
 
@@ -204,6 +207,7 @@ impl NasdaqCalendarKind {
             Self::Dividends => "dividends",
             Self::Earnings => "earnings",
             Self::Ipo => "ipo",
+            Self::Events => "events",
         }
     }
 }
@@ -277,6 +281,7 @@ impl Fetcher<NasdaqCalendarQuery, CalendarEvent> for NasdaqHttpCalendarFetcher {
             NasdaqCalendarKind::Dividends => "calendar/dividends",
             NasdaqCalendarKind::Earnings => "calendar/earnings",
             NasdaqCalendarKind::Ipo => "ipo/calendar",
+            NasdaqCalendarKind::Events => "calendar/events",
         };
         let endpoint = format!("{}/{path}", self.base_url().trim_end_matches('/'));
         let mut query_params: Vec<(&str, String)> = Vec::new();
@@ -373,6 +378,13 @@ fn decode_calendar_row(kind: NasdaqCalendarKind, row: &Value) -> Option<Calendar
             event.shares = num_field(row, &["sharesOffered", "shares"]);
             event.exchange = str_field(row, &["proposedExchange", "exchange", "market"]);
         }
+        NasdaqCalendarKind::Events => {
+            // Corporate-events rows carry a free-text event title; surface it via
+            // `name` when the row has no separate company name.
+            if event.name.is_none() {
+                event.name = str_field(row, &["eventName", "event", "title"]);
+            }
+        }
     }
     Some(event)
 }
@@ -409,4 +421,263 @@ fn num_field(row: &Value, keys: &[&str]) -> Option<f64> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing S&P 500 / Shiller multiples fetcher -> tdw_domain::Sp500Multiple
+//
+// The keyed NASDAQ Data Link (Quandl) `MULTPL` database publishes the classic
+// long-run S&P 500 valuation multiples (Robert Shiller's CAPE, the trailing PE,
+// dividend & earnings yields, etc.) as time-series datasets. This fetcher reuses
+// the crate's `NasdaqDatasetSpec` request builder and `[Date, Value]` envelope
+// parser verbatim, then maps each observation onto the standardized
+// `tdw_domain::Sp500Multiple`. The `metric` param selects the dataset within the
+// `MULTPL` database (default: the monthly Shiller CAPE).
+//
+// MULTPL database: <https://data.nasdaq.com/data/MULTPL>.
+// ---------------------------------------------------------------------------
+
+use tdw_domain::Sp500Multiple;
+
+/// `MULTPL`-database dataset code for a requested S&P 500 multiple metric.
+///
+/// Maps the public `metric` param to the Data Link dataset within the keyless-to-
+/// name but keyed-to-fetch `MULTPL` database. Unknown / missing metrics default
+/// to the monthly Shiller CAPE PE ratio.
+fn sp500_multiple_dataset(metric: &str) -> &'static str {
+    match metric.trim().to_ascii_lowercase().as_str() {
+        "sp500_pe_ratio_month" | "pe_ratio" | "pe" => "SP500_PE_RATIO_MONTH",
+        "sp500_div_yield_month" | "dividend_yield" | "div_yield" => "SP500_DIV_YIELD_MONTH",
+        "sp500_earnings_yield_month" | "earnings_yield" => "SP500_EARNINGS_YIELD_MONTH",
+        "sp500_real_price_month" | "real_price" => "SP500_REAL_PRICE_MONTH",
+        // Default: Robert Shiller's cyclically-adjusted PE (CAPE).
+        _ => "SHILLER_PE_RATIO_MONTH",
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production NASDAQ Data Link S&P 500 / Shiller-multiples fetcher
+    /// (catalog-facing).
+    ///
+    /// Standardizes `index/sp500_multiples`, normalized to
+    /// [`tdw_domain::Sp500Multiple`]. Targets the keyed Data Link `MULTPL`
+    /// database (requires `TDW_NASDAQ_API_KEY`); the `metric` param selects the
+    /// dataset (default: the monthly Shiller CAPE PE ratio). Reuses
+    /// [`NasdaqDatasetSpec`]'s request builder and `[Date, Value]` parser.
+    pub NasdaqHttpSp500MultiplesFetcher,
+    BASE_URL
+);
+
+/// Validated query for the standardized S&P 500 multiples route.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct NasdaqSp500MultiplesQuery {
+    /// Lower-cased metric label (also the emitted `Sp500Multiple::metric`).
+    pub metric: String,
+    /// Underlying `MULTPL` dataset query (carries the optional date window).
+    pub dataset: NasdaqDatasetQuery,
+}
+
+#[async_trait]
+impl Fetcher<NasdaqSp500MultiplesQuery, Sp500Multiple> for NasdaqHttpSp500MultiplesFetcher {
+    const PROVIDER: &'static str = "nasdaq";
+    const ENDPOINT: &'static str = "sp500_multiples";
+
+    fn transform_query(params: Value) -> Result<NasdaqSp500MultiplesQuery> {
+        let metric = params
+            .get("metric")
+            .and_then(Value::as_str)
+            .unwrap_or("shiller_pe_ratio_month")
+            .trim()
+            .to_ascii_lowercase();
+        let dataset_code = sp500_multiple_dataset(&metric);
+        let mut dataset = NasdaqDatasetQuery::new("MULTPL", dataset_code)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))?;
+        if let Some(start) = params.get("start_date").and_then(Value::as_str) {
+            dataset = dataset
+                .with_start_date(start)
+                .map_err(|e| Error::InvalidQuery(e.to_string()))?;
+        }
+        if let Some(end) = params.get("end_date").and_then(Value::as_str) {
+            dataset = dataset
+                .with_end_date(end)
+                .map_err(|e| Error::InvalidQuery(e.to_string()))?;
+        }
+        Ok(NasdaqSp500MultiplesQuery { metric, dataset })
+    }
+
+    async fn extract_data(
+        &self,
+        query: &NasdaqSp500MultiplesQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let client = tdw_core::http_support::build_client(USER_AGENT, "nasdaq client")?;
+        let request = <NasdaqDatasetSpec as ProviderSpec>::build_request(
+            self.base_url(),
+            &query.dataset,
+            &client,
+        )?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq sp500_multiples request: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "nasdaq sp500_multiples returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq sp500_multiples read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        query: &NasdaqSp500MultiplesQuery,
+        raw: Bytes,
+    ) -> Result<Vec<Sp500Multiple>> {
+        let rows = <NasdaqDatasetSpec as ProviderSpec>::transform_data(&query.dataset, raw)?;
+        // Each MULTPL dataset row is a `[Date, Value]` pair (the column order the
+        // Data Link `dataset_data.data` matrix reports). Map the leading date cell
+        // and the trailing numeric cell onto the standardized model.
+        let multiples = rows
+            .into_iter()
+            .filter_map(|row| {
+                let date = row.values.first().and_then(Value::as_str)?.to_string();
+                let value = row.values.get(1).and_then(value_as_f64);
+                Some(Sp500Multiple {
+                    metric: query.metric.clone(),
+                    date,
+                    value,
+                })
+            })
+            .collect();
+        Ok(multiples)
+    }
+}
+
+/// Parse a Data Link value cell as `f64`, accepting both JSON numbers and
+/// numeric strings; returns `None` for nulls / non-numeric cells.
+fn value_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Catalog-facing top-retail discovery fetcher -> tdw_domain::ScreenerRow
+//
+// The public, keyless NASDAQ market-activity API publishes a top-retail-traded
+// list (`/api/market-activity/quotes/...`). This fetcher normalizes each entry
+// onto the standardized `tdw_domain::ScreenerRow` (the same model the discovery
+// screeners emit). It targets the public NASDAQ host (no key) and reuses the
+// crate's browser-like `User-Agent`. Standardizes `equity/discovery/top_retail`.
+// ---------------------------------------------------------------------------
+
+use tdw_domain::ScreenerRow;
+
+/// Parameter-free query for the keyless NASDAQ top-retail discovery route.
+///
+/// The feed lists the current top retail-traded symbols and takes no filter, so
+/// the query carries no fields; it exists so the fetcher satisfies the
+/// `Fetcher<Q, D>` contract with a `JsonSchema`-bearing query.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+pub struct NasdaqTopRetailQuery {}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production NASDAQ top-retail discovery fetcher (catalog-facing).
+    ///
+    /// Standardizes `equity/discovery/top_retail`, normalized to
+    /// [`tdw_domain::ScreenerRow`]. Talks to the public, keyless NASDAQ
+    /// market-activity API.
+    pub NasdaqHttpTopRetailFetcher,
+    CALENDAR_BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<NasdaqTopRetailQuery, ScreenerRow> for NasdaqHttpTopRetailFetcher {
+    const PROVIDER: &'static str = "nasdaq";
+    const ENDPOINT: &'static str = "top_retail";
+
+    fn transform_query(_params: Value) -> Result<NasdaqTopRetailQuery> {
+        Ok(NasdaqTopRetailQuery {})
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &NasdaqTopRetailQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let endpoint = format!(
+            "{}/market-activity/quotes/top-retail",
+            self.base_url().trim_end_matches('/'),
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "nasdaq client")?;
+        let response = client
+            .get(&endpoint)
+            .send()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail request: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "nasdaq top_retail returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail read body: {e}")))
+    }
+
+    fn transform_data(
+        &self,
+        _query: &NasdaqTopRetailQuery,
+        raw: Bytes,
+    ) -> Result<Vec<ScreenerRow>> {
+        let value: Value = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("nasdaq top_retail parse_json: {e}")))?;
+        let rows = calendar_rows(&value);
+        Ok(rows.iter().filter_map(decode_top_retail_row).collect())
+    }
+}
+
+/// Decode one top-retail row into a [`ScreenerRow`], or `None` when it carries
+/// no usable symbol. Field names follow the public NASDAQ market-activity
+/// payloads (which reuse the `symbol`/`companyName`/`lastSalePrice` shape).
+fn decode_top_retail_row(row: &Value) -> Option<ScreenerRow> {
+    let symbol = str_field(row, &["symbol", "ticker"])?;
+    Some(ScreenerRow {
+        symbol,
+        company_name: str_field(row, &["companyName", "name", "company"]),
+        market_cap: num_field(row, &["marketCap", "marketcap"]),
+        sector: str_field(row, &["sector"]),
+        industry: str_field(row, &["industry"]),
+        beta: None,
+        price: num_field(row, &["lastSalePrice", "lastsale", "price"]),
+        last_annual_dividend: None,
+        volume: num_field(row, &["volume"]),
+        exchange: str_field(row, &["exchange", "market"]),
+        exchange_short_name: None,
+        country: None,
+        is_etf: None,
+        is_actively_trading: None,
+    })
 }

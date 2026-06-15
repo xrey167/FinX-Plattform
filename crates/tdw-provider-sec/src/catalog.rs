@@ -28,6 +28,28 @@ pub enum SecModel {
     FailsToDeliver,
     /// Standardizes to [`tdw_domain::EtfHolding`] (N-PORT portfolio).
     EtfHoldings,
+    /// Standardizes to [`tdw_domain::CompanyFacts`] (XBRL company facts).
+    CompanyFacts,
+    /// Standardizes to the filings-index row (latest periodic financial reports).
+    LatestFinancialReports,
+    /// Standardizes to the filings-index row (N-PORT portfolio disclosures).
+    NportDisclosure,
+    /// Standardizes to [`tdw_domain::SymbolMapping`] (CIK → ticker map).
+    SymbolMap,
+    /// Standardizes to [`tdw_domain::SecInstitution`] (institution name search).
+    InstitutionsSearch,
+    /// Standardizes to [`tdw_domain::SicCode`] (SIC industry-code search).
+    SicSearch,
+    /// Standardizes to [`tdw_domain::FilingHeader`] (filing-index header block).
+    FilingHeaders,
+    /// Standardizes to [`tdw_domain::FilingFile`] (filing-index file list).
+    SchemaFiles,
+    /// Standardizes to [`tdw_domain::LitigationRelease`] (litigation RSS feed).
+    RssLitigation,
+    /// Standardizes to [`tdw_domain::SecFilingHtml`] (a fetched filing HTML file).
+    HtmFile,
+    /// Standardizes to [`tdw_domain::SecFilingHtml`] (the MD&A section document).
+    ManagementDiscussionAnalysis,
 }
 
 /// One standardized SEC-backed endpoint.
@@ -69,6 +91,63 @@ pub const ENDPOINTS: &[SecEndpoint] = &[
         command: "etf/holdings",
         model: SecModel::EtfHoldings,
         description: "ETF constituent holdings from NPORT-P portfolio disclosures.",
+    },
+    SecEndpoint {
+        command: "equity/compare/company_facts",
+        model: SecModel::CompanyFacts,
+        description: "XBRL company facts (reported concept values) from companyfacts.",
+    },
+    SecEndpoint {
+        command: "equity/discovery/latest_financial_reports",
+        model: SecModel::LatestFinancialReports,
+        description: "Latest periodic financial reports (10-K/10-Q) from submissions.",
+    },
+    SecEndpoint {
+        command: "etf/nport_disclosure",
+        model: SecModel::NportDisclosure,
+        description: "Fund N-PORT portfolio-disclosure filing index from submissions.",
+    },
+    // Keyless SEC regulator utilities (openbb-parity P4W8).
+    SecEndpoint {
+        command: "regulators/sec/symbol_map",
+        model: SecModel::SymbolMap,
+        description: "Map SEC CIKs to ticker symbols via company_tickers.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/institutions_search",
+        model: SecModel::InstitutionsSearch,
+        description: "Search SEC-regulated institutions by name in company_tickers.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/sic_search",
+        model: SecModel::SicSearch,
+        description: "Search the SEC Standard Industrial Classification (SIC) code list.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/filing_headers",
+        model: SecModel::FilingHeaders,
+        description: "Filing header metadata for an accession from the EDGAR index.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/schema_files",
+        model: SecModel::SchemaFiles,
+        description: "List the schema/data files in a filing from the EDGAR index.json.",
+    },
+    SecEndpoint {
+        command: "regulators/sec/rss_litigation",
+        model: SecModel::RssLitigation,
+        description: "SEC litigation releases from the public litigation RSS feed.",
+    },
+    // OpenBB-parity total G003c: keyless filing-HTML retrieval + MD&A section.
+    SecEndpoint {
+        command: "regulators/sec/htm_file",
+        model: SecModel::HtmFile,
+        description: "Retrieve an HTML file from a filing by its EDGAR archive URL.",
+    },
+    SecEndpoint {
+        command: "equity/fundamental/management_discussion_analysis",
+        model: SecModel::ManagementDiscussionAnalysis,
+        description: "Management Discussion & Analysis section document from the latest 10-K.",
     },
 ];
 
@@ -116,6 +195,17 @@ mod tests {
             SecModel::Form13F,
             SecModel::FailsToDeliver,
             SecModel::EtfHoldings,
+            SecModel::CompanyFacts,
+            SecModel::LatestFinancialReports,
+            SecModel::NportDisclosure,
+            SecModel::SymbolMap,
+            SecModel::InstitutionsSearch,
+            SecModel::SicSearch,
+            SecModel::FilingHeaders,
+            SecModel::SchemaFiles,
+            SecModel::RssLitigation,
+            SecModel::HtmFile,
+            SecModel::ManagementDiscussionAnalysis,
         ] {
             assert!(
                 ENDPOINTS.iter().any(|e| e.model == model),

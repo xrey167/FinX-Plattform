@@ -15,9 +15,10 @@
 #![cfg(feature = "http")]
 
 use tdw_core::http_support::prelude::*;
-use tdw_domain::MacroSeries;
+use tdw_domain::{ImfDiscoveryRecord, MacroSeries};
 
-use crate::{BASE_URL, ImfCompactDataQuery};
+use crate::discovery::{self, DecodedRecord};
+use crate::{BASE_URL, ImfCompactDataQuery, ImfUtilsDiscoveryQuery};
 
 const USER_AGENT: &str = "tdw-provider-imf/0.1 (contact@finx.example)";
 
@@ -236,5 +237,95 @@ impl Fetcher<ImfCompactDataQuery, MacroSeries> for ImfHttpMacroSeriesFetcher {
                 transform: None,
             })
             .collect())
+    }
+}
+
+/// Map a pure-decoder [`DecodedRecord`] into the [`ImfDiscoveryRecord`] domain
+/// model.
+fn into_domain(record: DecodedRecord) -> ImfDiscoveryRecord {
+    ImfDiscoveryRecord {
+        kind: record.kind,
+        id: record.id,
+        name: record.name,
+        dataflow: record.dataflow,
+        structure: record.structure,
+        position: record.position,
+        value: record.value,
+    }
+}
+
+tdw_core::provider_fetcher_struct!(
+    /// Production IMF SDMX-JSON discovery fetcher for the `imf_utils/*` helpers
+    /// (OpenBB-parity **P4W9**).
+    ///
+    /// Resolves an `imf_utils/*` catalog `command` to the SDMX-JSON REST method
+    /// (`Dataflow` or `DataStructure/{dataflow}`) and normalizes the discovery
+    /// response to [`tdw_domain::ImfDiscoveryRecord`] rows. Distinct from the
+    /// `CompactData` macro fetcher: the discovery shapes carry no observations.
+    pub ImfUtilsHttpDiscoveryFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<ImfUtilsDiscoveryQuery, ImfDiscoveryRecord> for ImfUtilsHttpDiscoveryFetcher {
+    const PROVIDER: &'static str = "imf";
+    const ENDPOINT: &'static str = "imf_utils_discovery";
+
+    fn transform_query(params: Value) -> Result<ImfUtilsDiscoveryQuery> {
+        ImfUtilsDiscoveryQuery::from_value(&params)
+    }
+
+    async fn extract_data(
+        &self,
+        query: &ImfUtilsDiscoveryQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let endpoint = query.endpoint();
+        let base = self.base_url().trim_end_matches('/');
+        let url = match endpoint.method {
+            "DataStructure" => {
+                // `dataflow` is validated present + grammar-checked at query build.
+                let dataflow = query.dataflow.as_deref().unwrap_or_default();
+                format!("{base}/DataStructure/{dataflow}")
+            }
+            _ => format!("{base}/Dataflow"),
+        };
+        let client =
+            tdw_core::http_support::build_client(USER_AGENT, "imf_utils http client build")?;
+        let response = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|error| Error::Provider(format!("imf_utils extract_data: {error}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Provider(format!(
+                "imf_utils returned {status}: {body}"
+            )));
+        }
+        response
+            .bytes()
+            .await
+            .map_err(|error| Error::Provider(format!("imf_utils read body: {error}")))
+    }
+
+    fn transform_data(
+        &self,
+        query: &ImfUtilsDiscoveryQuery,
+        raw: Bytes,
+    ) -> Result<Vec<ImfDiscoveryRecord>> {
+        let endpoint = query.endpoint();
+        let root: Value = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("imf_utils parse_json: {error}")))?;
+        let decoded = match endpoint.method {
+            "DataStructure" => discovery::decode_dimensions(
+                &root,
+                query.dataflow.as_deref().unwrap_or_default(),
+                endpoint.kind,
+            ),
+            _ => discovery::decode_dataflows(&root, endpoint.kind, query.query.as_deref()),
+        };
+        Ok(decoded.into_iter().map(into_domain).collect())
     }
 }

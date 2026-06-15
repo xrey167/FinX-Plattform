@@ -1,0 +1,38 @@
+{
+  "Canonical Workspace": {
+    "description": "A two-pane starter layout emitted by the control plane.",
+    "mcp_servers": [
+      {
+        "name": "tdw-workspace-mcp",
+        "url": "stdio"
+      }
+    ],
+    "name": "Canonical Workspace",
+    "tabs": {
+      "detail": {
+        "id": "detail",
+        "name": "Detail"
+      },
+      "overview": {
+        "id": "overview",
+        "layout": [
+          {
+            "h": 12,
+            "i": "equity_price_historical",
+            "w": 20,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "h": 12,
+            "i": "equity_ownership_form_13f",
+            "w": 20,
+            "x": 20,
+            "y": 0
+          }
+        ],
+        "name": "Overview"
+      }
+    }
+  }
+}

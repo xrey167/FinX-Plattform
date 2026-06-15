@@ -32,14 +32,20 @@ use serde::Deserialize;
 use serde_json::Map;
 use tdw_core::http_support::prelude::*;
 use tdw_domain::{
-    CompanyProfile, CorporateAction, Estimate, FinancialStatement, Instrument, KeyMetrics,
-    MarketDataBar, Ohlcv, QuoteSnapshot, Ratios, ScreenerRow, StatementKind, TimeGranularity,
+    CalendarEvent, CompanyFiling, CompanyProfile, CorporateAction, CurrencySnapshot,
+    EarningsTranscript, EmployeeCount, EsgScore, Estimate, EtfCountryWeight, EtfEquityExposure,
+    EtfInfo, EtfSectorWeight, ExecutiveCompensation, FinancialStatement, HistoricalMarketCap,
+    IndexConstituent, Instrument, KeyExecutive, KeyMetrics, MarketDataBar, Ohlcv, OwnershipRecord,
+    PricePerformance, QuoteSnapshot, Ratios, RevenueSegment, ScreenerRow, StatementKind,
+    TimeGranularity,
 };
 
 use crate::{
-    API_KEY_ENV, BASE_URL, FmpDiscoveryDirection, FmpDiscoveryQuery, FmpError, FmpFundamentalQuery,
-    FmpFundamentalsQuery, FmpHistoricalQuery, FmpIncomeRow, FmpQuoteQuery, FmpScreenerQuery,
-    FmpStatement, FmpStatementQuery, FmpSymbolQuery,
+    API_KEY_ENV, BASE_URL, FmpCalendarRangeQuery, FmpDiscoveryDirection, FmpDiscoveryQuery,
+    FmpError, FmpFundamentalQuery, FmpFundamentalsQuery, FmpFxSnapshotQuery, FmpHistoricalQuery,
+    FmpIncomeRow, FmpIndexConstituentQuery, FmpLimitQuery, FmpMarketSnapshotQuery, FmpQuoteQuery,
+    FmpRevenueSegmentQuery, FmpScreenerQuery, FmpSearchQuery, FmpSegmentKind, FmpStatement,
+    FmpStatementQuery, FmpSymbolLimitQuery, FmpSymbolQuery, FmpTranscriptQuery,
 };
 
 const USER_AGENT: &str = "tdw-provider-fmp/0.1";
@@ -1498,6 +1504,1808 @@ impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpAnalystEstimatesFetcher {
 }
 
 // ---------------------------------------------------------------------------
+// FmpHttpKeyExecutivesFetcher — /key-executives/{symbol} → KeyExecutive
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP key-executives fetcher, normalized to [`KeyExecutive`].
+    ///
+    /// Calls `/key-executives/{symbol}` and maps each officer entry to a
+    /// [`KeyExecutive`] (the management team).
+    pub FmpHttpKeyExecutivesFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/key-executives/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpKeyExecutiveRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    pay: Option<f64>,
+    #[serde(rename = "currencyPay", default)]
+    currency_pay: Option<String>,
+    #[serde(default)]
+    gender: Option<String>,
+    #[serde(rename = "yearBorn", default)]
+    year_born: Option<i32>,
+    #[serde(rename = "titleSince", default)]
+    title_since: Option<i32>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, KeyExecutive> for FmpHttpKeyExecutivesFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "key_executives";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/key-executives/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp key_executives").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<KeyExecutive>> {
+        let entries: Vec<FmpKeyExecutiveRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp key_executives parse_json: {e}")))?;
+        let executives = entries
+            .into_iter()
+            .filter_map(|entry| {
+                // Defensively drop entries with an empty name so an empty
+                // provider string can't fail domain validation (mirrors the
+                // transcript fetcher's empty-content guard).
+                let name = entry.name.filter(|n| !n.is_empty())?;
+                Some(KeyExecutive {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    name,
+                    title: entry.title,
+                    pay: entry.pay,
+                    currency: entry.currency_pay,
+                    gender: entry.gender,
+                    year_born: entry.year_born,
+                    title_since: entry.title_since,
+                })
+            })
+            .collect();
+        Ok(executives)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpExecutiveCompensationFetcher — /v4/governance/executive_compensation
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP executive-compensation fetcher, normalized to
+    /// [`ExecutiveCompensation`].
+    ///
+    /// Calls `/v4/governance/executive_compensation?symbol=` and maps each
+    /// disclosed officer/year row to an [`ExecutiveCompensation`].
+    pub FmpHttpExecutiveCompensationFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/governance/executive_compensation` entry.
+#[derive(Deserialize)]
+struct FmpExecutiveCompensationRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "nameAndPosition", default)]
+    name_and_position: Option<String>,
+    #[serde(default)]
+    year: Option<i32>,
+    #[serde(rename = "acceptedDate", default)]
+    accepted_date: Option<String>,
+    #[serde(default)]
+    salary: Option<f64>,
+    #[serde(default)]
+    bonus: Option<f64>,
+    #[serde(rename = "stock_award", default)]
+    stock_award: Option<f64>,
+    #[serde(rename = "option_award", default)]
+    option_award: Option<f64>,
+    #[serde(rename = "incentive_plan_compensation", default)]
+    incentive_plan_compensation: Option<f64>,
+    #[serde(rename = "all_other_compensation", default)]
+    all_other_compensation: Option<f64>,
+    #[serde(default)]
+    total: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, ExecutiveCompensation> for FmpHttpExecutiveCompensationFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "executive_compensation";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/governance/executive_compensation",
+            peers_base(self.base_url()),
+        );
+        fmp_get(
+            &url,
+            &[("symbol", query.symbol.clone())],
+            "fmp executive_compensation",
+        )
+        .await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpSymbolQuery,
+        raw: Bytes,
+    ) -> Result<Vec<ExecutiveCompensation>> {
+        let entries: Vec<FmpExecutiveCompensationRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp executive_compensation parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                // Defensively drop entries with an empty name so an empty
+                // provider string can't fail domain validation (mirrors the
+                // transcript fetcher's empty-content guard).
+                let name_and_position = entry.name_and_position.filter(|n| !n.is_empty())?;
+                Some(ExecutiveCompensation {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    name_and_position,
+                    fiscal_year: entry.year,
+                    filing_date: entry.accepted_date,
+                    salary: entry.salary,
+                    bonus: entry.bonus,
+                    stock_award: entry.stock_award,
+                    option_award: entry.option_award,
+                    incentive_plan_compensation: entry.incentive_plan_compensation,
+                    all_other_compensation: entry.all_other_compensation,
+                    total: entry.total,
+                    currency: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpRevenueSegmentFetcher — /v4/revenue-{product,geographic}-segmentation
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP revenue-segmentation fetcher, normalized to
+    /// [`RevenueSegment`].
+    ///
+    /// Calls `/v4/revenue-product-segmentation` or
+    /// `/v4/revenue-geographic-segmentation` (selected by the query's
+    /// [`FmpSegmentKind`]) and flattens FMP's `{date: {segment: revenue}}` map
+    /// into one [`RevenueSegment`] row per (period, segment).
+    pub FmpHttpRevenueSegmentFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpRevenueSegmentQuery, RevenueSegment> for FmpHttpRevenueSegmentFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "revenue_segment";
+
+    fn transform_query(params: Value) -> Result<FmpRevenueSegmentQuery> {
+        let symbol = symbol_param(&params)?;
+        let kind = FmpSegmentKind::from_param(
+            params
+                .get("structure")
+                .or_else(|| params.get("segment_kind"))
+                .and_then(Value::as_str),
+        );
+        let period = crate::FmpPeriod::from_param(params.get("period").and_then(Value::as_str));
+        FmpRevenueSegmentQuery::new(symbol, kind, period)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpRevenueSegmentQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/{}",
+            peers_base(self.base_url()),
+            query.kind.as_path_segment(),
+        );
+        fmp_get(
+            &url,
+            &[
+                ("symbol", query.symbol.clone()),
+                ("period", query.period.as_param().to_string()),
+                ("structure", "flat".to_string()),
+            ],
+            "fmp revenue_segment",
+        )
+        .await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpRevenueSegmentQuery,
+        raw: Bytes,
+    ) -> Result<Vec<RevenueSegment>> {
+        // FMP returns an array of single-key objects: `[{ "2024-09-28": { "iPhone": 201.. } }]`.
+        let entries: Vec<Map<String, Value>> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp revenue_segment parse_json: {e}")))?;
+        let mut rows = Vec::new();
+        for entry in entries {
+            for (date, segments) in entry {
+                let Some(segment_map) = segments.as_object() else {
+                    continue;
+                };
+                for (segment, value) in segment_map {
+                    rows.push(RevenueSegment {
+                        symbol: query.symbol.clone(),
+                        kind: query.kind.as_kind().to_string(),
+                        date: date.clone(),
+                        segment: segment.clone(),
+                        revenue: value.as_f64(),
+                    });
+                }
+            }
+        }
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpTranscriptFetcher — /earning_call_transcript/{symbol} → EarningsTranscript
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP earnings-call-transcript fetcher, normalized to
+    /// [`EarningsTranscript`].
+    ///
+    /// Calls `/earning_call_transcript/{symbol}?year=&quarter=` and maps each
+    /// returned transcript to an [`EarningsTranscript`].
+    pub FmpHttpTranscriptFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/earning_call_transcript/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpTranscriptRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    year: Option<i32>,
+    #[serde(default)]
+    quarter: Option<i32>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpTranscriptQuery, EarningsTranscript> for FmpHttpTranscriptFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "transcript";
+
+    fn transform_query(params: Value) -> Result<FmpTranscriptQuery> {
+        let symbol = symbol_param(&params)?;
+        let year = u32::try_from(params.get("year").and_then(Value::as_u64).unwrap_or(0))
+            .map_err(|e| Error::InvalidQuery(format!("fmp transcript year too large: {e}")))?;
+        let quarter = u32::try_from(params.get("quarter").and_then(Value::as_u64).unwrap_or(0))
+            .map_err(|e| Error::InvalidQuery(format!("fmp transcript quarter too large: {e}")))?;
+        FmpTranscriptQuery::new(symbol, year, quarter)
+            .map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpTranscriptQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/earning_call_transcript/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(
+            &url,
+            &[
+                ("year", query.year.to_string()),
+                ("quarter", query.quarter.to_string()),
+            ],
+            "fmp transcript",
+        )
+        .await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpTranscriptQuery,
+        raw: Bytes,
+    ) -> Result<Vec<EarningsTranscript>> {
+        let entries: Vec<FmpTranscriptRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp transcript parse_json: {e}")))?;
+        let transcripts = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let content = entry.content.filter(|c| !c.is_empty())?;
+                Some(EarningsTranscript {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    year: entry.year.or_else(|| i32::try_from(query.year).ok()),
+                    quarter: entry.quarter.or_else(|| i32::try_from(query.quarter).ok()),
+                    date: entry.date,
+                    content,
+                })
+            })
+            .collect();
+        Ok(transcripts)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEsgScoreFetcher — /v4/esg-environmental-social-governance-data → EsgScore
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ESG-score fetcher, normalized to [`EsgScore`].
+    ///
+    /// Calls `/v4/esg-environmental-social-governance-data?symbol=` and maps each
+    /// disclosure to an [`EsgScore`].
+    pub FmpHttpEsgScoreFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/esg-environmental-social-governance-data` entry.
+#[derive(Deserialize)]
+struct FmpEsgScoreRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(rename = "companyName", default)]
+    company_name: Option<String>,
+    #[serde(rename = "environmentalScore", default)]
+    environmental_score: Option<f64>,
+    #[serde(rename = "socialScore", default)]
+    social_score: Option<f64>,
+    #[serde(rename = "governanceScore", default)]
+    governance_score: Option<f64>,
+    #[serde(rename = "ESGScore", default)]
+    esg_score: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EsgScore> for FmpHttpEsgScoreFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "esg_score";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/esg-environmental-social-governance-data",
+            peers_base(self.base_url()),
+        );
+        fmp_get(&url, &[("symbol", query.symbol.clone())], "fmp esg_score").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EsgScore>> {
+        let entries: Vec<FmpEsgScoreRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp esg_score parse_json: {e}")))?;
+        let scores = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let date = entry.date?;
+                Some(EsgScore {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    date,
+                    company_name: entry.company_name,
+                    environmental_score: entry.environmental_score,
+                    social_score: entry.social_score,
+                    governance_score: entry.governance_score,
+                    esg_score: entry.esg_score,
+                })
+            })
+            .collect();
+        Ok(scores)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEmployeeCountFetcher — /v4/historical/employee_count → EmployeeCount
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP historical-employee-count fetcher, normalized to
+    /// [`EmployeeCount`].
+    ///
+    /// Calls `/v4/historical/employee_count?symbol=` and maps each filing to an
+    /// [`EmployeeCount`].
+    pub FmpHttpEmployeeCountFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/historical/employee_count` entry.
+#[derive(Deserialize)]
+struct FmpEmployeeCountRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "periodOfReport", default)]
+    period_of_report: Option<String>,
+    #[serde(rename = "filingDate", default)]
+    filing_date: Option<String>,
+    #[serde(rename = "employeeCount", default)]
+    employee_count: Option<i64>,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EmployeeCount> for FmpHttpEmployeeCountFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "employee_count";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/historical/employee_count", peers_base(self.base_url()));
+        fmp_get(
+            &url,
+            &[("symbol", query.symbol.clone())],
+            "fmp employee_count",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EmployeeCount>> {
+        let entries: Vec<FmpEmployeeCountRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp employee_count parse_json: {e}")))?;
+        let counts = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let period_of_report = entry.period_of_report?;
+                Some(EmployeeCount {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    period_of_report,
+                    filing_date: entry.filing_date,
+                    employee_count: entry.employee_count,
+                    source: entry.source,
+                })
+            })
+            .collect();
+        Ok(counts)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpFilingsFetcher — /sec_filings/{symbol} → CompanyFiling
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP SEC-filings-index fetcher, normalized to [`CompanyFiling`].
+    ///
+    /// Calls `/sec_filings/{symbol}?limit=` and maps each filing-index entry to a
+    /// [`CompanyFiling`].
+    pub FmpHttpFilingsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/sec_filings/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpFilingRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "type", default)]
+    form_type: Option<String>,
+    #[serde(rename = "fillingDate", default)]
+    filling_date: Option<String>,
+    #[serde(rename = "filingDate", default)]
+    filing_date: Option<String>,
+    #[serde(rename = "acceptedDate", default)]
+    accepted_date: Option<String>,
+    #[serde(default)]
+    cik: Option<String>,
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(rename = "finalLink", default)]
+    final_link: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolLimitQuery, CompanyFiling> for FmpHttpFilingsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "filings";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolLimitQuery> {
+        let symbol = symbol_param(&params)?;
+        let limit = limit_param(&params, 100)?;
+        FmpSymbolLimitQuery::new(symbol, limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpSymbolLimitQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/sec_filings/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[("limit", query.limit.to_string())], "fmp filings").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpSymbolLimitQuery,
+        raw: Bytes,
+    ) -> Result<Vec<CompanyFiling>> {
+        let entries: Vec<FmpFilingRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp filings parse_json: {e}")))?;
+        let filings = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let form_type = entry.form_type?;
+                Some(CompanyFiling {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    form_type,
+                    filing_date: entry.filling_date.or(entry.filing_date),
+                    accepted_date: entry.accepted_date,
+                    cik: entry.cik,
+                    link: entry.link,
+                    final_link: entry.final_link,
+                })
+            })
+            .collect();
+        Ok(filings)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpSearchFetcher — /search → Instrument (equity/search)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ticker-search fetcher, normalized to [`Instrument`].
+    ///
+    /// Calls `/search?query=&limit=` and maps each match to an [`Instrument`]
+    /// (the search hit's symbol, company name, and exchange).
+    pub FmpHttpSearchFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/search` result entry.
+#[derive(Deserialize)]
+struct FmpSearchRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(rename = "stockExchange", default)]
+    stock_exchange: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSearchQuery, Instrument> for FmpHttpSearchFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "search";
+
+    fn transform_query(params: Value) -> Result<FmpSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::InvalidQuery("fmp search query must be a string".to_string()))?;
+        let limit = limit_param(&params, 10)?;
+        FmpSearchQuery::new(query, limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &FmpSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/search", self.base_url().trim_end_matches('/'));
+        fmp_get(
+            &url,
+            &[
+                ("query", query.query.clone()),
+                ("limit", query.limit.to_string()),
+            ],
+            "fmp search",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSearchQuery, raw: Bytes) -> Result<Vec<Instrument>> {
+        let entries: Vec<FmpSearchRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp search parse_json: {e}")))?;
+        let instruments = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(Instrument {
+                    name: entry.name.unwrap_or_else(|| symbol.clone()),
+                    symbol,
+                    venue: entry
+                        .exchange_short_name
+                        .or(entry.stock_exchange)
+                        .unwrap_or_else(|| "fmp".to_string()),
+                })
+            })
+            .collect();
+        let _ = query;
+        Ok(instruments)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpHistoricalMarketCapFetcher — /historical-market-capitalization
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP historical-market-capitalization fetcher, normalized to
+    /// [`HistoricalMarketCap`].
+    ///
+    /// Calls `/historical-market-capitalization/{symbol}?limit=` and maps each
+    /// (date, market-cap) point to a [`HistoricalMarketCap`].
+    pub FmpHttpHistoricalMarketCapFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/historical-market-capitalization/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpMarketCapRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(rename = "marketCap", default)]
+    market_cap: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolLimitQuery, HistoricalMarketCap> for FmpHttpHistoricalMarketCapFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "historical_market_cap";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolLimitQuery> {
+        let symbol = symbol_param(&params)?;
+        let limit = limit_param(&params, 100)?;
+        FmpSymbolLimitQuery::new(symbol, limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpSymbolLimitQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/historical-market-capitalization/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(
+            &url,
+            &[("limit", query.limit.to_string())],
+            "fmp historical_market_cap",
+        )
+        .await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpSymbolLimitQuery,
+        raw: Bytes,
+    ) -> Result<Vec<HistoricalMarketCap>> {
+        let entries: Vec<FmpMarketCapRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp historical_market_cap parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let date = entry.date?;
+                Some(HistoricalMarketCap {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    date,
+                    market_cap: entry.market_cap,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpSplitCalendarFetcher — /stock_split_calendar → CalendarEvent
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP stock-split-calendar fetcher, normalized to
+    /// [`CalendarEvent`] (`kind = "split"`).
+    ///
+    /// Calls `/stock_split_calendar?from=&to=` and maps each upcoming split to a
+    /// [`CalendarEvent`].
+    pub FmpHttpSplitCalendarFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/stock_split_calendar` entry.
+#[derive(Deserialize)]
+struct FmpSplitCalendarRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    numerator: Option<f64>,
+    #[serde(default)]
+    denominator: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpCalendarRangeQuery, CalendarEvent> for FmpHttpSplitCalendarFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "split_calendar";
+
+    fn transform_query(params: Value) -> Result<FmpCalendarRangeQuery> {
+        let from = params.get("from").and_then(Value::as_str);
+        let to = params.get("to").and_then(Value::as_str);
+        FmpCalendarRangeQuery::new(from, to).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpCalendarRangeQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/stock_split_calendar",
+            self.base_url().trim_end_matches('/')
+        );
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(from) = &query.from {
+            params.push(("from", from.clone()));
+        }
+        if let Some(to) = &query.to {
+            params.push(("to", to.clone()));
+        }
+        fmp_get(&url, &params, "fmp split_calendar").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpCalendarRangeQuery,
+        raw: Bytes,
+    ) -> Result<Vec<CalendarEvent>> {
+        let entries: Vec<FmpSplitCalendarRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp split_calendar parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                // The split factor (new-for-old) carried in the price field. A
+                // denominator of exactly `0.0` makes the ratio mathematically
+                // undefined, so it is rejected explicitly rather than falling
+                // through to the numerator-only arm.
+                let ratio = match (entry.numerator, entry.denominator) {
+                    (Some(n), Some(d)) => (d != 0.0).then_some(n / d),
+                    (Some(n), None) => Some(n),
+                    _ => None,
+                };
+                Some(CalendarEvent {
+                    kind: "split".to_string(),
+                    symbol,
+                    name: entry.label,
+                    date: entry.date,
+                    dividend: None,
+                    payment_date: None,
+                    record_date: None,
+                    eps_estimate: None,
+                    fiscal_period: None,
+                    price: ratio,
+                    shares: None,
+                    exchange: None,
+                })
+            })
+            .collect();
+        let _ = query;
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpLatestFilingsFetcher — /rss_feed → CompanyFiling (equity/discovery/filings)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP latest-SEC-filings-feed fetcher, normalized to
+    /// [`CompanyFiling`].
+    ///
+    /// Calls `/rss_feed?limit=` (the cross-issuer feed of the most-recent SEC
+    /// filings reported to EDGAR) and maps each feed item to a [`CompanyFiling`].
+    pub FmpHttpLatestFilingsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/rss_feed` entry.
+#[derive(Deserialize)]
+struct FmpRssFilingRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "type", default)]
+    form_type: Option<String>,
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(rename = "acceptedDate", default)]
+    accepted_date: Option<String>,
+    #[serde(default)]
+    cik: Option<String>,
+    #[serde(default)]
+    link: Option<String>,
+    #[serde(rename = "finalLink", default)]
+    final_link: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpLimitQuery, CompanyFiling> for FmpHttpLatestFilingsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "latest_filings";
+
+    fn transform_query(params: Value) -> Result<FmpLimitQuery> {
+        let limit = limit_param(&params, 100)?;
+        FmpLimitQuery::new(limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, query: &FmpLimitQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/rss_feed", self.base_url().trim_end_matches('/'));
+        fmp_get(
+            &url,
+            &[("limit", query.limit.to_string())],
+            "fmp latest_filings",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpLimitQuery, raw: Bytes) -> Result<Vec<CompanyFiling>> {
+        let entries: Vec<FmpRssFilingRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp latest_filings parse_json: {e}")))?;
+        let filings = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                let form_type = entry.form_type.filter(|t| !t.trim().is_empty())?;
+                Some(CompanyFiling {
+                    symbol,
+                    form_type,
+                    filing_date: entry.date,
+                    accepted_date: entry.accepted_date,
+                    cik: entry.cik,
+                    link: entry.link,
+                    final_link: entry.final_link,
+                })
+            })
+            .collect();
+        let _ = query;
+        Ok(filings)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpInsiderTradingFetcher — /v4/insider-trading → OwnershipRecord
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP insider-trading fetcher, normalized to [`OwnershipRecord`]
+    /// (`kind = "insider"`).
+    ///
+    /// Calls `/v4/insider-trading?symbol=` and maps each reported transaction to
+    /// an [`OwnershipRecord`].
+    pub FmpHttpInsiderTradingFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/insider-trading` entry.
+#[derive(Deserialize)]
+struct FmpInsiderTradeRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "reportingName", default)]
+    reporting_name: Option<String>,
+    #[serde(rename = "typeOfOwner", default)]
+    type_of_owner: Option<String>,
+    #[serde(rename = "transactionDate", default)]
+    transaction_date: Option<String>,
+    #[serde(rename = "transactionType", default)]
+    transaction_type: Option<String>,
+    #[serde(rename = "securitiesTransacted", default)]
+    securities_transacted: Option<f64>,
+    #[serde(default)]
+    price: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpInsiderTradingFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "insider_trading";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        // The insider-trading endpoint lives at the v4 root, not v3.
+        let url = format!("{}/insider-trading", peers_base(self.base_url()));
+        fmp_get(
+            &url,
+            &[("symbol", query.symbol.clone())],
+            "fmp insider_trading",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let entries: Vec<FmpInsiderTradeRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp insider_trading parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .map(|entry| {
+                let shares = entry.securities_transacted;
+                let value = match (shares, entry.price) {
+                    (Some(s), Some(p)) => Some(s * p),
+                    _ => None,
+                };
+                OwnershipRecord {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    kind: "insider".to_string(),
+                    holder: entry.reporting_name,
+                    relationship: entry.type_of_owner,
+                    date: entry.transaction_date,
+                    transaction_type: entry.transaction_type,
+                    shares,
+                    value,
+                    percentage: None,
+                }
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpInstitutionalOwnershipFetcher — /institutional-holder → OwnershipRecord
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP institutional-ownership fetcher, normalized to
+    /// [`OwnershipRecord`] (`kind = "institutional"`).
+    ///
+    /// Calls `/institutional-holder/{symbol}` and maps each institutional holder
+    /// to an [`OwnershipRecord`].
+    pub FmpHttpInstitutionalOwnershipFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/institutional-holder/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpInstitutionalHolderRaw {
+    #[serde(default)]
+    holder: Option<String>,
+    #[serde(default)]
+    shares: Option<f64>,
+    #[serde(rename = "dateReported", default)]
+    date_reported: Option<String>,
+    #[serde(default)]
+    change: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpInstitutionalOwnershipFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "institutional_ownership";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/institutional-holder/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp institutional_ownership").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let entries: Vec<FmpInstitutionalHolderRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp institutional_ownership parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let holder = entry.holder.filter(|h| !h.trim().is_empty())?;
+                Some(OwnershipRecord {
+                    symbol: query.symbol.clone(),
+                    kind: "institutional".to_string(),
+                    holder: Some(holder),
+                    relationship: None,
+                    date: entry.date_reported,
+                    transaction_type: None,
+                    shares: entry.shares,
+                    value: entry.change,
+                    percentage: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpGovernmentTradesFetcher — /v4/senate-trading → OwnershipRecord
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP government (senate) trading fetcher, normalized to
+    /// [`OwnershipRecord`] (`kind = "government_trade"`).
+    ///
+    /// Calls `/v4/senate-trading?symbol=` and maps each disclosed congressional
+    /// trade to an [`OwnershipRecord`].
+    pub FmpHttpGovernmentTradesFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/v4/senate-trading` entry.
+#[derive(Deserialize)]
+struct FmpSenateTradeRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    representative: Option<String>,
+    #[serde(default)]
+    office: Option<String>,
+    #[serde(rename = "transactionDate", default)]
+    transaction_date: Option<String>,
+    #[serde(rename = "type", default)]
+    transaction_type: Option<String>,
+    #[serde(default)]
+    amount: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpGovernmentTradesFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "government_trades";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        // The senate-trading endpoint lives at the v4 root, not v3.
+        let url = format!("{}/senate-trading", peers_base(self.base_url()));
+        fmp_get(
+            &url,
+            &[("symbol", query.symbol.clone())],
+            "fmp government_trades",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let entries: Vec<FmpSenateTradeRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp government_trades parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .map(|entry| {
+                // FMP reports the traded amount as a bucket string (e.g.
+                // "$1,001 - $15,000"); surface the lower bound as a value hint.
+                let value = entry.amount.as_deref().and_then(parse_amount_lower_bound);
+                OwnershipRecord {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    kind: "government_trade".to_string(),
+                    holder: entry.representative,
+                    relationship: entry.office,
+                    date: entry.transaction_date,
+                    transaction_type: entry.transaction_type,
+                    shares: None,
+                    value,
+                    percentage: None,
+                }
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ===========================================================================
+// ETF cluster (openbb-parity P4W3). FMP-keyed ETF endpoints, each normalized to
+// a `tdw-domain` ETF model. All use FMP's documented legacy ETF endpoints (the
+// same v3/v4 legacy surface the rest of this crate targets):
+//   - etf/search           → /etf/list (filtered by the query fragment)
+//   - etf/info             → /etf-info?symbol=
+//   - etf/sectors          → /etf-sector-weightings/{symbol}
+//   - etf/countries        → /etf-country-weightings/{symbol}
+//   - etf/price_performance→ /stock-price-change/{symbol}
+//   - etf/equity_exposure  → /etf-stock-exposure/{symbol}
+// All keyed (FMP only). etf/historical reuses the existing FMP historical
+// fetcher (an ETF ticker resolves through /historical-price-full like any
+// symbol), so no dedicated fetcher is added here.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfSearchFetcher — /etf/list → Instrument (etf/search)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF-search fetcher, normalized to [`Instrument`].
+    ///
+    /// Calls `/etf/list` (the full keyless ETF universe) and filters to rows whose
+    /// symbol or name contains the caller's `query` fragment (case-insensitive),
+    /// capped at the query's `limit`. Standardizes `etf/search`.
+    pub FmpHttpEtfSearchFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf/list` entry.
+#[derive(Deserialize)]
+struct FmpEtfListRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(default)]
+    exchange: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSearchQuery, Instrument> for FmpHttpEtfSearchFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_search";
+
+    fn transform_query(params: Value) -> Result<FmpSearchQuery> {
+        let query = params
+            .get("query")
+            .or_else(|| params.get("q"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Error::InvalidQuery("fmp etf search query must be a string".to_string())
+            })?;
+        let limit = limit_param(&params, 10)?;
+        FmpSearchQuery::new(query, limit).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(&self, _query: &FmpSearchQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/etf/list", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[], "fmp etf_search").await
+    }
+
+    fn transform_data(&self, query: &FmpSearchQuery, raw: Bytes) -> Result<Vec<Instrument>> {
+        let entries: Vec<FmpEtfListRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_search parse_json: {e}")))?;
+        let needle = query.query.to_ascii_lowercase();
+        let limit = query.limit as usize;
+        let instruments = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                let name = entry.name.unwrap_or_else(|| symbol.clone());
+                let matches = symbol.to_ascii_lowercase().contains(&needle)
+                    || name.to_ascii_lowercase().contains(&needle);
+                if !matches {
+                    return None;
+                }
+                Some(Instrument {
+                    name,
+                    symbol,
+                    venue: entry
+                        .exchange_short_name
+                        .or(entry.exchange)
+                        .unwrap_or_else(|| "fmp".to_string()),
+                })
+            })
+            .take(limit)
+            .collect();
+        Ok(instruments)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfInfoFetcher — /etf-info?symbol= → EtfInfo (etf/info)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF-info fetcher, normalized to [`EtfInfo`].
+    ///
+    /// Calls `/etf-info?symbol=` and maps the fund's profile (name, issuer, NAV,
+    /// AUM, expense ratio, holdings count) to an [`EtfInfo`]. Standardizes
+    /// `etf/info`.
+    pub FmpHttpEtfInfoFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-info` entry.
+#[derive(Deserialize)]
+struct FmpEtfInfoRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(rename = "etfCompany", default)]
+    etf_company: Option<String>,
+    #[serde(default)]
+    nav: Option<f64>,
+    #[serde(default)]
+    aum: Option<f64>,
+    #[serde(rename = "expenseRatio", default)]
+    expense_ratio: Option<f64>,
+    #[serde(rename = "holdingsCount", default)]
+    holdings_count: Option<u64>,
+    #[serde(default)]
+    domicile: Option<String>,
+    #[serde(rename = "exchangeShortName", default)]
+    exchange_short_name: Option<String>,
+    #[serde(rename = "inceptionDate", default)]
+    inception_date: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfInfo> for FmpHttpEtfInfoFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_info";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!("{}/etf-info", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[("symbol", query.symbol.clone())], "fmp etf_info").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfInfo>> {
+        let entries: Vec<FmpEtfInfoRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_info parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .map(|entry| EtfInfo {
+                symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                name: entry.name.unwrap_or_else(|| query.symbol.clone()),
+                issuer: entry.etf_company,
+                nav: entry.nav,
+                aum: entry.aum,
+                expense_ratio: entry.expense_ratio,
+                holdings_count: entry.holdings_count,
+                currency: None,
+                exchange: entry.exchange_short_name,
+                inception_date: entry.inception_date,
+                description: entry.description.or(entry.domicile),
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfSectorsFetcher — /etf-sector-weightings/{symbol} → EtfSectorWeight
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF sector-weighting fetcher, normalized to
+    /// [`EtfSectorWeight`].
+    ///
+    /// Calls `/etf-sector-weightings/{symbol}` and maps each (sector, weight) pair
+    /// to an [`EtfSectorWeight`]. Standardizes `etf/sectors`.
+    pub FmpHttpEtfSectorsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-sector-weightings/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfSectorRaw {
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfSectorWeight> for FmpHttpEtfSectorsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_sectors";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-sector-weightings/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_sectors").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfSectorWeight>> {
+        let entries: Vec<FmpEtfSectorRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_sectors parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let sector = entry.sector.filter(|s| !s.trim().is_empty())?;
+                Some(EtfSectorWeight {
+                    fund_symbol: query.symbol.clone(),
+                    report_date: None,
+                    sector,
+                    weight_pct: entry.weight_percentage.and_then(parse_weight_percentage),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfCountriesFetcher — /etf-country-weightings/{symbol} → EtfCountryWeight
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF country-weighting fetcher, normalized to
+    /// [`EtfCountryWeight`].
+    ///
+    /// Calls `/etf-country-weightings/{symbol}` and maps each (country, weight)
+    /// pair to an [`EtfCountryWeight`]. Standardizes `etf/countries`.
+    pub FmpHttpEtfCountriesFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-country-weightings/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfCountryRaw {
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfCountryWeight> for FmpHttpEtfCountriesFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_countries";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-country-weightings/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_countries").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfCountryWeight>> {
+        let entries: Vec<FmpEtfCountryRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_countries parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let country = entry.country.filter(|s| !s.trim().is_empty())?;
+                Some(EtfCountryWeight {
+                    fund_symbol: query.symbol.clone(),
+                    country,
+                    weight_pct: entry.weight_percentage.and_then(parse_weight_percentage),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfPricePerformanceFetcher — /stock-price-change/{symbol} →
+// PricePerformance (etf/price_performance)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF price-performance fetcher, normalized to
+    /// [`PricePerformance`].
+    ///
+    /// Calls `/stock-price-change/{symbol}` and maps the documented period
+    /// percentage changes (`1D`, `5D`, `1M`, `3M`, `ytd`, `1Y`) to a
+    /// [`PricePerformance`]. FMP reports these as whole-number percentages; they
+    /// are scaled to fractions to match the domain contract. Standardizes
+    /// `etf/price_performance`.
+    pub FmpHttpEtfPricePerformanceFetcher,
+    BASE_URL
+);
+
+/// Wire shape for a `/stock-price-change/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpPriceChangeRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(rename = "1D", default)]
+    one_day: Option<f64>,
+    #[serde(rename = "5D", default)]
+    five_day: Option<f64>,
+    #[serde(rename = "1M", default)]
+    one_month: Option<f64>,
+    #[serde(rename = "3M", default)]
+    three_month: Option<f64>,
+    #[serde(default)]
+    ytd: Option<f64>,
+    #[serde(rename = "1Y", default)]
+    one_year: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, PricePerformance> for FmpHttpEtfPricePerformanceFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_price_performance";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/stock-price-change/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_price_performance").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<PricePerformance>> {
+        let entries: Vec<FmpPriceChangeRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_price_performance parse_json: {e}")))?;
+        // FMP reports each period change as a whole-number percentage; the domain
+        // contract is a fraction, so divide by 100.
+        let to_fraction = |value: Option<f64>| value.map(|v| v / 100.0);
+        let rows = entries
+            .into_iter()
+            .map(|entry| PricePerformance {
+                symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                price: None,
+                one_day: to_fraction(entry.one_day),
+                one_week: to_fraction(entry.five_day),
+                one_month: to_fraction(entry.one_month),
+                three_month: to_fraction(entry.three_month),
+                ytd: to_fraction(entry.ytd),
+                one_year: to_fraction(entry.one_year),
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpEtfEquityExposureFetcher — /etf-stock-exposure/{symbol} →
+// EtfEquityExposure (etf/equity_exposure)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP ETF equity-exposure fetcher, normalized to
+    /// [`EtfEquityExposure`].
+    ///
+    /// Calls `/etf-stock-exposure/{symbol}` (the reverse lookup: every ETF that
+    /// holds the queried stock) and maps each fund to an [`EtfEquityExposure`].
+    /// Standardizes `etf/equity_exposure`.
+    pub FmpHttpEtfEquityExposureFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/etf-stock-exposure/{symbol}` entry.
+#[derive(Deserialize)]
+struct FmpEtfExposureRaw {
+    #[serde(rename = "etfSymbol", default)]
+    etf_symbol: Option<String>,
+    #[serde(rename = "assetExposure", default)]
+    asset_exposure: Option<String>,
+    #[serde(rename = "weightPercentage", default)]
+    weight_percentage: Option<f64>,
+    #[serde(rename = "sharesNumber", default)]
+    shares_number: Option<f64>,
+    #[serde(rename = "marketValue", default)]
+    market_value: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, EtfEquityExposure> for FmpHttpEtfEquityExposureFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "etf_equity_exposure";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/etf-stock-exposure/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp etf_equity_exposure").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<EtfEquityExposure>> {
+        let entries: Vec<FmpEtfExposureRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp etf_equity_exposure parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let fund_symbol = entry
+                    .etf_symbol
+                    .or(entry.asset_exposure)
+                    .filter(|s| !s.trim().is_empty())?;
+                Some(EtfEquityExposure {
+                    equity_symbol: query.symbol.clone(),
+                    fund_symbol,
+                    weight_pct: entry.weight_percentage,
+                    shares: entry.shares_number,
+                    market_value: entry.market_value,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpIndexConstituentsFetcher — /{index}_constituent → IndexConstituent
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP index-constituents fetcher, normalized to
+    /// [`IndexConstituent`].
+    ///
+    /// Calls `/{index}_constituent` (e.g. `/sp500_constituent`,
+    /// `/nasdaq_constituent`, `/dowjones_constituent`) and maps each member row
+    /// to one [`IndexConstituent`]. Standardizes `index/constituents`; the
+    /// `index` param selects the index handle (default `sp500`).
+    pub FmpHttpIndexConstituentsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/{index}_constituent` entry.
+#[derive(Deserialize)]
+struct FmpIndexConstituentRaw {
+    #[serde(default)]
+    symbol: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    sector: Option<String>,
+    #[serde(rename = "subSector", default)]
+    sub_sector: Option<String>,
+    #[serde(rename = "headQuarter", default)]
+    head_quarter: Option<String>,
+    #[serde(rename = "dateFirstAdded", default)]
+    date_first_added: Option<String>,
+}
+
+#[async_trait]
+impl Fetcher<FmpIndexConstituentQuery, IndexConstituent> for FmpHttpIndexConstituentsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "index_constituents";
+
+    fn transform_query(params: Value) -> Result<FmpIndexConstituentQuery> {
+        Ok(FmpIndexConstituentQuery::from_param(
+            params.get("index").and_then(Value::as_str),
+        ))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpIndexConstituentQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/{}_constituent",
+            self.base_url().trim_end_matches('/'),
+            query.index,
+        );
+        fmp_get(&url, &[], "fmp index_constituents").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpIndexConstituentQuery,
+        raw: Bytes,
+    ) -> Result<Vec<IndexConstituent>> {
+        let entries: Vec<FmpIndexConstituentRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp index_constituents parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(IndexConstituent {
+                    index: query.index.clone(),
+                    symbol,
+                    name: entry.name.filter(|s| !s.trim().is_empty()),
+                    sector: entry.sector.filter(|s| !s.trim().is_empty()),
+                    sub_industry: entry.sub_sector.filter(|s| !s.trim().is_empty()),
+                    headquarters: entry.head_quarter.filter(|s| !s.trim().is_empty()),
+                    date_added: entry.date_first_added.filter(|s| !s.trim().is_empty()),
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpCurrencySnapshotsFetcher — /fx → CurrencySnapshot
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP forex-snapshot fetcher, normalized to [`CurrencySnapshot`].
+    ///
+    /// Calls `/fx` (the full forex snapshot — every pair, no path parameter) and
+    /// maps each pair to one [`CurrencySnapshot`]. Standardizes
+    /// `currency/snapshots`; an optional `symbol` param keeps only the matching
+    /// pair client-side.
+    pub FmpHttpCurrencySnapshotsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for an `/fx` entry.
+#[derive(Deserialize)]
+struct FmpFxRaw {
+    #[serde(default)]
+    ticker: Option<String>,
+    #[serde(default)]
+    bid: Option<String>,
+    #[serde(default)]
+    ask: Option<String>,
+    #[serde(default)]
+    open: Option<String>,
+    #[serde(default)]
+    changes: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<FmpFxSnapshotQuery, CurrencySnapshot> for FmpHttpCurrencySnapshotsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "currency_snapshots";
+
+    fn transform_query(params: Value) -> Result<FmpFxSnapshotQuery> {
+        Ok(FmpFxSnapshotQuery::from_param(
+            params.get("symbol").and_then(Value::as_str),
+        ))
+    }
+
+    async fn extract_data(
+        &self,
+        _query: &FmpFxSnapshotQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!("{}/fx", self.base_url().trim_end_matches('/'));
+        fmp_get(&url, &[], "fmp currency_snapshots").await
+    }
+
+    fn transform_data(
+        &self,
+        query: &FmpFxSnapshotQuery,
+        raw: Bytes,
+    ) -> Result<Vec<CurrencySnapshot>> {
+        let entries: Vec<FmpFxRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp currency_snapshots parse_json: {e}")))?;
+        // The optional filter compares against both the raw `EUR/USD` form and the
+        // delimiter-stripped `EURUSD` form so either caller spelling matches.
+        let needle = query.symbol.replace('/', "");
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let ticker = entry.ticker.filter(|s| !s.trim().is_empty())?;
+                if !needle.is_empty() && ticker.to_ascii_uppercase().replace('/', "") != needle {
+                    return None;
+                }
+                let (base_currency, quote_currency) = split_fx_pair(&ticker);
+                let bid = entry.bid.and_then(|s| s.trim().parse::<f64>().ok());
+                let ask = entry.ask.and_then(|s| s.trim().parse::<f64>().ok());
+                // The `/fx` snapshot carries no explicit last price; derive a mid
+                // from bid/ask when both are present, else fall back to the open.
+                let price = match (bid, ask) {
+                    (Some(b), Some(a)) => Some((b + a) / 2.0),
+                    _ => entry.open.and_then(|s| s.trim().parse::<f64>().ok()),
+                };
+                let change_percent = match (price, entry.changes) {
+                    (Some(p), Some(c)) if (p - c).abs() > f64::EPSILON => Some(c / (p - c) * 100.0),
+                    _ => None,
+                };
+                Some(CurrencySnapshot {
+                    symbol: ticker,
+                    base_currency,
+                    quote_currency,
+                    price,
+                    bid,
+                    ask,
+                    change: entry.changes,
+                    change_percent,
+                    // The `/fx` snapshot carries a wall-clock string, not an epoch;
+                    // the dependency-free fetcher leaves the optional millis unset
+                    // rather than pulling in a date-parsing dependency.
+                    ts_ms: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+/// Split an FX-pair ticker (`"EUR/USD"` or `"EURUSD"`) into its base / quote
+/// currency codes. Returns `(None, None)` when the shape is unrecognized.
+fn split_fx_pair(ticker: &str) -> (Option<String>, Option<String>) {
+    let upper = ticker.trim().to_ascii_uppercase();
+    if let Some((base, quote)) = upper.split_once('/') {
+        return (Some(base.to_string()), Some(quote.to_string()));
+    }
+    if upper.len() == 6 && upper.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return (Some(upper[0..3].to_string()), Some(upper[3..6].to_string()));
+    }
+    (None, None)
+}
+
+/// Parse an FMP weight-percentage field (`"7.10%"` / `"7.10"` / `""`) into a
+/// number, stripping a trailing `%`. Returns `None` when the field is blank or
+/// non-numeric.
+fn parse_weight_percentage(raw: String) -> Option<f64> {
+    let trimmed = raw.trim().trim_end_matches('%').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok()
+}
+
+/// Parse the lower bound of an FMP amount bucket like `"$1,001 - $15,000"` into a
+/// number, returning `None` when no leading numeric portion is present.
+///
+/// Open-ended low buckets (`"$1,000 or less"`, `"under $1,001"`, `"below $1,001"`)
+/// have a lower bound of zero; without this guard the leading number of the bucket
+/// would be mistaken for the lower bound, overstating the disclosed minimum.
+fn parse_amount_lower_bound(amount: &str) -> Option<f64> {
+    let amount_lower = amount.to_ascii_lowercase();
+    if amount_lower.contains("less")
+        || amount_lower.contains("under")
+        || amount_lower.contains("below")
+    {
+        return Some(0.0);
+    }
+    let first = amount.split('-').next().unwrap_or(amount);
+    let cleaned: String = first
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        cleaned.parse::<f64>().ok()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared query-parameter parsing helpers
 // ---------------------------------------------------------------------------
 
@@ -1545,4 +3353,197 @@ fn fundamental_query(params: &Value) -> Result<FmpFundamentalQuery> {
 fn symbol_query(params: &Value) -> Result<FmpSymbolQuery> {
     let symbol = symbol_param(params)?;
     FmpSymbolQuery::new(symbol).map_err(|e| Error::InvalidQuery(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpMajorHoldersFetcher — /institutional-holder → OwnershipRecord
+// (equity/ownership/major_holders)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP major-holders fetcher, normalized to [`OwnershipRecord`]
+    /// (`kind = "major_holder"`).
+    ///
+    /// Calls `/institutional-holder/{symbol}` and emits one [`OwnershipRecord`]
+    /// per major institutional holder, ordered by reported share count. Mirrors
+    /// the institutional-ownership leg but standardizes the distinct
+    /// `equity/ownership/major_holders` OpenBB command with its own `kind`.
+    pub FmpHttpMajorHoldersFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, OwnershipRecord> for FmpHttpMajorHoldersFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "major_holders";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/institutional-holder/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(&url, &[], "fmp major_holders").await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<OwnershipRecord>> {
+        let entries: Vec<FmpInstitutionalHolderRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp major_holders parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let holder = entry.holder.filter(|h| !h.trim().is_empty())?;
+                Some(OwnershipRecord {
+                    symbol: query.symbol.clone(),
+                    kind: "major_holder".to_string(),
+                    holder: Some(holder),
+                    relationship: None,
+                    date: entry.date_reported,
+                    transaction_type: None,
+                    shares: entry.shares,
+                    value: entry.change,
+                    percentage: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpMarketSnapshotsFetcher — /symbol/{exchange} → QuoteSnapshot
+// (equity/market_snapshots)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP market-snapshots fetcher, normalized to [`QuoteSnapshot`].
+    ///
+    /// Calls `/symbol/{exchange}` (the full-exchange quote list, e.g.
+    /// `NASDAQ`/`NYSE`/`AMEX`) and emits one [`QuoteSnapshot`] per listed
+    /// symbol. Standardizes `equity/market_snapshots`.
+    pub FmpHttpMarketSnapshotsFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpMarketSnapshotQuery, QuoteSnapshot> for FmpHttpMarketSnapshotsFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "market_snapshots";
+
+    fn transform_query(params: Value) -> Result<FmpMarketSnapshotQuery> {
+        let exchange = params
+            .get("exchange")
+            .or_else(|| params.get("market"))
+            .and_then(Value::as_str);
+        FmpMarketSnapshotQuery::from_param(exchange).map_err(|e| Error::InvalidQuery(e.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &FmpMarketSnapshotQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/symbol/{}",
+            self.base_url().trim_end_matches('/'),
+            query.exchange,
+        );
+        fmp_get(&url, &[], "fmp market_snapshots").await
+    }
+
+    fn transform_data(
+        &self,
+        _query: &FmpMarketSnapshotQuery,
+        raw: Bytes,
+    ) -> Result<Vec<QuoteSnapshot>> {
+        let entries: Vec<FmpQuoteRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp market_snapshots parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let symbol = entry.symbol.filter(|s| !s.trim().is_empty())?;
+                Some(QuoteSnapshot {
+                    symbol,
+                    current_price: entry.price,
+                    change: entry.change,
+                    change_percent: entry.changes_percentage,
+                    prev_close: entry.previous_close,
+                    ts_ms: entry.timestamp * 1_000,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FmpHttpForwardEbitdaFetcher — /analyst-estimates/{symbol} → Estimate
+// (equity/estimates/forward_ebitda)
+// ---------------------------------------------------------------------------
+
+tdw_core::provider_fetcher_struct!(
+    /// Production FMP forward-EBITDA-estimates fetcher, normalized to
+    /// [`Estimate`] (`kind = "forward_ebitda"`).
+    ///
+    /// Calls `/analyst-estimates/{symbol}?period=annual` and emits one
+    /// [`Estimate`] per forward period from the `estimatedEbitda*` triplet,
+    /// dropping periods whose `estimatedEbitdaAvg` is absent. Standardizes the
+    /// distinct `equity/estimates/forward_ebitda` OpenBB command (the combined
+    /// `equity/estimates/forward` route emits all three forward metrics).
+    pub FmpHttpForwardEbitdaFetcher,
+    BASE_URL
+);
+
+#[async_trait]
+impl Fetcher<FmpSymbolQuery, Estimate> for FmpHttpForwardEbitdaFetcher {
+    const PROVIDER: &'static str = "fmp";
+    const ENDPOINT: &'static str = "forward_ebitda";
+
+    fn transform_query(params: Value) -> Result<FmpSymbolQuery> {
+        symbol_query(&params)
+    }
+
+    async fn extract_data(&self, query: &FmpSymbolQuery, _creds: &Credentials) -> Result<Bytes> {
+        let url = format!(
+            "{}/analyst-estimates/{}",
+            self.base_url().trim_end_matches('/'),
+            query.symbol,
+        );
+        fmp_get(
+            &url,
+            &[("period", "annual".to_string())],
+            "fmp forward_ebitda",
+        )
+        .await
+    }
+
+    fn transform_data(&self, query: &FmpSymbolQuery, raw: Bytes) -> Result<Vec<Estimate>> {
+        let entries: Vec<FmpAnalystEstimateRaw> = serde_json::from_slice(&raw)
+            .map_err(|e| Error::Provider(format!("fmp forward_ebitda parse_json: {e}")))?;
+        let rows = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let value = entry.estimated_ebitda_avg?;
+                Some(Estimate {
+                    symbol: entry.symbol.unwrap_or_else(|| query.symbol.clone()),
+                    kind: "forward_ebitda".to_string(),
+                    fiscal_period: entry.date,
+                    date: None,
+                    analyst: None,
+                    recommendation: None,
+                    value: Some(value),
+                    low: entry.estimated_ebitda_low,
+                    high: entry.estimated_ebitda_high,
+                    mean: Some(value),
+                    number_of_analysts: None,
+                    currency: None,
+                })
+            })
+            .collect();
+        Ok(rows)
+    }
 }

@@ -70,6 +70,39 @@ pub const ENDPOINTS: &[FedEndpoint] = &[
         unit: "",
         model: FedModel::FomcDocuments,
     },
+    // -- economy: SOMA / primary-dealer breadth (OpenBB-parity P4W4) ---------
+    FedEndpoint {
+        command: "economy/central_bank_holdings",
+        series_id: "SOMA_HOLDINGS",
+        title: "Federal Reserve SOMA Securities Holdings",
+        frequency: "weekly",
+        unit: "usd",
+        model: FedModel::Macro,
+    },
+    FedEndpoint {
+        command: "economy/primary_dealer_positioning",
+        series_id: "PD_NET_POSITIONS",
+        title: "Primary Dealer Net Positioning (FRBNY)",
+        frequency: "weekly",
+        unit: "usd",
+        model: FedModel::Macro,
+    },
+    FedEndpoint {
+        command: "economy/primary_dealer_fails",
+        series_id: "PD_FAILS",
+        title: "Primary Dealer Settlement Fails (FRBNY)",
+        frequency: "weekly",
+        unit: "usd",
+        model: FedModel::Macro,
+    },
+    FedEndpoint {
+        command: "economy/fomc_documents",
+        series_id: "",
+        title: "FOMC Meeting Documents Index",
+        frequency: "",
+        unit: "",
+        model: FedModel::FomcDocuments,
+    },
 ];
 
 /// Resolve a catalog entry by its `OpenBB` `command` path.

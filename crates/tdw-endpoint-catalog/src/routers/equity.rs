@@ -3,9 +3,11 @@
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
 use tdw_domain::{
-    CalendarEvent, CompanyProfile, CorporateAction, EquityHistoricalData, Estimate,
-    FinancialStatement, Instrument, KeyMetrics, OwnershipRecord, PricePerformance, QuoteSnapshot,
-    Ratios, ScreenerRow,
+    CalendarEvent, CompanyAttribute, CompanyFacts, CompanyFiling, CompanyProfile, CorporateAction,
+    EarningsTranscript, EmployeeCount, EquityHistoricalData, EsgScore, Estimate,
+    ExecutiveCompensation, FinancialStatement, HistoricalMarketCap, Instrument, KeyExecutive,
+    KeyMetrics, OtcMarketVolume, OwnershipRecord, PricePerformance, QuoteSnapshot, Ratios,
+    RevenueSegment, ScreenerRow, SecFilingHtml, ShortInterest,
 };
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
@@ -35,6 +37,13 @@ const EQUITY_OWNERSHIP_FORM_13F: &[ProviderCandidate] =
 /// Keyless SEC candidate for fails-to-deliver records (gap-matrix item **L2.6**).
 const EQUITY_SHORTS_FAILS_TO_DELIVER: &[ProviderCandidate] =
     &[ProviderCandidate::new("sec", "fails_to_deliver")];
+
+/// Keyless FINRA candidates (openbb-parity **P4W10**). Each endpoint key matches
+/// the FINRA fetcher's `ENDPOINT` const and runtime dispatch key (a short key,
+/// not the `'/'→'_'` route form), kept in sync by a conformance test.
+const EQUITY_SHORTS_SHORT_INTEREST: &[ProviderCandidate] =
+    &[ProviderCandidate::new("finra", "short_interest")];
+const EQUITY_DARKPOOL_OTC: &[ProviderCandidate] = &[ProviderCandidate::new("finra", "otc_summary")];
 // Keyless Yahoo expansion (gap-matrix item L2.4). Each route's single candidate
 // endpoint key matches the Yahoo fetcher's `ENDPOINT` const, which is also the
 // runtime fetch/ingest dispatch-table key; a conformance test in tdw-service-api
@@ -62,6 +71,45 @@ const EQUITY_FUNDAMENTAL_CASH: &[ProviderCandidate] =
 const EQUITY_FUNDAMENTAL_RATIOS: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "ratios")];
 const EQUITY_FUNDAMENTAL_METRICS: &[ProviderCandidate] =
     &[ProviderCandidate::new("fmp", "key_metrics")];
+
+// FMP equity/fundamental breadth (openbb-parity P4W1). The three statement-growth
+// routes reuse the shared FMP `financial_statement` fetcher with `growth=true`
+// injected per dispatch binding, so each gets a distinct dispatch endpoint key —
+// `financial_statement_<kind>_growth` — to avoid a dispatch-key collision (the
+// NASDAQ-calendar / statement pattern). The remaining routes are each their own
+// FMP fetcher keyed by its `ENDPOINT` const, except the two revenue-segmentation
+// routes which share one fetcher (the `structure` discriminator is injected per
+// binding) and so get distinct `revenue_segment_<kind>` keys. All keyed (FMP only).
+const EQUITY_FUNDAMENTAL_BALANCE_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_balance_growth",
+)];
+const EQUITY_FUNDAMENTAL_INCOME_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_income_growth",
+)];
+const EQUITY_FUNDAMENTAL_CASH_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "fmp",
+    "financial_statement_cash_growth",
+)];
+const EQUITY_FUNDAMENTAL_HISTORICAL_EPS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "historical_eps")];
+const EQUITY_FUNDAMENTAL_EMPLOYEE_COUNT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "employee_count")];
+const EQUITY_FUNDAMENTAL_ESG_SCORE: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "esg_score")];
+const EQUITY_FUNDAMENTAL_FILINGS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "filings")];
+const EQUITY_FUNDAMENTAL_MANAGEMENT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "key_executives")];
+const EQUITY_FUNDAMENTAL_MANAGEMENT_COMPENSATION: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "executive_compensation")];
+const EQUITY_FUNDAMENTAL_REVENUE_PER_SEGMENT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "revenue_segment_product")];
+const EQUITY_FUNDAMENTAL_REVENUE_PER_GEOGRAPHY: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "revenue_segment_geography")];
+const EQUITY_FUNDAMENTAL_TRANSCRIPT: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "transcript")];
 const EQUITY_PRICE_QUOTE: &[ProviderCandidate] = &[ProviderCandidate::new("yahoo", "equity_quote")];
 const EQUITY_PRICE_PERFORMANCE: &[ProviderCandidate] =
     &[ProviderCandidate::new("yahoo", "price_performance")];
@@ -116,8 +164,106 @@ const EQUITY_CALENDAR_EARNINGS: &[ProviderCandidate] =
 const EQUITY_CALENDAR_IPO: &[ProviderCandidate] =
     &[ProviderCandidate::new("nasdaq", "equity_calendar_ipo")];
 
+// FMP equity discovery/estimates/ownership breadth (openbb-parity P4W2). Each
+// route is its own FMP fetcher keyed by its `ENDPOINT` const, except the two
+// SEC routes (company_facts and latest_financial_reports) served by the keyless
+// SEC EDGAR data API. All free-tier (FMP / SEC) only.
+const EQUITY_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("fmp", "search")];
+const EQUITY_HISTORICAL_MARKET_CAP: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "historical_market_cap")];
+const EQUITY_CALENDAR_SPLITS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "split_calendar")];
+const EQUITY_COMPARE_COMPANY_FACTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "company_facts")];
+const EQUITY_DISCOVERY_FILINGS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "latest_filings")];
+const EQUITY_DISCOVERY_LATEST_FINANCIAL_REPORTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "latest_financial_reports")];
+const EQUITY_OWNERSHIP_INSIDER_TRADING: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "insider_trading")];
+const EQUITY_OWNERSHIP_INSTITUTIONAL: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "institutional_ownership")];
+const EQUITY_OWNERSHIP_GOVERNMENT_TRADES: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "government_trades")];
+
+// yfinance discovery screeners (openbb-parity P4W3). The four predefined-screen
+// routes share one keyless Yahoo predefined-screener fetcher (the screen id is
+// injected per dispatch binding), so each route gets a distinct dispatch endpoint
+// key — `discovery_<screen>` — to avoid a dispatch-key collision (the
+// FMP-discovery / NASDAQ-calendar pattern). All keyless (Yahoo only). These
+// complement the existing FMP discovery active/gainers/losers routes.
+const EQUITY_DISCOVERY_AGGRESSIVE_SMALL_CAPS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_aggressive_small_caps",
+)];
+const EQUITY_DISCOVERY_GROWTH_TECH: &[ProviderCandidate] =
+    &[ProviderCandidate::new("yahoo", "discovery_growth_tech")];
+const EQUITY_DISCOVERY_UNDERVALUED_GROWTH: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_undervalued_growth",
+)];
+const EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "yahoo",
+    "discovery_undervalued_large_caps",
+)];
+
+// OpenBB-parity total G003c: the free-closeable equity remainder. Each route is
+// its own provider fetcher keyed by its `ENDPOINT` const, except `calendar/events`
+// which reuses the shared keyless NASDAQ calendar fetcher (the `events` calendar
+// discriminator is injected per dispatch binding, so the route gets the
+// `'/'→'_'` dispatch key, mirroring the dividends/earnings/ipo calendars). FMP
+// free-tier (major_holders, market_snapshots, forward_ebitda), keyless NASDAQ
+// (calendar/events, discovery/top_retail), and keyless SEC (MD&A).
+const EQUITY_OWNERSHIP_MAJOR_HOLDERS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "major_holders")];
+const EQUITY_MARKET_SNAPSHOTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "market_snapshots")];
+const EQUITY_ESTIMATES_FORWARD_EBITDA: &[ProviderCandidate] =
+    &[ProviderCandidate::new("fmp", "forward_ebitda")];
+const EQUITY_CALENDAR_EVENTS: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "equity_calendar_events")];
+const EQUITY_DISCOVERY_TOP_RETAIL: &[ProviderCandidate] =
+    &[ProviderCandidate::new("nasdaq", "top_retail")];
+const EQUITY_FUNDAMENTAL_MD_AND_A: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "sec",
+    "management_discussion_analysis",
+)];
+
+// Intrinio keyed-provider fundamentals/estimates breadth (openbb-parity total
+// wave G002). Each route is its own catalog-backed Intrinio fetcher whose
+// `ENDPOINT` const is the route's `'/'→'_'` form (the dispatch key). All keyed
+// (Intrinio only; live calls require the PAID INTRINIO_API_KEY).
+const EQUITY_FUNDAMENTAL_HISTORICAL_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_historical_attributes",
+)];
+const EQUITY_FUNDAMENTAL_LATEST_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_latest_attributes",
+)];
+const EQUITY_FUNDAMENTAL_SEARCH_ATTRIBUTES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_search_attributes",
+)];
+const EQUITY_FUNDAMENTAL_REPORTED_FINANCIALS: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_fundamental_reported_financials",
+)];
+const EQUITY_ESTIMATES_FORWARD_PE: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_estimates_forward_pe",
+)];
+const EQUITY_ESTIMATES_FORWARD_SALES: &[ProviderCandidate] = &[ProviderCandidate::new(
+    "intrinio",
+    "equity_estimates_forward_sales",
+)];
+
 fn params_schema() -> Schema {
     schema_for!(StandardParams)
+}
+
+fn sec_filing_html() -> Schema {
+    schema_for!(SecFilingHtml)
 }
 
 fn model_schema() -> Schema {
@@ -156,6 +302,10 @@ fn financial_statement() -> Schema {
     schema_for!(FinancialStatement)
 }
 
+fn company_attribute() -> Schema {
+    schema_for!(CompanyAttribute)
+}
+
 fn key_metrics() -> Schema {
     schema_for!(KeyMetrics)
 }
@@ -170,6 +320,50 @@ fn instrument() -> Schema {
 
 fn screener_row() -> Schema {
     schema_for!(ScreenerRow)
+}
+
+fn key_executive() -> Schema {
+    schema_for!(KeyExecutive)
+}
+
+fn executive_compensation() -> Schema {
+    schema_for!(ExecutiveCompensation)
+}
+
+fn revenue_segment() -> Schema {
+    schema_for!(RevenueSegment)
+}
+
+fn earnings_transcript() -> Schema {
+    schema_for!(EarningsTranscript)
+}
+
+fn esg_score() -> Schema {
+    schema_for!(EsgScore)
+}
+
+fn employee_count() -> Schema {
+    schema_for!(EmployeeCount)
+}
+
+fn company_filing() -> Schema {
+    schema_for!(CompanyFiling)
+}
+
+fn company_facts() -> Schema {
+    schema_for!(CompanyFacts)
+}
+
+fn historical_market_cap() -> Schema {
+    schema_for!(HistoricalMarketCap)
+}
+
+fn short_interest() -> Schema {
+    schema_for!(ShortInterest)
+}
+
+fn otc_market_volume() -> Schema {
+    schema_for!(OtcMarketVolume)
 }
 
 /// One non-chartable single-model `equity/*` Fetch entry (the common shape of
@@ -330,7 +524,350 @@ pub fn entries() -> Vec<CatalogEntry> {
     ];
     entries.extend(fundamental_entries());
     entries.extend(completion_entries());
+    entries.extend(p4w1_entries());
+    entries.extend(p4w2_entries());
+    entries.extend(p4w3_entries());
+    entries.extend(p4w10_entries());
+    entries.extend(g003c_entries());
+    entries.extend(g002_intrinio_entries());
     entries
+}
+
+/// OpenBB-parity total G003c free-closeable equity remainder: FMP major
+/// holders, the full-exchange market snapshot, the forward-EBITDA estimate, the
+/// keyless NASDAQ corporate-events calendar and top-retail discovery feed, and
+/// the keyless SEC Management-Discussion-&-Analysis document. Split out of
+/// [`entries`] to keep each function compact; appended in declaration order.
+fn g003c_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/ownership/major_holders",
+            ownership_record,
+            EQUITY_OWNERSHIP_MAJOR_HOLDERS,
+            "raw.ownership_record",
+            "Major institutional holders of a company, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/market_snapshots",
+            price_quote,
+            EQUITY_MARKET_SNAPSHOTS,
+            "raw.price_quote",
+            "Full-exchange market snapshot (per-symbol last-price quotes), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/estimates/forward_ebitda",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_EBITDA,
+            "raw.estimate",
+            "Forward EBITDA analyst estimates per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/events",
+            calendar_event,
+            EQUITY_CALENDAR_EVENTS,
+            "raw.calendar_event",
+            "Upcoming corporate-events calendar, NASDAQ-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/top_retail",
+            screener_row,
+            EQUITY_DISCOVERY_TOP_RETAIL,
+            "raw.screener_row",
+            "Top retail-traded equities discovery feed, NASDAQ-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/fundamental/management_discussion_analysis",
+            sec_filing_html,
+            EQUITY_FUNDAMENTAL_MD_AND_A,
+            "raw.sec_filing_html",
+            "Management Discussion & Analysis document from the latest 10-K, SEC-backed (keyless).",
+        ),
+    ]
+}
+
+/// Intrinio keyed-provider fundamentals/estimates entries (openbb-parity total
+/// wave **G002**): the three data-point attribute routes, as-reported
+/// financials, and the forward-PE / forward-sales analyst estimates. Each is its
+/// own catalog-backed Intrinio fetcher keyed by its `ENDPOINT` const. Split out
+/// of [`entries`] to keep each function compact; appended in declaration order.
+/// All keyed (Intrinio only; live calls require the PAID `INTRINIO_API_KEY`).
+fn g002_intrinio_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/historical_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_HISTORICAL_ATTRIBUTES,
+            "raw.company_attribute",
+            "Historical time series for a standardized data-point tag of a company, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/latest_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_LATEST_ATTRIBUTES,
+            "raw.company_attribute",
+            "Latest value of a standardized data-point tag for a company, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/search_attributes",
+            company_attribute,
+            EQUITY_FUNDAMENTAL_SEARCH_ATTRIBUTES,
+            "raw.company_attribute",
+            "Search the standardized data-point tag dictionary, Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/fundamental/reported_financials",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_REPORTED_FINANCIALS,
+            "raw.financial_statement",
+            "As-reported financial statement line items for a fundamental, \
+             Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/estimates/forward_pe",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_PE,
+            "raw.estimate",
+            "Forward price-to-earnings analyst estimates per period, Intrinio-backed (keyed).",
+        ),
+        flat_entry(
+            "equity/estimates/forward_sales",
+            estimate,
+            EQUITY_ESTIMATES_FORWARD_SALES,
+            "raw.estimate",
+            "Forward sales analyst estimates per period, Intrinio-backed (keyed).",
+        ),
+    ]
+}
+
+/// Keyless FINRA shorts / dark-pool entries (openbb-parity **P4W10**): reported
+/// short interest and the weekly OTC market-volume summary. Split out of
+/// [`entries`] to keep each function compact; appended in declaration order.
+/// Keyless (FINRA only).
+fn p4w10_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/shorts/short_interest",
+            short_interest,
+            EQUITY_SHORTS_SHORT_INTEREST,
+            "raw.short_interest",
+            "Reported consolidated short interest for equities, FINRA-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/darkpool/otc",
+            otc_market_volume,
+            EQUITY_DARKPOOL_OTC,
+            "raw.otc_market_volume",
+            "Weekly OTC / dark-pool market-volume summary, FINRA-backed (keyless).",
+        ),
+    ]
+}
+
+/// yfinance discovery-screener entries (openbb-parity P4W3): the four predefined
+/// Yahoo screens, each its own dispatch key over the shared keyless
+/// predefined-screener fetcher (the screen id is injected per binding). All emit
+/// [`ScreenerRow`]. Split out of [`entries`] to keep each function compact;
+/// appended in declaration order. Keyless (Yahoo only).
+fn p4w3_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/discovery/aggressive_small_caps",
+            screener_row,
+            EQUITY_DISCOVERY_AGGRESSIVE_SMALL_CAPS,
+            "raw.screener_row",
+            "Aggressive small-cap discovery screen (high earnings growth), Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/growth_tech",
+            screener_row,
+            EQUITY_DISCOVERY_GROWTH_TECH,
+            "raw.screener_row",
+            "Growth technology-stocks discovery screen, Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/undervalued_growth",
+            screener_row,
+            EQUITY_DISCOVERY_UNDERVALUED_GROWTH,
+            "raw.screener_row",
+            "Undervalued growth-stocks discovery screen, Yahoo-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/undervalued_large_caps",
+            screener_row,
+            EQUITY_DISCOVERY_UNDERVALUED_LARGE_CAPS,
+            "raw.screener_row",
+            "Undervalued large-cap discovery screen, Yahoo-backed (keyless).",
+        ),
+    ]
+}
+
+/// FMP/SEC equity discovery/estimates/ownership breadth entries (openbb-parity
+/// P4W2): ticker search, historical market cap, the split calendar, SEC company
+/// facts, the latest-filings discovery feeds (FMP cross-issuer + SEC periodic
+/// reports), and the insider / institutional / government-trade ownership
+/// records. Split out of [`entries`] to keep each function compact; appended in
+/// declaration order. Free-tier (FMP / keyless SEC) only.
+fn p4w2_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/search",
+            instrument,
+            EQUITY_SEARCH,
+            "raw.instrument",
+            "Ticker/company search by name or symbol fragment, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/historical_market_cap",
+            historical_market_cap,
+            EQUITY_HISTORICAL_MARKET_CAP,
+            "raw.historical_market_cap",
+            "Historical market-capitalization time series for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/calendar/splits",
+            calendar_event,
+            EQUITY_CALENDAR_SPLITS,
+            "raw.calendar_event",
+            "Upcoming stock-split calendar (split factor, date), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/compare/company_facts",
+            company_facts,
+            EQUITY_COMPARE_COMPANY_FACTS,
+            "raw.company_facts",
+            "Reported XBRL company facts (concept values per period), SEC-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/discovery/filings",
+            company_filing,
+            EQUITY_DISCOVERY_FILINGS,
+            "raw.company_filing",
+            "Latest SEC filings reported to EDGAR (cross-issuer feed), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/discovery/latest_financial_reports",
+            company_filing,
+            EQUITY_DISCOVERY_LATEST_FINANCIAL_REPORTS,
+            "raw.company_filing",
+            "Latest periodic financial reports (10-K/10-Q) for a filer, SEC-backed (keyless).",
+        ),
+        flat_entry(
+            "equity/ownership/insider_trading",
+            ownership_record,
+            EQUITY_OWNERSHIP_INSIDER_TRADING,
+            "raw.ownership_record",
+            "Insider (management/board) trading activity for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/ownership/institutional",
+            ownership_record,
+            EQUITY_OWNERSHIP_INSTITUTIONAL,
+            "raw.ownership_record",
+            "Institutional holders and ownership over time for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/ownership/government_trades",
+            ownership_record,
+            EQUITY_OWNERSHIP_GOVERNMENT_TRADES,
+            "raw.ownership_record",
+            "Government official (congressional) trades for a symbol, FMP-backed.",
+        ),
+    ]
+}
+
+/// FMP equity/fundamental breadth entries (openbb-parity P4W1): statement-growth
+/// siblings, historical EPS, employee count, ESG score, SEC filings index,
+/// management team and compensation, revenue per segment/geography, and the
+/// earnings-call transcript. Split out of [`entries`] to keep each function
+/// compact; appended in declaration order. All keyed (FMP only).
+fn p4w1_entries() -> Vec<CatalogEntry> {
+    vec![
+        flat_entry(
+            "equity/fundamental/balance_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_BALANCE_GROWTH,
+            "raw.financial_statement",
+            "Balance-sheet growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/income_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_INCOME_GROWTH,
+            "raw.financial_statement",
+            "Income-statement growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/cash_growth",
+            financial_statement,
+            EQUITY_FUNDAMENTAL_CASH_GROWTH,
+            "raw.financial_statement",
+            "Cash-flow growth rates per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/historical_eps",
+            estimate,
+            EQUITY_FUNDAMENTAL_HISTORICAL_EPS,
+            "raw.estimate",
+            "Historical reported vs estimated EPS per period for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/employee_count",
+            employee_count,
+            EQUITY_FUNDAMENTAL_EMPLOYEE_COUNT,
+            "raw.employee_count",
+            "Historical employee headcount per filing for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/esg_score",
+            esg_score,
+            EQUITY_FUNDAMENTAL_ESG_SCORE,
+            "raw.esg_score",
+            "Environmental/social/governance pillar and overall scores, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/filings",
+            company_filing,
+            EQUITY_FUNDAMENTAL_FILINGS,
+            "raw.company_filing",
+            "Company SEC-filings index (form type, dates, links), FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/management",
+            key_executive,
+            EQUITY_FUNDAMENTAL_MANAGEMENT,
+            "raw.key_executive",
+            "Executive/management team (name, title, pay) for a symbol, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/management_compensation",
+            executive_compensation,
+            EQUITY_FUNDAMENTAL_MANAGEMENT_COMPENSATION,
+            "raw.executive_compensation",
+            "Executive compensation per officer and fiscal year, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/revenue_per_segment",
+            revenue_segment,
+            EQUITY_FUNDAMENTAL_REVENUE_PER_SEGMENT,
+            "raw.revenue_segment",
+            "Revenue broken down by business product segment per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/revenue_per_geography",
+            revenue_segment,
+            EQUITY_FUNDAMENTAL_REVENUE_PER_GEOGRAPHY,
+            "raw.revenue_segment",
+            "Revenue broken down by geographic region per period, FMP-backed.",
+        ),
+        flat_entry(
+            "equity/fundamental/transcript",
+            earnings_transcript,
+            EQUITY_FUNDAMENTAL_TRANSCRIPT,
+            "raw.earnings_transcript",
+            "Earnings-call transcript for a fiscal quarter, FMP-backed.",
+        ),
+    ]
 }
 
 /// FMP fundamentals-completion entries (openbb-parity P2W2): corporate-action

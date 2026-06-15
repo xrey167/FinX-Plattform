@@ -25,6 +25,38 @@ pub const PROVIDER_ID: &str = "finra";
 /// Maximum allowed limit for short-interest queries.
 pub const SHORT_INTEREST_MAX_LIMIT: u32 = 1000;
 
+/// One standardized FINRA Market Data endpoint.
+///
+/// `command` is the `OpenBB`-parity catalog command path this endpoint
+/// standardizes; `endpoint` is the concrete dispatch key (the matching fetcher's
+/// `ENDPOINT` const). A conformance test in `tdw-service-api` keeps this table
+/// and the catalog candidates in sync without the catalog crate depending on
+/// this provider. (OpenBB-parity **P4W10**.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FinraEndpoint {
+    /// `OpenBB`-parity command path this endpoint standardizes.
+    pub command: &'static str,
+    /// Concrete dispatch endpoint key (matches the fetcher's `ENDPOINT` const).
+    pub endpoint: &'static str,
+    /// Human-readable description of the endpoint.
+    pub description: &'static str,
+}
+
+/// The standardized FINRA endpoint catalog (OpenBB-parity **P4W10**): reported
+/// short interest and weekly OTC / dark-pool volume, both keyless.
+pub const ENDPOINTS: &[FinraEndpoint] = &[
+    FinraEndpoint {
+        command: "equity/shorts/short_interest",
+        endpoint: "short_interest",
+        description: "FINRA consolidated reported short interest (keyless).",
+    },
+    FinraEndpoint {
+        command: "equity/darkpool/otc",
+        endpoint: "otc_summary",
+        description: "FINRA weekly OTC / dark-pool market volume summary (keyless).",
+    },
+];
+
 /// Shared result type for this crate.
 pub type Result<T> = std::result::Result<T, FinraProviderError>;
 

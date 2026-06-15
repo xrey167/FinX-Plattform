@@ -28,12 +28,15 @@ from .economy import EconomyNamespace
 from .equity import EquityNamespace
 from .etf import EtfNamespace
 from .fixedincome import FixedincomeNamespace
+from .forecast import ForecastNamespace
+from .imf_utils import ImfUtilsNamespace
 from .index import IndexNamespace
 from .news import NewsNamespace
 from .portfolio import PortfolioNamespace
 from .quantitative import QuantitativeNamespace
 from .regulators import RegulatorsNamespace
 from .technical import TechnicalNamespace
+from .uscongress import UscongressNamespace
 
 __all__ = [
     "FinX",
@@ -69,10 +72,13 @@ class FinX:
         self.equity = EquityNamespace(self._client)
         self.etf = EtfNamespace(self._client)
         self.fixedincome = FixedincomeNamespace(self._client)
+        self.forecast = ForecastNamespace(self._client)
+        self.imf_utils = ImfUtilsNamespace(self._client)
         self.index = IndexNamespace(self._client)
         self.news = NewsNamespace(self._client)
         self.portfolio = PortfolioNamespace(self._client)
         self.quantitative = QuantitativeNamespace(self._client)
         self.regulators = RegulatorsNamespace(self._client)
         self.technical = TechnicalNamespace(self._client)
+        self.uscongress = UscongressNamespace(self._client)
 

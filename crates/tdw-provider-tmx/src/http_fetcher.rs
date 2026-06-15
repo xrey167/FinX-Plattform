@@ -17,9 +17,12 @@
 //! integration tests.
 
 use tdw_core::http_support::prelude::*;
-use tdw_domain::EquityHistoricalData;
+use tdw_domain::{EquityHistoricalData, IndexSector};
 
-use crate::{TmxBatchQuoteQuery, TmxQuote, TmxQuoteQuery, parse_quote_response, validate_symbol};
+use crate::{
+    TmxBatchQuoteQuery, TmxIndexSectorsQuery, TmxQuote, TmxQuoteQuery, parse_quote_response,
+    validate_symbol,
+};
 
 const BASE_URL: &str = "https://app.tmxmoney.com/apphub/quotes/api";
 const USER_AGENT: &str = "tdw-provider-tmx/0.1";
@@ -149,6 +152,79 @@ impl Fetcher<TmxBatchQuoteQuery, EquityHistoricalData> for TmxHttpBatchQuoteFetc
         let quotes =
             parse_quote_response(&raw).map_err(|error| Error::Provider(error.to_string()))?;
         Ok(quotes_to_domain(quotes))
+    }
+}
+
+// ── index-sectors fetcher ──────────────────────────────────────────────────
+
+tdw_core::provider_fetcher_struct!(
+    /// Production TMX index sector-breakdown fetcher.
+    ///
+    /// Maps to the public TMX market-data index-sectors document
+    /// (`/index/getsectorweights?symbol={index}`) and emits one
+    /// [`tdw_domain::IndexSector`] per sector in the index. Standardizes
+    /// `index/sectors`. The index symbol is normalised (leading `^`) by
+    /// [`TmxIndexSectorsQuery::from_params`].
+    pub TmxHttpIndexSectorsFetcher,
+    BASE_URL
+);
+
+/// Wire shape for one TMX index sector-weight entry.
+#[derive(serde::Deserialize)]
+struct TmxSectorWeightRaw {
+    #[serde(alias = "sector", alias = "name", alias = "sectorName")]
+    sector: Option<String>,
+    #[serde(alias = "weight", alias = "weightPercent", alias = "percentWeight")]
+    weight: Option<f64>,
+}
+
+#[async_trait]
+impl Fetcher<TmxIndexSectorsQuery, IndexSector> for TmxHttpIndexSectorsFetcher {
+    const PROVIDER: &'static str = "tmx";
+    const ENDPOINT: &'static str = "index_sectors";
+
+    fn transform_query(params: Value) -> Result<TmxIndexSectorsQuery> {
+        TmxIndexSectorsQuery::from_params(&params)
+            .map_err(|error| Error::InvalidQuery(error.to_string()))
+    }
+
+    async fn extract_data(
+        &self,
+        query: &TmxIndexSectorsQuery,
+        _creds: &Credentials,
+    ) -> Result<Bytes> {
+        let url = format!(
+            "{}/index/getsectorweights?symbol={}",
+            self.base_url(),
+            query.symbol
+        );
+        let client = tdw_core::http_support::build_client(USER_AGENT, "tmx client build")?;
+        get_bytes(&client, &url).await
+    }
+
+    fn transform_data(&self, query: &TmxIndexSectorsQuery, raw: Bytes) -> Result<Vec<IndexSector>> {
+        let value: Value = serde_json::from_slice(&raw)
+            .map_err(|error| Error::Provider(format!("tmx index_sectors parse_json: {error}")))?;
+        // The sector array is published under one of a few known keys depending
+        // on the document version; probe them in order.
+        let rows = ["results", "sectors", "sectorWeights"]
+            .iter()
+            .find_map(|key| value.get(*key).and_then(Value::as_array))
+            .cloned()
+            .unwrap_or_default();
+        let sectors = rows
+            .iter()
+            .filter_map(|row| {
+                let parsed: TmxSectorWeightRaw = serde_json::from_value(row.clone()).ok()?;
+                let sector = parsed.sector.filter(|s| !s.trim().is_empty())?;
+                Some(IndexSector {
+                    index: query.symbol.clone(),
+                    sector,
+                    weight_pct: parsed.weight,
+                })
+            })
+            .collect();
+        Ok(sectors)
     }
 }
 

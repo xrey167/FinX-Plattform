@@ -37,6 +37,7 @@
 #![cfg(feature = "workspace-route")]
 
 use std::collections::{BTreeSet, VecDeque};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -445,38 +446,41 @@ fn render_markdown(
 ) -> String {
     let mut out = String::new();
     out.push_str("## Knowledge Graph\n\n");
-    out.push_str(&format!(
-        "Root: `{}` · depth {} · {} nodes · {} edges\n",
+    let _ = writeln!(
+        out,
+        "Root: `{}` · depth {} · {} nodes · {} edges",
         request.root.as_deref().unwrap_or("(none)"),
         request.depth,
         nodes.len(),
         edges.len()
-    ));
+    );
     if let Some(as_of) = &request.as_of {
-        out.push_str(&format!("As of: `{as_of}`\n"));
+        let _ = writeln!(out, "As of: `{as_of}`");
     }
     if let Some(note) = note {
-        out.push_str(&format!("\n> {note}\n"));
+        let _ = write!(out, "\n> {note}\n");
     }
 
     out.push_str("\n### Nodes\n\n| id | kind | label |\n|----|------|-------|\n");
     for node in nodes {
-        out.push_str(&format!(
-            "| `{}` | {:?} | {} |\n",
+        let _ = writeln!(
+            out,
+            "| `{}` | {:?} | {} |",
             escape_cell(&node.id),
             node.kind,
             escape_cell(&node.label)
-        ));
+        );
     }
 
     out.push_str("\n### Edges\n\n| from | rel | to |\n|------|-----|----|\n");
     for edge in edges {
-        out.push_str(&format!(
-            "| `{}` | {} | `{}` |\n",
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | `{}` |",
             escape_cell(&edge.from),
             escape_cell(&edge.rel),
             escape_cell(&edge.to)
-        ));
+        );
     }
     out
 }

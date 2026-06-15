@@ -14,6 +14,344 @@ per release — releases are tag-driven (see [`docs/release.md`](docs/release.md
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-06-14
+
+The **OpenBB ecosystem-parity release.** v1.4.0–v1.6.0 reached total OpenBB
+command/data parity and v1.7.x shipped the FinX Partner; v1.8.0 closes the
+**ecosystem** half — the capability *surfaces* the OpenBB organization ships
+beyond the Platform's data/command surface. The `openbb-ecosystem-p1` campaign
+(waves G001–G010, PRs #444–#453) added computed analytics, four new operator/
+client surfaces, and a provider scaffolder. MINOR — every change is a
+backward-compatible **addition**; the native `gui`/`discord`/`telegram`/`charts`
+features are **off by default**, so default builds are unaffected. No protocol,
+persistence-schema, or operator-contract breaks. See
+[`docs/release/v1.8.0-notes.md`](docs/release/v1.8.0-notes.md) and the ecosystem
+gap-map [`docs/roadmap/openbb-ecosystem-gap.md`](docs/roadmap/openbb-ecosystem-gap.md).
+
+### Added
+
+- **Computed option pricing & greeks (#444, G001):** a new pure-Rust
+  `tdw-quant-options` crate — Black-Scholes, the full greek set, implied-vol
+  inversion, a binomial (CRR) tree, and Monte-Carlo — exposed as offline
+  `Compute` routes. OpenBB's Platform fetches vendor option data; FinX *computes*
+  it.
+- **Provider scaffolder (#445, G002):** `xtask new-provider` scaffolds a new
+  `tdw-provider-<name>` crate against `tdw_core::Fetcher`, the FinX equivalent of
+  OpenBB's provider-extension cookiecutter.
+- **Classical forecasting (#446, G003):** a new pure-Rust `tdw-analytics-forecast`
+  crate — naive / seasonal-naive / random-walk-drift baselines, Holt-Winters / ETS,
+  Theta, MSTL decomposition, lag-feature linear regression, an expanding-window
+  backtest harness, RMSE / MAE / MAPE / SMAPE measures, and a quantile-band anomaly
+  scan — as `forecast/*` `Compute` routes.
+- **Workspace-SDK completeness (#447, G004):** the OpenBB Workspace widgets/apps
+  backend (`tdw-widgets`) and copilot bridge (`tdw-openbb-agent`) brought to
+  SDK-completeness (citations, the agent contract).
+- **Desktop chart-render host (#448, G005):** a new `tdw-chart-host` crate — a
+  pure-Rust Plotly host-page assembler with an optional native window behind the
+  off-by-default `gui` feature (`wry`/`tao`); the PyWry-equivalent.
+- **Workspace control-plane MCP (#450, G006):** a new `tdw-workspace-mcp` crate —
+  dashboard/widget CRUD + layout + navigate over a catalog-validated
+  `WorkspaceState` that serializes to `apps.json`.
+- **Discord/Telegram chat-bot surface (#451, G007):** a new `tdw-bot` crate — a
+  pure-Rust offline bot core (parser + router + `BotResponse` + chart payload)
+  with feature-gated `discord`/`telegram` transports and a `charts` PNG path
+  (all off by default); the `openbb-bot`-equivalent.
+- **AutoARIMA (#452, G008):** `ARIMA(p, d, q)` (Hannan-Rissanen two-stage least
+  squares) and `AutoARIMA` (Hyndman-Khandakar-style stepwise order search) added
+  to `tdw-analytics-forecast`, exposed as the `forecast/arima` and
+  `forecast/autoarima` `Compute` routes. Pure Rust, deterministic — OpenBB's
+  Platform does not compute these.
+- **Excel / Office add-in (#453, G009):** `integrations/excel-addin`, a TypeScript
+  Office.js package providing the `FINX.GET` / `FINX.BYOD` / `FINX.ROUTES` custom
+  functions over the FinX REST catalog (all real logic in a unit-tested pure
+  `src/lib`). Shipped as a separate TS package — the deliberate non-Rust
+  deliverable of the campaign.
+
+### Deferred (documented decisions)
+
+- **Deep-learning forecasting** (RNN/LSTM/GRU, NBEATS, NHITS, TCN, TFT,
+  Transformer — OpenBB's `torch`/`darts` tail) is **deferred by decision**: it is
+  at odds with the pure-Rust, zero-heavy-dependency, deterministic, offline-compute
+  posture of the analytics surface. The rationale and the supported future path (an
+  off-by-default `candle`/`burn` feature, or a sidecar) are in
+  [`docs/roadmap/dl-forecasting-deferral.md`](docs/roadmap/dl-forecasting-deferral.md).
+
+### Also included
+
+- **FinX Partner integrity patch (v1.7.1):** the v1.7.1 patch (released
+  2026-06-14) is carried forward — see [1.7.1] below.
+
+## [1.7.1] - 2026-06-14
+
+**FinX Partner integrity patch.** Closes the integrity gaps a post-release
+`tdw-partner` re-review found: the learning loop's behavior-shaping was wired to
+nothing live, contradicting the docstrings. PATCH — all changes are
+backward-compatible (the additions to `TurnOutcome` and the `tdw.partner.undo`
+plan are new fields; no breaks). See
+[`docs/release/v1.7.1-notes.md`](docs/release/v1.7.1-notes.md).
+
+### Fixed
+
+- **Learned-route reshaping now fires on a live turn (HIGH, W4.2/W4.3):**
+  `PartnerCore` gains a gated `InferEngine` seam (`with_infer_engine`); a turn now
+  reads the installed (promoted-past-B9) rule set via `routing_hints_from`,
+  derives a route-preference list (`route_preferences_from_hints`), and threads it
+  onto the `LearningState` snapshot before resolution — so a learned preference
+  re-orders the resolved routes on a real turn, not only in a unit test. The
+  preference is always the gated signal, never caller-supplied, preserving the
+  audit-only/gated posture. A live-turn test asserts the preferred route leads.
+- **Walk-forward usefulness harness is a public eval entry point (HIGH, W4.4):**
+  `walk_forward::walk_forward_usefulness` is promoted out of `#[cfg(test)]` to a
+  public function behind the new `eval-harness` feature, so the gated eval loop /
+  a benchmark gate can compute the "more useful with use" metric rather than it
+  living only inside a test (the offline `tdw-eval-runner` dependency stays out of
+  the default leaf build).
+- **Undo respects `AwaitingHuman` (MEDIUM):** `tdw.partner.undo` now surfaces the
+  action's `status` and a `needs_confirmation` flag; an action the escalation
+  predicate flagged `AwaitingHuman` (high-impact / low-confidence / irreversible)
+  no longer yields a ready-to-execute reversal — the human-in-the-loop posture
+  survives into the reversal surface.
+- **Model error surfaced on the turn outcome (MEDIUM):** `TurnOutcome` gains
+  `model_error: Option<String>`; a `complete_streaming` failure is now detectable
+  by a write-back caller (it previously had to infer failure from a `Reasoning`
+  event string), so a partial answer is never persisted as complete.
+- **Ticker stop-words expanded (LOW):** `TICKER_STOP_WORDS` now covers common
+  macro/geo/role acronyms (`US`, `EU`, `CPI`, `GDP`, `ETF`, …) so a question like
+  "What is US CPI doing?" does not mine `US` as a symbol on an equity route.
+
+## [1.7.0] - 2026-06-14
+
+The **FinX Partner release.** Ties the data, warehouse, knowledge, and learning
+layers into one autonomous, learning, human-in-the-loop partner (6 waves, PRs
+#437–#442). A new `tdw-partner` crate provides one shared `PartnerCore`, exposed
+as thin adapters on MCP, the OpenBB Workspace copilot, and the CLI. MINOR — all
+additions, no breaks. See [`docs/release/v1.7.0-notes.md`](docs/release/v1.7.0-notes.md)
+and the design spec [`docs/products/finx-partner.md`](docs/products/finx-partner.md).
+
+### Added
+
+- **Partner Core — one conversational front door (#438, W2):** the `tdw-partner`
+  crate with `PartnerCore::turn` (resolve → param-extract → fetch → ground →
+  write-back), exposed as `tdw.partner.ask` (MCP), the Workspace copilot (the
+  `agent_bridge` now routes through `PartnerCore`), and a CLI `ask`. One shared
+  core, thin adapters — memory-aware (KG/episodic context per turn), every turn
+  written back as episodic memory + candidate findings.
+- **Proactive layer — brief + nudges (#439, W3):** a `Nudge` model + brief
+  assembler unifying alerts, watchlists, thesis health, open questions,
+  contradictions, and staleness; a daily brief scheduled via `tdw-cron` and
+  event-driven nudges off the knowledge feed; `tdw.partner.brief`; dismissals
+  feed learning.
+- **Learning-loop closure (#440, W4):** Partner Core reads the gated runtime
+  (`versions()`/adaptivity) per turn so promoted lessons/rules/parameters and
+  learned route preferences take effect; trust-dial-filtered retrieval; a
+  walk-forward eval harness proving rising usefulness. All behavior changes stay
+  B9/eval-gated.
+- **Audit & undo surface — audit-only autonomy (#441, W5):** an `audit` feed
+  projecting every action with its `why` (over `Proposal.history`,
+  `SelfTuneLog`, `LessonAudit`, `tdw.kg.why` — no new store); auto-accept within
+  gates with escalation of low-confidence/high-impact/irreversible actions;
+  `tdw.partner.audit`/`undo`; `undo` reverses on the governed-forgetting /
+  cold-plane machinery; `correct` = undo + feedback that records a `Lesson`.
+- **Cohesion + zero-to-partner onboarding (#442, W6):** an anti-duplication test
+  enforcing logic-free adapters; a guided first-run workflow; a
+  progressive-disclosure manifest leading with `ask`/`brief`/`audit`.
+- **Partner design spec (#437, W1):** `docs/products/finx-partner.md` — the
+  grounded architecture for the above.
+
+### Fixed
+
+- Partner Core review fixes folded forward each wave: parameterized DataPlane
+  fetch (the resolver extracts route + params from the utterance, #439); brief
+  dedup-before-sort + bounded dismissal penalty (#440); a real
+  learned-preference route re-ordering (prefix-aware) replacing a no-op (#441);
+  and **real `undo` reversal per action kind** replacing a silent `Ok` (#442) —
+  the linchpin that makes audit-only autonomy genuinely reversible.
+
+## [1.6.0] - 2026-06-14
+
+**Total OpenBB parity.** Closes the OpenBB-parity-total program (G001–G005):
+**every OpenBB command with a documented public API — free *or* paid — is now
+built**, paid ones key-gated and dormant until a key is configured. The endpoint
+catalog grows from **216 → 267 routes** (**169 → 195 `Fetch` routes** + 72
+`Compute` routes); OpenAPI paths **169 → 195**. The only residual is scrape /
+undocumented-internal sources with no public API (stockgrid, wsj, finviz, multpl)
+— a source decision, not an engineering gap. MINOR release — backward-compatible
+additions, no breaks. See [`docs/release/v1.6.0-notes.md`](docs/release/v1.6.0-notes.md),
+[`docs/products/openbb-total-parity.md`](docs/products/openbb-total-parity.md),
+and the TOTAL roll-up in [`docs/roadmap/openbb-gap-matrix.md`](docs/roadmap/openbb-gap-matrix.md).
+
+### Added
+
+- **fixedincome FRED family + economy breadth (G003a, #431):** the remaining FRED
+  fixedincome rate/spread/curve family and the economy-router breadth fill →
+  standardized `tdw-domain` models, drift-gated.
+- **intrinio provider — key-gated (G002, #432):** new `tdw-provider-intrinio`
+  (paid `INTRINIO_API_KEY`) wiring intrinio's options unusual/snapshots/IV-surface,
+  reported_financials, and forward-P/E routes; code-complete and dormant until a
+  paid key is provisioned (no free tier to live-verify).
+- **congress.gov + biztoc providers (#430):** the
+  `uscongress/{bills,bill_info,bill_text_urls}` cluster (`tdw-provider-congress-gov`,
+  free `CONGRESS_GOV_API_KEY`) and biztoc as a second `news/world` candidate
+  (`tdw-provider-biztoc`, free `BIZTOC_API_KEY`) — closes the previously
+  mislabeled deferrals.
+- **compute-router remainder (G003b, #433):** the econometrics / quantitative /
+  technical Compute-route remainder → 72 total `Compute` routes (technical 31 /
+  quantitative 21 / econometrics 15 / portfolio 5), each also an MCP tool.
+- **equity / etf / index / commodity remainder (G003c, #434):** the standardized
+  provider-fetch remainder across the equity, etf, index, commodity, regulators
+  and index routers, closing the documented-public-API surface.
+
+### Changed
+
+- **Scoreboard truth-up to TOTAL parity (G005, #436):**
+  `docs/roadmap/openbb-gap-matrix.md` gains a top **OpenBB-parity TOTAL roll-up**
+  section; `docs/products/openbb-parity.md` refreshes the scoreboard to
+  **267 catalog / 195 Fetch / 72 Compute** and adds a total-parity statement; new
+  `docs/products/openbb-total-parity.md` states the total-parity claim, the
+  provider coverage (30+ of 32 built), and the honest residual.
+
+### Fixed
+
+- **scrape-provider assessment + intrinio fixes (G004, #435):** each remaining
+  no-API provider (stockgrid, wsj, finviz, multpl) was re-assessed against the
+  vendor's own site for a documented public API and confirmed unimplementable
+  clean-room (built none); plus intrinio `reported_financials` + Workspace-widget
+  fixes folded forward.
+
+## [1.5.0] - 2026-06-14
+
+The **OpenBB command-parity release.** Closes the real OpenBB command-breadth
+gap (Phase 4, 11 waves, PRs #419–#428). The endpoint catalog grows from 131 to
+**216 routes / 185 provider candidates** — **169 `Fetch` routes (up from 84)** +
+47 `Compute` routes — with full parity on the keyless / free-key provider
+surface. Remaining OpenBB commands require paid keys or have no public API and
+are documented deferrals. MINOR release — backward-compatible additions, no
+breaks. See [`docs/release/v1.5.0-notes.md`](docs/release/v1.5.0-notes.md) and
+the P4 roll-up in [`docs/roadmap/openbb-gap-matrix.md`](docs/roadmap/openbb-gap-matrix.md).
+
+### Added
+
+- **equity fundamentals breadth (P4W1, #419):** balance/income/cash growth,
+  metrics, ratios, dividends, historical EPS/splits, employee count, ESG,
+  filings, management + compensation, revenue per segment/geography, earnings
+  transcripts (FMP) → standardized `tdw-domain` models.
+- **equity discovery/estimates/ownership (P4W2, #420):** search, market
+  snapshots, historical market cap, calendar/splits, compare/company_facts
+  (SEC), discovery/filings + latest_financial_reports, estimates breadth,
+  ownership (insider/institutional/government_trades) (FMP + SEC).
+- **yfinance discovery + ETF cluster (P4W3, #421):** four predefined-screen
+  discovery routes; etf search/info/historical/sectors/countries/
+  equity_exposure/nport_disclosure (FMP + SEC N-PORT + Yahoo).
+- **economy breadth (P4W4, #422):** OECD SDMX (CLI, house/share price indices,
+  retail prices, GDP forecast, interest rates), Fed/BLS surveys (SLOOS + four
+  regional Fed surveys), central-bank holdings, primary-dealer positioning/fails,
+  FOMC documents (OECD + FRED + Federal Reserve + BLS + EconDB).
+- **fixedincome FRED fill (P4W5, #423):** Svensson yield curve (2y/5y/10y), HQM
+  corporate spot (2y/5y/30y), AMERIBOR, EFFR forecast, TCM-EFFR spreads.
+- **index/currency/crypto/commodity breadth (P4W6, #424; P4W11, #428):** index
+  search/available/constituents/sp500_multiples (Shiller CAPE, NASDAQ),
+  currency search/snapshots, crypto search, commodity spot price.
+- **derivatives futures + SEC regulator utilities (P4W7+W8, #425):** Deribit
+  futures instruments + info; SEC EDGAR symbol_map, filing_headers,
+  institutions_search, SIC search, schema_files, RSS litigation.
+- **famafrench portfolio returns + imf_utils discovery (P4W9, #427):** Ken
+  French breakpoints + US/regional/country portfolio returns + international
+  index returns; IMF SDMX dataflow-discovery helpers.
+- **FINRA shorts/dark-pool (P4W10, #426):** equity/shorts/short_interest,
+  equity/darkpool/otc.
+- New keyless/free-key providers wired into routes: OECD, IMF discovery, Ken
+  French Data Library, FINRA — plus deep FMP/FRED/Federal-Reserve/BLS/EconDB/
+  SEC/CBOE/NASDAQ/Deribit expansion.
+
+### Changed
+
+- **Scoreboard truth-up (P4W11, #428):** `docs/roadmap/openbb-gap-matrix.md`
+  (P4 roll-up + per-row Status) and `docs/products/openbb-parity.md` refreshed
+  so every OpenBB command reads as done (with its route) or deferred-with-reason;
+  the Part 2 implementation-layer rows are marked as a superseded historical
+  planning record.
+
+### Fixed
+
+- Gemini-code-assist review findings folded forward each wave: SEC company_facts
+  single-pass deserialization (avoids an intermediate `serde_json::Value` on
+  10–20 MB filings, #421); OECD `limit` semantics now keep the most-recent N
+  observations (#423); SEC `form_type` path-fallback + in-loop allocation
+  hoisting (#426); FMP transcript error variant + executive empty-string
+  filtering (#420); CBOE / Ken French allocation and readability fixes.
+
+## [1.4.0] - 2026-06-13
+
+The **intelligent-knowledge release.** Bundles every change merged to `main`
+after the v1.3.0 tag: the knowledge-system-2 program (33 stories across the
+Ease → Autonomy → Market → Finesse → Learning/Trust phases), the close-out of
+OpenBB-parity Phase 3 (catalog at 131 routes / 98 provider candidates), plus
+reliability and dependency hygiene. MINOR release — all additions are
+backward-compatible; no protocol/persistence/operator-contract breaks. See
+[`docs/release/v1.4.0-notes.md`](docs/release/v1.4.0-notes.md).
+
+### Added
+
+- **Knowledge system — ease of use (K-E):** zero-config first run with an
+  in-memory default and actionable Bolt errors (#358); `tdw.kg.status`
+  observability across MCP/REST/CLI (#360); public ingestion through a single
+  `KnowledgeIndexer` seam (#359); offline `tdw kg demo` walkthrough (#378).
+- **Knowledge system — autonomy (K-L):** rules + inference hosted in the daemon
+  (#365); host-bound agent identity via session principals (#376); scheduled
+  retrieval evals + drift alarm (#375); consolidation tick draining feedback and
+  persisting plans (#377); gated auto-materialization sweep (#380); scheduled
+  KnowledgeFeed pipelines (#382).
+- **Knowledge system — market-grade (K-M):** LLM extraction-as-proposals,
+  cost-bounded and gate-routed (#401); episodic memory of agent transcripts as
+  searchable temporal episodes (#396); `tdw.kg.answer` cited GraphRAG synthesis
+  (#404); contradiction-driven temporal invalidation (#392); published
+  knowledge benchmark suite — recall/MRR/latency, nightly, drift-stamped (#405);
+  knowledge graph-visualization Workspace widget (#415).
+- **Knowledge system — finesses (K-X):** `tdw.kg.why` + `tdw.kg.diff`
+  provenance chains & time-travel diffs (#362); trust-dial retrieval by
+  provenance class (#394); self-narrating digest + staleness surfacing (#407);
+  open questions that self-answer + negative knowledge (#403); knowledge
+  watchlists with change-driven alerts (#398); first-class analyst findings
+  capture + linking (#366); thesis tracking with temporal health (#391);
+  session→findings distillation as proposals (#413); portable research-trail
+  export — JSON + Markdown (#412).
+- **Knowledge system — learning & trust (K-R):** lessons-as-proposals via B9 +
+  walk-forward eval (#406); skill lifecycle + eval tournaments (#408);
+  eval-gated parameter self-tuning (#409); deterministic motif mining + analogy
+  recall (#381); pattern→rule induction through the gate (#400); per-fact
+  confidence from corroboration + survived contradiction (#397); walk-forward
+  knowledge validation replay harness (#393); governed, reversible forgetting to
+  a cold plane (#411).
+- **OpenBB parity Phase 3:** `tdw-analytics-portfolio` metrics (#361);
+  `tdw-provider-imf` IMF SDMX-JSON macro series (#367); EconDB series (#369);
+  `tdw-provider-famafrench` Ken French factors (#355); estimates breadth —
+  price-target consensus + forward analyst estimates (#371); XLSX export from
+  any result envelope via pure-Rust `rust_xlsxwriter` (#372).
+
+### Changed
+
+- Live `real-engines` feature chain wired with eager graph-backend validation
+  at boot (#368).
+- CFTC reads its app token via the shared `read_optional_key` helper (#363).
+- OpenBB-parity P3 cutover: roll-up scoreboard + route-count refresh, and the
+  niche-provider deferral decision documented in the gap matrix (#373, #374).
+- Dependency bumps: candle-core/candle-transformers 0.10.2 (#385, #386),
+  prost 0.14.4 (#389), zip 7.2.0 (#390), codecov-action 7 (#384),
+  setup-qemu-action 4 (#383).
+- CI review-gate checklist codified (release/schema-drift/clock/rebase gaps) in
+  `docs/review-gate.md` (#417).
+
+### Fixed
+
+- Deterministic clock for `McpServer` — unbreaks date-brittle thesis tests
+  (#414).
+- Corrected Julian day math, scoped the contradiction edge scan, and narrowed
+  the feed-indexer lock (Gemini-flagged escapes) (#399).
+- Wired the real graph backend with eager validation, surfacing boot-time
+  misconfiguration instead of failing lazily (#368).
+- Clippy pedantic+nursery ratchet held at 0 across the release (#370, #379,
+  #395, #402, #410, #416).
+
 ## [1.3.0] - 2026-06-11
 
 The self-hosted warehouse release: Product ② (the ClickHouse/Qdrant/Meilisearch

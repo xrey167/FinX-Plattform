@@ -1,0 +1,112 @@
+# tdw-bot: a Discord + Telegram chat-bot surface over the warehouse REST/catalog
+# + charts (openbb-ecosystem-p1 G007 — the chat-bot-equivalent, a differentiator).
+#
+# A THIN client: a chat message becomes a parsed command, the router maps it to a
+# catalog/REST fetch through an abstract data seam, and the result is rendered to
+# a platform-agnostic `BotResponse` (text / table / chart). The transport
+# adapters (Discord, Telegram) are thin wrappers that receive a message, call the
+# core router, and send the formatted reply — NO business logic lives in them.
+#
+# CI-SAFETY (same gating discipline as G005's `gui` feature): the bot frameworks
+# (`serenity` for Discord, `teloxide` for Telegram) are heavy async deps that pull
+# a tokio runtime and TLS, so they are OPTIONAL and gated behind NON-DEFAULT
+# features. The DEFAULT build — what `cargo build/clippy/test --workspace` runs —
+# compiles ONLY the pure-Rust, framework-free, fully-offline CORE (parser +
+# router + `BotResponse` + formatting), with ZERO bot-framework or network
+# dependency, so the workspace lint/test stays green and fast.
+[package]
+name = "tdw-bot"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[lib]
+# No runnable doc examples; skip the empty rustdoc doctest harness to keep warm
+# `cargo test` time down (matches tdw-workspace-mcp).
+doctest = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The chart-spec builder (pure-Rust Plotly figure JSON) and its bar/line data
+# model — the `/chart` command renders the underlying series through these.
+tdw-charting = { workspace = true }
+tdw-domain = { workspace = true }
+
+# --- Optional: PNG chart rasterizer (NON-DEFAULT `charts` feature) -----------
+# Pure-Rust 2D plotting with the in-memory bitmap backend — NO native/system
+# graphics dependency (no cairo/freetype/fontconfig). `tdw-charting` emits Plotly
+# figure JSON (a spec, not pixels) and rasterizing that JSON in pure Rust is not
+# feasible, so `/chart` renders a simple line PNG directly from the series.
+plotters = { version = "0.3", optional = true, default-features = false, features = [
+    "bitmap_backend",
+    "line_series",
+] }
+# Pure-Rust PNG encoder (no native libpng) for the rasterized chart bytes.
+png = { version = "0.18", optional = true }
+
+# --- Optional: Discord transport (NON-DEFAULT `discord` feature) -------------
+# `serenity` is the Discord API framework. `rustls_backend` selects the pure-Rust
+# TLS stack (no openssl-sys / native TLS), keeping the gated build C-free on a
+# Windows runner. default-features = false drops the voice/gateway extras we do
+# not use; `client`/`gateway`/`rustls_backend`/`model` are the message-handling core.
+serenity = { version = "0.12", optional = true, default-features = false, features = [
+    "client",
+    "gateway",
+    "rustls_backend",
+    "model",
+] }
+
+# --- Optional: Telegram transport (NON-DEFAULT `telegram` feature) -----------
+# `teloxide` is the Telegram bot framework. default-features pulls the long-poll
+# `ctrlc_handler` + `rustls` (pure-Rust TLS) update listener; we keep the default
+# set, which is rustls-based, so the gated build stays C-free.
+teloxide = { version = "0.13", optional = true }
+
+# The async runtime the transport adapters drive their event loops on — OPTIONAL,
+# only compiled when a transport feature is on. The default core is sync/offline.
+tokio = { workspace = true, optional = true }
+
+# The thin REST client the production data seam uses (the warehouse
+# `GET /api/v1/{route}` surface). OPTIONAL, only compiled when a transport is on.
+# `rustls-tls` keeps it C-free; `blocking` lets the sync core run off the adapter
+# event loop without leaking async into the router.
+reqwest = { version = "0.12.24", optional = true, default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "blocking",
+] }
+
+[features]
+# DEFAULT is empty: the pure-Rust, offline core (parser + router + BotResponse +
+# formatting) only. No bot framework, no network, no async runtime is compiled,
+# so `cargo build/clippy/test --workspace` needs nothing heavy.
+default = []
+# Rasterize `/chart` to a PNG from the underlying series (pure-Rust `plotters`
+# bitmap backend). Without it, `/chart` attaches the `tdw-charting` figure-JSON
+# spec plus a text summary (see the crate docs for the rationale).
+charts = ["dep:plotters", "dep:png"]
+# The Discord transport adapter + binary. Pulls `serenity` (rustls) + `tokio` +
+# the REST data client.
+discord = ["dep:serenity", "dep:tokio", "dep:reqwest"]
+# The Telegram transport adapter + binary. Pulls `teloxide` (rustls) + `tokio` +
+# the REST data client.
+telegram = ["dep:teloxide", "dep:tokio", "dep:reqwest"]
+
+# The Discord bot binary: wires the core router to a serenity client. Only built
+# under `--features discord`, so the default workspace build never compiles it.
+[[bin]]
+name = "tdw-bot-discord"
+path = "src/bin/tdw-bot-discord.rs"
+required-features = ["discord"]
+
+# The Telegram bot binary: wires the core router to a teloxide dispatcher. Only
+# built under `--features telegram`.
+[[bin]]
+name = "tdw-bot-telegram"
+path = "src/bin/tdw-bot-telegram.rs"
+required-features = ["telegram"]
+
+[lints]
+workspace = true

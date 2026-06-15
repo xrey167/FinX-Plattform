@@ -1,0 +1,27 @@
+{
+  "name": "@finx/excel-addin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FinX Excel/Office add-in — Office.js custom functions (FINX.GET / FINX.BYOD) over the FinX platform REST API.",
+  "license": "MIT OR Apache-2.0",
+  "author": "ReyDa",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/custom-functions-runtime": "^1.6.11",
+    "@types/office-js": "^1.0.377",
+    "@types/office-runtime": "^1.0.35",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "esbuild": "^0.23.1",
+    "eslint": "^8.57.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}

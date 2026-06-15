@@ -10,11 +10,25 @@
 
 use schemars::{Schema, schema_for};
 use tdw_core::query_params::StandardParams;
-use tdw_domain::{CommitmentOfTraders, FomcDocument, SeriesSearchResult, SymbolMapping};
+use tdw_domain::{
+    CommitmentOfTraders, FilingFile, FilingHeader, FomcDocument, LitigationRelease, SecFilingHtml,
+    SecInstitution, SeriesSearchResult, SicCode, SymbolMapping,
+};
 
 use crate::{CatalogEntry, EndpointKind, ProviderCandidate};
 
 const SEC_CIK_MAP: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "cik_map")];
+// Keyless SEC regulator utilities (openbb-parity P4W8). Each endpoint key
+// matches the SEC fetcher's `ENDPOINT` const and runtime dispatch key.
+const SEC_SYMBOL_MAP: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "symbol_map")];
+const SEC_INSTITUTIONS_SEARCH: &[ProviderCandidate] =
+    &[ProviderCandidate::new("sec", "institutions_search")];
+const SEC_SIC_SEARCH: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "sic_search")];
+const SEC_FILING_HEADERS: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "filing_headers")];
+const SEC_SCHEMA_FILES: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "schema_files")];
+const SEC_RSS_LITIGATION: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "rss_litigation")];
+// OpenBB-parity total G003c: keyless filing-HTML retrieval by EDGAR archive URL.
+const SEC_HTM_FILE: &[ProviderCandidate] = &[ProviderCandidate::new("sec", "htm_file")];
 const FED_FOMC_DOCUMENTS: &[ProviderCandidate] = &[ProviderCandidate::new(
     "federal_reserve",
     "regulators_fed_fomc_documents",
@@ -43,8 +57,39 @@ fn series_search_result() -> Schema {
     schema_for!(SeriesSearchResult)
 }
 
+fn sec_institution() -> Schema {
+    schema_for!(SecInstitution)
+}
+
+fn sic_code() -> Schema {
+    schema_for!(SicCode)
+}
+
+fn filing_header() -> Schema {
+    schema_for!(FilingHeader)
+}
+
+fn filing_file() -> Schema {
+    schema_for!(FilingFile)
+}
+
+fn litigation_release() -> Schema {
+    schema_for!(LitigationRelease)
+}
+
+fn sec_filing_html() -> Schema {
+    schema_for!(SecFilingHtml)
+}
+
 /// The `regulators` namespace's catalog entries, in declaration order.
 pub fn entries() -> Vec<CatalogEntry> {
+    let mut entries = core_entries();
+    entries.extend(sec_utility_entries());
+    entries
+}
+
+/// The pre-existing `regulators` routes (SEC `cik_map`, Fed FOMC, CFTC cluster).
+fn core_entries() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry {
             route: "regulators/sec/cik_map",
@@ -84,6 +129,82 @@ pub fn entries() -> Vec<CatalogEntry> {
             candidates: CFTC_COT_SEARCH,
             bronze_table: Some("raw.series_search_result"),
             doc: "Distinct CFTC COT market-and-exchange names for discovery (Socrata, keyless).",
+            chartable: false,
+        },
+    ]
+}
+
+/// The keyless SEC regulator-utility routes (openbb-parity P4W8).
+fn sec_utility_entries() -> Vec<CatalogEntry> {
+    vec![
+        CatalogEntry {
+            route: "regulators/sec/symbol_map",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: symbol_mapping,
+            candidates: SEC_SYMBOL_MAP,
+            bronze_table: Some("raw.symbol_mapping"),
+            doc: "Map SEC CIKs to ticker symbols via company_tickers.json (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/institutions_search",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: sec_institution,
+            candidates: SEC_INSTITUTIONS_SEARCH,
+            bronze_table: Some("raw.sec_institution"),
+            doc: "Search SEC-regulated institutions by name in company_tickers.json (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/sic_search",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: sic_code,
+            candidates: SEC_SIC_SEARCH,
+            bronze_table: Some("raw.sic_code"),
+            doc: "Search the SEC Standard Industrial Classification (SIC) code list (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/filing_headers",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: filing_header,
+            candidates: SEC_FILING_HEADERS,
+            bronze_table: Some("raw.filing_header"),
+            doc: "Filing header metadata for an accession from the EDGAR index (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/schema_files",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: filing_file,
+            candidates: SEC_SCHEMA_FILES,
+            bronze_table: Some("raw.filing_file"),
+            doc: "List the schema/data files in a filing from the EDGAR index (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/rss_litigation",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: litigation_release,
+            candidates: SEC_RSS_LITIGATION,
+            bronze_table: Some("raw.litigation_release"),
+            doc: "SEC litigation releases from the public litigation RSS feed (keyless).",
+            chartable: false,
+        },
+        CatalogEntry {
+            route: "regulators/sec/htm_file",
+            kind: EndpointKind::Fetch,
+            params_schema: standard_params,
+            model: sec_filing_html,
+            candidates: SEC_HTM_FILE,
+            bronze_table: Some("raw.sec_filing_html"),
+            doc: "Retrieve an HTML file from a filing by its EDGAR archive URL (keyless).",
             chartable: false,
         },
     ]
