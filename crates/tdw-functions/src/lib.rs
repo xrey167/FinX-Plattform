@@ -1119,6 +1119,46 @@ mod sqlite_tests {
         assert_eq!(listed[1], ("b".to_string(), json!("B")));
     }
 
+    #[tokio::test]
+    async fn sqlite_run_store_insert_run_first_write_wins() {
+        use super::RunRecord;
+        let store = SqliteRunStore::connect("sqlite::memory:")
+            .await
+            .expect("connect");
+        let first = RunRecord {
+            run_id: "r1".to_string(),
+            function_id: "fn-a".to_string(),
+            payload: json!({"v": 1}),
+            status: RunStatus::Running,
+            result: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        store.insert_run(&first).await.expect("first insert_run");
+
+        // A re-fired slot re-inserts the same run id: must be a silent no-op,
+        // never an error, matching the Postgres `ON CONFLICT DO NOTHING` and
+        // in-memory backends.
+        let second = RunRecord {
+            run_id: "r1".to_string(),
+            function_id: "fn-b".to_string(),
+            payload: json!({"v": 2}),
+            status: RunStatus::Completed,
+            result: Some(json!("changed")),
+            created_at_ms: 2,
+            updated_at_ms: 2,
+        };
+        store
+            .insert_run(&second)
+            .await
+            .expect("duplicate insert_run must be a silent no-op");
+
+        let stored = store.get_run("r1").await.expect("get_run").expect("Some");
+        assert_eq!(stored.function_id, "fn-a", "first write must win");
+        assert_eq!(stored.status, RunStatus::Running);
+        assert_eq!(stored.payload, json!({"v": 1}));
+    }
+
     // -----------------------------------------------------------------------
     // Registry with SQLite stores: full invoke round-trip
     // -----------------------------------------------------------------------
