@@ -602,7 +602,10 @@ impl SqliteWorkerQueue {
             // If the guarded dead-letter touched no rows, the lease was lost
             // between the read and the write (TOCTOU): report the real status.
             if self.dead_letter(job_id, error, now_ms).await? == 0 {
-                return Ok(self.job_status(job_id).await?.unwrap_or(status));
+                return self
+                    .job_status(job_id)
+                    .await?
+                    .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()));
             }
             return Ok(WorkerJobStatus::DeadLettered);
         }
@@ -632,7 +635,10 @@ impl SqliteWorkerQueue {
         // report the real status rather than asserting a requeue that did not
         // happen.
         if result.rows_affected() == 0 {
-            return Ok(self.job_status(job_id).await?.unwrap_or(status));
+            return self
+                .job_status(job_id)
+                .await?
+                .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()));
         }
         Ok(WorkerJobStatus::Pending)
     }
@@ -1064,7 +1070,10 @@ impl PgWorkerQueue {
             // If the guarded dead-letter touched no rows, the lease was lost
             // between the read and the write (TOCTOU): report the real status.
             if self.dead_letter(job_id, error, now_ms).await? == 0 {
-                return Ok(self.job_status(job_id).await?.unwrap_or(status));
+                return self
+                    .job_status(job_id)
+                    .await?
+                    .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()));
             }
             return Ok(WorkerJobStatus::DeadLettered);
         }
@@ -1094,7 +1103,10 @@ impl PgWorkerQueue {
         // report the real status rather than asserting a requeue that did not
         // happen.
         if result.rows_affected() == 0 {
-            return Ok(self.job_status(job_id).await?.unwrap_or(status));
+            return self
+                .job_status(job_id)
+                .await?
+                .ok_or_else(|| WorkerQueueError::UnknownJob(job_id.to_string()));
         }
         Ok(WorkerJobStatus::Pending)
     }
