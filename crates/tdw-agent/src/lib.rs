@@ -286,6 +286,7 @@ pub struct SlashCommand {
     #[validate(nested)]
     pub meta: EntityMeta,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub args: Vec<SlashArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
@@ -305,6 +306,7 @@ pub struct EvalCase {
     #[validate(length(min = 1))]
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub expected_refs: Vec<ContentRef>,
 }
 
@@ -317,6 +319,7 @@ pub struct EvalRunRequest {
     #[validate(length(min = 1))]
     pub dataset_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub cases: Vec<EvalCase>,
 }
 
@@ -367,8 +370,10 @@ pub struct WorkflowDefinition {
     #[validate(nested)]
     pub meta: EntityMeta,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub nodes: Vec<WorkflowNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[validate(nested)]
     pub edges: Vec<WorkflowEdge>,
 }
 
@@ -382,6 +387,7 @@ pub struct Gotcha {
     #[validate(length(min = 1))]
     pub remediation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
     pub source_ref: Option<ContentRef>,
 }
 
@@ -2068,6 +2074,96 @@ mod tests {
             ..workflow
         };
         assert_eq!(cycle.validate_dag(), Err(WorkflowValidationError::Cycle));
+    }
+
+    #[test]
+    fn validate_recurses_into_nested_collection_fields() {
+        // Regression: `validator` only recurses into struct/collection fields
+        // annotated `#[validate(nested)]`. These fields hold Validate-deriving
+        // types whose `length(min = 1)` invariants were previously skipped, so
+        // a structurally-invalid element passed the outer `validate()`.
+        use validator::Validate;
+
+        let meta = || {
+            EntityMeta::new(
+                "wf",
+                "wf",
+                "0.1.0",
+                Origin {
+                    tier: Tier::Domain,
+                    source: Source::Internal,
+                },
+                Adaptivity::Configured,
+                false,
+            )
+        };
+
+        // WorkflowDefinition.nodes — an empty node_id must fail through the parent.
+        let bad_node = WorkflowDefinition {
+            meta: meta(),
+            nodes: vec![WorkflowNode {
+                node_id: String::new(),
+                task: "t".to_string(),
+                skill_id: None,
+            }],
+            edges: vec![],
+        };
+        assert!(
+            bad_node.validate().is_err(),
+            "empty node_id must fail workflow validation"
+        );
+
+        // WorkflowDefinition.edges — an empty endpoint must fail.
+        let bad_edge = WorkflowDefinition {
+            meta: meta(),
+            nodes: vec![],
+            edges: vec![WorkflowEdge {
+                from: String::new(),
+                to: "x".to_string(),
+            }],
+        };
+        assert!(
+            bad_edge.validate().is_err(),
+            "empty edge endpoint must fail workflow validation"
+        );
+
+        // EvalRunRequest.cases -> EvalCase — an empty case_id must fail.
+        let bad_case = EvalRunRequest {
+            run_id: "r".to_string(),
+            agent_id: "a".to_string(),
+            dataset_id: "d".to_string(),
+            cases: vec![EvalCase {
+                case_id: String::new(),
+                prompt: "p".to_string(),
+                expected_refs: vec![],
+            }],
+        };
+        assert!(
+            bad_case.validate().is_err(),
+            "empty case_id must fail eval-request validation"
+        );
+
+        // Compounding chain: EvalRunRequest.cases -> EvalCase.expected_refs ->
+        // ContentRef.uri must propagate (every level annotated nested).
+        let bad_ref = EvalRunRequest {
+            run_id: "r".to_string(),
+            agent_id: "a".to_string(),
+            dataset_id: "d".to_string(),
+            cases: vec![EvalCase {
+                case_id: "c".to_string(),
+                prompt: "p".to_string(),
+                expected_refs: vec![ContentRef {
+                    uri: String::new(),
+                    kind: ContentKind::Document,
+                    checksum: None,
+                    tags: vec![],
+                }],
+            }],
+        };
+        assert!(
+            bad_ref.validate().is_err(),
+            "empty ContentRef.uri must fail through the eval -> case -> ref chain"
+        );
     }
 
     #[test]
