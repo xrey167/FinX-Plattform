@@ -102,10 +102,14 @@ pub fn implied_volatility(params: ImpliedVolParams) -> Result<f64> {
             bracketed = true;
             break;
         }
-        hi *= 2.0;
-        if hi > VOL_HI_MAX {
+        if hi >= VOL_HI_MAX {
             break;
         }
+        // Double, but never skip past the cap: clamping to `VOL_HI_MAX` so the
+        // boundary itself is always probed. Plain doubling steps 8 -> 16 and
+        // bails past the 1000% cap without ever testing a vol in (8, 10], which
+        // wrongly rejected attainable implied vols in (800%, 1000%].
+        hi = (hi * 2.0).min(VOL_HI_MAX);
     }
     if !bracketed {
         return Err(OptionError::ImpliedVolNoConvergence(
@@ -220,6 +224,31 @@ mod tests {
         // And a clearly-impossible price (above spot) fails cleanly.
         iv.market_price = 1e6;
         assert!(implied_volatility(iv).is_err());
+    }
+
+    #[test]
+    fn solves_high_implied_vol_near_upper_bound() {
+        // Regression: a price reproducible at ~900% vol — inside the solver's
+        // 1000% (`VOL_HI_MAX`) cap — must be solved, not rejected. The bracket
+        // previously doubled `hi` 1->2->4->8->16 and bailed past the cap without
+        // ever probing a vol in (8, 10], so vols in (800%, 1000%] were wrongly
+        // reported as unattainable.
+        let known_vol = 9.0;
+        let priced = price(BlackScholesParams {
+            spot: 100.0,
+            strike: 100.0,
+            rate: 0.05,
+            dividend_yield: 0.0,
+            volatility: known_vol,
+            time_to_expiry: 1.0,
+            option_type: OptionType::Call,
+        })
+        .expect("price");
+        let recovered = implied_volatility(iv_request(priced, OptionType::Call)).expect("iv");
+        assert!(
+            recovered > 8.0 && recovered <= 10.0,
+            "recovered {recovered}"
+        );
     }
 
     #[test]
