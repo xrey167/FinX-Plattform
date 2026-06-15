@@ -374,8 +374,6 @@ struct QuoteSummaryResult {
     asset_profile: Option<AssetProfile>,
     #[serde(default)]
     price: Option<PriceModule>,
-    #[serde(rename = "summaryDetail", default)]
-    summary_detail: Option<SummaryDetail>,
     #[serde(rename = "defaultKeyStatistics", default)]
     key_statistics: Option<KeyStatistics>,
     #[serde(rename = "financialData", default)]
@@ -419,18 +417,6 @@ struct PriceModule {
     regular_market_price: RawNum,
     #[serde(rename = "regularMarketPreviousClose", default)]
     regular_market_previous_close: RawNum,
-}
-
-#[derive(Deserialize, Default)]
-struct SummaryDetail {
-    #[serde(rename = "fiftyTwoWeekHigh", default)]
-    fifty_two_week_high: RawNum,
-    #[serde(rename = "fiftyTwoWeekLow", default)]
-    fifty_two_week_low: RawNum,
-    #[serde(rename = "fiftyDayAverage", default)]
-    fifty_day_average: RawNum,
-    #[serde(rename = "twoHundredDayAverage", default)]
-    two_hundred_day_average: RawNum,
 }
 
 #[derive(Deserialize, Default)]
@@ -653,12 +639,18 @@ impl Fetcher<YahooSymbolQuery, PricePerformance> for YahooHttpPricePerformanceFe
     ) -> Result<Vec<PricePerformance>> {
         let result = parse_quote_summary(&raw, "yahoo performance")?;
         let price = result.price.unwrap_or_default();
-        let detail = result.summary_detail.unwrap_or_default();
         let stats = result.key_statistics.unwrap_or_default();
         let last = price.regular_market_price.value();
-        // Derive period returns from the moving averages / range Yahoo exposes
-        // (these are the documented `summaryDetail` fields). `one_year` comes
-        // from the dedicated `52WeekChange` statistic.
+        // Only the returns this endpoint can produce honestly are reported:
+        //   * `one_day` from the previous close (a true close-to-close return);
+        //   * `one_year` from Yahoo's dedicated `52WeekChange` statistic.
+        // The `summaryDetail` moving averages (50d/200d) and the 52-week range
+        // are NOT prior prices, so deriving "1-month/3-month/YTD returns" from
+        // them is wrong: a moving-average deviation is not a period return, and
+        // `(last - 52wk_low) / 52wk_low` is structurally non-negative (so it has
+        // the wrong sign for any name that is down on the year). Those periods
+        // require historical bars (the `equity_historical` fetcher), so they are
+        // reported as `None` here rather than a mislabeled deviation.
         let pct = |from: Option<f64>| match (last, from) {
             (Some(now), Some(base)) if base != 0.0 => Some((now - base) / base),
             _ => None,
@@ -668,13 +660,10 @@ impl Fetcher<YahooSymbolQuery, PricePerformance> for YahooHttpPricePerformanceFe
             price: last,
             one_day: pct(price.regular_market_previous_close.value()),
             one_week: None,
-            one_month: pct(detail.fifty_day_average.value()),
-            three_month: pct(detail.two_hundred_day_average.value()),
-            ytd: pct(detail.fifty_two_week_low.value()),
-            one_year: stats
-                .fifty_two_week_change
-                .value()
-                .or_else(|| pct(detail.fifty_two_week_high.value())),
+            one_month: None,
+            three_month: None,
+            ytd: None,
+            one_year: stats.fifty_two_week_change.value(),
         }])
     }
 }
