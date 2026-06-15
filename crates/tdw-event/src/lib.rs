@@ -70,8 +70,16 @@ pub struct EventEnvelope<P> {
     pub event_type: String,
     #[validate(length(min = 1))]
     pub schema_version: String,
+    // `validator` v0.20 only recurses into nested structs annotated with
+    // `nested`; without it the `length(min = 1)` invariants on
+    // Actor/Origin/TraceContext are dead through the envelope, so an empty
+    // `trace_id`/`span_id` (which also feed `event_id = trace:span:type`) would
+    // pass validation and mint a malformed, collision-prone `event_id`.
+    #[validate(nested)]
     pub actor: Actor,
+    #[validate(nested)]
     pub origin: Origin,
+    #[validate(nested)]
     pub trace: TraceContext,
     #[validate(length(min = 1))]
     pub occurred_at: String,
@@ -209,6 +217,34 @@ mod tests {
         assert_eq!(event.origin.entrypoint, "mcp");
         assert_eq!(event.trace.trace_id, "trace-mcp");
         assert!(event.validate().is_ok());
+    }
+
+    #[test]
+    fn envelope_validation_recurses_into_nested_actor_origin_trace() {
+        // The nested `length(min = 1)` invariants on Actor/Origin/TraceContext
+        // must be enforced through the envelope (`#[validate(nested)]`), or an
+        // envelope with an empty trace/actor/origin field is wrongly accepted —
+        // and an empty trace_id/span_id mints a malformed `event_id`.
+        let mut event = sample_event("mcp");
+        event.trace.trace_id = String::new();
+        assert!(
+            event.validate().is_err(),
+            "empty trace_id must fail envelope validation"
+        );
+
+        let mut event = sample_event("mcp");
+        event.actor.actor_id = String::new();
+        assert!(
+            event.validate().is_err(),
+            "empty actor_id must fail envelope validation"
+        );
+
+        let mut event = sample_event("mcp");
+        event.origin.entrypoint = String::new();
+        assert!(
+            event.validate().is_err(),
+            "empty origin.entrypoint must fail envelope validation"
+        );
     }
 
     #[test]
