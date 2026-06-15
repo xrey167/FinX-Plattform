@@ -301,8 +301,16 @@ mod tests {
         let y = vec![15.0, 5.0, 15.0, 5.0, 15.0, 5.0, 15.0, 5.0, 15.0];
         let fc = holt_winters(&y, 2, 0.4, 0.0, 0.4, 2).expect("forecast");
         let values: Vec<f64> = fc.points.iter().map(|p| p.value).collect();
-        assert!((values[0] - 5.0).abs() < 1.5, "h1 {} should be ~5 (low)", values[0]);
-        assert!((values[1] - 15.0).abs() < 1.5, "h2 {} should be ~15 (high)", values[1]);
+        assert!(
+            (values[0] - 5.0).abs() < 1.5,
+            "h1 {} should be ~5 (low)",
+            values[0]
+        );
+        assert!(
+            (values[1] - 15.0).abs() < 1.5,
+            "h2 {} should be ~15 (high)",
+            values[1]
+        );
     }
 
     #[test]
