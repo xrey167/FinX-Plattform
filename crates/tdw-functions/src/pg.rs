@@ -172,6 +172,11 @@ impl StepStore for PgStepStore {
 /// Postgres-backed implementation of [`RunStore`].
 ///
 /// Table: `system.function_runs` (created by migration `20260607_0002`).
+///
+/// `insert_run` uses `ON CONFLICT DO NOTHING` for exactly-once first-write-wins
+/// semantics, matching the SQLite (`INSERT OR IGNORE`) and in-memory backends so
+/// a re-fired run id is silently deduplicated rather than raising a primary-key
+/// violation.
 #[derive(Clone, Debug)]
 pub struct PgRunStore {
     pool: PgPool,
@@ -217,6 +222,7 @@ impl RunStore for PgRunStore {
                 result, created_at_ms, updated_at_ms
             )
             values ($1, $2, $3::jsonb, $4, $5::jsonb, $6, $7)
+            on conflict (run_id) do nothing
             "#,
         )
         .bind(&record.run_id)
