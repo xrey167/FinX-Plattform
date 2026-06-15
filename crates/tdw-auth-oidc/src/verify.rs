@@ -225,6 +225,13 @@ pub fn verify_jwt_strict(
     validation.validate_nbf = true;
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
+    // Require `aud` and `iss` to be PRESENT, not merely match-if-present.
+    // `jsonwebtoken` only validates `aud`/`iss` when the claim exists in the
+    // token (its `required_spec_claims` defaults to just `{"exp"}`), so without
+    // this a correctly-signed token that simply omits `aud` (or `iss`) would
+    // bypass audience/issuer binding entirely. `exp` stays required so a token
+    // with no expiry is still rejected.
+    validation.set_required_spec_claims(&["exp", "aud", "iss"]);
     // Only the explicitly-listed algorithm is accepted by the underlying decode.
     validation.algorithms = vec![algorithm];
 
