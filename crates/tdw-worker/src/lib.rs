@@ -599,12 +599,16 @@ impl SqliteWorkerQueue {
         let max_attempts = i64_to_u32(row.get("max_attempts"), "max_attempts")?;
         let now_ms = unix_epoch_millis()?;
         if attempts >= max_attempts {
-            self.dead_letter(job_id, error, now_ms).await?;
+            // If the guarded dead-letter touched no rows, the lease was lost
+            // between the read and the write (TOCTOU): report the real status.
+            if self.dead_letter(job_id, error, now_ms).await? == 0 {
+                return Ok(self.job_status(job_id).await?.unwrap_or(status));
+            }
             return Ok(WorkerJobStatus::DeadLettered);
         }
 
         let not_before_ms = now_ms.saturating_add(retry_after_ms);
-        sqlx::query(
+        let result = sqlx::query(
             r"
             update worker_jobs
             set status = ?1,
@@ -624,6 +628,12 @@ impl SqliteWorkerQueue {
         .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
+        // 0 rows ⇒ the lease was lost mid-call (reaped/completed elsewhere):
+        // report the real status rather than asserting a requeue that did not
+        // happen.
+        if result.rows_affected() == 0 {
+            return Ok(self.job_status(job_id).await?.unwrap_or(status));
+        }
         Ok(WorkerJobStatus::Pending)
     }
 
@@ -745,8 +755,10 @@ impl SqliteWorkerQueue {
         Ok(stats)
     }
 
-    async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<()> {
-        sqlx::query(
+    /// Returns the number of rows updated: `0` when the job was no longer
+    /// `Leased` (lost the race to a reap or another worker), `1` otherwise.
+    async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<u64> {
+        let result = sqlx::query(
             r"
             update worker_jobs
             set status = ?1,
@@ -765,7 +777,7 @@ impl SqliteWorkerQueue {
         .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
@@ -1049,12 +1061,16 @@ impl PgWorkerQueue {
         let max_attempts = i64_to_u32(row.get("max_attempts"), "max_attempts")?;
         let now_ms = unix_epoch_millis()?;
         if attempts >= max_attempts {
-            self.dead_letter(job_id, error, now_ms).await?;
+            // If the guarded dead-letter touched no rows, the lease was lost
+            // between the read and the write (TOCTOU): report the real status.
+            if self.dead_letter(job_id, error, now_ms).await? == 0 {
+                return Ok(self.job_status(job_id).await?.unwrap_or(status));
+            }
             return Ok(WorkerJobStatus::DeadLettered);
         }
 
         let not_before_ms = now_ms.saturating_add(retry_after_ms);
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             update system.worker_jobs
             set status = $1,
@@ -1074,6 +1090,12 @@ impl PgWorkerQueue {
         .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
+        // 0 rows ⇒ the lease was lost mid-call (reaped/completed elsewhere):
+        // report the real status rather than asserting a requeue that did not
+        // happen.
+        if result.rows_affected() == 0 {
+            return Ok(self.job_status(job_id).await?.unwrap_or(status));
+        }
         Ok(WorkerJobStatus::Pending)
     }
 
@@ -1181,8 +1203,10 @@ impl PgWorkerQueue {
         Ok(stats)
     }
 
-    async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<()> {
-        sqlx::query(
+    /// Returns the number of rows updated: `0` when the job was no longer
+    /// `Leased` (lost the race to a reap or another worker), `1` otherwise.
+    async fn dead_letter(&self, job_id: &str, error: &str, now_ms: u64) -> Result<u64> {
+        let result = sqlx::query(
             r#"
             update system.worker_jobs
             set status = $1,
@@ -1201,7 +1225,7 @@ impl PgWorkerQueue {
         .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Re-enqueue a dead-lettered job: reset it to `Pending` with a fresh
