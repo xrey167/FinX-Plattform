@@ -33,7 +33,14 @@ pub struct TrustContext {
 impl Default for TrustContext {
     fn default() -> Self {
         Self {
-            adaptivity: Adaptivity::Learning,
+            // Fail-CLOSED: a principal that has not had its trust set from an
+            // authoritative source defaults to read-only (`Configured`, below
+            // the write-back gate's `Learning` floor). The autonomy gate must
+            // never grant writes from a hard-coded default — write authority is
+            // an explicit grant, derived from the host-bound trust resolver
+            // (`KnowledgeRuntime::adaptivity_resolver`), not from a caller's
+            // asserted identity. See `writeback::submit_kg_mutation`.
+            adaptivity: Adaptivity::Configured,
             retrieval_floor: 0.0,
         }
     }
@@ -61,8 +68,11 @@ pub struct Principal {
 }
 
 impl Principal {
-    /// A minimal principal for `session_id`/`agent_id` with a default
-    /// (`Learning`, no retrieval floor) trust context and the default namespace.
+    /// A minimal principal for `session_id`/`agent_id` with a fail-closed
+    /// default trust context (`Configured` — read-only, below the write-back
+    /// gate; no retrieval floor) and the default namespace. Callers that are
+    /// authorized to mutate the graph must raise the dial explicitly via
+    /// [`Principal::with_trust`] from an authoritative trust source.
     #[must_use]
     pub fn new(session_id: impl Into<String>, agent_id: impl Into<String>) -> Self {
         Self {
@@ -142,8 +152,11 @@ mod tests {
         assert_eq!(principal.agent_id, "agent:partner");
         assert_eq!(principal.user_id.as_deref(), Some("user-9"));
         assert_eq!(principal.kg_namespace, "desk-a");
-        // Default trust admits writes (Learning) and filters nothing.
-        assert_eq!(principal.trust.adaptivity, Adaptivity::Learning);
+        // Fail-closed default: read-only (`Configured`, below the write-back
+        // gate's `Learning` floor) and filters nothing. Write authority is
+        // never granted by the default — it must be set explicitly.
+        assert_eq!(principal.trust.adaptivity, Adaptivity::Configured);
+        assert!(principal.trust.adaptivity < Adaptivity::Learning);
         assert!((principal.trust.retrieval_floor - 0.0).abs() < f64::EPSILON);
     }
 

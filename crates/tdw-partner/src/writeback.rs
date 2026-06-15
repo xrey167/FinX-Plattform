@@ -60,6 +60,19 @@ pub async fn submit_kg_mutation(
 /// A cheap pre-check mirroring the gate's admission rule: writes are admitted
 /// only at [`Adaptivity::Learning`] or above. Surfaces use this to decide
 /// whether to attempt a write-back without round-tripping the queue.
+///
+/// # Trust must be authoritative
+///
+/// The principal's `adaptivity` is the *only* thing standing between a caller
+/// and a graph mutation, so it must be set from an **authoritative, host-bound**
+/// source — the same `KnowledgeRuntime::adaptivity_resolver` (keyed on the
+/// runtime's bound agent id) that the `tdw.kg.*` MCP write tools already gate
+/// on — and never from a caller-asserted identity. The
+/// [`Principal::new`](crate::Principal::new) default is fail-closed
+/// (`Configured`, read-only) precisely so an adapter that maps a caller-supplied
+/// `agent_id` to a principal cannot acquire write authority by omission: a
+/// surface must raise the dial explicitly from the resolver before a write-back
+/// is admitted.
 #[must_use]
 pub fn writes_admitted(principal: &Principal) -> bool {
     principal.trust.adaptivity >= Adaptivity::Learning
@@ -84,6 +97,39 @@ mod tests {
             adaptivity,
             retrieval_floor: 0.0,
         })
+    }
+
+    #[tokio::test]
+    async fn default_principal_is_fail_closed() {
+        // Security regression: a principal built with no explicit trust — the
+        // path every surface adapter takes when it maps a caller-supplied
+        // agent_id via `Principal::new` — must NOT be write-admitted. Write
+        // authority is a deliberate grant from an authoritative source, never a
+        // default. (Before the fail-closed default, `Principal::new` defaulted to
+        // `Learning`, so any caller asserting an agent_id got write autonomy.)
+        let (graph, tags) = engines();
+        let mut queue = ProposalQueue::default();
+        let principal = Principal::new("sess", "agent:anyone");
+        assert!(
+            !writes_admitted(&principal),
+            "the default (fail-closed) principal must not be write-admitted"
+        );
+        let result = submit_kg_mutation(
+            &mut queue,
+            &principal,
+            ProposalKind::Annotation {
+                entity_id: "AAPL".to_string(),
+                note: "n".to_string(),
+            },
+            &graph,
+            &tags,
+            "2026-06-14",
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "the gate must refuse a default-trust principal's write"
+        );
     }
 
     #[tokio::test]
