@@ -95,7 +95,16 @@ fn fit(
         (l0, b0, s0, period)
     } else {
         let l0 = y[0];
-        let b0 = if n >= 2 { y[1] - y[0] } else { 0.0 };
+        // Seed a trend only when trend smoothing is active. With `beta == 0`
+        // the trend never updates from its seed (the recursion below reduces to
+        // `trend = trend`), so a non-zero seed would turn the level-only (SES)
+        // variant into a permanent-drift forecast — the ETS selector's
+        // `fit(y, alpha, 0.0, 0.0, 1)` candidate must stay flat.
+        let b0 = if n >= 2 && beta > 0.0 {
+            y[1] - y[0]
+        } else {
+            0.0
+        };
         (l0, b0, Vec::new(), 1)
     };
 
@@ -311,6 +320,22 @@ mod tests {
             "h2 {} should be ~15 (high)",
             values[1]
         );
+    }
+
+    #[test]
+    fn holt_winters_level_only_does_not_drift() {
+        // Regression: with no trend smoothing (beta == 0) the model is SES and
+        // must NOT carry a trend. Previously the trend was seeded to the first
+        // difference y[1]-y[0] and frozen by beta==0, so a flat series produced
+        // a spurious permanent drift. This series jumps 0->10 then stays flat;
+        // the forecast must hold near the level, not ramp upward.
+        let y = vec![0.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+        let fc = holt_winters(&y, 3, 0.5, 0.0, 0.0, 0).expect("forecast");
+        let v: Vec<f64> = fc.points.iter().map(|p| p.value).collect();
+        // No drift: every horizon sits within a tight band of the first.
+        assert!((v[2] - v[0]).abs() < 1.0, "level-only drifted: {v:?}");
+        // Anchored near the recent level (~10), not ramping away.
+        assert!(v[0] > 5.0 && v[0] < 11.0, "h1 {} not near level", v[0]);
     }
 
     #[test]
