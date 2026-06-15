@@ -261,6 +261,16 @@ fn performance_cassette_derives_period_returns() {
     assert!((rows[0].one_day.unwrap_or_default() - 0.10).abs() < 1e-9);
     // 1-year return comes from the dedicated 52WeekChange statistic.
     assert!((rows[0].one_year.unwrap_or_default() - 0.42).abs() < 1e-9);
+    // The remaining periods are NOT derivable from this endpoint: the 50d/200d
+    // moving averages and the 52-week range are not prior prices, so reporting
+    // a return from them would be a mislabeled deviation (and `(last - 52wk_low)
+    // / 52wk_low` is structurally non-negative). They must be None, not the
+    // moving-average deviations the cassette's 50d/200d/52wk-low fields would
+    // otherwise have produced.
+    assert_eq!(rows[0].one_week, None);
+    assert_eq!(rows[0].one_month, None);
+    assert_eq!(rows[0].three_month, None);
+    assert_eq!(rows[0].ytd, None);
 }
 
 #[test]
