@@ -38,6 +38,35 @@ persists each entry to a `tdw_bus` table via `PgEngine`, so the durable log
 survives restarts; `ensure_schema()` creates the table lazily. The Postgres log's
 retention policy is governed by the table (not a fixed in-memory ring).
 
+#### Concurrency caveat — `PgEventBus` does NOT inherit the commit-order completeness guarantee
+
+The in-memory `EventBus` assigns `sequence` under a single lock, so allocation
+order **is** commit/visibility order and an advancing cursor (`cursor = max+1`)
+never skips an entry. **`PgEventBus` does not share that property.** Its
+`sequence` is a `BIGSERIAL` allocated by a non-transactional `nextval()`, so
+allocation order is independent of COMMIT order (under `READ COMMITTED`, only
+committed rows are visible). With **concurrent publishers**, a transaction that
+allocated `sequence = 5` can COMMIT *after* one that allocated `6`. A consumer
+that reads `[6]` in that window and advances its cursor to `7` will **never**
+see `5` once it commits — silent, permanent loss for that consumer.
+
+**Safe usage of `read_from(seq)` against `PgEventBus`:**
+- Safe: re-reading from a **fixed low watermark** that never advances past an
+  unconfirmed region (the in-process relay consumer does this and is unaffected).
+- **Unsafe:** advancing the cursor to `max(sequence)+1` after each read (a
+  replay/CDC-style consumer). Do **not** build such a consumer on `read_from`
+  as-is.
+
+A correct advancing consumer needs commit-order delivery — e.g. a watermark that
+only exposes rows below the oldest in-flight transaction
+(`pg_snapshot_xmin(pg_current_snapshot())`), a commit-ordered sequence stamped
+inside the publishing txn, or logical-decoding (LSN) consumption. That change is
+**deferred until such a consumer is actually wired**, because it must be verified
+against a live concurrent Postgres (the `tests/pg_bus.rs` suite is feature- and
+env-gated and is not exercised by default CI), and the naive "return only the
+gapless contiguous prefix" fix is worse — it stalls forever on the permanent
+gaps `BIGSERIAL` leaves whenever a publish transaction rolls back.
+
 ## Real-vs-stub duality design
 
 Same pattern as the sibling persistence crates: the in-memory `EventBus` is

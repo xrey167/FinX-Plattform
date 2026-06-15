@@ -107,6 +107,23 @@ impl PgEventBus {
 
     /// Read all bus entries with sequence >= `sequence`, ordered.
     ///
+    /// # Consumer safety (read before building an advancing-cursor consumer)
+    ///
+    /// `sequence` is a non-transactional `BIGSERIAL`, so allocation order is
+    /// **independent of COMMIT order** — unlike the in-memory [`crate::EventBus`],
+    /// whose single-locked counter makes allocation order == visibility order.
+    /// With concurrent publishers, a transaction that allocated a *lower*
+    /// sequence can commit *after* a higher one. A consumer that advances its
+    /// cursor to `max(sequence)+1` after a read can therefore **permanently skip**
+    /// a lower-sequence row that commits later — silent message loss.
+    ///
+    /// Safe: re-reading from a **fixed low watermark** (the in-process relay does
+    /// this). **Unsafe:** a replay/CDC-style cursor that advances past the highest
+    /// sequence seen. A correct advancing consumer needs commit-order delivery
+    /// (a `pg_snapshot_xmin` watermark, a commit-ordered sequence, or logical
+    /// decoding) — see `ARCHITECTURE.md`; that is deferred until such a consumer
+    /// is wired, since it must be verified against a live concurrent Postgres.
+    ///
     /// # Errors
     ///
     /// Returns an error variant if the underlying operation fails.
