@@ -219,16 +219,29 @@ impl PatternEngine {
 
                 report.motifs_examined += 1;
 
-                if instances.len() < self.limits.min_support {
+                // Support = number of DISTINCT source entities participating in
+                // ALL labels (the documented `from`-overlap contract), NOT the
+                // raw (from, to) pair count. A single entity with multiple `to`
+                // targets in the last label must contribute support 1; otherwise
+                // one entity can cross `min_support` on its own and persist a
+                // false-positive pattern to the graph.
+                let support = instances
+                    .iter()
+                    .map(|(f, _)| f.as_str())
+                    .collect::<BTreeSet<&str>>()
+                    .len();
+
+                if support < self.limits.min_support {
                     continue;
                 }
 
-                // Persist the Pattern node and update index.
+                // Persist the Pattern node and update index. Provenance still
+                // records every (from, to) instance pair, capped independently
+                // of the support count above.
                 let capped_instances: Vec<(String, String)> = instances
                     .into_iter()
                     .take(self.limits.max_provenance_edges)
                     .collect();
-                let support = capped_instances.len();
 
                 let record = PatternRecord::new(
                     canonical.clone(),

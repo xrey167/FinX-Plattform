@@ -156,6 +156,106 @@ async fn fixture_produces_expected_patterns() {
     assert!(report.motifs_examined >= 2);
 }
 
+// ── support counts distinct source entities, not (from,to) pairs ──────────────
+
+/// Regression: support must equal the number of *distinct source entities* that
+/// exhibit a motif — not the number of `(from, to)` instance pairs. A single
+/// entity with several `to` targets under one label contributes support 1.
+///
+/// Before the fix, `support` was the de-duped pair count, so one entity with two
+/// edges of the same label reached `min_support = 2` on its own and persisted a
+/// false-positive pattern to the graph. The shared fixture never exercised this
+/// because every entity there has out-degree 1 per label.
+#[tokio::test]
+async fn support_counts_distinct_sources_not_pairs() {
+    let graph = Arc::new(InMemoryGraphEngine::default());
+    let prov = Provenance::Ingest {
+        source: "test".to_string(),
+    };
+
+    let node = |id: &str| GraphNode {
+        id: id.to_string(),
+        kind: EntityKind::Instrument,
+        label: id.to_string(),
+        aliases: vec![],
+        props: serde_json::Value::Null,
+        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+        valid_to: None,
+    };
+    graph
+        .upsert_nodes(vec![
+            node("instrument:AAPL"),
+            node("instrument:MSFT"),
+            node("instrument:GOOG"),
+        ])
+        .await
+        .expect("upsert nodes");
+
+    let edge = |from: &str, rel: &str, to: &str| GraphEdge {
+        from: from.to_string(),
+        to: to.to_string(),
+        rel: rel.to_string(),
+        props: serde_json::Value::Null,
+        provenance: prov.clone(),
+        valid_from: Some("2020-01-01T00:00:00Z".to_string()),
+        valid_to: None,
+    };
+    // AAPL alone exhibits `supplier_of` twice (→ MSFT, → GOOG): one distinct
+    // source entity, two instance pairs.
+    graph
+        .upsert_edges(vec![
+            edge("instrument:AAPL", "supplier_of", "instrument:MSFT"),
+            edge("instrument:AAPL", "supplier_of", "instrument:GOOG"),
+        ])
+        .await
+        .expect("upsert edges");
+
+    let limits = |min_support| MiningLimits {
+        max_candidates: 8_000,
+        max_instance_scan: 20_000,
+        max_iterations: 50_000,
+        max_provenance_edges: 64,
+        max_motif_edges: 1,
+        min_support,
+    };
+
+    // min_support = 2: a single-entity motif must NOT be recorded.
+    let mut index = PatternIndex::default();
+    PatternEngine::with_limits(limits(2))
+        .run_pattern_mining_at(
+            &(graph.clone() as Arc<dyn GraphEngine>),
+            &mut index,
+            NOW,
+            WINDOW,
+        )
+        .await
+        .expect("mining run");
+    assert!(
+        !index.contains("supplier_of"),
+        "one entity with two same-label edges must not reach min_support=2 (false-positive pattern)"
+    );
+
+    // min_support = 1: recorded with support 1 (distinct sources), not 2 (pairs).
+    let mut index1 = PatternIndex::default();
+    PatternEngine::with_limits(limits(1))
+        .run_pattern_mining_at(
+            &(graph.clone() as Arc<dyn GraphEngine>),
+            &mut index1,
+            NOW,
+            WINDOW,
+        )
+        .await
+        .expect("mining run");
+    assert_eq!(
+        index1
+            .get("supplier_of")
+            .expect("supplier_of present at min_support=1")
+            .support,
+        1,
+        "support must count the single distinct source entity, not the two (from,to) pairs"
+    );
+}
+
 // ── idempotent re-mine ────────────────────────────────────────────────────────
 
 #[tokio::test]
