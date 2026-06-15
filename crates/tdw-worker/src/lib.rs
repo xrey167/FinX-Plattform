@@ -247,7 +247,11 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
 
     fn complete(&mut self, job_id: &str) -> Result<()> {
         let record = self.record_mut(job_id)?;
-        if record.status == WorkerJobStatus::Completed {
+        // Only a currently-leased job may be completed. A worker whose lease
+        // expired and was reaped (re-queued or dead-lettered, possibly already
+        // re-leased and finished by another worker) must not resurrect a
+        // terminal job; an already-`Completed` job stays a no-op (idempotent).
+        if record.status != WorkerJobStatus::Leased {
             return Ok(());
         }
         record.status = WorkerJobStatus::Completed;
@@ -259,6 +263,12 @@ impl DurableWorkerQueue for InMemoryWorkerQueue {
     fn fail(&mut self, job_id: &str, error: &str, retry_after_ms: u64) -> Result<WorkerJobStatus> {
         let now_ms = unix_epoch_millis()?;
         let record = self.record_mut(job_id)?;
+        // Only a currently-leased job may be failed. A worker that lost its
+        // lease (reaped/expired, perhaps already re-leased elsewhere) must not
+        // requeue or dead-letter the job; report the current status unchanged.
+        if record.status != WorkerJobStatus::Leased {
+            return Ok(record.status);
+        }
         record.last_error = Some(error.to_string());
         record.leased_by = None;
         record.lease_expires_at_ms = None;
@@ -546,12 +556,13 @@ impl SqliteWorkerQueue {
                 lease_expires_at_ms = null,
                 completed_at_ms = ?2,
                 updated_at_ms = ?2
-            where job_id = ?3
+            where job_id = ?3 and status = ?4
             ",
         )
         .bind(WorkerJobStatus::Completed.as_str())
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -566,14 +577,23 @@ impl SqliteWorkerQueue {
         error: &str,
         retry_after_ms: u64,
     ) -> Result<WorkerJobStatus> {
-        let row =
-            sqlx::query("select attempts, max_attempts from worker_jobs where job_id = ?1 limit 1")
-                .bind(job_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let row = sqlx::query(
+            "select attempts, max_attempts, status from worker_jobs where job_id = ?1 limit 1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await?;
         let Some(row) = row else {
             return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
         };
+
+        // Only a currently-leased job may be failed: a worker that lost its
+        // lease (reaped/expired, perhaps re-leased elsewhere) must not requeue
+        // or dead-letter the job. Report the current status without mutating.
+        let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+        if status != WorkerJobStatus::Leased {
+            return Ok(status);
+        }
 
         let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
         let max_attempts = i64_to_u32(row.get("max_attempts"), "max_attempts")?;
@@ -593,7 +613,7 @@ impl SqliteWorkerQueue {
                 lease_expires_at_ms = null,
                 last_error = ?3,
                 updated_at_ms = ?4
-            where job_id = ?5
+            where job_id = ?5 and status = ?6
             ",
         )
         .bind(WorkerJobStatus::Pending.as_str())
@@ -601,6 +621,7 @@ impl SqliteWorkerQueue {
         .bind(error)
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(WorkerJobStatus::Pending)
@@ -734,13 +755,14 @@ impl SqliteWorkerQueue {
                 last_error = ?2,
                 dead_lettered_at_ms = ?3,
                 updated_at_ms = ?3
-            where job_id = ?4
+            where job_id = ?4 and status = ?5
             ",
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .bind(error)
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -987,12 +1009,13 @@ impl PgWorkerQueue {
                 lease_expires_at_ms = null,
                 completed_at_ms = $2,
                 updated_at_ms = $2
-            where job_id = $3
+            where job_id = $3 and status = $4
             "#,
         )
         .bind(WorkerJobStatus::Completed.as_str())
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1005,7 +1028,7 @@ impl PgWorkerQueue {
         retry_after_ms: u64,
     ) -> Result<WorkerJobStatus> {
         let row = sqlx::query(
-            "select attempts, max_attempts from system.worker_jobs where job_id = $1 limit 1",
+            "select attempts, max_attempts, status from system.worker_jobs where job_id = $1 limit 1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
@@ -1013,6 +1036,14 @@ impl PgWorkerQueue {
         let Some(row) = row else {
             return Err(WorkerQueueError::UnknownJob(job_id.to_string()));
         };
+
+        // Only a currently-leased job may be failed: a worker that lost its
+        // lease (reaped/expired, perhaps re-leased elsewhere) must not requeue
+        // or dead-letter the job. Report the current status without mutating.
+        let status = WorkerJobStatus::parse(row.get::<&str, _>("status"))?;
+        if status != WorkerJobStatus::Leased {
+            return Ok(status);
+        }
 
         let attempts = i64_to_u32(row.get("attempts"), "attempts")?;
         let max_attempts = i64_to_u32(row.get("max_attempts"), "max_attempts")?;
@@ -1032,7 +1063,7 @@ impl PgWorkerQueue {
                 lease_expires_at_ms = null,
                 last_error = $3,
                 updated_at_ms = $4
-            where job_id = $5
+            where job_id = $5 and status = $6
             "#,
         )
         .bind(WorkerJobStatus::Pending.as_str())
@@ -1040,6 +1071,7 @@ impl PgWorkerQueue {
         .bind(error)
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(WorkerJobStatus::Pending)
@@ -1159,13 +1191,14 @@ impl PgWorkerQueue {
                 last_error = $2,
                 dead_lettered_at_ms = $3,
                 updated_at_ms = $3
-            where job_id = $4
+            where job_id = $4 and status = $5
             "#,
         )
         .bind(WorkerJobStatus::DeadLettered.as_str())
         .bind(error)
         .bind(u64_to_i64(now_ms)?)
         .bind(job_id)
+        .bind(WorkerJobStatus::Leased.as_str())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -2427,6 +2460,72 @@ mod tests {
     }
 
     #[test]
+    fn stale_fail_after_lease_reaped_does_not_resurrect_completed_job() {
+        // Worker A leases, its lease expires and is reaped back to Pending,
+        // worker B leases and completes. A stale `fail` from worker A (whose
+        // lease is long gone) must NOT requeue the now-completed job.
+        let mut queue = InMemoryWorkerQueue::default();
+        let mut job = test_job("job-race");
+        job.max_attempts = 5;
+        queue.enqueue(job).expect("enqueue");
+
+        let a = queue
+            .lease_next_with_ttl("worker-a", 0)
+            .expect("lease a")
+            .expect("a present");
+        assert_eq!(a.attempt, 1);
+        assert_eq!(queue.reap_expired_leases().expect("reap"), 1);
+
+        let b = queue
+            .lease_next("worker-b")
+            .expect("lease b")
+            .expect("b present");
+        assert_eq!(b.attempt, 2);
+        queue.complete("job-race").expect("b completes");
+        assert_eq!(queue.stats().completed, 1);
+
+        let status = queue.fail("job-race", "stale boom", 0).expect("stale fail");
+        assert_eq!(
+            status,
+            WorkerJobStatus::Completed,
+            "stale fail must observe (not mutate) the completed job"
+        );
+        assert_eq!(queue.stats().completed, 1, "job must stay completed");
+        assert_eq!(queue.stats().pending, 0, "job must not be requeued");
+    }
+
+    #[test]
+    fn stale_complete_after_lease_reaped_does_not_resurrect_dead_lettered_job() {
+        // Worker A leases at the final attempt; its lease expires and is reaped
+        // straight to DeadLettered. A stale `complete` from worker A must NOT
+        // resurrect the dead-lettered job to Completed.
+        let mut queue = InMemoryWorkerQueue::default();
+        let mut job = test_job("job-dead-race");
+        job.max_attempts = 1;
+        queue.enqueue(job).expect("enqueue");
+
+        let a = queue
+            .lease_next_with_ttl("worker-a", 0)
+            .expect("lease")
+            .expect("present");
+        assert_eq!(a.attempt, 1);
+        assert_eq!(queue.reap_expired_leases().expect("reap"), 1);
+        assert_eq!(queue.stats().dead_lettered, 1);
+
+        queue.complete("job-dead-race").expect("stale complete");
+        assert_eq!(
+            queue.stats().dead_lettered,
+            1,
+            "dead-lettered job must stay dead"
+        );
+        assert_eq!(
+            queue.stats().completed,
+            0,
+            "stale complete must not resurrect the job"
+        );
+    }
+
+    #[test]
     fn worker_queue_contract_rejects_invalid_jobs() {
         let mut queue = InMemoryWorkerQueue::default();
         let mut invalid = test_job("");
@@ -2633,6 +2732,66 @@ mod tests {
             .await
             .unwrap_or_else(|error| panic!("dead letters: {error}"));
         assert_eq!(letters[0].last_error.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn sqlite_stale_fail_after_reap_does_not_resurrect_completed_job() {
+        // SQL-backend regression for the lease-guarded finalizers: a worker
+        // whose lease expired and was reaped (then re-leased + completed by
+        // another worker) must not requeue the now-completed job.
+        let queue = SqliteWorkerQueue::connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|error| panic!("connect: {error}"));
+        let mut job = test_job("job-race");
+        job.max_attempts = 5;
+        queue
+            .enqueue(job)
+            .await
+            .unwrap_or_else(|error| panic!("enqueue: {error}"));
+
+        // Worker A leases with a 0ms TTL, then its lease is reaped to Pending.
+        queue
+            .lease_next_with_ttl("worker-a", 0)
+            .await
+            .unwrap_or_else(|error| panic!("lease a: {error}"))
+            .expect("a present");
+        assert_eq!(
+            queue
+                .reap_expired_leases()
+                .await
+                .unwrap_or_else(|error| panic!("reap: {error}")),
+            1
+        );
+
+        // Worker B leases and completes.
+        queue
+            .lease_next("worker-b")
+            .await
+            .unwrap_or_else(|error| panic!("lease b: {error}"))
+            .expect("b present");
+        queue
+            .complete("job-race")
+            .await
+            .unwrap_or_else(|error| panic!("complete: {error}"));
+
+        // Stale worker A fails the job: must observe Completed, not requeue it.
+        let status = queue
+            .fail("job-race", "stale boom", 0)
+            .await
+            .unwrap_or_else(|error| panic!("fail: {error}"));
+        assert_eq!(
+            status,
+            WorkerJobStatus::Completed,
+            "stale fail must observe (not mutate) the completed job"
+        );
+        assert_eq!(
+            queue
+                .job_status("job-race")
+                .await
+                .unwrap_or_else(|error| panic!("status: {error}")),
+            Some(WorkerJobStatus::Completed),
+            "job must stay completed, not be requeued"
+        );
     }
 
     #[tokio::test]
