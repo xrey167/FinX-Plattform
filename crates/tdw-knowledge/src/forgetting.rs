@@ -40,9 +40,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tdw_core::confidence::{
-    EdgeConfidenceInput, MAX_CORROBORATION_CAP, compute_confidence, count_independent_sources,
-};
+use tdw_core::confidence::{EdgeConfidenceInput, compute_confidence, count_independent_sources};
 use tdw_core::{GraphEdge, GraphEngine, Provenance};
 
 use crate::{KnowledgeError, Result};
@@ -611,7 +609,15 @@ pub async fn identify_candidates(
                 pool_cache.insert(cache_key.clone(), fetched);
             }
             let pool = &pool_cache[&cache_key];
-            let pool_refs: Vec<&GraphEdge> = pool.iter().take(MAX_CORROBORATION_CAP).collect();
+            // Pass the FULL same-(from,rel) pool. `compute_confidence` and
+            // `count_independent_sources` filter to the matching `to` target
+            // *before* applying `MAX_CORROBORATION_CAP` internally; pre-capping
+            // here would cap across the mixed-target pool and silently drop a
+            // fact's real corroborators for a high-fanout subject (e.g. an
+            // exchange that lists hundreds of instruments), under-counting them
+            // so a well-corroborated, protected fact reads as a forgetting
+            // candidate — the K-X7 cap-before-filter bug class.
+            let pool_refs: Vec<&GraphEdge> = pool.iter().collect();
             let input = EdgeConfidenceInput::from_edge(edge);
             let score = compute_confidence(&input, &pool_refs, None);
             let corroboration = count_independent_sources(&input, &pool_refs);
@@ -1019,6 +1025,61 @@ mod tests {
         assert!(
             restored.props.get("recalled_at").is_some(),
             "recall is audited"
+        );
+    }
+
+    // ── K-X7 regression: cap must not precede the per-target filter ──────────
+
+    #[tokio::test]
+    async fn high_fanout_corroborators_beyond_cap_still_protect_a_fact() {
+        // A high-fanout subject's same-(from,rel) pool can exceed
+        // MAX_CORROBORATION_CAP (64) with edges for many *different* targets.
+        // Pre-capping that mixed pool before the confidence machinery filters by
+        // `to` would drop a well-corroborated fact's real sources, mis-flagging a
+        // protected fact for forgetting. 70 single-source noise targets fill the
+        // pool ahead of a target asserted by 4 independent sources (>= the
+        // protect threshold of 3); the corroborated fact must NOT be a candidate.
+        let mut nodes = vec!["company:ACME"];
+        let mut edges = Vec::new();
+        // Noise: distinct targets, single source, stale + low confidence. Named
+        // "noise:NNN" and dated earliest so the corroborated target sorts last
+        // under insertion-, target-, or valid_from-ordering alike.
+        for i in 0..70 {
+            let to: &'static str = Box::leak(format!("noise:{i:03}").into_boxed_str());
+            nodes.push(to);
+            edges.push(GraphEdge {
+                props: json!({ "extraction_confidence": 0.1 }),
+                ..ingest_edge("company:ACME", "lists", to, "src:noise", "2000-01-01")
+            });
+        }
+        // The corroborated fact: same (from, rel, to) asserted by 4 independent
+        // sources (distinct valid_from keeps them distinct edges). Stale and
+        // low-confidence on its own — only corroboration protects it.
+        let tgt = "zzz:tgt";
+        nodes.push(tgt);
+        for s in 0..4 {
+            edges.push(GraphEdge {
+                props: json!({ "extraction_confidence": 0.1 }),
+                ..ingest_edge(
+                    "company:ACME",
+                    "lists",
+                    tgt,
+                    &format!("src:{s}"),
+                    &format!("2005-01-0{}", s + 1),
+                )
+            });
+        }
+        let graph = seeded(&nodes, &edges).await;
+        let graph: Arc<dyn GraphEngine> = graph;
+
+        let policy = ForgettingPolicy::default();
+        let report = identify_candidates(&graph, &policy, 1000, "2024-06-01")
+            .await
+            .expect("sweep");
+        assert!(
+            !report.candidates.iter().any(|c| c.to == tgt),
+            "well-corroborated fact (4 sources >= 3) must stay protected even when \
+             its corroborators sit beyond MAX_CORROBORATION_CAP in the pool"
         );
     }
 
