@@ -451,10 +451,14 @@ impl InductionEngine {
             });
         }
 
-        // Build rule_id: "inducted:pattern:<node_id_safe>"
-        // node_id is "pattern:<canonical>" where canonical uses "--" separators —
-        // already graph-id safe.
-        let rule_id = format!("inducted-{}", pattern_id.replace(':', "-"));
+        // Build rule_id "inducted-pattern-<canonical>" from the node id
+        // "pattern:<canonical>". Replace ONLY the leading `pattern:` colon:
+        // a label may contain a single `:` (is_graph_id permits it, and
+        // pattern_node_id only collapses `::`), so replacing every colon is
+        // non-injective — "x:y" and "x-y" would both yield
+        // "inducted-pattern-x-y", colliding the rule id (breaking dedup) and
+        // breaking the `inducted_rule_provenance_label` inverse round-trip.
+        let rule_id = format!("inducted-{}", pattern_id.replacen(':', "-", 1));
 
         let when: Vec<EdgePattern> = labels
             .iter()
@@ -588,6 +592,34 @@ mod tests {
             panic!("expected DeriveEdge");
         };
         assert_eq!(when.len(), 3);
+    }
+
+    #[test]
+    fn rule_id_injective_for_single_colon_labels() {
+        // Regression: a relation label may contain a single ':' (is_graph_id
+        // permits it; pattern_node_id only collapses "::"). Building rule_id by
+        // replacing EVERY colon collapsed "x:y" and "x-y" onto the same id,
+        // breaking dedup and the provenance inverse. The two must stay distinct
+        // and each must round-trip back to its source pattern node id.
+        let eng = engine();
+        let id_of = |c: &CandidateRule| {
+            let InferRule::DeriveEdge { rule_id, .. } = &c.rule else {
+                panic!("expected DeriveEdge");
+            };
+            rule_id.clone()
+        };
+        let colon = id_of(&eng.induce_candidate(&record("x:y", 2)).unwrap());
+        let dash = id_of(&eng.induce_candidate(&record("x-y", 2)).unwrap());
+        assert_ne!(colon, dash, "distinct labels must yield distinct rule ids");
+        assert_eq!(
+            inducted_rule_provenance_label(&colon).as_deref(),
+            Some("pattern:x:y"),
+            "provenance inverse must round-trip the colon label"
+        );
+        assert_eq!(
+            inducted_rule_provenance_label(&dash).as_deref(),
+            Some("pattern:x-y")
+        );
     }
 
     // ── induce_candidate: rejection criteria ──────────────────────────────────
