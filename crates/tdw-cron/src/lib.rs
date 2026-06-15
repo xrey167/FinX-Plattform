@@ -415,10 +415,16 @@ fn wall_clock_ms() -> i64 {
 
 /// Convert epoch milliseconds to a `DateTime<Utc>`.  Returns `None` if `ms`
 /// is out of the `chrono` representable range.
+///
+/// Uses Euclidean division so the `(secs, nanos)` pair is correct for negative
+/// (pre-epoch) `ms` too: `nanos` must be non-negative and `secs` floored, e.g.
+/// `-500` ms decodes to `1969-12-31T23:59:59.500Z`, not `+0.5s`.  Truncating
+/// division (`ms / 1_000`) with an `.abs()` remainder would yield the wrong
+/// instant for negative inputs.
 #[must_use]
 fn ms_to_datetime(ms: i64) -> Option<DateTime<Utc>> {
-    let secs = ms.checked_div(1_000)?;
-    let nanos = u32::try_from((ms % 1_000).abs() * 1_000_000).ok()?;
+    let secs = ms.div_euclid(1_000);
+    let nanos = u32::try_from(ms.rem_euclid(1_000) * 1_000_000).ok()?;
     Utc.timestamp_opt(secs, nanos).single()
 }
 
@@ -470,6 +476,22 @@ mod tests {
                 max_attempts: 3,
                 priority: 0,
             },
+        }
+    }
+
+    #[test]
+    fn ms_to_datetime_round_trips_including_negative_epoch() {
+        // Positive and zero are unchanged.
+        for ms in [0_i64, 1, 999, 1_000, 1_234_567, 1_700_000_000_000] {
+            let dt = ms_to_datetime(ms).expect("representable");
+            assert_eq!(datetime_to_ms(&dt), ms, "positive ms must round-trip: {ms}");
+        }
+        // Negative (pre-1970) ms must decode with a floored second and a
+        // non-negative sub-second remainder, not a truncated-toward-zero second
+        // with an absolute remainder. `-500` ms is 1969-12-31T23:59:59.500Z.
+        for ms in [-1_i64, -500, -999, -1_000, -1_500, -86_400_000] {
+            let dt = ms_to_datetime(ms).expect("representable");
+            assert_eq!(datetime_to_ms(&dt), ms, "negative ms must round-trip: {ms}");
         }
     }
 
