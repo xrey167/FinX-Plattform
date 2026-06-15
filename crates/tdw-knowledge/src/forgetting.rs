@@ -423,6 +423,11 @@ pub async fn retire_edge_to_cold(
             m
         }
     };
+    // Clear any stale `recalled_at` from a prior recall: re-retiring an edge
+    // must not leave a contradictory `forgotten` + `recalled_at` pair in the
+    // audit trail. Mirrors `recall_cold_edge`, which strips the `forgotten`
+    // block when it stamps `recalled_at`.
+    props_map.remove("recalled_at");
     props_map.insert(
         FORGOTTEN_PROPS_KEY.to_string(),
         json!({
@@ -982,6 +987,54 @@ mod tests {
     }
 
     // ── (d) a cold fact can be recalled / restored through the gate ──────────
+
+    #[tokio::test]
+    async fn re_retire_clears_stale_recalled_at() {
+        // Regression: retire -> recall -> re-retire must not leave a
+        // contradictory `recalled_at` alongside the `forgotten` block. recall
+        // strips the forgotten block when it stamps recalled_at; retire must
+        // symmetrically clear recalled_at when it re-adds the forgotten block.
+        let edge = ingest_edge("company:ACME", "hq_in", "city:old", "src:a", "2010-01-01");
+        let graph = seeded(&["company:ACME", "city:old"], &[edge]).await;
+        let graph: Arc<dyn GraphEngine> = graph;
+
+        retire_edge_to_cold(
+            &graph,
+            "company:ACME",
+            "hq_in",
+            "city:old",
+            "r1",
+            "agent:w;proposal:p1",
+            "2024-06-01",
+        )
+        .await
+        .expect("retire 1");
+        recall_cold_edge(&graph, "company:ACME", "hq_in", "city:old", "2024-07-01")
+            .await
+            .expect("recall");
+        retire_edge_to_cold(
+            &graph,
+            "company:ACME",
+            "hq_in",
+            "city:old",
+            "r2",
+            "agent:w;proposal:p2",
+            "2024-08-01",
+        )
+        .await
+        .expect("retire 2");
+
+        let edges = graph.edges(Some("hq_in"), 0, 256).await.expect("read");
+        let props = &edges[0].props;
+        assert!(
+            edge_forgotten_block(props).is_some(),
+            "re-retired edge carries the forgotten block"
+        );
+        assert!(
+            props.get("recalled_at").is_none(),
+            "re-retire must clear the stale recalled_at (no forgotten+recalled contradiction)"
+        );
+    }
 
     #[tokio::test]
     async fn cold_fact_can_be_recalled_and_restored() {
