@@ -223,6 +223,40 @@ struct ChartQuote {
     volume: Vec<Option<i64>>,
 }
 
+/// Build the Yahoo v8 chart URL, honoring an absolute `start`/`end` date
+/// window when present and otherwise falling back to the relative `range`.
+///
+/// Yahoo accepts either `range=` (relative) or `period1=`/`period2=` (absolute
+/// epoch seconds), not a meaningful mix. `period2` is exclusive on the API, so
+/// a present `end` date is pushed forward one day to include that day's bar; an
+/// absent `end` runs to `now_unix`, and an absent `start` runs from the epoch
+/// (Yahoo clamps to the symbol's listing date).
+fn build_chart_url(
+    base_url: &str,
+    symbol: &str,
+    interval: &str,
+    range: &str,
+    start: Option<tdw_core::Date>,
+    end: Option<tdw_core::Date>,
+    now_unix: i64,
+) -> String {
+    if start.is_none() && end.is_none() {
+        return format!("{base_url}/v8/finance/chart/{symbol}?interval={interval}&range={range}");
+    }
+    let to_epoch = |d: tdw_core::Date| {
+        tdw_core::date::civil_to_unix_seconds(
+            i64::from(d.year()),
+            u32::from(d.month()),
+            u32::from(d.day()),
+        )
+    };
+    let period1 = start.map_or(0, to_epoch);
+    let period2 = end.map_or(now_unix, |d| to_epoch(d) + 86_400);
+    format!(
+        "{base_url}/v8/finance/chart/{symbol}?interval={interval}&period1={period1}&period2={period2}"
+    )
+}
+
 #[async_trait]
 impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHistoricalFetcher {
     const PROVIDER: &'static str = "yahoo";
@@ -249,9 +283,24 @@ impl Fetcher<EquityHistoricalQuery, EquityHistoricalData> for YahooHttpEquityHis
         } else {
             interval
         };
-        let url = format!(
-            "{}/v8/finance/chart/{}?interval={}&range={}",
-            self.base_url, query.symbol, interval, self.range
+        // Honor a caller-supplied date window. Yahoo's v8 chart accepts either
+        // a relative `range` or an absolute `period1`/`period2` epoch-second
+        // pair; when the request carries start/end dates we must send the
+        // latter, otherwise the window is silently dropped and only the
+        // configured `self.range` is returned.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+            });
+        let url = build_chart_url(
+            &self.base_url,
+            &query.symbol,
+            interval,
+            &self.range,
+            query.params.start_date,
+            query.params.end_date,
+            now_unix,
         );
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -1389,6 +1438,51 @@ fn unix_to_iso_date(timestamp_seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_chart_url_uses_range_without_dates() {
+        let url = build_chart_url("https://x", "AAPL", "1d", "5d", None, None, 1_700_000_000);
+        assert_eq!(url, "https://x/v8/finance/chart/AAPL?interval=1d&range=5d");
+    }
+
+    #[test]
+    fn build_chart_url_honors_date_window() {
+        let start = tdw_core::Date::parse("2024-01-02").expect("date");
+        let end = tdw_core::Date::parse("2024-01-31").expect("date");
+        let url = build_chart_url(
+            "https://x",
+            "AAPL",
+            "1d",
+            "5d",
+            Some(start),
+            Some(end),
+            9_999,
+        );
+        // 2024-01-02 -> 1_704_153_600; 2024-01-31 -> 1_706_659_200, and period2
+        // is exclusive so the end date is pushed forward one day (+86_400).
+        assert_eq!(
+            url,
+            "https://x/v8/finance/chart/AAPL?interval=1d&period1=1704153600&period2=1706745600"
+        );
+    }
+
+    #[test]
+    fn build_chart_url_open_ended_windows() {
+        let date = tdw_core::Date::parse("2024-01-02").expect("date");
+        // Only an end date: the window runs from the epoch (Yahoo clamps to the
+        // listing date) to the exclusive end.
+        let end_only = build_chart_url("https://x", "AAPL", "1d", "5d", None, Some(date), 9_999);
+        assert_eq!(
+            end_only,
+            "https://x/v8/finance/chart/AAPL?interval=1d&period1=0&period2=1704240000"
+        );
+        // Only a start date: the window runs to `now`.
+        let start_only = build_chart_url("https://x", "AAPL", "1d", "5d", Some(date), None, 9_999);
+        assert_eq!(
+            start_only,
+            "https://x/v8/finance/chart/AAPL?interval=1d&period1=1704153600&period2=9999"
+        );
+    }
 
     #[test]
     fn unix_to_iso_date_matches_well_known_dates() {
