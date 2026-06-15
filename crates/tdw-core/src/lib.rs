@@ -831,6 +831,32 @@ pub mod date {
         (year, month as u32, day as u32)
     }
 
+    /// Convert a `(year, month, day)` civil date to days since the Unix epoch.
+    ///
+    /// Uses the Howard-Hinnant algorithm — the exact inverse of
+    /// [`civil_from_days`]. `month` is `1..=12` and `day` is `1..=31`;
+    /// out-of-range components are not validated here (callers parse via a
+    /// validating `Date`).
+    #[must_use]
+    pub const fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+        let m = month as i64;
+        let d = day as i64;
+        // Shift so March is month 0; this keeps the leap day at year's end.
+        let y = if m <= 2 { year - 1 } else { year };
+        let era = if y >= 0 { y } else { y - 399 } / 400;
+        let yoe = y - era * 400; // [0, 399]
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+        era * 146_097 + doe - 719_468
+    }
+
+    /// Convert a `(year, month, day)` civil date to a whole-second Unix
+    /// timestamp at `00:00:00 UTC` on that date.
+    #[must_use]
+    pub const fn civil_to_unix_seconds(year: i64, month: u32, day: u32) -> i64 {
+        days_from_civil(year, month, day) * 86_400
+    }
+
     /// Convert a whole-second Unix timestamp to an ISO-8601 UTC timestamp
     /// string of the form `YYYY-MM-DDThh:mm:ssZ`.
     #[must_use]
@@ -865,6 +891,24 @@ pub mod date {
                 civil_from_days((-86_400i64).div_euclid(86_400)),
                 (1969, 12, 31)
             );
+        }
+
+        #[test]
+        fn days_from_civil_well_known() {
+            assert_eq!(days_from_civil(1970, 1, 1), 0);
+            assert_eq!(days_from_civil(2024, 1, 2), 1_704_153_600 / 86_400);
+            assert_eq!(days_from_civil(1969, 12, 31), -1);
+            assert_eq!(civil_to_unix_seconds(2024, 1, 2), 1_704_153_600);
+        }
+
+        #[test]
+        fn days_from_civil_is_inverse_of_civil_from_days() {
+            // Round-trip every day across a multi-century span (incl. a leap
+            // day and pre-epoch dates) to lock the two algorithms together.
+            for days in (-30_000..30_000).step_by(7) {
+                let (y, m, d) = civil_from_days(days);
+                assert_eq!(days_from_civil(y, m, d), days, "round-trip at {days}");
+            }
         }
 
         #[test]
