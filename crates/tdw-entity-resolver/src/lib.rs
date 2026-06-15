@@ -98,11 +98,18 @@ pub fn try_resolve_by_identifier(
     if !is_identifier_scheme(scheme) || !is_identifier_value(value) {
         return Err(ResolveError::InvalidIdentifier);
     }
+    // Canonicalize BOTH sides of BOTH fields exactly as `identifier_to_graph`
+    // does (`.trim().to_ascii_lowercase()`). Trimming only the query while
+    // comparing the stored value as-is would silently diverge from the graph
+    // resolve path on whitespace-padded feed values — the same two-path
+    // divergence the comment in `identifier_to_graph` warns about for case.
+    let scheme = scheme.trim();
     let value = value.trim();
     Ok(records
         .iter()
         .filter(|record| {
-            record.scheme.eq_ignore_ascii_case(scheme) && record.value.eq_ignore_ascii_case(value)
+            record.scheme.trim().eq_ignore_ascii_case(scheme)
+                && record.value.trim().eq_ignore_ascii_case(value)
         })
         .map(|record| ResolveCandidate {
             entity_id: record.instrument_id.clone(),
@@ -303,6 +310,32 @@ mod tests {
         assert_eq!(by_isin[0].entity_id, "INST-AAPL-XNAS");
 
         assert!(resolve_by_identifier("FIGI", "NOPE00000000", &records).is_empty());
+    }
+
+    #[test]
+    fn in_memory_identifier_match_trims_stored_scheme_and_value() {
+        // Feed rows can carry surrounding whitespace, which passes validation
+        // (`is_identifier_value`/`is_identifier_scheme` validate the trimmed
+        // form). The in-memory resolver must canonicalize the stored side just
+        // like `identifier_to_graph` does, or the two resolve paths diverge.
+        let records = vec![IdentifierRecord {
+            scheme: " FIGI ".to_string(),
+            value: "BBG000B9XRY4 ".to_string(),
+            instrument_id: "INST-X".to_string(),
+        }];
+
+        let hits = resolve_by_identifier("FIGI", "BBG000B9XRY4", &records);
+        assert_eq!(
+            hits.len(),
+            1,
+            "whitespace-padded stored scheme/value must not drop the match"
+        );
+        assert_eq!(hits[0].entity_id, "INST-X");
+
+        // And it must agree with the graph-key canonicalization of the same row.
+        let (node, _edge) =
+            identifier_to_graph(&records[0]).expect("whitespace-padded row is valid");
+        assert_eq!(node.id, "symbol:figi:bbg000b9xry4");
     }
 
     #[tokio::test]
