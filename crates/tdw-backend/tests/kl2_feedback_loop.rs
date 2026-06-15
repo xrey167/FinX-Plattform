@@ -449,10 +449,20 @@ async fn live_scheduler_drains_feedback_and_updates_freshness_cell() {
         cancel.clone(),
     );
 
-    // Wait until the Working buffer is expired by the scheduler.
+    // Wait until BOTH post-conditions hold: the Working buffer has been expired
+    // AND the freshness cell has been written `Ok`. The scheduler expires the
+    // buffer (under the store lock) and updates the freshness cell (under a
+    // separate lock) as two distinct steps within a tick, so polling only on
+    // buffer expiry races the freshness write — the test could observe the
+    // expiry one tick before the freshness cell transitions, then fail (b).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
-        if store_arc.lock().await.get("buf").is_none() {
+        let buf_gone = store_arc.lock().await.get("buf").is_none();
+        let freshness_ok = matches!(
+            &*freshness_arc.lock().await,
+            ConsolidationFreshness::Ok { .. }
+        );
+        if buf_gone && freshness_ok {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
