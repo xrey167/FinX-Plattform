@@ -174,9 +174,10 @@ impl StepStore for PgStepStore {
 /// Table: `system.function_runs` (created by migration `20260607_0002`).
 ///
 /// `insert_run` uses `ON CONFLICT DO NOTHING` for exactly-once first-write-wins
-/// semantics, matching the SQLite (`INSERT OR IGNORE`) and in-memory backends so
-/// a re-fired run id is silently deduplicated rather than raising a primary-key
-/// violation.
+/// semantics, matching the SQLite (`INSERT OR IGNORE`) backend so a re-fired run
+/// id is silently deduplicated rather than raising a primary-key violation. (The
+/// in-memory backend is likewise idempotent on a duplicate insert, though it
+/// overwrites rather than keeping the first write.)
 #[derive(Clone, Debug)]
 pub struct PgRunStore {
     pool: PgPool,

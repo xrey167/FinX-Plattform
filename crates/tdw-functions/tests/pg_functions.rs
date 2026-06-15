@@ -103,15 +103,14 @@ async fn pg_run_store_insert_run_is_idempotent() {
         return;
     };
 
-    // The migration owns the schema for both stores; apply it via the step store.
+    // The migration owns the schema for both stores; apply it via the step store,
+    // then share its pool with the run store rather than opening a second one.
     let step_store = PgStepStore::connect(&url)
         .await
         .unwrap_or_else(|error| panic!("connect step: {error}"));
     apply_migration(&step_store).await;
 
-    let run_store = PgRunStore::connect(&url)
-        .await
-        .unwrap_or_else(|error| panic!("connect run: {error}"));
+    let run_store = PgRunStore::from_pool(step_store.pool().clone());
 
     let prefix = test_prefix();
     let run_id = format!("{prefix}dup_run");
