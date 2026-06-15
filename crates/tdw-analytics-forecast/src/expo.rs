@@ -35,6 +35,10 @@ struct HoltWintersFit {
     trend: f64,
     seasonal: Vec<f64>,
     period: usize,
+    /// In-sample length. Needed to align the forecast seasonal phase: the
+    /// seasonal indices are keyed by absolute time `t % period`, so projecting
+    /// forward must continue from the last in-sample index `n - 1`.
+    n: usize,
     sse: f64,
 }
 
@@ -123,6 +127,7 @@ fn fit(
         trend,
         seasonal,
         period,
+        n,
         sse,
     })
 }
@@ -135,9 +140,12 @@ fn project(fitted: &HoltWintersFit, horizon: usize, model: &str) -> ForecastResu
             #[allow(clippy::cast_precision_loss)]
             let drift = h as f64 * fitted.trend;
             let seasonal = if seasonal_on {
-                // The seasonal index repeats with period m: the last in-sample
-                // phase rolls forward by h.
-                let idx = (h - 1) % fitted.period;
+                // Seasonal indices are phase-keyed by absolute time `t % m`.
+                // Forecast step `h` targets time index `n - 1 + h`, so its phase
+                // is `(n - 1 + h) % m`. Using `(h - 1) % m` only coincides with
+                // this when the series length is a whole multiple of the period,
+                // and otherwise shifts every forecast out of phase.
+                let idx = (fitted.n - 1 + h) % fitted.period;
                 fitted.seasonal[idx]
             } else {
                 0.0
@@ -280,6 +288,21 @@ mod tests {
         // Next two steps continue the alternation around 10.
         assert!((values[0] - 15.0).abs() < 1.5, "h1 {}", values[0]);
         assert!((values[1] - 5.0).abs() < 1.5, "h2 {}", values[1]);
+    }
+
+    #[test]
+    fn holt_winters_seasonal_phase_aligns_when_length_not_multiple_of_period() {
+        // Regression: a series whose length is NOT a whole multiple of the
+        // period must still forecast the correct seasonal phase. With nine
+        // points (period 2), the last in-sample index (8) is a "high" (15), so
+        // the next step (index 9) must be a "low" (~5) and the step after a
+        // "high" (~15). A phase keyed off `(h - 1) % m` would wrongly repeat the
+        // high first; the correct `(n - 1 + h) % m` keeps the phase aligned.
+        let y = vec![15.0, 5.0, 15.0, 5.0, 15.0, 5.0, 15.0, 5.0, 15.0];
+        let fc = holt_winters(&y, 2, 0.4, 0.0, 0.4, 2).expect("forecast");
+        let values: Vec<f64> = fc.points.iter().map(|p| p.value).collect();
+        assert!((values[0] - 5.0).abs() < 1.5, "h1 {} should be ~5 (low)", values[0]);
+        assert!((values[1] - 15.0).abs() < 1.5, "h2 {} should be ~15 (high)", values[1]);
     }
 
     #[test]
