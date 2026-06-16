@@ -1147,3 +1147,147 @@ async fn trust_dial_tag_channel_gates_user_authored_under_document_only_filter()
          that arrives via the tag channel: {ids_filtered:?}"
     );
 }
+
+/// Fixture for the tag-channel distinct-budget regression.
+///
+/// Tag `topic:dup` is held by eleven entities. Ten of them (`e:a00`..`e:a09`,
+/// all sorted before `e:z99` by `entities_with_tag`'s `BTreeSet` order) are each
+/// `described_by` the SAME `document:doc-shared`. The eleventh, `e:z99`, is
+/// `described_by` a DISTINCT `document:doc-unique`. `doc-unique` is reachable
+/// ONLY through the tag channel (no vector/lexical entry), so its presence in
+/// the result proves the tag channel retained it.
+async fn tag_dedup_fixture() -> (
+    Arc<HashEmbeddingProvider>,
+    Arc<InMemoryVectorEngine>,
+    Arc<InMemoryGraphEngine>,
+    Arc<InMemoryTagEngine>,
+) {
+    let embedder = Arc::new(HashEmbeddingProvider::default());
+    let vectors = Arc::new(InMemoryVectorEngine::default());
+    let graph = Arc::new(InMemoryGraphEngine::default());
+    let tags = Arc::new(InMemoryTagEngine::default());
+
+    // doc-shared also lives in the vector channel (realistic); doc-unique does
+    // not, so only the tag channel can surface it.
+    let emb = embedder.embed("shared document body").await.expect("embed");
+    vectors
+        .upsert(
+            COLLECTION,
+            vec![VectorPoint {
+                id: "doc-shared".to_string(),
+                vector: emb.vector,
+                payload: json!({
+                    "entity_id": "e:a00",
+                    "entity_kind": "instrument",
+                    "as_of": "2026-06-01T00:00:00Z",
+                    "plane": "platform",
+                }),
+            }],
+        )
+        .await
+        .expect("upsert shared");
+
+    let doc_props = json!({"as_of": "2026-06-01T00:00:00Z", "plane": "platform"});
+    let mut shared_doc = node("document:doc-shared", EntityKind::Document);
+    shared_doc.props = doc_props.clone();
+    let mut unique_doc = node("document:doc-unique", EntityKind::Document);
+    unique_doc.props = doc_props;
+    let mut nodes = vec![shared_doc, unique_doc];
+    let mut edges = Vec::new();
+
+    tags.define(TagDefinition {
+        tag_id: "topic:dup".to_string(),
+        parent: None,
+        ttl_days: None,
+    })
+    .await
+    .expect("define topic:dup");
+
+    // Ten entities, all reaching the SAME shared doc, sorted before e:z99.
+    for i in 0..10 {
+        let entity = format!("e:a{i:02}");
+        nodes.push(node(&entity, EntityKind::Instrument));
+        edges.push(edge(&entity, "document:doc-shared", "described_by"));
+        tags.assign(TagAssignment {
+            entity_id: entity,
+            tag_id: "topic:dup".to_string(),
+            assigned_at: "2026-06-01".to_string(),
+            expires_at: None,
+            provenance: "test:fixture".to_string(),
+        })
+        .await
+        .expect("assign shared entity");
+    }
+    // The lone entity holding a DISTINCT doc, sorted last.
+    nodes.push(node("e:z99", EntityKind::Instrument));
+    edges.push(edge("e:z99", "document:doc-unique", "described_by"));
+    tags.assign(TagAssignment {
+        entity_id: "e:z99".to_string(),
+        tag_id: "topic:dup".to_string(),
+        assigned_at: "2026-06-01".to_string(),
+        expires_at: None,
+        provenance: "test:fixture".to_string(),
+    })
+    .await
+    .expect("assign unique entity");
+
+    graph.upsert_nodes(nodes).await.expect("nodes");
+    graph.upsert_edges(edges).await.expect("edges");
+
+    (embedder, vectors, graph, tags)
+}
+
+#[tokio::test]
+async fn tag_channel_counts_distinct_docs_against_channel_budget() {
+    // Regression (knowledge-system): the tag channel is a ranked list of DISTINCT
+    // documents. A doc reachable via many tag-holding entities must consume ONE
+    // budget slot, not one per reaching entity — otherwise the duplicates fill
+    // `channel_top_k` and evict other distinct, tag-reachable docs.
+    let (embedder, vectors, graph, tags) = tag_dedup_fixture().await;
+    let retriever = Retriever::new(embedder.clone(), vectors.clone(), COLLECTION)
+        .with_graph(graph.clone())
+        .with_tags(tags.clone());
+
+    // top_k = 2 ⇒ channel_top_k = 8. The ten duplicate references to doc-shared
+    // would (pre-fix) fill all 8 slots before e:z99's doc-unique is reached.
+    let query = KnowledgeQuery::try_new(
+        "shared document body",
+        2,
+        QueryFilter {
+            tags_any: vec!["topic:dup".to_string()],
+            as_of: Some("2026-06-12".to_string()),
+            ..QueryFilter::default()
+        },
+        None,
+    )
+    .expect("valid query");
+
+    let hits = retriever.search(&query).await.expect("search");
+    let ids: std::collections::BTreeSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+
+    assert!(
+        ids.contains("doc-unique"),
+        "tag channel must keep a distinct doc that shares the channel_top_k \
+         budget with a multiply-referenced doc: {ids:?}"
+    );
+    assert!(
+        ids.contains("doc-shared"),
+        "the multiply-referenced doc must also surface: {ids:?}"
+    );
+
+    // doc-unique has no vector/lexical route, so its evidence must name the Tag
+    // channel — proving the tag channel (not some other path) retained it.
+    let unique = hits
+        .iter()
+        .find(|hit| hit.id == "doc-unique")
+        .expect("doc-unique hit present");
+    assert!(
+        unique
+            .explanation
+            .channels
+            .iter()
+            .any(|evidence| evidence.channel == Channel::Tag),
+        "doc-unique must be attributed to the Tag channel: {:?}",
+        unique.explanation.channels
+    );
+}
