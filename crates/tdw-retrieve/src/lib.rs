@@ -674,6 +674,14 @@ impl Retriever {
             && !expanded_tags.is_empty()
         {
             let mut entries = Vec::new();
+            // A tag channel is a ranked list of DISTINCT documents; a single doc
+            // is commonly reachable via multiple tag-holding entities (or via one
+            // entity that holds several expanded tags). Without this set the
+            // duplicates would be counted by the `channel_top_k` budget break and
+            // by the `truncate` below, evicting genuine distinct docs and starving
+            // the channel of recall. (Cross-channel dedup is handled later by
+            // `rrf_fuse`; this only dedups WITHIN the tag channel.)
+            let mut seen_docs = std::collections::BTreeSet::new();
             for tag in expanded_tags {
                 for entity in tags
                     .entities_with_tag(tag, as_of)
@@ -693,6 +701,10 @@ impl Retriever {
                     for (doc_id, class_token) in
                         entity_documents(graph.as_ref(), &entity, &query.filter).await?
                     {
+                        if !seen_docs.insert(doc_id.clone()) {
+                            // Already contributed by an earlier tag/entity.
+                            continue;
+                        }
                         run.meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
                             entity_id: entity.clone(),
                             tags: vec![tag.clone()],
