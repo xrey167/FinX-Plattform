@@ -180,8 +180,7 @@ impl RuleEngine {
         // store (B5 idempotency holds within a pass, not just across re-runs).
         let mut assigned_now: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for rule in &self.rules {
-            if ctx.active_tags.contains(&rule.tag_id)
-                || assigned_now.contains(rule.tag_id.as_str())
+            if ctx.active_tags.contains(&rule.tag_id) || assigned_now.contains(rule.tag_id.as_str())
             {
                 continue;
             }
