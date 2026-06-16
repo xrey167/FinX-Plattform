@@ -300,8 +300,9 @@ impl InductionEngine {
             min_recall: self.min_recall,
         };
 
-        // Collect already-installed inducted rule ids for dedup.
-        let installed_ids: BTreeSet<String> = current_rules
+        // Collect already-installed inducted rule ids for dedup. Mutable so we
+        // can also fold in ids collected earlier in this cycle (see below).
+        let mut installed_ids: BTreeSet<String> = current_rules
             .iter()
             .map(|r| r.rule_id().to_string())
             .collect();
@@ -336,8 +337,15 @@ impl InductionEngine {
                 });
             }
 
-            // Dedup: skip already-installed rules.
-            if installed_ids.contains(candidate.rule.rule_id()) {
+            // Dedup: skip rules already installed in the engine OR already
+            // collected earlier in this same cycle. Inserting (instead of a
+            // read-only `contains`) into the seeded set closes a gap where two
+            // distinct canonicals whose pattern node-ids collide on a single
+            // `rule_id` (the `pattern_node_id` `::`->`--` mapping is not
+            // injective) would both be promoted, breaking the
+            // rule_id-uniqueness invariant the infer engine, provenance
+            // round-trip, and disable-time retirement all depend on.
+            if !installed_ids.insert(candidate.rule.rule_id().to_string()) {
                 report.already_installed += 1;
                 continue;
             }
@@ -862,6 +870,46 @@ mod tests {
             .unwrap();
         assert_eq!(report2.already_installed, 1, "dedup must skip re-install");
         assert_eq!(report2.rules_to_install.len(), 0);
+    }
+
+    // ── within-cycle dedup: rule_id collisions don't double-install ──────────
+    //
+    // Two distinct canonicals can map to the same pattern node-id (hence the
+    // same rule_id) because `pattern_node_id` collapses "::"->"--": the 2-label
+    // motif "a::b" and the 1-label motif "a--b" both yield "pattern:a--b". The
+    // dedup must catch this WITHIN a single cycle, not only against
+    // already-installed rules, so the engine never receives a duplicate rule_id
+    // (which would break provenance round-trip and disable-time retirement).
+    #[test]
+    fn run_cycle_dedups_rule_id_collision_within_cycle() {
+        let mut index = PatternIndex::default();
+        index.record(record("a::b", 2)); // node_id "pattern:a--b"
+        index.record(record("a--b", 2)); // node_id "pattern:a--b" — collides
+
+        let eng = InductionEngine::new(0.0, 0.0, 100); // vacuous promote
+        let current_rules: Vec<InferRule> = Vec::new();
+
+        // Empty splits → vacuous promote; both candidates would otherwise pass.
+        let report = eng
+            .run_cycle(&index, &current_rules, &[], &[], &DriftKey::default())
+            .unwrap();
+
+        assert_eq!(report.patterns_examined, 2, "both records examined");
+        assert_eq!(
+            report.rules_to_install.len(),
+            1,
+            "rule_id collision must install exactly one rule, not two"
+        );
+        assert_eq!(
+            report.already_installed, 1,
+            "the colliding second candidate is deduped within the cycle"
+        );
+        let ids: std::collections::BTreeSet<String> = report
+            .rules_to_install
+            .iter()
+            .map(|r| r.rule_id().to_string())
+            .collect();
+        assert_eq!(ids.len(), 1, "no duplicate rule_id emitted");
     }
 
     // ── budget cap ────────────────────────────────────────────────────────────
