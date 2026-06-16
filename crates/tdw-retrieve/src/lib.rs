@@ -915,7 +915,10 @@ async fn compute_hit_confidence(
     // (entity, doc) pair the doc-comment above forbids. If no `described_by`
     // edge targets this document, confidence is unknown and must not affect
     // ranking (return the raw RRF score, as the other no-confidence branches do).
-    let subject_edge = neighbors.iter().map(|(e, _)| e).find(|e| e.to == doc_node_id);
+    let subject_edge = neighbors
+        .iter()
+        .map(|(e, _)| e)
+        .find(|e| e.to == doc_node_id);
     let Some(subject_edge) = subject_edge else {
         return Ok((None, rrf_score));
     };
@@ -1144,7 +1147,11 @@ mod confidence_subject_edge_tests {
     async fn confidence_none_when_no_described_by_edge_targets_this_document() {
         let graph = InMemoryGraphEngine::default();
         graph
-            .upsert_nodes(vec![node("entity:E"), node("document:A"), node("document:B")])
+            .upsert_nodes(vec![
+                node("entity:E"),
+                node("document:A"),
+                node("document:B"),
+            ])
             .await
             .expect("nodes");
         graph
