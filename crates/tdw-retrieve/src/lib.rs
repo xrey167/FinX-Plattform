@@ -669,53 +669,86 @@ impl Retriever {
         // Tag channel: entities holding any expanded tag at as_of, mapped to
         // their documents through the graph. Runs only when temporal (as_of)
         // — tag activity is a dated property.
-        if let (Some(tags), Some(graph), Some(as_of)) =
-            (&self.tags, &self.graph, &query.filter.as_of)
-            && !expanded_tags.is_empty()
+        if let Some(entries) = self
+            .tag_channel(query, expanded_tags, &mut run.meta)
+            .await?
         {
-            let mut entries = Vec::new();
-            for tag in expanded_tags {
-                for entity in tags
-                    .entities_with_tag(tag, as_of)
-                    .await
-                    .map_err(|error| Error::Storage(error.to_string()))?
-                {
-                    // The payload contract's entity_kind condition, applied
-                    // via the entity's graph node.
-                    if let Some(kinds) = &query.filter.entity_kinds {
-                        let Some(entity_node) = graph.node(&entity).await? else {
-                            continue;
-                        };
-                        if !kinds.contains(&entity_node.kind) {
-                            continue;
-                        }
-                    }
-                    for (doc_id, class_token) in
-                        entity_documents(graph.as_ref(), &entity, &query.filter).await?
-                    {
-                        run.meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
-                            entity_id: entity.clone(),
-                            tags: vec![tag.clone()],
-                            // K-X3: class_token is read from the graph document
-                            // node's props.provenance_class (stamped at index time).
-                            // Pre-stamp nodes carry None → effective DocumentIngested.
-                            provenance_class_token: class_token,
-                        });
-                        entries.push(RankedEntry {
-                            id: doc_id,
-                            raw_score: 1.0,
-                        });
-                    }
-                }
-                if entries.len() >= query.channel_top_k {
-                    break;
-                }
-            }
-            entries.truncate(query.channel_top_k);
             run.channels.push(entries);
             run.kinds.push(Channel::Tag);
         }
         Ok(run)
+    }
+
+    /// Build the tag channel: documents of entities holding any expanded tag at
+    /// `as_of`, reached through the graph. Returns `None` when the channel does
+    /// not apply (no tags/graph engine, no `as_of`, or no expanded tags).
+    ///
+    /// A tag channel is a ranked list of DISTINCT documents; a single doc is
+    /// commonly reachable via multiple tag-holding entities (or via one entity
+    /// holding several expanded tags). Deduping by `doc_id` here keeps the
+    /// `channel_top_k` budget break and `truncate` counting DISTINCT docs —
+    /// otherwise duplicates evict genuine distinct docs and starve recall.
+    /// (Cross-channel dedup is handled later by `rrf_fuse`; this dedups only
+    /// WITHIN the tag channel.)
+    async fn tag_channel(
+        &self,
+        query: &KnowledgeQuery,
+        expanded_tags: &[String],
+        meta: &mut BTreeMap<String, DocMeta>,
+    ) -> Result<Option<Vec<RankedEntry>>> {
+        let (Some(tags), Some(graph), Some(as_of)) = (&self.tags, &self.graph, &query.filter.as_of)
+        else {
+            return Ok(None);
+        };
+        if expanded_tags.is_empty() {
+            return Ok(None);
+        }
+
+        let mut entries = Vec::new();
+        let mut seen_docs = std::collections::BTreeSet::new();
+        for tag in expanded_tags {
+            for entity in tags
+                .entities_with_tag(tag, as_of)
+                .await
+                .map_err(|error| Error::Storage(error.to_string()))?
+            {
+                // The payload contract's entity_kind condition, applied via the
+                // entity's graph node.
+                if let Some(kinds) = &query.filter.entity_kinds {
+                    let Some(entity_node) = graph.node(&entity).await? else {
+                        continue;
+                    };
+                    if !kinds.contains(&entity_node.kind) {
+                        continue;
+                    }
+                }
+                for (doc_id, class_token) in
+                    entity_documents(graph.as_ref(), &entity, &query.filter).await?
+                {
+                    if !seen_docs.insert(doc_id.clone()) {
+                        // Already contributed by an earlier tag/entity.
+                        continue;
+                    }
+                    meta.entry(doc_id.clone()).or_insert_with(|| DocMeta {
+                        entity_id: entity.clone(),
+                        tags: vec![tag.clone()],
+                        // K-X3: class_token is read from the graph document
+                        // node's props.provenance_class (stamped at index time).
+                        // Pre-stamp nodes carry None → effective DocumentIngested.
+                        provenance_class_token: class_token,
+                    });
+                    entries.push(RankedEntry {
+                        id: doc_id,
+                        raw_score: 1.0,
+                    });
+                }
+            }
+            if entries.len() >= query.channel_top_k {
+                break;
+            }
+        }
+        entries.truncate(query.channel_top_k);
+        Ok(Some(entries))
     }
 
     /// BFS from one seed entity, contributing decayed scores to the documents
