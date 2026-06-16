@@ -527,6 +527,36 @@ pub async fn run_scheduled_eval(
 
     let retriever = build_in_memory_retriever(embedder, documents).await?;
     let report = run_retrieval_eval(&retriever, cases, k, drift_key).await?;
+
+    // recall@k / nDCG@k are only comparable at the SAME cutoff `k` (both are
+    // monotone in k). A baseline blessed at a different `k` would make every run
+    // report a phantom regression — or mask a real one — purely from the cutoff
+    // delta. Refuse to derive a verdict from incomparable metrics: surface the
+    // misconfiguration as `Stale` so the baseline is re-blessed at this `k`.
+    if report.k != baseline.k {
+        let error = format!(
+            "k mismatch: baseline k={}, eval k={k}; re-bless the baseline at k={k}",
+            baseline.k
+        );
+        return Ok(ScheduledEvalOutcome {
+            verdict: RegressionVerdict {
+                is_regression: false,
+                summary: error.clone(),
+                deltas: vec![],
+                baseline_drift_key: baseline.drift_key.clone(),
+                current_drift_key: report.drift_key.clone(),
+                drift_key_changed: baseline.drift_key != report.drift_key,
+            },
+            freshness: EvalFreshness::Stale {
+                last_run_ms: now_ms,
+                split_id,
+                error,
+            },
+            report,
+            ran_at_ms: now_ms,
+        });
+    }
+
     let verdict = compare_to_baseline(baseline, &report, &config.thresholds());
 
     let freshness = if verdict.is_regression {
@@ -886,6 +916,73 @@ mod tests {
             outcome.freshness
         );
         assert!(matches!(outcome.freshness, EvalFreshness::Regressed { .. }));
+    }
+
+    // ── k mismatch never produces a (phantom) regression verdict ──────────────
+
+    #[tokio::test]
+    async fn run_scheduled_eval_stale_on_k_mismatch_not_phantom_regression() {
+        use std::sync::Arc;
+        use tdw_embed_local::HashEmbeddingProvider;
+        use tdw_kg::{Entity, EntityKind};
+
+        let embedder = Arc::new(HashEmbeddingProvider::default());
+        let entity = Entity {
+            entity_id: "instrument:acme".to_string(),
+            kind: EntityKind::Instrument,
+            label: "Acme".to_string(),
+            aliases: vec![],
+        };
+        let documents = vec![KnowledgeDocument {
+            id: "doc-a".to_string(),
+            body: "acme earnings report strong cloud growth".to_string(),
+            entity,
+            tags: vec![],
+            source: None,
+            plane: None,
+            as_of: None,
+            author: None,
+            mentions: vec![],
+        }];
+        let cases = vec![RetrievalEvalCase {
+            case_id: "q1".to_string(),
+            query: "acme earnings report strong cloud growth".to_string(),
+            expected_doc_ids: vec!["doc-a".to_string()],
+            as_of: None,
+            tags_any: vec![],
+            fixed_split_id: Some("test-split".to_string()),
+        }];
+
+        // Baseline is blessed at k=3; running the eval at k=5 makes recall@5 vs
+        // recall@3 incomparable. The gate must NOT report that as a regression —
+        // it surfaces a Stale "k mismatch" so the baseline is re-blessed at k.
+        let baseline = perfect_report(); // k = 3
+        let config = config_with_split("test-split");
+        let now_ms = 1_749_297_600_000_i64;
+
+        let outcome = run_scheduled_eval(
+            embedder,
+            documents,
+            &cases,
+            drift_key(),
+            5, // eval cutoff differs from baseline.k (3)
+            &baseline,
+            &config,
+            now_ms,
+        )
+        .await
+        .expect("eval runs");
+
+        assert!(
+            !outcome.verdict.is_regression,
+            "a k mismatch must not be reported as a regression; got {:?}",
+            outcome.verdict.summary
+        );
+        assert!(
+            matches!(outcome.freshness, EvalFreshness::Stale { .. }),
+            "k mismatch must surface as Stale; got {:?}",
+            outcome.freshness
+        );
     }
 
     // ── regression_alert_body includes deltas ─────────────────────────────────
