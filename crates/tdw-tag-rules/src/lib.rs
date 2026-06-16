@@ -174,8 +174,14 @@ impl RuleEngine {
         store: &mut TagStore,
     ) -> Result<Vec<TagAssignment>, RuleError> {
         let mut assignments = Vec::new();
+        // Tags assigned earlier in THIS pass. `ctx.active_tags` is a snapshot
+        // taken before the call, so without this a second rule targeting the
+        // same tag_id would fire and append a duplicate to the append-only
+        // store (B5 idempotency holds within a pass, not just across re-runs).
+        let mut assigned_now: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for rule in &self.rules {
-            if ctx.active_tags.contains(&rule.tag_id) {
+            if ctx.active_tags.contains(&rule.tag_id) || assigned_now.contains(rule.tag_id.as_str())
+            {
                 continue;
             }
             if evaluate(&rule.predicate, ctx, store) {
@@ -189,6 +195,7 @@ impl RuleEngine {
                 store
                     .assign(assignment.clone())
                     .map_err(|error| RuleError::Tag(error.to_string()))?;
+                assigned_now.insert(rule.tag_id.as_str());
                 assignments.push(assignment);
             }
         }
@@ -499,6 +506,56 @@ mod tests {
             .unwrap_or_else(|error| panic!("rule should apply: {error}"));
         assert!(assignments.is_empty(), "{assignments:?}");
         assert!(tags.assignments().is_empty(), "no duplicate was appended");
+    }
+
+    #[test]
+    fn apply_at_dedups_two_rules_targeting_same_tag_in_one_pass() {
+        let mut tags = store_with(&[("asset:equity", None)]);
+        let mut engine = RuleEngine::default();
+        engine
+            .hot_reload(vec![
+                TagRule {
+                    rule_id: "by-symbol".to_string(),
+                    tag_id: "asset:equity".to_string(),
+                    predicate: Predicate::LabelContains {
+                        label: "AAPL".to_string(),
+                    },
+                },
+                TagRule {
+                    rule_id: "by-prefix".to_string(),
+                    tag_id: "asset:equity".to_string(),
+                    predicate: Predicate::LabelContains {
+                        label: "AAP".to_string(),
+                    },
+                },
+            ])
+            .unwrap_or_else(|error| panic!("rules should reload: {error}"));
+        // The entity does NOT yet hold the tag, and both rules match. The store
+        // is append-only and idempotent (B5), so the two rules must yield ONE
+        // assignment, not two (the first firing rule wins the provenance).
+        let active: Vec<String> = vec![];
+        let ctx = EntityContext {
+            entity_id: "instrument:AAPL",
+            label: "AAPL",
+            fields: &Value::Null,
+            active_tags: &active,
+            neighbors: &[],
+        };
+        let assignments = engine
+            .apply_at(&ctx, NOW, &mut tags)
+            .unwrap_or_else(|error| panic!("rules should apply: {error}"));
+        assert_eq!(
+            assignments.len(),
+            1,
+            "two rules targeting one tag must assign it once: {assignments:?}"
+        );
+        assert_eq!(
+            tags.assignments().len(),
+            1,
+            "no duplicate appended to the store: {:?}",
+            tags.assignments()
+        );
+        assert_eq!(assignments[0].provenance, "rule:by-symbol@v1");
     }
 
     #[test]
