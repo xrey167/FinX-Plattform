@@ -929,113 +929,6 @@ async fn compute_hit_confidence(
     Ok((Some(score), blended))
 }
 
-#[cfg(test)]
-mod confidence_subject_edge_tests {
-    use super::*;
-    use serde_json::json;
-    use tdw_core::{GraphEdge, GraphNode, Provenance};
-    use tdw_storage_graph::InMemoryGraphEngine;
-
-    fn node(id: &str) -> GraphNode {
-        GraphNode {
-            id: id.to_string(),
-            kind: EntityKind::Instrument,
-            label: id.to_string(),
-            aliases: Vec::new(),
-            props: json!({}),
-            valid_from: None,
-            valid_to: None,
-        }
-    }
-
-    // A multi-document entity that is `described_by` document:A but NOT
-    // document:B. A hit for document:B must not borrow document:A's provenance:
-    // with no subject edge for this hit's document, confidence is None and the
-    // ranking score is the raw RRF score (the documented contract). The removed
-    // `.or_else(neighbors.first())` fallback used to score B's hit with A's edge.
-    #[tokio::test]
-    async fn confidence_none_when_no_described_by_edge_targets_this_document() {
-        let graph = InMemoryGraphEngine::default();
-        graph
-            .upsert_nodes(vec![node("entity:E"), node("document:A"), node("document:B")])
-            .await
-            .expect("nodes");
-        graph
-            .upsert_edges(vec![GraphEdge {
-                from: "entity:E".to_string(),
-                to: "document:A".to_string(),
-                rel: DESCRIBED_BY.to_string(),
-                props: json!({}),
-                provenance: Provenance::Ingest {
-                    source: "test".to_string(),
-                },
-                valid_from: None,
-                valid_to: None,
-            }])
-            .await
-            .expect("edge");
-
-        let query = KnowledgeQuery::try_new("q", 10, QueryFilter::default(), None)
-            .expect("query")
-            .with_confidence_weight(ConfidenceRankingWeight(0.5));
-
-        let graph_dyn: &dyn GraphEngine = &graph;
-        let (score, blended) =
-            compute_hit_confidence(Some(graph_dyn), &query, "entity:E", "B", 0.5)
-                .await
-                .expect("confidence");
-
-        assert!(
-            score.is_none(),
-            "no described_by edge to this hit's document → confidence must be None, \
-             never scored from a different document's edge"
-        );
-        assert!(
-            (blended - 0.5).abs() < f64::EPSILON,
-            "ranking score must be the raw rrf_score when no subject edge matches"
-        );
-    }
-
-    // Sanity: when the subject edge for the hit's document IS present, confidence
-    // is computed (guards against the fix over-suppressing the normal path).
-    #[tokio::test]
-    async fn confidence_present_when_described_by_edge_targets_this_document() {
-        let graph = InMemoryGraphEngine::default();
-        graph
-            .upsert_nodes(vec![node("entity:E"), node("document:B")])
-            .await
-            .expect("nodes");
-        graph
-            .upsert_edges(vec![GraphEdge {
-                from: "entity:E".to_string(),
-                to: "document:B".to_string(),
-                rel: DESCRIBED_BY.to_string(),
-                props: json!({}),
-                provenance: Provenance::Ingest {
-                    source: "test".to_string(),
-                },
-                valid_from: None,
-                valid_to: None,
-            }])
-            .await
-            .expect("edge");
-
-        let query = KnowledgeQuery::try_new("q", 10, QueryFilter::default(), None)
-            .expect("query")
-            .with_confidence_weight(ConfidenceRankingWeight(0.5));
-
-        let graph_dyn: &dyn GraphEngine = &graph;
-        let (score, _) = compute_hit_confidence(Some(graph_dyn), &query, "entity:E", "B", 0.5)
-            .await
-            .expect("confidence");
-
-        assert!(
-            score.is_some(),
-            "a described_by edge to this hit's document must yield a confidence score"
-        );
-    }
-}
-
 /// Documents described by an entity (via `described_by` edges to
 /// `document:<id>` nodes) that are VISIBLE under the query filter.
 ///
@@ -1221,4 +1114,111 @@ fn record_meta(meta: &mut BTreeMap<String, DocMeta>, id: &str, payload: &serde_j
         tags,
         provenance_class_token,
     });
+}
+
+#[cfg(test)]
+mod confidence_subject_edge_tests {
+    use super::*;
+    use serde_json::json;
+    use tdw_core::{GraphEdge, GraphNode, Provenance};
+    use tdw_storage_graph::InMemoryGraphEngine;
+
+    fn node(id: &str) -> GraphNode {
+        GraphNode {
+            id: id.to_string(),
+            kind: EntityKind::Instrument,
+            label: id.to_string(),
+            aliases: Vec::new(),
+            props: json!({}),
+            valid_from: None,
+            valid_to: None,
+        }
+    }
+
+    // A multi-document entity that is `described_by` document:A but NOT
+    // document:B. A hit for document:B must not borrow document:A's provenance:
+    // with no subject edge for this hit's document, confidence is None and the
+    // ranking score is the raw RRF score (the documented contract). The removed
+    // `.or_else(neighbors.first())` fallback used to score B's hit with A's edge.
+    #[tokio::test]
+    async fn confidence_none_when_no_described_by_edge_targets_this_document() {
+        let graph = InMemoryGraphEngine::default();
+        graph
+            .upsert_nodes(vec![node("entity:E"), node("document:A"), node("document:B")])
+            .await
+            .expect("nodes");
+        graph
+            .upsert_edges(vec![GraphEdge {
+                from: "entity:E".to_string(),
+                to: "document:A".to_string(),
+                rel: DESCRIBED_BY.to_string(),
+                props: json!({}),
+                provenance: Provenance::Ingest {
+                    source: "test".to_string(),
+                },
+                valid_from: None,
+                valid_to: None,
+            }])
+            .await
+            .expect("edge");
+
+        let query = KnowledgeQuery::try_new("q", 10, QueryFilter::default(), None)
+            .expect("query")
+            .with_confidence_weight(ConfidenceRankingWeight(0.5));
+
+        let graph_dyn: &dyn GraphEngine = &graph;
+        let (score, blended) =
+            compute_hit_confidence(Some(graph_dyn), &query, "entity:E", "B", 0.5)
+                .await
+                .expect("confidence");
+
+        assert!(
+            score.is_none(),
+            "no described_by edge to this hit's document → confidence must be None, \
+             never scored from a different document's edge"
+        );
+        assert!(
+            (blended - 0.5).abs() < f64::EPSILON,
+            "ranking score must be the raw rrf_score when no subject edge matches"
+        );
+    }
+
+    // Sanity: when the subject edge for the hit's document IS present, confidence
+    // is computed (guards against the fix over-suppressing the normal path).
+    #[tokio::test]
+    async fn confidence_present_when_described_by_edge_targets_this_document() {
+        let graph = InMemoryGraphEngine::default();
+        graph
+            .upsert_nodes(vec![node("entity:E"), node("document:B")])
+            .await
+            .expect("nodes");
+        graph
+            .upsert_edges(vec![GraphEdge {
+                from: "entity:E".to_string(),
+                to: "document:B".to_string(),
+                rel: DESCRIBED_BY.to_string(),
+                props: json!({}),
+                provenance: Provenance::Ingest {
+                    source: "test".to_string(),
+                },
+                valid_from: None,
+                valid_to: None,
+            }])
+            .await
+            .expect("edge");
+
+        let query = KnowledgeQuery::try_new("q", 10, QueryFilter::default(), None)
+            .expect("query")
+            .with_confidence_weight(ConfidenceRankingWeight(0.5));
+
+        let graph_dyn: &dyn GraphEngine = &graph;
+        let (score, _) = compute_hit_confidence(Some(graph_dyn), &query, "entity:E", "B", 0.5)
+            .await
+            .expect("confidence");
+
+        assert!(
+            score.is_some(),
+            "a described_by edge to this hit's document must yield a confidence score"
+        );
+    }
 }
