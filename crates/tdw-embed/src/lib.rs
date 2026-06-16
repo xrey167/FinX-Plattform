@@ -40,10 +40,12 @@ pub trait EmbeddingProvider: Send + Sync {
     /// The default implementation loops over [`EmbeddingProvider::embed`], so
     /// every provider gets batching for free; providers with a native batch
     /// endpoint (`OpenAI`, Google) override this with one round-trip. The
-    /// contract every implementation must hold — enforced by
-    /// [`validate_batch`] — is: the result has exactly one embedding per
-    /// input, in input order, and each embedding passes
-    /// [`validate_embedding`].
+    /// contract every implementation must hold is: the result has exactly one
+    /// embedding per input, in input order, and each embedding passes
+    /// [`validate_embedding`]. The default impl preserves order by construction
+    /// (sequential push); [`validate_batch`] checks the length and per-embedding
+    /// validity (it cannot verify ordering — a native-batch override is
+    /// responsible for re-sorting its results into input order).
     ///
     /// # Errors
     ///
@@ -54,6 +56,14 @@ pub trait EmbeddingProvider: Send + Sync {
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Embedding>> {
         if texts.is_empty() {
             return Err(EmbeddingError::EmptyInput);
+        }
+        // Enforce the "any input is empty → error" contract here, at the shared
+        // seam, rather than relying on each provider's `embed` to reject empty
+        // strings (providers disagree on this, so it was not actually uniform).
+        for text in texts {
+            if text.is_empty() {
+                return Err(EmbeddingError::EmptyInput);
+            }
         }
         let mut embeddings = Vec::with_capacity(texts.len());
         for text in texts {
@@ -140,13 +150,13 @@ mod tests {
             provider.embed_batch(&[]).await,
             Err(EmbeddingError::EmptyInput)
         ));
-        // An empty input inside the batch fails through the per-text path.
-        assert!(
+        // An empty input inside the batch is rejected at the shared batch seam.
+        assert!(matches!(
             provider
                 .embed_batch(&["ok".to_string(), String::new()])
-                .await
-                .is_err()
-        );
+                .await,
+            Err(EmbeddingError::EmptyInput)
+        ));
         // The shared contract validator rejects length mismatches and bad vectors.
         let good = Embedding {
             model_id: "constant".to_string(),
@@ -197,5 +207,43 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    // A provider whose `embed` does NOT itself reject empty strings — proves the
+    // default `embed_batch` enforces the "no empty input" contract on its own,
+    // independent of provider behavior.
+    struct LenientProvider;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for LenientProvider {
+        fn model_id(&self) -> &'static str {
+            "lenient"
+        }
+
+        async fn embed(&self, _text: &str) -> Result<Embedding> {
+            Ok(Embedding {
+                model_id: self.model_id().to_string(),
+                vector: vec![1.0],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn embed_batch_rejects_empty_input_even_when_provider_would_not() {
+        let provider = LenientProvider;
+        // `LenientProvider::embed` accepts "" — but the batch contract must not,
+        // so the empty element is rejected up front regardless of the provider.
+        assert!(matches!(
+            provider
+                .embed_batch(&["ok".to_string(), String::new()])
+                .await,
+            Err(EmbeddingError::EmptyInput)
+        ));
+        // A fully non-empty batch still succeeds.
+        let embeddings = provider
+            .embed_batch(&["a".to_string(), "b".to_string()])
+            .await
+            .unwrap_or_else(|error| panic!("non-empty batch should embed: {error}"));
+        assert_eq!(embeddings.len(), 2);
     }
 }
