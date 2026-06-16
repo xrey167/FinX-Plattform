@@ -579,6 +579,13 @@ pub async fn identify_candidates(
 ) -> Result<HygieneReport> {
     let storage = |error: tdw_core::Error| KnowledgeError::Storage(error.to_string());
     let mut report = HygieneReport::default();
+    // `cap` bounds how many candidates to return; a 0 cap means "collect none".
+    // The per-page loop below pushes a candidate BEFORE its `len() >= cap`
+    // check, so without this short-circuit a 0 cap would still emit one
+    // candidate (an off-by-one against the documented "truncated to `cap`").
+    if cap == 0 {
+        return Ok(report);
+    }
     // Cache the corroboration pool per `(from, rel)` so multiple candidate
     // edges sharing a subject+rel do NOT each re-fetch the same neighborhood
     // (the N+1 query problem, Gemini K-R8 MEDIUM). The pool for a given
@@ -1162,6 +1169,31 @@ mod tests {
             .expect("sweep");
         assert_eq!(report.candidates.len(), 2, "cap=2 truncates");
         assert!(report.capped, "capped flag must signal more remain");
+    }
+
+    #[tokio::test]
+    async fn cap_zero_returns_no_candidates() {
+        // A 0 cap means "collect none". The per-page loop pushes a candidate
+        // before its len>=cap check, so a 0 cap must be short-circuited or it
+        // leaks one. Seed a real candidate (stale, low-confidence) and assert
+        // none is returned.
+        let edges = vec![GraphEdge {
+            props: json!({ "extraction_confidence": 0.1 }),
+            rel: "rel0".to_string(),
+            ..ingest_edge("company:ACME", "tmp", "person:p0", "src:a", "2005-01-01")
+        }];
+        let graph = seeded(&["company:ACME", "person:p0"], &edges).await;
+        let graph: Arc<dyn GraphEngine> = graph;
+
+        let policy = ForgettingPolicy::default();
+        let report = identify_candidates(&graph, &policy, 0, "2024-06-01")
+            .await
+            .expect("sweep");
+        assert!(
+            report.candidates.is_empty(),
+            "cap=0 must yield zero candidates, got {}",
+            report.candidates.len()
+        );
     }
 
     // ── kill-switch is the worker's concern; here assert the policy threshold ─
