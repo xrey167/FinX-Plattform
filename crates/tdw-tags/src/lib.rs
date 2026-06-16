@@ -262,11 +262,40 @@ fn is_date(value: &str) -> bool {
             .chars()
             .enumerate()
             .all(|(index, character)| matches!(index, 4 | 7) || character.is_ascii_digit())
+        && date_in_range(value.as_bytes())
+}
+
+/// Basic calendar range check: month `01..=12`, day `01..=31`. Does NOT enforce
+/// days-per-month or leap years — it just rejects the impossible values
+/// (month `00`/`13+`, day `00`/`32+`) that pass the format check yet break the
+/// lexicographic-equals-chronological ordering the temporal tag layer relies on
+/// (e.g. `"2026-13-45"` sorts after every real date in the year). Reached only
+/// after the format check confirmed `len == 10` and ASCII digits at indices
+/// 5, 6, 8, 9, so the byte arithmetic cannot underflow.
+fn date_in_range(bytes: &[u8]) -> bool {
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    let day = (bytes[8] - b'0') * 10 + (bytes[9] - b'0');
+    (1..=12).contains(&month) && (1..=31).contains(&day)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_date_enforces_calendar_ranges() {
+        assert!(is_date("2026-06-10"));
+        assert!(is_date("2026-12-31"));
+        assert!(is_date("2026-01-01"));
+        // Format-valid but impossible dates must be rejected so lexicographic
+        // order keeps standing in for chronological order.
+        assert!(!is_date("2026-13-45"));
+        assert!(!is_date("2026-00-10"));
+        assert!(!is_date("2026-06-00"));
+        assert!(!is_date("2026-06-32"));
+        // The format itself is still enforced.
+        assert!(!is_date("2026-6-10"));
+    }
 
     #[test]
     fn is_defined_reflects_definitions_only() {
