@@ -324,6 +324,10 @@ impl EdgeTriple {
 /// - The intermediate `next` vec is bounded by [`REPLAY_JOIN_BOUND`].  If the bound
 ///   is exceeded, `Err(ReplayError::JoinBoundExceeded { bound })` is returned rather
 ///   than silently continuing with a potentially unbounded result.
+/// - A `(from, to)` pair whose `derived_type` edge is already active at `as_of` is
+///   excluded: production `fire_derive_edge` never re-asserts an existing triple,
+///   so replay must not count it as a prediction (counting it understates
+///   precision and rejects otherwise-promotable rules).
 ///
 /// **Why not reuse `InferEngine::match_chain` directly?**  `match_chain` is an
 /// `async fn` that takes `Arc<dyn GraphEngine>` with paged I/O; replay operates
@@ -398,9 +402,24 @@ pub fn apply_derive_edge_at(
         partials = next;
     }
 
+    // Existing-edge dedup — mirror production `fire_derive_edge`, which NEVER
+    // re-asserts a (from, to) of the derived type that already exists. The
+    // temporal analog at `as_of` is to exclude any pair whose derived-type edge
+    // is active at `as_of`. Without this, replay counts predictions production
+    // would never make (it skips them), understating precision and wrongly
+    // rejecting good rules at the gate. Provenance is NOT filtered here, matching
+    // production's `scan_rel(.., exclude_user_authored = false)`.
+    let existing: BTreeSet<(&str, &str)> = all_edges
+        .iter()
+        .filter(|edge| edge.rel.as_str() == derived_type.as_str())
+        .filter(|edge| active_at(edge.valid_from.as_deref(), edge.valid_to.as_deref(), as_of))
+        .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+        .collect();
+
     Ok(partials
         .into_iter()
         .filter(|(from, to)| from != to) // exclude self-loops
+        .filter(|(from, to)| !existing.contains(&(from.as_str(), to.as_str())))
         .map(|(from, to)| EdgeTriple {
             from,
             rel: derived_type.clone(),
@@ -418,6 +437,12 @@ pub fn apply_derive_edge_at(
 /// Semantics: an outcome edge answers "did it ever materialize in the forward
 /// window?" — `valid_to` is intentionally ignored so that a fact which appeared
 /// and was later retracted still counts as a realized outcome.
+///
+/// A `(from, to)` pair whose `derived_type` edge is already active at `as_of` is
+/// excluded: it was already true, so a re-assertion in the window is not a novel
+/// outcome the rule must predict. This mirrors the prediction-side existing-edge
+/// exclusion in [`apply_derive_edge_at`], keeping the precision and recall
+/// populations consistent (production never re-asserts an existing triple).
 #[must_use]
 pub fn collect_outcomes(
     rule: &InferRule,
@@ -428,10 +453,17 @@ pub fn collect_outcomes(
     let Some(derived_type) = rule.produced_type() else {
         return BTreeSet::new();
     };
+    let existing: BTreeSet<(&str, &str)> = all_edges
+        .iter()
+        .filter(|edge| edge.rel == derived_type)
+        .filter(|edge| active_at(edge.valid_from.as_deref(), edge.valid_to.as_deref(), as_of))
+        .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+        .collect();
     all_edges
         .iter()
         .filter(|edge| edge.rel == derived_type)
         .filter(|edge| in_forward_window(edge, as_of, as_of_plus_window))
+        .filter(|edge| !existing.contains(&(edge.from.as_str(), edge.to.as_str())))
         .map(EdgeTriple::from_edge)
         .collect()
 }
@@ -836,6 +868,47 @@ mod tests {
         }
     }
 
+    // ── existing-edge dedup parity with production `fire_derive_edge` ─────────
+
+    #[test]
+    fn predictions_exclude_derived_edge_already_active_at_as_of() {
+        // Chain A -r1-> B -r2-> X completes for (A, X), but A -d-> X already
+        // exists and is active at as_of. Production `fire_derive_edge` skips
+        // re-asserting it, so replay must not count it as a prediction.
+        let rule = derive_rule("rid", &["r1", "r2"], "d");
+        let as_of = "2024-06-01T00:00:00Z";
+        let edges = vec![
+            dated_edge("A", "r1", "B", "2024-01-01T00:00:00Z"),
+            dated_edge("B", "r2", "X", "2024-02-01T00:00:00Z"),
+            dated_edge("A", "d", "X", "2024-03-01T00:00:00Z"), // already live at as_of
+        ];
+        let preds = apply_derive_edge_at(&rule, &edges, as_of).unwrap();
+        assert!(
+            preds.is_empty(),
+            "the only chain-completing pair (A,X) already has a derived edge active \
+             at as_of; production would not re-derive it. got: {preds:?}"
+        );
+    }
+
+    #[test]
+    fn predictions_include_pair_whose_derived_edge_is_not_active_at_as_of() {
+        // Guard against over-exclusion (the dangerous direction): if the derived
+        // edge only materialises AFTER as_of, (A, X) is still a real prediction.
+        let rule = derive_rule("rid", &["r1", "r2"], "d");
+        let as_of = "2024-06-01T00:00:00Z";
+        let edges = vec![
+            dated_edge("A", "r1", "B", "2024-01-01T00:00:00Z"),
+            dated_edge("B", "r2", "X", "2024-02-01T00:00:00Z"),
+            dated_edge("A", "d", "X", "2024-09-01T00:00:00Z"), // future: not active at as_of
+        ];
+        let preds = apply_derive_edge_at(&rule, &edges, as_of).unwrap();
+        assert_eq!(
+            preds.len(),
+            1,
+            "pair (A,X) must still be predicted at as_of (its derived edge is not yet active)"
+        );
+    }
+
     // ── pure metric math (hand-computed) ─────────────────────────────────────
 
     #[test]
@@ -1093,8 +1166,20 @@ mod tests {
             dated_edge("b", "listed_on", "x", "2023-06-01T00:00:00Z"),
             // Outcome at s1 window.
             dated_edge("a", "exposed_to", "x", "2024-03-01T00:00:00Z"),
-            // Outcome at s2 window.
-            dated_edge("a", "exposed_to", "x", "2022-06-01T00:00:00Z"),
+            // Outcome at s2 window. Retired before s1's as_of so it is genuinely
+            // s2-scoped: with `valid_to = None` it would still be active at s1,
+            // and the already-existing-fact exclusion would (correctly) drop a→x
+            // from s1's prediction and outcome sets — a different scenario than
+            // the macro-average this test pins down.
+            GraphEdge {
+                from: "a".to_string(),
+                to: "x".to_string(),
+                rel: "exposed_to".to_string(),
+                props: serde_json::Value::Null,
+                provenance: ingest_prov(),
+                valid_from: Some("2022-06-01T00:00:00Z".to_string()),
+                valid_to: Some("2023-01-01T00:00:00Z".to_string()),
+            },
         ];
         let splits = vec![
             split("s1", "2024-01-01T00:00:00Z", "2024-07-01T00:00:00Z"),
