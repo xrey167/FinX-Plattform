@@ -303,6 +303,53 @@ async fn idempotent_remine_updates_not_duplicates() {
     );
 }
 
+// ── re-mine at a NEW timestamp refreshes instance edges, never duplicates ──────
+//
+// Edge identity is `(from, to, rel, valid_from)` and the miner stamps every
+// `pattern_instance_of` edge with the per-run `now`. A plain upsert would push a
+// fresh edge to the same instance on every re-mine at a different timestamp,
+// growing the provenance fan-out without bound. Mining the SAME graph at two
+// timestamps must leave the instance-edge count unchanged (refresh, not append).
+#[tokio::test]
+async fn remine_at_new_timestamp_refreshes_instance_edges() {
+    let graph = build_fixture_graph().await;
+    let engine = PatternEngine::default();
+    let mut index = PatternIndex::default();
+    let dyn_graph = graph.clone() as Arc<dyn GraphEngine>;
+
+    engine
+        .run_pattern_mining_at(&dyn_graph, &mut index, "2025-06-01T00:00:00Z", WINDOW)
+        .await
+        .expect("first run");
+    let instance_edges_after_first = dyn_graph
+        .edges(Some("pattern_instance_of"), 0, 10_000)
+        .await
+        .expect("read instance edges")
+        .len();
+    assert!(
+        instance_edges_after_first > 0,
+        "first run must write instance provenance edges"
+    );
+
+    // Re-mine the identical graph at a LATER timestamp: the instance set is
+    // unchanged, so the provenance edges must be refreshed in place.
+    engine
+        .run_pattern_mining_at(&dyn_graph, &mut index, "2025-06-02T00:00:00Z", WINDOW)
+        .await
+        .expect("second run");
+    let instance_edges_after_second = dyn_graph
+        .edges(Some("pattern_instance_of"), 0, 10_000)
+        .await
+        .expect("read instance edges")
+        .len();
+
+    assert_eq!(
+        instance_edges_after_second, instance_edges_after_first,
+        "instance provenance edges must be refreshed in place, not duplicated, \
+         across re-mines at different timestamps"
+    );
+}
+
 // ── bounds: candidate cap ─────────────────────────────────────────────────────
 
 #[tokio::test]

@@ -407,7 +407,9 @@ impl PatternEngine {
 
     /// Write a Pattern node and its instance provenance edges to the graph.
     ///
-    /// Idempotent: `upsert_nodes` / `upsert_edges` on the same id updates in place.
+    /// Idempotent: `upsert_nodes` replaces the Pattern node in place, and
+    /// `replace_edges` refreshes its `pattern_instance_of` provenance edges
+    /// (retract-all + rewrite) so re-mining never duplicates them.
     /// Returns the number of instance edges written.
     async fn persist_pattern(
         &self,
@@ -462,12 +464,20 @@ impl PatternEngine {
             .collect();
 
         let edge_count = edges.len();
-        if !edges.is_empty() {
-            graph
-                .upsert_edges(edges)
-                .await
-                .map_err(|e| PatternError::Graph(e.to_string()))?;
-        }
+        // Refresh (do NOT append) the instance provenance edges. `replace_edges`
+        // atomically retracts every existing `pattern_instance_of` edge for this
+        // pattern node and writes the current set under one lock. A plain
+        // `upsert_edges` would not refresh: edge identity includes `valid_from`
+        // (stamped with the per-run `now`), so each re-mine at a new timestamp
+        // would push a duplicate edge to the same instance, growing the
+        // provenance fan-out without bound and contradicting the documented
+        // "re-mining refreshes its instance provenance edges; it does not
+        // duplicate" contract. With an empty instance set this clears stale
+        // edges, which is the correct refresh outcome.
+        graph
+            .replace_edges(&node_id, "pattern_instance_of", edges)
+            .await
+            .map_err(|e| PatternError::Graph(e.to_string()))?;
 
         Ok(edge_count)
     }
