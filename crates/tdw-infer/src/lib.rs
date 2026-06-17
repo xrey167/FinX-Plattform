@@ -309,6 +309,43 @@ impl InferEngine {
         Ok(())
     }
 
+    /// Shape-fail-soft variant of [`hot_reload`](Self::hot_reload): rules that
+    /// fail per-rule [`validate_rule`] are SKIPPED (and returned) instead of
+    /// failing the whole reload, so a single malformed rule cannot drop an
+    /// entire batch (e.g. an induction cycle's promotions).
+    ///
+    /// Set-level stratification stays ATOMIC over the surviving rules: if the
+    /// shape-valid set is unstratifiable the engine is left UNCHANGED and the
+    /// error is returned (dropping individual rules to break a cycle is not
+    /// attempted). On success returns the skipped `(rule_id, reason)` pairs.
+    ///
+    /// Use the strict [`hot_reload`](Self::hot_reload) for config loads that must
+    /// reject loudly; use this for best-effort installs of generated rules.
+    ///
+    /// # Errors
+    ///
+    /// [`InferError::Unstratifiable`] (or another non-`InvalidRule` validation
+    /// error) if the surviving rule set fails the set-level check; the engine is
+    /// not mutated.
+    pub fn hot_reload_lenient(
+        &mut self,
+        rules: Vec<InferRule>,
+    ) -> Result<Vec<(String, &'static str)>, InferError> {
+        let mut kept = Vec::with_capacity(rules.len());
+        let mut skipped = Vec::new();
+        for rule in rules {
+            match validate_rule(&rule) {
+                Ok(()) => kept.push(rule),
+                Err(InferError::InvalidRule { rule_id, reason }) => skipped.push((rule_id, reason)),
+                Err(other) => return Err(other),
+            }
+        }
+        validate_stratification(&kept)?;
+        self.rules = kept;
+        self.version += 1;
+        Ok(skipped)
+    }
+
     /// Run every rule to a fixpoint, stratum by stratum (ascending).
     ///
     /// Within each stratum a FULL re-scan iterates until no new fact is derived (NOT
@@ -901,6 +938,42 @@ mod tests {
             validate_stratification(&rules),
             Err(InferError::Unstratifiable { .. })
         ));
+    }
+
+    #[test]
+    fn hot_reload_lenient_skips_shape_invalid_and_keeps_the_rest() {
+        // One valid rule with a colon-containing (induced) id + one malformed
+        // rule: the malformed one is skipped, the valid one installs — a single
+        // bad rule must not drop the whole batch.
+        let mut engine = InferEngine::default();
+        let good = InferRule::DeriveEdge {
+            rule_id: "inducted-pattern-a:b".to_string(),
+            stratum: 0,
+            when: vec![
+                EdgePattern {
+                    rel: "x".to_string(),
+                },
+                EdgePattern {
+                    rel: "y".to_string(),
+                },
+            ],
+            derived_type: "z".to_string(),
+        };
+        let bad = InferRule::DeriveEdge {
+            rule_id: "bad/id".to_string(),
+            stratum: 0,
+            when: vec![EdgePattern {
+                rel: "x".to_string(),
+            }],
+            derived_type: "w".to_string(),
+        };
+        let skipped = engine
+            .hot_reload_lenient(vec![good, bad])
+            .expect("stratifiable survivors install");
+        assert_eq!(skipped.len(), 1, "the malformed rule is skipped, not fatal");
+        assert_eq!(skipped[0].0, "bad/id");
+        assert_eq!(engine.rules().len(), 1, "the valid colon-id rule installs");
+        assert_eq!(engine.rules()[0].rule_id(), "inducted-pattern-a:b");
     }
 
     #[test]
