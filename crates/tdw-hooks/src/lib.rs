@@ -422,6 +422,11 @@ pub struct HookRegistry {
 
 impl HookRegistry {
     pub fn register(&mut self, hook: HookSpec) {
+        // Replace by name (last writer wins): the hook name is the identity key
+        // everywhere else (disable, the recursion guard, the emitted `hook.<name>`
+        // event), so allowing a duplicate name would make that hook fire twice
+        // — re-registering on a config reload must update, not duplicate.
+        self.hooks.retain(|existing| existing.name != hook.name);
         self.hooks.push(hook);
         self.hooks.sort_by(|left, right| {
             left.order
@@ -469,7 +474,15 @@ impl HookRegistry {
             if envelope.depth >= hook.max_depth {
                 return Err(HookError::DepthExceeded(hook.name));
             }
-            if envelope.event_type == hook.name || self.active.contains(&hook.name) {
+            // Guard against a hook re-triggered by its OWN emission. A hook emits
+            // events of type `hook.<name>` (see below), so a recursion check
+            // against the bare `<name>` alone misses the case where that emitted
+            // event is re-dispatched back through the registry — leaving only the
+            // `max_depth` backstop. Match both namespaces.
+            if envelope.event_type == hook.name
+                || envelope.event_type.strip_prefix("hook.") == Some(hook.name.as_str())
+                || self.active.contains(&hook.name)
+            {
                 return Err(HookError::RecursionGuard(hook.name));
             }
             self.active.insert(hook.name.clone());
@@ -878,6 +891,46 @@ mod tests {
         assert_eq!(
             registry.execute(&sample_event("service")),
             Err(HookError::RecursionGuard("ingress.received".to_string()))
+        );
+    }
+
+    #[test]
+    fn register_replaces_duplicate_name_so_hook_fires_once() {
+        let mut registry = HookRegistry::default();
+        registry.register(event_hook!("audit", 10, TransactionMode::InTransaction));
+        registry.register(event_hook!("audit", 20, TransactionMode::PostCommit));
+
+        let outcomes = registry
+            .execute(&sample_event("service"))
+            .unwrap_or_else(|error| panic!("hooks should execute: {error}"));
+
+        let audit = outcomes
+            .iter()
+            .filter(|outcome| outcome.name == "audit")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            audit.len(),
+            1,
+            "duplicate-name registration must not double-fire: {outcomes:?}"
+        );
+        // Last writer wins: the second registration's transaction mode survives.
+        assert_eq!(audit[0].transaction_mode, TransactionMode::PostCommit);
+    }
+
+    #[test]
+    fn recursion_guard_rejects_hook_re_triggered_by_its_own_emission() {
+        let mut registry = HookRegistry::default();
+        registry.register(event_hook!("audit", 1, TransactionMode::InTransaction));
+
+        // A hook named "audit" emits events of type "hook.audit". If that emitted
+        // event is re-dispatched through the registry, the hook must be
+        // recursion-guarded — not merely bounded by max_depth.
+        let mut envelope = sample_event("service");
+        envelope.event_type = "hook.audit".to_string();
+
+        assert_eq!(
+            registry.execute(&envelope),
+            Err(HookError::RecursionGuard("audit".to_string()))
         );
     }
 
