@@ -200,12 +200,21 @@ pub fn validate_rule(rule: &InferRule) -> Result<(), InferError> {
     Ok(())
 }
 
-/// The rule-id / kind identifier grammar (matches `tdw-tag-rules`).
+/// The rule-id / kind identifier grammar.
+///
+/// Permits the graph-id character set (alphanumeric plus `:`, `.`, `_`, `-`):
+/// induced rule ids embed a graph-derived canonical label that may legitimately
+/// contain `:` (e.g. `inducted-pattern-<a:b>`, which `tdw-induction` builds by
+/// replacing only the leading `pattern:` colon to keep the id injective). The
+/// previous alphanumeric-plus-`_`/`-` grammar rejected those ids during
+/// `hot_reload`, which — being all-or-nothing — silently dropped an entire
+/// induction cycle's promotions. Other disallowed characters (e.g. `/`) are
+/// still rejected.
 fn is_identifier(value: &str) -> bool {
     !value.is_empty()
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '_' | '-')
+        })
 }
 
 /// The tag-id grammar (matches `tdw-tags`): non-empty, contains `:`.
@@ -254,6 +263,11 @@ mod tests {
             validate_rule(&derive("bad/id", 0, &["a"], "c")),
             Err(InferError::InvalidRule { .. })
         ));
+        // Induced rule ids embed a graph-derived label that may contain ':'
+        // (and '.'); the grammar must accept them or hot_reload silently drops
+        // the whole induction cycle.
+        assert!(validate_rule(&derive("inducted-pattern-a:b", 0, &["a", "b"], "c")).is_ok());
+        assert!(validate_rule(&derive("inducted-pattern-x.y", 0, &["a", "b"], "c")).is_ok());
     }
 
     #[test]
