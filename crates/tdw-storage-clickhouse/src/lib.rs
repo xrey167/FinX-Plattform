@@ -360,6 +360,45 @@ mod tests {
     }
 
     #[test]
+    fn batch_dedup_token_folds_identical_content_from_separate_flushes() {
+        // CONTRACT (reviewed design decision): the streaming dedup token is
+        // content-addressed on purpose. Two SEPARATELY-constructed batches whose
+        // rows are byte-identical produce the SAME token, so ClickHouse folds the
+        // second INSERT block as a duplicate. A re-sent identical batch is treated
+        // as a duplicate to drop, NOT as distinct data to keep -- this is the
+        // intended idempotency behavior, not silent data loss. (If a future
+        // requirement ever needs identical-content flushes kept as distinct, add a
+        // per-flush ordinal to the token -- do not merely swap the hash function.)
+        let flush_a = OBBject::new(
+            vec![Row {
+                symbol: "AAPL".to_string(),
+            }],
+            "stream",
+            "stream_ingest",
+        );
+        let flush_b = OBBject::new(
+            vec![Row {
+                symbol: "AAPL".to_string(),
+            }],
+            "stream",
+            "stream_ingest",
+        );
+        let token_a = batch_dedup_token("sess", "raw.tick", &flush_a).expect("token");
+        let token_b = batch_dedup_token("sess", "raw.tick", &flush_b).expect("token");
+        assert_eq!(
+            token_a, token_b,
+            "identical content from distinct flushes must collide so the duplicate is folded",
+        );
+
+        // The dedup key is scoped to (session, table): identical content under a
+        // different session or table must NOT be folded.
+        let other_session = batch_dedup_token("other", "raw.tick", &flush_a).expect("token");
+        let other_table = batch_dedup_token("sess", "raw.other", &flush_a).expect("token");
+        assert_ne!(token_a, other_session, "session is part of the dedup scope");
+        assert_ne!(token_a, other_table, "table is part of the dedup scope");
+    }
+
+    #[test]
     fn ingest_dedup_token_is_stable_across_retries() {
         let first = ingest_dedup_token("sess-1", 7, "raw.equity_historical");
         let retry = ingest_dedup_token("sess-1", 7, "raw.equity_historical");
