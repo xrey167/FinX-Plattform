@@ -5191,14 +5191,27 @@ fn spawn_induction_worker(
                         all_rules.push(rule);
                     }
                 }
-                match infer_guard.hot_reload(all_rules) {
-                    Ok(()) => {
-                        report.promoted = report.new_rules.len();
+                // Fail-soft: a single malformed inducted rule_id must NOT drop
+                // the whole cycle's promotions. `hot_reload_lenient` skips only
+                // the shape-invalid rules and installs the rest; stratification
+                // stays atomic over the survivors.
+                match infer_guard.hot_reload_lenient(all_rules) {
+                    Ok(skipped) => {
+                        if !skipped.is_empty() {
+                            eprintln!(
+                                "[tdw] K-R5 induction: skipped {} malformed rule(s), \
+                                 installed the rest: {skipped:?}",
+                                skipped.len()
+                            );
+                        }
+                        // Promoted counts only the gate-passing new rules that
+                        // actually installed (skipped ones did not).
+                        report.promoted = report.new_rules.len().saturating_sub(skipped.len());
                     }
                     Err(err) => {
                         eprintln!(
-                            "[tdw] K-R5 induction: hot_reload rejected inducted \
-                             rules — no rules installed this cycle: {err}"
+                            "[tdw] K-R5 induction: hot_reload stratification rejected the \
+                             surviving rule set — no rules installed this cycle: {err}"
                         );
                         // Clear new_rules so the log loop below does not report
                         // gate-passing candidates as installed (they weren't).
