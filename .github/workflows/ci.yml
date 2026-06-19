@@ -26,7 +26,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy, llvm-tools-preview
@@ -37,7 +37,7 @@ jobs:
     name: Lint, Schema, and Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
@@ -106,7 +106,7 @@ jobs:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: llvm-tools-preview
@@ -122,7 +122,7 @@ jobs:
     name: Windows Release
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: x86_64-pc-windows-msvc
@@ -133,7 +133,7 @@ jobs:
     name: aarch64 Linux Build (release binaries)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: aarch64-unknown-linux-gnu
@@ -158,7 +158,7 @@ jobs:
     outputs:
       image_affecting: ${{ steps.detect.outputs.image_affecting }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Detect image-affecting changes
@@ -212,7 +212,7 @@ jobs:
       matrix:
         binary: [tdw-service, tdw-cli, tdw-mcp, tdw-worker]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Free runner disk space (release+live docker builds exhaust the default ~14GB)
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
@@ -290,7 +290,7 @@ jobs:
       # satisfies interpolation. Operators set a real token via .env.
       TDW_MCP_HTTP_TOKEN: ci-compose-interpolation-only
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Free runner disk space (release+live docker builds exhaust the default ~14GB)
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
