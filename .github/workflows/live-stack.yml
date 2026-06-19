@@ -25,7 +25,7 @@ jobs:
       # also presented on the smoke request below.
       TDW_MCP_HTTP_TOKEN: ci-live-stack-smoke-token
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
       - name: Validate live compose model
@@ -231,7 +231,7 @@ jobs:
       # just satisfies interpolation.
       TDW_MCP_HTTP_TOKEN: ci-compose-interpolation-only
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
       - name: Validate tools compose model
