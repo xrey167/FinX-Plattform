@@ -34,7 +34,7 @@ tdw-embed = { path = "../tdw-embed" }
 candle-core = { version = "0.10", default-features = false, optional = true }
 candle-nn = { version = "0.9", default-features = false, optional = true }
 candle-transformers = { version = "0.10", default-features = false, optional = true }
-tokenizers = { version = "0.21", default-features = false, features = ["onig"], optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
 serde_json = { workspace = true, optional = true }
 # `block_in_place` (used to keep synchronous candle inference off the async poll
 # path) needs the multi-thread runtime, which the workspace tokio already enables.
