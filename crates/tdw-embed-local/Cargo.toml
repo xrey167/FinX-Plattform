@@ -32,7 +32,7 @@ tdw-embed = { path = "../tdw-embed" }
 # CPU only; default-features = false keeps the candle crates from enabling any
 # native math backend, so the crate builds on a Windows host with no C toolchain.
 candle-core = { version = "0.10", default-features = false, optional = true }
-candle-nn = { version = "0.9", default-features = false, optional = true }
+candle-nn = { version = "0.10", default-features = false, optional = true }
 candle-transformers = { version = "0.10", default-features = false, optional = true }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"], optional = true }
 serde_json = { workspace = true, optional = true }
