@@ -62,7 +62,7 @@ serenity = { version = "0.12", optional = true, default-features = false, featur
 # `teloxide` is the Telegram bot framework. default-features pulls the long-poll
 # `ctrlc_handler` + `rustls` (pure-Rust TLS) update listener; we keep the default
 # set, which is rustls-based, so the gated build stays C-free.
-teloxide = { version = "0.13", optional = true }
+teloxide = { version = "0.17", optional = true }
 
 # The async runtime the transport adapters drive their event loops on — OPTIONAL,
 # only compiled when a transport feature is on. The default core is sync/offline.
